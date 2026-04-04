@@ -5,9 +5,15 @@ import glob
 import json
 import audioop
 import vosk
+import logging
+import sys
 from discord.ext import commands
 from keywords import check_keywords
 import config
+
+# Standard logging
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
+logger = logging.getLogger('bot')
 
 # Initialize Vosk models
 model_es = None
@@ -23,27 +29,30 @@ if os.path.exists(config.MODEL_PATH_EN):
 else:
     print(f"Warning: English model not found at {config.MODEL_PATH_EN}")
 
-# Fix for Python 3.12+ where get_event_loop() doesn't auto-create a loop
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
+# Ensure libopus is loaded
+if not discord.opus.is_loaded():
+    for lib in ['libopus.so.0', 'libopus.so', 'opus']:
+        try:
+            discord.opus.load_opus(lib)
+            print(f"DEBUG: Loaded opus: {lib}")
+            break
+        except Exception:
+            continue
+
+# Note: Python 3.12+ (and 3.14) handle the loop within bot.run() automatically.
+# Manual loop manipulation often causes issues in newer Python versions.
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
     def __init__(self, vc, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.vc = vc
-        # Store dict of dicts: user_id -> {'es': rec, 'en': rec}
         self.recognizers = {}
         self.resample_states = {}
-        # Restricted vocabularies
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
 
     def write(self, data, user_id):
         super().write(data, user_id)
-
-        # Skip if no models are loaded
         if model_es is None and model_en is None:
             return
 
@@ -56,15 +65,12 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             self.resample_states[user_id] = None
 
         try:
-            # 1. Convert to Mono
             mono_data = audioop.tomono(data, 2, 0.5, 0.5)
-            # 2. Downsample to 16000 Hz using persistent state
             data_16k, new_state = audioop.ratecv(
                 mono_data, 2, 1, 48000, 16000, self.resample_states[user_id]
             )
             self.resample_states[user_id] = new_state
             
-            # 3. Process with each recognizer
             detected = False
             for lang, rec in self.recognizers[user_id].items():
                 if rec.AcceptWaveform(data_16k):
@@ -73,104 +79,115 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
                         print(f"[TRANSCRIPTION][{lang}] User {user_id}: {text}")
                 else:
                     text = json.loads(rec.PartialResult()).get("partial", "")
-                    if text:
-                        # Optional: Log partial results if needed for debugging
-                        # print(f"[PARTIAL][{lang}] User {user_id}: {text}")
-                        pass
                 
                 if text and check_keywords(text):
                     detected = True
-                    break # Trigger once if detected in any language
+                    break
             
             if detected:
                 self.trigger_audio(user_id, text)
-                
         except Exception as e:
-            # Print error to console for debugging but don't crash the sink
-            # print(f"Error processing audio for {user_id}: {e}")
             pass
 
     def trigger_audio(self, user_id, detected_text):
         if self.vc.is_playing():
             return
-
-        # Log what the bot is doing (Action log)
-        log_msg = f"Detected keyword: '{detected_text}' from User {user_id}. Playing audio response."
-        print(f"[BOT ACTION] {log_msg}")
-
+        print(f"[BOT ACTION] Detected '{detected_text}' from User {user_id}. Playing audio.")
         pattern = os.path.join(config.AUDIO_DIR, "necesitopito.*")
         matches = glob.glob(pattern)
-        if not matches:
-            return
+        if matches:
+            try:
+                self.vc.play(discord.FFmpegOpusAudio(matches[0]))
+            except Exception as e:
+                print(f"Error playing audio: {e}")
 
-        audio_path = matches[0]
-        try:
-            self.vc.play(discord.FFmpegOpusAudio(audio_path))
-        except Exception as e:
-            print(f"Error playing audio: {e}")
+# Enable necessary intents for voice connection
+intents = discord.Intents.default()
+intents.voice_states = True
 
-bot = discord.Bot()
+bot = discord.Bot(intents=intents)
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot is online as {bot.user}")
 
-@bot.slash_command(name="escuchar", description="Escucha palabras clave en español e inglés")
+@bot.slash_command(name="escuchar", description="Escucha palabras clave")
 async def escuchar(ctx: discord.ApplicationContext):
     if not ctx.author.voice:
         return await ctx.respond("❌ ¡Debes estar en un canal de voz!")
 
-    # Defer interaction to avoid timeout (404 Unknown Interaction) while connecting
     await ctx.defer()
-    
     channel = ctx.author.voice.channel
     
-    # Check if already connected or move to new channel
+    # 1. FORCED CLEANUP: Disconnect from any zombie sessions
+    if ctx.voice_client:
+        print(f"DEBUG: Active voice client found. Disconnecting to ensure fresh session...")
+        try:
+            await ctx.voice_client.disconnect(force=True)
+            await asyncio.sleep(2.0) # Longer wait for Discord to invalidate old session
+        except Exception as e:
+            print(f"DEBUG: Disconnect failed: {e}")
+
+    print(f"DEBUG: Connecting to {channel.name}...")
+    
     try:
-        if ctx.voice_client:
-            vc = ctx.voice_client
-            if vc.channel.id != channel.id:
-                await vc.move_to(channel)
-        else:
-            vc = await channel.connect()
-    except Exception as e:
-        return await ctx.followup.send(f"❌ Error al conectar: {e}")
+        # 2. CONNECT: Explicitly handle connection
+        vc = await channel.connect(timeout=30.0)
+        
+        # 3. ROBUST WAIT: Poll until the connection is fully handshake-complete
+        connected = False
+        for i in range(20): # Up to 10 seconds of polling
+            if vc and vc.is_connected() and hasattr(vc, 'ws') and vc.ws:
+                connected = True
+                break
+            await asyncio.sleep(0.5)
 
-    # Wait until connection is fully established
-    count = 0
-    while not vc.is_connected() and count < 10:
-        await asyncio.sleep(0.5)
-        count += 1
+        if not connected:
+            raise Exception("Timeout: Handshake de voz no completado tras 10s.")
 
-    if not vc.is_connected():
-        return await ctx.followup.send("❌ Error: No se pudo establecer la conexión de voz.")
-
-    # Start recording, ensuring we're not already doing so
-    try:
+        # Extra stabilization delay before starting sink
+        await asyncio.sleep(1.0)
+        print(f"DEBUG: Connection verified and stabilized for {channel.name}")
+        
+        # 4. START RECORDING
         vc.start_recording(
             KeywordDetectorSink(vc),
-            lambda sink, *args: print("Recording stopped"),
+            lambda sink, *args: print("DEBUG: Recording stopped"),
             ctx.channel
         )
         await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
-    except discord.sinks.errors.RecordingException:
-        await ctx.followup.send("🎙️ ¡Ya estoy escuchando!")
+        
+    except discord.errors.ConnectionClosed as ce:
+        print(f"DEBUG: ConnectionClosed Error {ce.code}: {ce.reason}")
+        if ctx.voice_client:
+            await ctx.voice_client.disconnect(force=True)
+        await ctx.followup.send(f"❌ Error 4006 (Sesión inválida). Intenta usar `/escuchar` de nuevo.")
     except Exception as e:
-        print(f"Error starting recording: {e}")
-        await ctx.followup.send(f"❌ Error al iniciar grabación: {e}")
+        print(f"DEBUG: ERROR in escuchar: {type(e).__name__}: {e}")
+        if ctx.voice_client:
+            try:
+                await ctx.voice_client.disconnect(force=True)
+            except:
+                pass
+        await ctx.followup.send(f"❌ Error de conexión: {e}")
 
-@bot.slash_command(name="parar", description="Detiene la grabación y desconecta")
+@bot.slash_command(name="parar", description="Detiene y desconecta")
 async def parar(ctx: discord.ApplicationContext):
-    if not ctx.voice_client:
-        return await ctx.respond("❌ No estoy en un canal de voz.")
-
-    vc = ctx.voice_client
-    vc.stop_recording()
-    await vc.disconnect()
-    await ctx.respond("👋 Desconectado.")
+    if ctx.voice_client:
+        try:
+            ctx.voice_client.stop_recording()
+            await ctx.voice_client.disconnect(force=True)
+            await ctx.respond("👋 Desconectado.")
+        except Exception as e:
+            await ctx.respond(f"❌ Error al desconectar: {e}")
+    else:
+        await ctx.respond("❌ No estoy conectado.")
 
 if __name__ == "__main__":
-    if not config.TOKEN:
-        print("Error: TOKEN not found in environment or .env file.")
+    if config.TOKEN:
+        try:
+            bot.run(config.TOKEN)
+        except KeyboardInterrupt:
+            print("Bot stopped by user.")
     else:
-        bot.run(config.TOKEN)
+        print("Error: No TOKEN found.")
