@@ -1,0 +1,17 @@
+# Discord Bot
+.env
+*.pyc
+__pycache__/
+
+# Audio files (as requested)
+audio/*
+!audio/.gitkeep
+
+# Vosk Models (too large for GitHub)
+models/*
+!models/.gitkeep
+
+# Internal tools
+.planning
+*.zip
+*.log
