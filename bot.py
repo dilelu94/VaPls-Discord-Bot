@@ -39,8 +39,14 @@ if not discord.opus.is_loaded():
         except Exception:
             continue
 
-# Note: Python 3.12+ (and 3.14) handle the loop within bot.run() automatically.
-# Manual loop manipulation often causes issues in newer Python versions.
+# Fix for Python 3.12+ (and 3.14) where get_event_loop() doesn't auto-create a loop
+# This must happen BEFORE any library call that expects a loop (like discord.Bot)
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    print("DEBUG: Created new event loop for Python 3.14 compatibility.")
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
     def __init__(self, vc, *args, **kwargs):
