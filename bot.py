@@ -99,7 +99,24 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         except Exception as e:
             print(f"Error playing audio: {e}")
 
-bot = discord.Bot()
+from aiohttp_socks import ProxyConnector
+
+class ProxyBot(discord.Bot):
+    def __init__(self, proxy_url=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.proxy_url = proxy_url
+
+    async def login(self, token):
+        if self.proxy_url:
+            print(f"Connecting using proxy: {self.proxy_url}")
+            # Injecting the custom connector into the internal HTTP client session
+            try:
+                self.http.connector = ProxyConnector.from_url(self.proxy_url)
+            except Exception as e:
+                print(f"Error setting up proxy connector: {e}")
+        return await super().login(token)
+
+bot = ProxyBot(proxy_url=config.PROXY_URL)
 
 @bot.event
 async def on_ready():

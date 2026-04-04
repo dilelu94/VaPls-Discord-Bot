@@ -1,3 +1,4 @@
 py-cord[voice]>=2.4.0
 vosk
 python-dotenv
+aiohttp-socks
