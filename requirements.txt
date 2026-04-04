@@ -1,3 +1,4 @@
-py-cord[voice]>=2.4.0
+py-cord[voice]>=2.6.1
+dave.py
 vosk
 python-dotenv

@@ -1,12 +1,14 @@
+import sys
+import os
+import logging
+import warnings
+
 import discord
 import asyncio
-import os
 import glob
 import json
 import audioop
 import vosk
-import logging
-import sys
 from discord.ext import commands
 from keywords import check_keywords
 import config
@@ -14,6 +16,9 @@ import config
 # Standard logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
 logger = logging.getLogger('bot')
+
+# Suppress the DAVE protocol warning
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="Voice reception is currently broken")
 
 # Initialize Vosk models
 model_es = None
@@ -39,7 +44,7 @@ if not discord.opus.is_loaded():
         except Exception:
             continue
 
-# Event loop fix for Python 3.12+ (especially 3.14)
+# Event loop fix for Python 3.12+
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -105,58 +110,80 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             except Exception as e:
                 print(f"Error playing audio: {e}")
 
-# Enable necessary intents for voice connection
+# Enable necessary intents
 intents = discord.Intents.default()
 intents.voice_states = True
 
-bot = discord.Bot(intents=intents)
+# Guild ID del servidor de pruebas
+bot = discord.Bot(intents=intents, debug_guilds=[523359466528440320])
+
+@bot.event
+async def on_connect():
+    print(f"DEBUG: Connected to Gateway. (Latencia: {bot.latency*1000:.2f}ms)")
+
+@bot.event
+async def on_disconnect():
+    print("WARNING: Disconnected from Discord Gateway.")
 
 @bot.event
 async def on_ready():
     print(f"✅ Bot is online as {bot.user}")
+    print(f"DEBUG: Active Guilds: {[(guild.name, guild.id) for guild in bot.guilds]}")
+    # Application commands (Slash commands)
+    print(f"DEBUG: Slash Commands registered: {[cmd.name for cmd in bot.application_commands]}")
+    print(f"DEBUG: Pending Commands: {[cmd.name for cmd in bot.pending_application_commands]}")
+    print(f"DEBUG: All commands (bot.all_commands): {list(bot.all_commands.keys())}")
+    print("--- Ready to receive commands ---")
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    if member == bot.user:
+        if before.channel and not after.channel:
+            print(f"DEBUG: Bot was disconnected from voice channel: {before.channel.name}")
+        elif not before.channel and after.channel:
+            print(f"DEBUG: Bot joined voice channel: {after.channel.name}")
+        elif before.channel != after.channel:
+            print(f"DEBUG: Bot moved voice channel from {before.channel.name} to {after.channel.name}")
 
 @bot.slash_command(name="escuchar", description="Escucha palabras clave")
 async def escuchar(ctx: discord.ApplicationContext):
+    print(f"[COMMAND] /escuchar used by {ctx.author} in {ctx.guild.name}")
     if not ctx.author.voice:
+        print(f"[COMMAND ERROR] {ctx.author} is not in a voice channel.")
         return await ctx.respond("❌ ¡Debes estar en un canal de voz!")
 
     await ctx.defer()
     channel = ctx.author.voice.channel
+    print(f"DEBUG: Attempting to connect to channel: {channel.name} (ID: {channel.id})")
     
-    # Check if already connected to THIS channel
     if ctx.voice_client:
         if ctx.voice_client.channel.id == channel.id:
-            return await ctx.followup.send("🎙️ ¡Ya estoy escuchando en este canal!")
+            print("DEBUG: Already in the correct channel.")
+            return await ctx.followup.send("🎙️ ¡Ya estoy escuchando!")
         else:
-            print(f"DEBUG: Moving from {ctx.voice_client.channel.name} to {channel.name}...")
+            print(f"DEBUG: Moving from {ctx.voice_client.channel.name} to {channel.name}")
             await ctx.voice_client.move_to(channel)
             vc = ctx.voice_client
     else:
-        print(f"DEBUG: Attempting connection to {channel.name}...")
         try:
-            # Reconnect=True can hide primary errors, set to False for debugging
-            # self_deaf is not supported in this version of connect()
-            vc = await channel.connect(timeout=30.0, reconnect=True)
+            vc = await channel.connect(timeout=60.0, reconnect=True)
+            print(f"DEBUG: Connected to {channel.name}")
         except Exception as e:
-            print(f"DEBUG: Connection command failed: {e}")
-            return await ctx.followup.send(f"❌ Error al iniciar conexión: {e}")
+            print(f"[VOICE ERROR] Failed to connect: {e}")
+            return await ctx.followup.send(f"❌ Error al conectar: {e}")
 
-    # Wait for the voice client to be confirmed by the gateway
     try:
         connected = False
-        for i in range(20): # Up to 10 seconds
+        for i in range(40):
             if vc.is_connected() and hasattr(vc, 'ws') and vc.ws:
                 connected = True
                 break
             await asyncio.sleep(0.5)
 
         if not connected:
-            raise Exception("Timeout: Handshake de voz incompleto.")
+            raise Exception("Timeout: La voz no se estabilizó.")
 
-        print(f"DEBUG: Connection stabilized for {channel.name}")
-        
-        # START RECORDING
-        # Use lambda to avoid printing "Recording stopped" on temporary glitches
+        print(f"DEBUG: Voice connection stabilized. Starting KeywordDetectorSink.")
         vc.start_recording(
             KeywordDetectorSink(vc),
             lambda sink, *args: print(f"DEBUG: Sink for {channel.name} finished."),
@@ -165,7 +192,7 @@ async def escuchar(ctx: discord.ApplicationContext):
         await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
         
     except Exception as e:
-        print(f"DEBUG: ERROR during stabilization: {type(e).__name__}: {e}")
+        print(f"[VOICE ERROR] Post-connection failure: {e}")
         if ctx.voice_client:
             await ctx.voice_client.disconnect(force=True)
         await ctx.followup.send(f"❌ Error de voz: {e}")
@@ -180,14 +207,13 @@ async def parar(ctx: discord.ApplicationContext):
         except Exception as e:
             await ctx.respond(f"❌ Error al desconectar: {e}")
     else:
-        await ctx.respond("❌ No estoy conectado.")
+        await ctx.respond("❌ No conectado.")
 
 if __name__ == "__main__":
     if config.TOKEN:
         try:
-            # reconnect=True in run() can help with gateway timeouts
             bot.run(config.TOKEN)
         except Exception as e:
-            print(f"Bot exited with error: {e}")
+            print(f"Bot fatal error: {e}")
     else:
         print("Error: No TOKEN found.")
