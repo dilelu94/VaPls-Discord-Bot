@@ -2,18 +2,67 @@ import sys
 import os
 import logging
 import warnings
-
 import discord
 import asyncio
 import glob
 import json
 import audioop
 import vosk
+import threading
+import aiohttp
 from discord.ext import commands
+from discord.gateway import DiscordVoiceWebSocket
 from keywords import check_keywords
 import config
 
+# Monkeypatch DiscordVoiceWebSocket to support DAVE protocol (E2EE)
+# Required since the current py-cord version (2.6.1) doesn't have it natively.
+
+original_identify = DiscordVoiceWebSocket.identify
+
+async def patched_identify(self):
+    print("DEBUG: Using patched_identify with DAVE support")
+    state = self._connection
+    payload = {
+        "op": self.IDENTIFY,
+        "d": {
+            "server_id": str(state.server_id),
+            "user_id": str(state.user.id),
+            "session_id": state.session_id,
+            "token": state.token,
+            "max_dave_protocol_version": 1,
+        },
+    }
+    await self.send_as_json(payload)
+
+DiscordVoiceWebSocket.identify = patched_identify
+
+original_from_client = DiscordVoiceWebSocket.from_client
+
+@classmethod
+async def patched_from_client(cls, client, *, resume=False, hook=None):
+    """Creates a voice websocket for the :class:`VoiceClient` with v=7 for DAVE support."""
+    print(f"DEBUG: Using patched_from_client for endpoint {client.endpoint}")
+    gateway = f"wss://{client.endpoint}/?v=7"
+    http = client._state.http
+    socket = await http.ws_connect(gateway, compress=15)
+    ws = cls(socket, loop=client.loop, hook=hook)
+    ws.gateway = gateway
+    ws._connection = client
+    ws._max_heartbeat_timeout = 60.0
+    ws.thread_id = threading.get_ident()
+
+    if resume:
+        await ws.resume()
+    else:
+        await ws.identify()
+
+    return ws
+
+DiscordVoiceWebSocket.from_client = patched_from_client
+
 # Standard logging
+...
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
 logger = logging.getLogger('bot')
 
@@ -128,6 +177,11 @@ async def on_disconnect():
 @bot.event
 async def on_ready():
     print(f"✅ Bot is online as {bot.user}")
+    try:
+        await bot.sync_commands()
+        print("DEBUG: Commands synced successfully")
+    except Exception as e:
+        print(f"ERROR: Failed to sync commands: {e}")
     print(f"DEBUG: Active Guilds: {[(guild.name, guild.id) for guild in bot.guilds]}")
     # Application commands (Slash commands)
     print(f"DEBUG: Slash Commands registered: {[cmd.name for cmd in bot.application_commands]}")
