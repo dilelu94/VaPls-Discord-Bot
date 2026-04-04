@@ -147,12 +147,13 @@ async def on_voice_state_update(member, before, after):
 
 @bot.slash_command(name="escuchar", description="Escucha palabras clave")
 async def escuchar(ctx: discord.ApplicationContext):
+    await ctx.defer()
     print(f"[COMMAND] /escuchar used by {ctx.author} in {ctx.guild.name}")
+    
     if not ctx.author.voice:
         print(f"[COMMAND ERROR] {ctx.author} is not in a voice channel.")
-        return await ctx.respond("❌ ¡Debes estar en un canal de voz!")
+        return await ctx.followup.send("❌ ¡Debes estar en un canal de voz!")
 
-    await ctx.defer()
     channel = ctx.author.voice.channel
     print(f"DEBUG: Attempting to connect to channel: {channel.name} (ID: {channel.id})")
     
