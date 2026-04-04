@@ -69,6 +69,8 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             for lang, rec in self.recognizers[user_id].items():
                 if rec.AcceptWaveform(data_16k):
                     text = json.loads(rec.Result()).get("text", "")
+                    if text:
+                        print(f"[{lang}] {user_id}: {text}") # Show full transcription logs
                 else:
                     text = json.loads(rec.PartialResult()).get("partial", "")
                 
@@ -110,6 +112,9 @@ async def escuchar(ctx: discord.ApplicationContext):
     if not ctx.author.voice:
         return await ctx.respond("❌ ¡Debes estar en un canal de voz!")
 
+    # Defer interaction to avoid timeout (404 Unknown Interaction) while connecting
+    await ctx.defer()
+    
     channel = ctx.author.voice.channel
     
     # Check if already connected or move to new channel
@@ -121,7 +126,7 @@ async def escuchar(ctx: discord.ApplicationContext):
         else:
             vc = await channel.connect()
     except Exception as e:
-        return await ctx.respond(f"❌ Error al conectar: {e}")
+        return await ctx.followup.send(f"❌ Error al conectar: {e}")
 
     # Wait until connection is fully established
     count = 0
@@ -130,7 +135,7 @@ async def escuchar(ctx: discord.ApplicationContext):
         count += 1
 
     if not vc.is_connected():
-        return await ctx.respond("❌ Error: No se pudo establecer la conexión de voz.")
+        return await ctx.followup.send("❌ Error: No se pudo establecer la conexión de voz.")
 
     # Start recording, ensuring we're not already doing so
     try:
@@ -139,12 +144,12 @@ async def escuchar(ctx: discord.ApplicationContext):
             lambda sink, *args: print("Recording stopped"),
             ctx.channel
         )
-        await ctx.respond(f"🎙️ Escuchando en {channel.name}...")
+        await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
     except discord.sinks.errors.RecordingException:
-        await ctx.respond("🎙️ ¡Ya estoy escuchando!")
+        await ctx.followup.send("🎙️ ¡Ya estoy escuchando!")
     except Exception as e:
         print(f"Error starting recording: {e}")
-        await ctx.respond(f"❌ Error al iniciar grabación: {e}")
+        await ctx.followup.send(f"❌ Error al iniciar grabación: {e}")
 
 @bot.slash_command(name="parar", description="Detiene la grabación y desconecta")
 async def parar(ctx: discord.ApplicationContext):
