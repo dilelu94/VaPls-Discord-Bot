@@ -39,14 +39,12 @@ if not discord.opus.is_loaded():
         except Exception:
             continue
 
-# Fix for Python 3.12+ (and 3.14) where get_event_loop() doesn't auto-create a loop
-# This must happen BEFORE any library call that expects a loop (like discord.Bot)
+# Event loop fix for Python 3.12+ (especially 3.14)
 try:
     asyncio.get_event_loop()
 except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    print("DEBUG: Created new event loop for Python 3.14 compatibility.")
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
     def __init__(self, vc, *args, **kwargs):
@@ -125,57 +123,52 @@ async def escuchar(ctx: discord.ApplicationContext):
     await ctx.defer()
     channel = ctx.author.voice.channel
     
-    # 1. FORCED CLEANUP: Disconnect from any zombie sessions
+    # Check if already connected to THIS channel
     if ctx.voice_client:
-        print(f"DEBUG: Active voice client found. Disconnecting to ensure fresh session...")
+        if ctx.voice_client.channel.id == channel.id:
+            return await ctx.followup.send("🎙️ ¡Ya estoy escuchando en este canal!")
+        else:
+            print(f"DEBUG: Moving from {ctx.voice_client.channel.name} to {channel.name}...")
+            await ctx.voice_client.move_to(channel)
+            vc = ctx.voice_client
+    else:
+        print(f"DEBUG: Attempting connection to {channel.name}...")
         try:
-            await ctx.voice_client.disconnect(force=True)
-            await asyncio.sleep(2.0) # Longer wait for Discord to invalidate old session
+            # Reconnect=True can hide primary errors, set to False for debugging
+            # self_deaf is not supported in this version of connect()
+            vc = await channel.connect(timeout=30.0, reconnect=True)
         except Exception as e:
-            print(f"DEBUG: Disconnect failed: {e}")
+            print(f"DEBUG: Connection command failed: {e}")
+            return await ctx.followup.send(f"❌ Error al iniciar conexión: {e}")
 
-    print(f"DEBUG: Connecting to {channel.name}...")
-    
+    # Wait for the voice client to be confirmed by the gateway
     try:
-        # 2. CONNECT: Explicitly handle connection
-        vc = await channel.connect(timeout=30.0)
-        
-        # 3. ROBUST WAIT: Poll until the connection is fully handshake-complete
         connected = False
-        for i in range(20): # Up to 10 seconds of polling
-            if vc and vc.is_connected() and hasattr(vc, 'ws') and vc.ws:
+        for i in range(20): # Up to 10 seconds
+            if vc.is_connected() and hasattr(vc, 'ws') and vc.ws:
                 connected = True
                 break
             await asyncio.sleep(0.5)
 
         if not connected:
-            raise Exception("Timeout: Handshake de voz no completado tras 10s.")
+            raise Exception("Timeout: Handshake de voz incompleto.")
 
-        # Extra stabilization delay before starting sink
-        await asyncio.sleep(1.0)
-        print(f"DEBUG: Connection verified and stabilized for {channel.name}")
+        print(f"DEBUG: Connection stabilized for {channel.name}")
         
-        # 4. START RECORDING
+        # START RECORDING
+        # Use lambda to avoid printing "Recording stopped" on temporary glitches
         vc.start_recording(
             KeywordDetectorSink(vc),
-            lambda sink, *args: print("DEBUG: Recording stopped"),
+            lambda sink, *args: print(f"DEBUG: Sink for {channel.name} finished."),
             ctx.channel
         )
         await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
         
-    except discord.errors.ConnectionClosed as ce:
-        print(f"DEBUG: ConnectionClosed Error {ce.code}: {ce.reason}")
+    except Exception as e:
+        print(f"DEBUG: ERROR during stabilization: {type(e).__name__}: {e}")
         if ctx.voice_client:
             await ctx.voice_client.disconnect(force=True)
-        await ctx.followup.send(f"❌ Error 4006 (Sesión inválida). Intenta usar `/escuchar` de nuevo.")
-    except Exception as e:
-        print(f"DEBUG: ERROR in escuchar: {type(e).__name__}: {e}")
-        if ctx.voice_client:
-            try:
-                await ctx.voice_client.disconnect(force=True)
-            except:
-                pass
-        await ctx.followup.send(f"❌ Error de conexión: {e}")
+        await ctx.followup.send(f"❌ Error de voz: {e}")
 
 @bot.slash_command(name="parar", description="Detiene y desconecta")
 async def parar(ctx: discord.ApplicationContext):
@@ -192,8 +185,9 @@ async def parar(ctx: discord.ApplicationContext):
 if __name__ == "__main__":
     if config.TOKEN:
         try:
+            # reconnect=True in run() can help with gateway timeouts
             bot.run(config.TOKEN)
-        except KeyboardInterrupt:
-            print("Bot stopped by user.")
+        except Exception as e:
+            print(f"Bot exited with error: {e}")
     else:
         print("Error: No TOKEN found.")
