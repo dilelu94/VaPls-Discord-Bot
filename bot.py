@@ -111,18 +111,40 @@ async def escuchar(ctx: discord.ApplicationContext):
         return await ctx.respond("❌ ¡Debes estar en un canal de voz!")
 
     channel = ctx.author.voice.channel
-    try:
-        vc = await channel.connect()
-    except discord.ClientException:
-        vc = ctx.voice_client
-
-    vc.start_recording(
-        KeywordDetectorSink(vc),
-        lambda sink, *args: print("Recording stopped"),
-        ctx.channel
-    )
     
-    await ctx.respond(f"🎙️ Escuchando en {channel.name}...")
+    # Check if already connected or move to new channel
+    try:
+        if ctx.voice_client:
+            vc = ctx.voice_client
+            if vc.channel.id != channel.id:
+                await vc.move_to(channel)
+        else:
+            vc = await channel.connect()
+    except Exception as e:
+        return await ctx.respond(f"❌ Error al conectar: {e}")
+
+    # Wait until connection is fully established
+    count = 0
+    while not vc.is_connected() and count < 10:
+        await asyncio.sleep(0.5)
+        count += 1
+
+    if not vc.is_connected():
+        return await ctx.respond("❌ Error: No se pudo establecer la conexión de voz.")
+
+    # Start recording, ensuring we're not already doing so
+    try:
+        vc.start_recording(
+            KeywordDetectorSink(vc),
+            lambda sink, *args: print("Recording stopped"),
+            ctx.channel
+        )
+        await ctx.respond(f"🎙️ Escuchando en {channel.name}...")
+    except discord.sinks.errors.RecordingException:
+        await ctx.respond("🎙️ ¡Ya estoy escuchando!")
+    except Exception as e:
+        print(f"Error starting recording: {e}")
+        await ctx.respond(f"❌ Error al iniciar grabación: {e}")
 
 @bot.slash_command(name="parar", description="Detiene la grabación y desconecta")
 async def parar(ctx: discord.ApplicationContext):
