@@ -30,10 +30,9 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
-    def __init__(self, vc, text_channel, *args, **kwargs):
+    def __init__(self, vc, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.vc = vc
-        self.text_channel = text_channel
         # Store dict of dicts: user_id -> {'es': rec, 'en': rec}
         self.recognizers = {}
         self.resample_states = {}
@@ -84,26 +83,20 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
                     break # Trigger once if detected in any language
             
             if detected:
-                self.trigger_audio_and_chat(user_id, text)
+                self.trigger_audio(user_id, text)
                 
         except Exception as e:
             # Print error to console for debugging but don't crash the sink
             # print(f"Error processing audio for {user_id}: {e}")
             pass
 
-    def trigger_audio_and_chat(self, user_id, detected_text):
+    def trigger_audio(self, user_id, detected_text):
         if self.vc.is_playing():
             return
 
-        # Log what we're about to do
-        log_msg = f"Detected keyword: '{detected_text}' from User {user_id}. Sending response."
+        # Log what the bot is doing (Action log)
+        log_msg = f"Detected keyword: '{detected_text}' from User {user_id}. Playing audio response."
         print(f"[BOT ACTION] {log_msg}")
-
-        # Send message to chat (async in a sync context)
-        asyncio.run_coroutine_threadsafe(
-            self.text_channel.send(f"🤖 Palabra clave detectada: `{detected_text}` (Usuario: <@{user_id}>)"),
-            self.vc.loop
-        )
 
         pattern = os.path.join(config.AUDIO_DIR, "necesitopito.*")
         matches = glob.glob(pattern)
@@ -155,7 +148,7 @@ async def escuchar(ctx: discord.ApplicationContext):
     # Start recording, ensuring we're not already doing so
     try:
         vc.start_recording(
-            KeywordDetectorSink(vc, ctx.channel),
+            KeywordDetectorSink(vc),
             lambda sink, *args: print("Recording stopped"),
             ctx.channel
         )
