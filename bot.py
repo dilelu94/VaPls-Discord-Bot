@@ -1,4 +1,5 @@
 import discord
+import asyncio
 import os
 import glob
 import json
@@ -21,6 +22,12 @@ if os.path.exists(config.MODEL_PATH_EN):
     model_en = vosk.Model(config.MODEL_PATH_EN)
 else:
     print(f"Warning: English model not found at {config.MODEL_PATH_EN}")
+
+# Fix for Python 3.12+ where get_event_loop() doesn't auto-create a loop
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
     def __init__(self, vc, *args, **kwargs):
