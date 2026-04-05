@@ -53,28 +53,15 @@ except RuntimeError:
 # Silence noisy Opus info logs
 logging.getLogger("discord.opus").setLevel(logging.WARNING)
 
-# Monkey-patch discord.opus.PacketDecoder._decode_packet
-# This prevents the PacketRouter thread from dying when it encounters "corrupted stream"
-# during DAVE handshake stabilization.
-original_decode_packet = discord.opus.PacketDecoder._decode_packet
-def patched_decode_packet(self, packet):
-    try:
-        return original_decode_packet(self, packet)
-    except discord.opus.OpusError as e:
-        if "corrupted stream" in str(e):
-            # Return original packet and 20ms of silence
-            return packet, b"\x00" * 3840
-        raise e
-discord.opus.PacketDecoder._decode_packet = patched_decode_packet
-
 # Silence RecordingException during stop_recording
-original_stop_recording = discord.VoiceClient.stop_recording
+# Using discord.voice.VoiceClient to avoid DeprecationWarning
+original_stop_recording = discord.voice.VoiceClient.stop_recording
 def patched_stop_recording(self):
     try:
         return original_stop_recording(self)
     except Exception: # Catch RecordingException and others
         pass
-discord.VoiceClient.stop_recording = patched_stop_recording
+discord.voice.VoiceClient.stop_recording = patched_stop_recording
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
     __sink_listeners__ = []
@@ -87,6 +74,7 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         self.recognizers = {}
         self.resample_states = {}
         self.packet_counts = {}
+        self.decoders = {}
         # Vocabularies to speed up recognition and reduce CPU usage
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
@@ -95,18 +83,28 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         return []
 
     def is_opus(self):
-        return False
+        return True
 
     def write(self, data, user):
         user_id = getattr(user, 'id', user)
-        # In py-cord 2.8+, data might be a VoiceData object
-        if hasattr(data, 'pcm'):
-            data = data.pcm
-        
-        if not isinstance(data, (bytes, bytearray)):
+        # In is_opus=True mode, data is a VoiceData object with .opus attribute
+        opus_bytes = getattr(data, 'opus', None)
+        if not opus_bytes:
             return
 
-        super().write(data, user_id)
+        if user_id not in self.decoders:
+            self.decoders[user_id] = discord.opus.Decoder()
+
+        try:
+            pcm_data = self.decoders[user_id].decode(opus_bytes, fec=False)
+        except discord.opus.OpusError as e:
+            if "corrupted stream" in str(e):
+                return
+            raise e
+
+        # Pass decodified PCM bytes to WaveSink base
+        super().write(pcm_data, user_id)
+        
         if model_es is None and model_en is None:
             return
 
@@ -123,12 +121,11 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             self.packet_counts[user_id] += 1
             # Log RMS every 100 packets to verify audio activity
             if self.packet_counts[user_id] % 100 == 0:
-                rms = audioop.rms(data, 2)
+                rms = audioop.rms(pcm_data, 2)
                 print(f"DEBUG: Audio telemetry for User {user_id}: RMS={rms} ({self.packet_counts[user_id]} packets)")
 
-            # Py-cord 2.8+ feeds PCM data to write() for WaveSink
             # Convert to mono and resample to 16kHz for Vosk
-            mono_data = audioop.tomono(data, 2, 0.5, 0.5)
+            mono_data = audioop.tomono(pcm_data, 2, 0.5, 0.5)
             data_16k, new_state = audioop.ratecv(
                 mono_data, 2, 1, 48000, 16000, self.resample_states[user_id]
             )
@@ -151,7 +148,8 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             
             if detected:
                 self.trigger_audio(user_id, text)
-        except Exception:
+        except Exception as e:
+            print(f"DEBUG: Vosk processing error: {e}")
             pass
 
     def trigger_audio(self, user_id, detected_text):
