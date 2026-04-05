@@ -16,8 +16,9 @@ import config
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
 logger = logging.getLogger('bot')
 
-# Suppress the DAVE protocol warning as we have davey installed
+# Suppress the DAVE protocol warning and VoiceClient deprecation warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="Voice reception is currently broken")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*VoiceClient is deprecated.*")
 
 # Initialize Vosk models
 model_es = None
@@ -54,14 +55,14 @@ except RuntimeError:
 logging.getLogger("discord.opus").setLevel(logging.WARNING)
 
 # Silence RecordingException during stop_recording
-# Using discord.voice.VoiceClient to avoid DeprecationWarning
-original_stop_recording = discord.voice.VoiceClient.stop_recording
+# Using discord.VoiceClient which is the standard entry point in py-cord
+original_stop_recording = discord.VoiceClient.stop_recording
 def patched_stop_recording(self):
     try:
         return original_stop_recording(self)
     except Exception: # Catch RecordingException and others
         pass
-discord.voice.VoiceClient.stop_recording = patched_stop_recording
+discord.VoiceClient.stop_recording = patched_stop_recording
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
     __sink_listeners__ = []
