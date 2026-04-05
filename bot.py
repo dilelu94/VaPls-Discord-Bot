@@ -11,6 +11,7 @@ import vosk
 import threading
 import aiohttp
 import socket
+import struct
 from discord.ext import commands
 from discord.gateway import DiscordVoiceWebSocket
 import discord.voice_client
@@ -29,9 +30,10 @@ async def patched_on_voice_server_update(self, data):
     endpoint = data.get("endpoint")
     if endpoint:
         # Keep the whole host:port
-        self.endpoint = endpoint.replace("wss://", "").replace(":80", ":443")
+        self.endpoint = endpoint.replace("wss://", "")
+        if ":" not in self.endpoint:
+            self.endpoint += ":443"
     
-    # CRITICAL: Re-implement original socket initialization omitted in previous patch
     self.endpoint_ip = discord.utils.MISSING
     self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     self.socket.setblocking(False)
@@ -73,8 +75,8 @@ async def patched_from_client(cls, client, *, resume=False, hook=None):
     print(f"DEBUG: Using patched_from_client for endpoint {client.endpoint}")
     gateway = f"wss://{client.endpoint}/?v=7"
     http = client._state.http
-    socket = await http.ws_connect(gateway, compress=15)
-    ws = cls(socket, loop=client.loop, hook=hook)
+    socket_ws = await http.ws_connect(gateway, compress=15)
+    ws = cls(socket_ws, loop=client.loop, hook=hook)
     ws.gateway = gateway
     ws._connection = client
     ws._max_heartbeat_timeout = 60.0
@@ -88,6 +90,42 @@ async def patched_from_client(cls, client, *, resume=False, hook=None):
     return ws
 
 DiscordVoiceWebSocket.from_client = patched_from_client
+
+# 4. Patch initial_connection to handle modes safely (Fix list index out of range)
+async def patched_initial_connection(self, data):
+    state = self._connection
+    state.ssrc = data["ssrc"]
+    state.voice_port = data["port"]
+    state.endpoint_ip = data["ip"]
+    
+    modes = data.get("modes", [])
+    print(f"DEBUG: Available voice modes: {modes}")
+    if not modes:
+        print("WARNING: No voice modes received in READY payload. Using default.")
+        mode = "xsalsa20_poly1305"
+    else:
+        # Preferred mode for DAVE is often at the end or specific, but we'll take the first available
+        mode = modes[0]
+
+    packet = bytearray(74)
+    struct.pack_into(">H", packet, 0, 1)  # 1 = Send
+    struct.pack_into(">H", packet, 2, 70)  # 70 = Length
+    struct.pack_into(">I", packet, 4, state.ssrc)
+    state.socket.sendto(packet, (state.endpoint_ip, state.voice_port))
+    
+    try:
+        recv = await asyncio.wait_for(self.loop.sock_recv(state.socket, 74), timeout=5.0)
+    except asyncio.TimeoutError:
+        print("ERROR: UDP IP discovery timed out.")
+        raise
+        
+    ip = recv[4:74].decode("ascii").strip("\x00")
+    port = struct.unpack_from(">H", recv, 72)[0]
+    
+    print(f"DEBUG: UDP Discovery finished: {ip}:{port} using mode {mode}")
+    await self.select_protocol(ip, port, mode)
+
+DiscordVoiceWebSocket.initial_connection = patched_initial_connection
 
 # Standard logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
