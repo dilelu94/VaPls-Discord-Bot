@@ -50,6 +50,19 @@ except RuntimeError:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+# Monkey-patch discord.opus.Decoder.decode to be resilient to "corrupted stream" errors
+# which are common during DAVE handshake stabilization.
+original_decode = discord.opus.Decoder.decode
+def patched_decode(self, data, *, fec=False):
+    try:
+        return original_decode(self, data, fec=fec)
+    except discord.opus.OpusError as e:
+        if "corrupted stream" in str(e):
+            # Return silence (20ms of 48k stereo PCM is 3840 bytes)
+            return b"\x00" * 3840
+        raise e
+discord.opus.Decoder.decode = patched_decode
+
 class KeywordDetectorSink(discord.sinks.WaveSink):
     __sink_listeners__ = []
 
