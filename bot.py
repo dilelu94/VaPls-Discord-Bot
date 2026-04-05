@@ -19,8 +19,8 @@ import discord.voice_client
 from keywords import check_keywords
 import config
 
-# Monkeypatch DiscordVoiceWebSocket to support DAVE protocol (E2EE)
-# Required since the current py-cord version (2.6.1) doesn't have it natively.
+# Monkeypatch DiscordVoiceWebSocket to support modern Discord Gateway
+# and try to handle AEAD decryption properly.
 
 # 1. Prevent port stripping in endpoint and INITIALIZE SOCKET
 original_on_voice_server_update = discord.voice_client.VoiceClient.on_voice_server_update
@@ -30,7 +30,6 @@ async def patched_on_voice_server_update(self, data):
     self.server_id = int(data["guild_id"])
     endpoint = data.get("endpoint")
     if endpoint:
-        # Keep the whole host:port
         self.endpoint = endpoint.replace("wss://", "")
         if ":" not in self.endpoint:
             self.endpoint += ":443"
@@ -47,7 +46,7 @@ async def patched_on_voice_server_update(self, data):
 
 discord.voice_client.VoiceClient.on_voice_server_update = patched_on_voice_server_update
 
-# 2. IDENTIFY with max_dave_protocol_version: 1 (MANDATORY in 2026)
+# 2. IDENTIFY with max_dave_protocol_version: 1 (Mandatory for AEAD modes)
 async def patched_identify(self):
     print(f"DEBUG: Identifying for server {self._connection.server_id} with DAVE support (v1)")
     state = self._connection
@@ -58,7 +57,7 @@ async def patched_identify(self):
             "user_id": int(state.user.id),
             "session_id": state.session_id,
             "token": state.token,
-            "max_dave_protocol_version": 1, # Mandatory
+            "max_dave_protocol_version": 1,
             "video": False,
             "streams": [],
         },
@@ -97,14 +96,13 @@ async def patched_initial_connection(self, data):
     
     modes = data.get("modes", [])
     print(f"DEBUG: Available voice modes: {modes}")
-    if not modes:
-        mode = "xsalsa20_poly1305"
+    # Prioritize AEAD modes
+    if "aead_aes256_gcm_rtpsize" in modes:
+        mode = "aead_aes256_gcm_rtpsize"
+    elif modes:
+        mode = modes[0]
     else:
-        # Prefer AEAD modes used by DAVE
-        if "aead_aes256_gcm_rtpsize" in modes:
-            mode = "aead_aes256_gcm_rtpsize"
-        else:
-            mode = modes[0]
+        mode = "xsalsa20_poly1305"
 
     packet = bytearray(74)
     struct.pack_into(">H", packet, 0, 1)
@@ -121,7 +119,6 @@ async def patched_initial_connection(self, data):
     if len(recv) < 74:
         raise Exception("UDP packet too short")
 
-    # Correct offsets for Discord UDP Discovery
     ip = recv[8:72].decode("ascii").split("\x00", 1)[0]
     port = struct.unpack_from(">H", recv, 72)[0]
     
@@ -133,19 +130,16 @@ DiscordVoiceWebSocket.initial_connection = patched_initial_connection
 # 5. Patch decryption methods for AEAD
 def _decrypt_aead_aes256_gcm_rtpsize(self, header, data):
     try:
-        # Discord GCM: Key is 32 bytes, Nonce is first 12 bytes of header, AAD is header
+        # Nonce is 12-byte RTP header
+        # AAD is 12-byte RTP header
+        # Payload is data (ciphertext + tag)
         key = bytes(self.secret_key)
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(bytes(header), bytes(data), bytes(header))
     except Exception:
         return b""
 
-def _decrypt_aead_xchacha20_poly1305_rtpsize(self, header, data):
-    # Fallback if xchacha is selected, though AES is more common
-    return b""
-
 discord.voice_client.VoiceClient._decrypt_aead_aes256_gcm_rtpsize = _decrypt_aead_aes256_gcm_rtpsize
-discord.voice_client.VoiceClient._decrypt_aead_xchacha20_poly1305_rtpsize = _decrypt_aead_xchacha20_poly1305_rtpsize
 
 # Standard logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
@@ -217,11 +211,13 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             detected = False
             for lang, rec in self.recognizers[user_id].items():
                 if rec.AcceptWaveform(data_16k):
-                    text = json.loads(rec.Result()).get("text", "")
+                    result = json.loads(rec.Result())
+                    text = result.get("text", "")
                     if text:
                         print(f"[TRANSCRIPTION][{lang}] User {user_id}: {text}")
                 else:
-                    text = json.loads(rec.PartialResult()).get("partial", "")
+                    partial = json.loads(rec.PartialResult())
+                    text = partial.get("partial", "")
                 
                 if text and check_keywords(text):
                     detected = True
@@ -291,6 +287,10 @@ async def on_voice_state_update(member, before, after):
         elif before.channel != after.channel:
             print(f"DEBUG: Bot moved voice channel from {before.channel.name} to {after.channel.name}")
 
+# Correct coroutine for recording finished callback
+async def on_record_finished(sink, *args):
+    print("DEBUG: Recording session finished.")
+
 @bot.slash_command(name="escuchar", description="Escucha palabras clave")
 async def escuchar(ctx: discord.ApplicationContext):
     await ctx.defer()
@@ -333,7 +333,7 @@ async def escuchar(ctx: discord.ApplicationContext):
         print(f"DEBUG: Voice connection stabilized. Starting KeywordDetectorSink.")
         vc.start_recording(
             KeywordDetectorSink(vc),
-            lambda sink, *args: print(f"DEBUG: Sink for {channel.name} finished."),
+            on_record_finished,
             ctx.channel
         )
         await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
