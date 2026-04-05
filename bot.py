@@ -12,31 +12,53 @@ import threading
 import aiohttp
 from discord.ext import commands
 from discord.gateway import DiscordVoiceWebSocket
+import discord.voice_client
 from keywords import check_keywords
 import config
 
 # Monkeypatch DiscordVoiceWebSocket to support DAVE protocol (E2EE)
 # Required since the current py-cord version (2.6.1) doesn't have it natively.
 
-original_identify = DiscordVoiceWebSocket.identify
+# 1. Prevent port stripping in endpoint
+original_on_voice_server_update = discord.voice_client.VoiceClient.on_voice_server_update
 
+async def patched_on_voice_server_update(self, data):
+    self.token = data.get("token")
+    self.server_id = int(data["guild_id"])
+    endpoint = data.get("endpoint")
+    if endpoint:
+        # Keep the whole host:port
+        self.endpoint = endpoint.replace("wss://", "").replace(":80", ":443")
+    
+    if not self._handshaking:
+        if self.ws:
+            await self.ws.close(4000)
+        return
+    self._voice_server_complete.set()
+
+discord.voice_client.VoiceClient.on_voice_server_update = patched_on_voice_server_update
+
+# 2. Add DAVE fields to IDENTIFY
 async def patched_identify(self):
-    print("DEBUG: Using patched_identify with DAVE support")
+    print(f"DEBUG: Using patched_identify with DAVE support for server {self._connection.server_id}")
     state = self._connection
     payload = {
         "op": self.IDENTIFY,
         "d": {
-            "server_id": str(state.server_id),
-            "user_id": str(state.user.id),
+            "server_id": int(state.server_id),
+            "user_id": int(state.user.id),
             "session_id": state.session_id,
             "token": state.token,
             "max_dave_protocol_version": 1,
+            "video": False,
+            "streams": [],
         },
     }
     await self.send_as_json(payload)
 
 DiscordVoiceWebSocket.identify = patched_identify
 
+# 3. Use v=7 for Gateway
 original_from_client = DiscordVoiceWebSocket.from_client
 
 @classmethod
@@ -62,7 +84,6 @@ async def patched_from_client(cls, client, *, resume=False, hook=None):
 DiscordVoiceWebSocket.from_client = patched_from_client
 
 # Standard logging
-...
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
 logger = logging.getLogger('bot')
 
@@ -174,14 +195,21 @@ async def on_connect():
 async def on_disconnect():
     print("WARNING: Disconnected from Discord Gateway.")
 
+# Command sync flag
+synced = False
+
 @bot.event
 async def on_ready():
+    global synced
     print(f"✅ Bot is online as {bot.user}")
-    try:
-        await bot.sync_commands()
-        print("DEBUG: Commands synced successfully")
-    except Exception as e:
-        print(f"ERROR: Failed to sync commands: {e}")
+    if not synced:
+        try:
+            await bot.sync_commands()
+            print("DEBUG: Commands synced successfully")
+            synced = True
+        except Exception as e:
+            print(f"ERROR: Failed to sync commands: {e}")
+    
     print(f"DEBUG: Active Guilds: {[(guild.name, guild.id) for guild in bot.guilds]}")
     # Application commands (Slash commands)
     print(f"DEBUG: Slash Commands registered: {[cmd.name for cmd in bot.application_commands]}")
