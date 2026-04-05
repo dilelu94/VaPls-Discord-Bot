@@ -8,144 +8,15 @@ import glob
 import json
 import audioop
 import vosk
-import threading
-import aiohttp
-import socket
-import struct
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from discord.ext import commands
-from discord.gateway import DiscordVoiceWebSocket
-import discord.voice_client
 from keywords import check_keywords
 import config
-
-# Monkeypatch DiscordVoiceWebSocket to support modern Discord Gateway
-# and try to handle AEAD decryption properly.
-
-# 1. Prevent port stripping in endpoint and INITIALIZE SOCKET
-original_on_voice_server_update = discord.voice_client.VoiceClient.on_voice_server_update
-
-async def patched_on_voice_server_update(self, data):
-    self.token = data.get("token")
-    self.server_id = int(data["guild_id"])
-    endpoint = data.get("endpoint")
-    if endpoint:
-        self.endpoint = endpoint.replace("wss://", "")
-        if ":" not in self.endpoint:
-            self.endpoint += ":443"
-    
-    self.endpoint_ip = discord.utils.MISSING
-    self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    self.socket.setblocking(False)
-
-    if not self._handshaking:
-        if self.ws:
-            await self.ws.close(4000)
-        return
-    self._voice_server_complete.set()
-
-discord.voice_client.VoiceClient.on_voice_server_update = patched_on_voice_server_update
-
-# 2. IDENTIFY with max_dave_protocol_version: 1 (Mandatory for AEAD modes)
-async def patched_identify(self):
-    print(f"DEBUG: Identifying for server {self._connection.server_id} with DAVE support (v1)")
-    state = self._connection
-    payload = {
-        "op": self.IDENTIFY,
-        "d": {
-            "server_id": int(state.server_id),
-            "user_id": int(state.user.id),
-            "session_id": state.session_id,
-            "token": state.token,
-            "max_dave_protocol_version": 1,
-            "video": False,
-            "streams": [],
-        },
-    }
-    await self.send_as_json(payload)
-
-DiscordVoiceWebSocket.identify = patched_identify
-
-# 3. Use v=7 for Gateway
-@classmethod
-async def patched_from_client(cls, client, *, resume=False, hook=None):
-    print(f"DEBUG: Using patched_from_client for endpoint {client.endpoint}")
-    gateway = f"wss://{client.endpoint}/?v=7"
-    http = client._state.http
-    socket_ws = await http.ws_connect(gateway, compress=15)
-    ws = cls(socket_ws, loop=client.loop, hook=hook)
-    ws.gateway = gateway
-    ws._connection = client
-    ws._max_heartbeat_timeout = 60.0
-    ws.thread_id = threading.get_ident()
-
-    if resume:
-        await ws.resume()
-    else:
-        await ws.identify()
-    return ws
-
-DiscordVoiceWebSocket.from_client = patched_from_client
-
-# 4. Patch initial_connection to handle modes safely
-async def patched_initial_connection(self, data):
-    state = self._connection
-    state.ssrc = data["ssrc"]
-    state.voice_port = data["port"]
-    state.endpoint_ip = data["ip"]
-    
-    modes = data.get("modes", [])
-    print(f"DEBUG: Available voice modes: {modes}")
-    # Prioritize AEAD modes
-    if "aead_aes256_gcm_rtpsize" in modes:
-        mode = "aead_aes256_gcm_rtpsize"
-    elif modes:
-        mode = modes[0]
-    else:
-        mode = "xsalsa20_poly1305"
-
-    packet = bytearray(74)
-    struct.pack_into(">H", packet, 0, 1)
-    struct.pack_into(">H", packet, 2, 70)
-    struct.pack_into(">I", packet, 4, state.ssrc)
-    state.socket.sendto(packet, (state.endpoint_ip, state.voice_port))
-    
-    try:
-        recv = await asyncio.wait_for(self.loop.sock_recv(state.socket, 74), timeout=5.0)
-    except asyncio.TimeoutError:
-        print("ERROR: UDP IP discovery timed out.")
-        raise
-        
-    if len(recv) < 74:
-        raise Exception("UDP packet too short")
-
-    ip = recv[8:72].decode("ascii").split("\x00", 1)[0]
-    port = struct.unpack_from(">H", recv, 72)[0]
-    
-    print(f"DEBUG: UDP Discovery finished: {ip}:{port} using mode {mode}")
-    await self.select_protocol(ip, port, mode)
-
-DiscordVoiceWebSocket.initial_connection = patched_initial_connection
-
-# 5. Patch decryption methods for AEAD
-def _decrypt_aead_aes256_gcm_rtpsize(self, header, data):
-    try:
-        # Nonce is 12-byte RTP header
-        # AAD is 12-byte RTP header
-        # Payload is data (ciphertext + tag)
-        key = bytes(self.secret_key)
-        aesgcm = AESGCM(key)
-        return aesgcm.decrypt(bytes(header), bytes(data), bytes(header))
-    except Exception:
-        return b""
-
-discord.voice_client.VoiceClient._decrypt_aead_aes256_gcm_rtpsize = _decrypt_aead_aes256_gcm_rtpsize
 
 # Standard logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
 logger = logging.getLogger('bot')
 
-# Suppress the DAVE protocol warning
+# Suppress the DAVE protocol warning as we have davey installed
 warnings.filterwarnings("ignore", category=RuntimeWarning, message="Voice reception is currently broken")
 
 # Initialize Vosk models
@@ -180,11 +51,13 @@ except RuntimeError:
     asyncio.set_event_loop(loop)
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
-    def __init__(self, vc, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, vc, **kwargs):
+        # WaveSink in py-cord 2.8+ only takes filters as keyword args
+        super().__init__(**kwargs)
         self.vc = vc
         self.recognizers = {}
         self.resample_states = {}
+        # Vocabularies to speed up recognition and reduce CPU usage
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
 
@@ -202,6 +75,8 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             self.resample_states[user_id] = None
 
         try:
+            # Py-cord 2.8+ feeds PCM data to write() for WaveSink
+            # Convert to mono and resample to 16kHz for Vosk
             mono_data = audioop.tomono(data, 2, 0.5, 0.5)
             data_16k, new_state = audioop.ratecv(
                 mono_data, 2, 1, 48000, 16000, self.resample_states[user_id]
@@ -244,18 +119,18 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
 intents = discord.Intents.default()
 intents.voice_states = True
 
-# Guild ID del servidor de pruebas
+# Guild ID for testing
 bot = discord.Bot(intents=intents, debug_guilds=[523359466528440320])
 
 @bot.event
 async def on_connect():
-    print(f"DEBUG: Connected to Gateway. (Latencia: {bot.latency*1000:.2f}ms)")
+    print(f"DEBUG: Connected to Gateway. (Latency: {bot.latency*1000:.2f}ms)")
 
 @bot.event
 async def on_disconnect():
     print("WARNING: Disconnected from Discord Gateway.")
 
-# Command sync flag
+# Command sync flag to avoid spamming Discord
 synced = False
 
 @bot.event
@@ -274,7 +149,7 @@ async def on_ready():
     # Application commands (Slash commands)
     print(f"DEBUG: Slash Commands registered: {[cmd.name for cmd in bot.application_commands]}")
     print(f"DEBUG: Pending Commands: {[cmd.name for cmd in bot.pending_application_commands]}")
-    print(f"DEBUG: All commands (bot.all_commands): {list(bot.all_commands.keys())}")
+    print(f"DEBUG: All commands: {list(bot.all_commands.keys())}")
     print("--- Ready to receive commands ---")
 
 @bot.event
@@ -287,9 +162,12 @@ async def on_voice_state_update(member, before, after):
         elif before.channel != after.channel:
             print(f"DEBUG: Bot moved voice channel from {before.channel.name} to {after.channel.name}")
 
-# Correct coroutine for recording finished callback
-async def on_record_finished(sink, *args):
-    print("DEBUG: Recording session finished.")
+# Correct coroutine for recording finished callback in py-cord 2.8+
+async def on_record_finished(exception):
+    if exception:
+        print(f"DEBUG: Recording finished with error: {exception}")
+    else:
+        print("DEBUG: Recording session finished successfully.")
 
 @bot.slash_command(name="escuchar", description="Escucha palabras clave")
 async def escuchar(ctx: discord.ApplicationContext):
@@ -308,11 +186,12 @@ async def escuchar(ctx: discord.ApplicationContext):
             print("DEBUG: Already in the correct channel.")
             return await ctx.followup.send("🎙️ ¡Ya estoy escuchando!")
         else:
-            print(f"DEBUG: Moving from {ctx.voice_client.channel.name} to {channel.name}")
+            print(f"DEBUG: Moving to {channel.name}")
             await ctx.voice_client.move_to(channel)
             vc = ctx.voice_client
     else:
         try:
+            # VoiceClient handles DAVE protocol automatically in 2.8+ if davey is installed
             vc = await channel.connect(timeout=60.0, reconnect=True)
             print(f"DEBUG: Connected to {channel.name}")
         except Exception as e:
@@ -320,21 +199,22 @@ async def escuchar(ctx: discord.ApplicationContext):
             return await ctx.followup.send(f"❌ Error al conectar: {e}")
 
     try:
+        # Stabilize connection
         connected = False
         for i in range(40):
-            if vc.is_connected() and hasattr(vc, 'ws') and vc.ws:
+            if vc.is_connected() and vc.ws:
                 connected = True
                 break
             await asyncio.sleep(0.5)
 
         if not connected:
-            raise Exception("Timeout: La voz no se estabilizó.")
+            raise Exception("Timeout: Voice connection did not stabilize.")
 
         print(f"DEBUG: Voice connection stabilized. Starting KeywordDetectorSink.")
+        # sync_start is deprecated in 2.8+, passing it via kwargs just in case
         vc.start_recording(
             KeywordDetectorSink(vc),
-            on_record_finished,
-            ctx.channel
+            on_record_finished
         )
         await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
         

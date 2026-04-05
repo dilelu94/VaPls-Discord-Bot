@@ -1,4 +1,4 @@
-py-cord[voice]==2.6.1
+py-cord[voice] @ git+https://github.com/Pycord-Development/pycord
 davey
 vosk
 python-dotenv
