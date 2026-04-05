@@ -60,7 +60,6 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         self.__sink_listeners__ = [] # Ensure instance also has it
         self.recognizers = {}
         self.resample_states = {}
-        self.decoders = {}
         # Vocabularies to speed up recognition and reduce CPU usage
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
@@ -69,26 +68,17 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         return []
 
     def is_opus(self):
-        return True
+        return False
 
     def write(self, data, user_id):
-        # data is VoiceData object when is_opus is True
-        opus_data = getattr(data, 'opus', None)
-        if not opus_data:
+        # In py-cord 2.8+, data might be a VoiceData object
+        if hasattr(data, 'pcm'):
+            data = data.pcm
+        
+        if not isinstance(data, (bytes, bytearray)):
             return
 
-        if user_id not in self.decoders:
-            self.decoders[user_id] = discord.opus.Decoder()
-
-        try:
-            pcm_data = self.decoders[user_id].decode(opus_data, fec=False)
-        except discord.opus.OpusError as e:
-            if "corrupted stream" in str(e):
-                return # Ignore early encrypted or corrupted packets
-            raise e
-
-        # Pass PCM bytes to WaveSink and Vosk
-        super().write(pcm_data, user_id)
+        super().write(data, user_id)
         if model_es is None and model_en is None:
             return
 
@@ -225,9 +215,9 @@ async def escuchar(ctx: discord.ApplicationContext):
             return await ctx.followup.send(f"❌ Error al conectar: {e}")
 
     try:
-        # Stabilize connection
+        # Stabilize connection and wait for DAVE handshake
         connected = False
-        for i in range(40):
+        for i in range(120): # Longer timeout for DAVE
             if vc.is_connected() and vc.ws:
                 connected = True
                 break
@@ -236,8 +226,10 @@ async def escuchar(ctx: discord.ApplicationContext):
         if not connected:
             raise Exception("Timeout: Voice connection did not stabilize.")
 
+        # Extra delay for E2EE key exchange
+        await asyncio.sleep(2.0)
+        
         print(f"DEBUG: Voice connection stabilized. Starting KeywordDetectorSink.")
-        # sync_start is deprecated in 2.8+, passing it via kwargs just in case
         vc.start_recording(
             KeywordDetectorSink(vc),
             on_record_finished
