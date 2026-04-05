@@ -10,6 +10,7 @@ import audioop
 import vosk
 import threading
 import aiohttp
+import socket
 from discord.ext import commands
 from discord.gateway import DiscordVoiceWebSocket
 import discord.voice_client
@@ -19,7 +20,7 @@ import config
 # Monkeypatch DiscordVoiceWebSocket to support DAVE protocol (E2EE)
 # Required since the current py-cord version (2.6.1) doesn't have it natively.
 
-# 1. Prevent port stripping in endpoint
+# 1. Prevent port stripping in endpoint and INITIALIZE SOCKET
 original_on_voice_server_update = discord.voice_client.VoiceClient.on_voice_server_update
 
 async def patched_on_voice_server_update(self, data):
@@ -30,6 +31,11 @@ async def patched_on_voice_server_update(self, data):
         # Keep the whole host:port
         self.endpoint = endpoint.replace("wss://", "").replace(":80", ":443")
     
+    # CRITICAL: Re-implement original socket initialization omitted in previous patch
+    self.endpoint_ip = discord.utils.MISSING
+    self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    self.socket.setblocking(False)
+
     if not self._handshaking:
         if self.ws:
             await self.ws.close(4000)
