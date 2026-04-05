@@ -67,6 +67,15 @@ def patched_decode_packet(self, packet):
         raise e
 discord.opus.PacketDecoder._decode_packet = patched_decode_packet
 
+# Silence RecordingException during stop_recording
+original_stop_recording = discord.VoiceClient.stop_recording
+def patched_stop_recording(self):
+    try:
+        return original_stop_recording(self)
+    except Exception: # Catch RecordingException and others
+        pass
+discord.VoiceClient.stop_recording = patched_stop_recording
+
 class KeywordDetectorSink(discord.sinks.WaveSink):
     __sink_listeners__ = []
 
@@ -77,6 +86,7 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         self.__sink_listeners__ = [] # Ensure instance also has it
         self.recognizers = {}
         self.resample_states = {}
+        self.packet_counts = {}
         # Vocabularies to speed up recognition and reduce CPU usage
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
@@ -87,7 +97,8 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
     def is_opus(self):
         return False
 
-    def write(self, data, user_id):
+    def write(self, data, user):
+        user_id = getattr(user, 'id', user)
         # In py-cord 2.8+, data might be a VoiceData object
         if hasattr(data, 'pcm'):
             data = data.pcm
@@ -101,6 +112,7 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
 
         if user_id not in self.recognizers:
             self.recognizers[user_id] = {}
+            self.packet_counts[user_id] = 0
             if model_es:
                 self.recognizers[user_id]['es'] = vosk.KaldiRecognizer(model_es, 16000, self.vocab_es)
             if model_en:
@@ -108,6 +120,12 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             self.resample_states[user_id] = None
 
         try:
+            self.packet_counts[user_id] += 1
+            # Log RMS every 100 packets to verify audio activity
+            if self.packet_counts[user_id] % 100 == 0:
+                rms = audioop.rms(data, 2)
+                print(f"DEBUG: Audio telemetry for User {user_id}: RMS={rms} ({self.packet_counts[user_id]} packets)")
+
             # Py-cord 2.8+ feeds PCM data to write() for WaveSink
             # Convert to mono and resample to 16kHz for Vosk
             mono_data = audioop.tomono(data, 2, 0.5, 0.5)
