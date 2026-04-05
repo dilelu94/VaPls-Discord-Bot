@@ -51,15 +51,21 @@ except RuntimeError:
     asyncio.set_event_loop(loop)
 
 class KeywordDetectorSink(discord.sinks.WaveSink):
+    __sink_listeners__ = []
+
     def __init__(self, vc, **kwargs):
         # WaveSink in py-cord 2.8+ only takes filters as keyword args
         super().__init__(**kwargs)
         self.vc = vc
+        self.__sink_listeners__ = [] # Ensure instance also has it
         self.recognizers = {}
         self.resample_states = {}
         # Vocabularies to speed up recognition and reduce CPU usage
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
+
+    def walk_children(self):
+        return []
 
     def write(self, data, user_id):
         super().write(data, user_id)
