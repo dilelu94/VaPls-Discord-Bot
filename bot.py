@@ -71,6 +71,8 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         return False
 
     def write(self, data, user_id):
+        if hasattr(data, 'pcm'):
+            data = data.pcm
         super().write(data, user_id)
         if model_es is None and model_en is None:
             return
