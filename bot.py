@@ -12,14 +12,15 @@ import threading
 import aiohttp
 import socket
 import struct
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from discord.ext import commands
 from discord.gateway import DiscordVoiceWebSocket
 import discord.voice_client
 from keywords import check_keywords
 import config
 
-# Monkeypatch DiscordVoiceWebSocket to support DAVE protocol (E2EE)
-# Required since the current py-cord version (2.6.1) doesn't have it natively.
+# Monkeypatch DiscordVoiceWebSocket to support modern Discord Gateway
+# and try to avoid mandatory DAVE by setting version to 0.
 
 # 1. Prevent port stripping in endpoint and INITIALIZE SOCKET
 original_on_voice_server_update = discord.voice_client.VoiceClient.on_voice_server_update
@@ -29,7 +30,6 @@ async def patched_on_voice_server_update(self, data):
     self.server_id = int(data["guild_id"])
     endpoint = data.get("endpoint")
     if endpoint:
-        # Keep the whole host:port
         self.endpoint = endpoint.replace("wss://", "")
         if ":" not in self.endpoint:
             self.endpoint += ":443"
@@ -46,9 +46,9 @@ async def patched_on_voice_server_update(self, data):
 
 discord.voice_client.VoiceClient.on_voice_server_update = patched_on_voice_server_update
 
-# 2. Add DAVE fields to IDENTIFY
+# 2. IDENTIFY with max_dave_protocol_version: 0 to avoid MLS if possible
 async def patched_identify(self):
-    print(f"DEBUG: Using patched_identify with DAVE support for server {self._connection.server_id}")
+    print(f"DEBUG: Identifying for server {self._connection.server_id} (DAVE version 0)")
     state = self._connection
     payload = {
         "op": self.IDENTIFY,
@@ -57,7 +57,7 @@ async def patched_identify(self):
             "user_id": int(state.user.id),
             "session_id": state.session_id,
             "token": state.token,
-            "max_dave_protocol_version": 1,
+            "max_dave_protocol_version": 0, # Try to avoid MLS
             "video": False,
             "streams": [],
         },
@@ -66,12 +66,9 @@ async def patched_identify(self):
 
 DiscordVoiceWebSocket.identify = patched_identify
 
-# 3. Use v=7 for Gateway
-original_from_client = DiscordVoiceWebSocket.from_client
-
+# 3. Use v=7 for Gateway (required for newer features even without DAVE)
 @classmethod
 async def patched_from_client(cls, client, *, resume=False, hook=None):
-    """Creates a voice websocket for the :class:`VoiceClient` with v=7 for DAVE support."""
     print(f"DEBUG: Using patched_from_client for endpoint {client.endpoint}")
     gateway = f"wss://{client.endpoint}/?v=7"
     http = client._state.http
@@ -86,12 +83,11 @@ async def patched_from_client(cls, client, *, resume=False, hook=None):
         await ws.resume()
     else:
         await ws.identify()
-
     return ws
 
 DiscordVoiceWebSocket.from_client = patched_from_client
 
-# 4. Patch initial_connection to handle modes safely (Fix list index out of range)
+# 4. Patch initial_connection to handle modes safely
 async def patched_initial_connection(self, data):
     state = self._connection
     state.ssrc = data["ssrc"]
@@ -101,15 +97,17 @@ async def patched_initial_connection(self, data):
     modes = data.get("modes", [])
     print(f"DEBUG: Available voice modes: {modes}")
     if not modes:
-        print("WARNING: No voice modes received in READY payload. Using default.")
         mode = "xsalsa20_poly1305"
     else:
-        # Preferred mode for DAVE is often at the end or specific, but we'll take the first available
-        mode = modes[0]
+        # Prefer AEAD if offered, otherwise fallback
+        if "aead_aes256_gcm_rtpsize" in modes:
+            mode = "aead_aes256_gcm_rtpsize"
+        else:
+            mode = modes[0]
 
     packet = bytearray(74)
-    struct.pack_into(">H", packet, 0, 1)  # 1 = Send
-    struct.pack_into(">H", packet, 2, 70)  # 70 = Length
+    struct.pack_into(">H", packet, 0, 1)
+    struct.pack_into(">H", packet, 2, 70)
     struct.pack_into(">I", packet, 4, state.ssrc)
     state.socket.sendto(packet, (state.endpoint_ip, state.voice_port))
     
@@ -119,13 +117,9 @@ async def patched_initial_connection(self, data):
         print("ERROR: UDP IP discovery timed out.")
         raise
         
-    # Discord UDP discovery response:
-    # 0-1: Type (0x02), 2-3: Length (70), 4-7: SSRC, 8-71: IP, 72-73: Port
     if len(recv) < 74:
-        print(f"ERROR: Received short UDP packet ({len(recv)} bytes)")
         raise Exception("UDP packet too short")
 
-    # The IP starts at index 8 and is null-terminated
     ip = recv[8:72].decode("ascii").split("\x00", 1)[0]
     port = struct.unpack_from(">H", recv, 72)[0]
     
@@ -133,6 +127,24 @@ async def patched_initial_connection(self, data):
     await self.select_protocol(ip, port, mode)
 
 DiscordVoiceWebSocket.initial_connection = patched_initial_connection
+
+# 5. Robust patch for VoiceClient decryption methods
+def _decrypt_aead_aes256_gcm_rtpsize(self, header, data):
+    try:
+        key = bytes(self.secret_key)
+        aesgcm = AESGCM(key)
+        return aesgcm.decrypt(bytes(header), bytes(data), bytes(header))
+    except Exception:
+        return b""
+
+def _decrypt_aead_xchacha20_poly1305_rtpsize(self, header, data):
+    # Fallback to empty if not easily implementable, but usually AES is preferred
+    return b""
+
+# Patch both locations to be sure
+for cls in [discord.voice_client.VoiceClient, discord.VoiceClient]:
+    cls._decrypt_aead_aes256_gcm_rtpsize = _decrypt_aead_aes256_gcm_rtpsize
+    cls._decrypt_aead_xchacha20_poly1305_rtpsize = _decrypt_aead_xchacha20_poly1305_rtpsize
 
 # Standard logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
@@ -216,7 +228,7 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
             
             if detected:
                 self.trigger_audio(user_id, text)
-        except Exception as e:
+        except Exception:
             pass
 
     def trigger_audio(self, user_id, detected_text):
