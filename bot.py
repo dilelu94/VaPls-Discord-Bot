@@ -67,6 +67,9 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
     def walk_children(self):
         return []
 
+    def is_opus(self):
+        return False
+
     def write(self, data, user_id):
         super().write(data, user_id)
         if model_es is None and model_en is None:
@@ -168,8 +171,8 @@ async def on_voice_state_update(member, before, after):
         elif before.channel != after.channel:
             print(f"DEBUG: Bot moved voice channel from {before.channel.name} to {after.channel.name}")
 
-# Correct coroutine for recording finished callback in py-cord 2.8+
-async def on_record_finished(exception):
+# Regular function for recording finished callback in py-cord 2.8+
+def on_record_finished(exception):
     if exception:
         print(f"DEBUG: Recording finished with error: {exception}")
     else:
