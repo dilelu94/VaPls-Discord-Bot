@@ -119,7 +119,14 @@ async def patched_initial_connection(self, data):
         print("ERROR: UDP IP discovery timed out.")
         raise
         
-    ip = recv[4:74].decode("ascii").strip("\x00")
+    # Discord UDP discovery response:
+    # 0-1: Type (0x02), 2-3: Length (70), 4-7: SSRC, 8-71: IP, 72-73: Port
+    if len(recv) < 74:
+        print(f"ERROR: Received short UDP packet ({len(recv)} bytes)")
+        raise Exception("UDP packet too short")
+
+    # The IP starts at index 8 and is null-terminated
+    ip = recv[8:72].decode("ascii").split("\x00", 1)[0]
     port = struct.unpack_from(">H", recv, 72)[0]
     
     print(f"DEBUG: UDP Discovery finished: {ip}:{port} using mode {mode}")
