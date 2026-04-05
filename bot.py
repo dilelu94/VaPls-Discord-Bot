@@ -60,6 +60,7 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         self.__sink_listeners__ = [] # Ensure instance also has it
         self.recognizers = {}
         self.resample_states = {}
+        self.decoders = {}
         # Vocabularies to speed up recognition and reduce CPU usage
         self.vocab_es = '["necesito", "pito", "[unk]"]'
         self.vocab_en = '["i need", "whistle", "[unk]"]'
@@ -68,12 +69,26 @@ class KeywordDetectorSink(discord.sinks.WaveSink):
         return []
 
     def is_opus(self):
-        return False
+        return True
 
     def write(self, data, user_id):
-        if hasattr(data, 'pcm'):
-            data = data.pcm
-        super().write(data, user_id)
+        # data is VoiceData object when is_opus is True
+        opus_data = getattr(data, 'opus', None)
+        if not opus_data:
+            return
+
+        if user_id not in self.decoders:
+            self.decoders[user_id] = discord.opus.Decoder()
+
+        try:
+            pcm_data = self.decoders[user_id].decode(opus_data, fec=False)
+        except discord.opus.OpusError as e:
+            if "corrupted stream" in str(e):
+                return # Ignore early encrypted or corrupted packets
+            raise e
+
+        # Pass PCM bytes to WaveSink and Vosk
+        super().write(pcm_data, user_id)
         if model_es is None and model_en is None:
             return
 
