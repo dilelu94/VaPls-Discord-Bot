@@ -1,4 +1,5 @@
 import os
+import asyncio
 import discord
 import config
 
@@ -68,33 +69,70 @@ class SoundpadView(discord.ui.View):
         if status_text: embed.add_field(name="⚡ Estado", value=status_text, inline=False)
         await interaction.response.edit_message(embed=embed, view=self)
 
-    async def play_sound(self, interaction: discord.Interaction):
-        # Buscar el voice_client de forma mas exhaustiva
-        vc = discord.utils.get(interaction.client.voice_clients, guild=interaction.guild)
-        
-        if not vc or not vc.is_connected():
-            # Intentar reconectar si el usuario esta en voz
-            if interaction.user.voice:
+    async def _force_reconnect(self, interaction: discord.Interaction):
+        if not interaction.user.voice:
+            return None, "No estás en un canal de voz."
+        for stale in list(interaction.client.voice_clients):
+            if stale.guild.id == interaction.guild.id:
                 try:
-                    vc = await interaction.user.voice.channel.connect(reconnect=True, timeout=10.0)
-                except Exception as e:
-                    return await interaction.followup.send(f"❌ Error al conectar: {e}", ephemeral=True)
-            else:
-                return await interaction.followup.send("❌ No estoy en un canal de voz y tu tampoco.", ephemeral=True)
-        
+                    await stale.disconnect(force=True)
+                except Exception:
+                    pass
+        try:
+            vc = await interaction.user.voice.channel.connect(reconnect=True, timeout=10.0)
+        except Exception as e:
+            return None, f"Error al reconectar: {e}"
+        try:
+            from bot import start_listening
+            await start_listening(vc)
+        except Exception:
+            pass
+        return vc, None
+
+    async def play_sound(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        vc = guild.voice_client
+
+        # _connected puede estar False transitoriamente durante renegociación DAVE.
+        if not vc or not vc.is_connected():
+            for _ in range(5):
+                await asyncio.sleep(0.3)
+                vc = guild.voice_client
+                if vc and vc.is_connected():
+                    break
+            if not vc or not vc.is_connected():
+                vc, err = await self._force_reconnect(interaction)
+                if err:
+                    return await interaction.followup.send(f"❌ {err}", ephemeral=True)
+
         filepath = os.path.join(self.output_dir, self.selected_category, self.selected_file)
         if not os.path.exists(filepath):
             return await interaction.followup.send(f"❌ No encuentro el archivo: {self.selected_file}", ephemeral=True)
 
         try:
-            if vc.is_playing(): vc.stop()
-            # Pequeña espera para asegurar que FFmpeg se limpio
-            await asyncio.sleep(0.2)
+            if vc.is_playing():
+                vc.stop()
+                await asyncio.sleep(0.2)
+        except Exception:
+            pass
+
+        try:
             vc.play(discord.FFmpegOpusAudio(filepath))
-            await self.update_message(interaction, status_text=f"▶️ Reproduciendo: {self.selected_file}")
+            return await self.update_message(interaction, status_text=f"▶️ Reproduciendo: {self.selected_file}")
+        except discord.ClientException as e:
+            print(f"[SOUNDPAD] ClientException on play ({e}); forcing reconnect...")
+            vc, err = await self._force_reconnect(interaction)
+            if err:
+                return await interaction.followup.send(f"❌ Reconexión falló: {err}", ephemeral=True)
+            try:
+                vc.play(discord.FFmpegOpusAudio(filepath))
+                await self.update_message(interaction, status_text=f"▶️ Reproduciendo (tras reconectar): {self.selected_file}")
+            except Exception as e2:
+                print(f"[SOUNDPAD ERROR] Retry failed: {e2}")
+                await interaction.followup.send(f"❌ Error tras reconectar: {e2}", ephemeral=True)
         except Exception as e:
             print(f"[SOUNDPAD ERROR] Playback failed: {e}")
-            await interaction.followup.send(f"❌ Error de reproduccion: {e}", ephemeral=True)
+            await interaction.followup.send(f"❌ Error de reproducción: {e}", ephemeral=True)
 
     async def on_category_select(self, interaction: discord.Interaction):
         self.selected_category = interaction.data["values"][0]
