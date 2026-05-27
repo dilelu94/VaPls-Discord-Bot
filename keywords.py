@@ -1,7 +1,7 @@
 # Spanish and English keywords
-KEYWORDS = ["necesito", "pito", "i need", "whistle"]
+KEYWORDS = ["necesito", "pito", "i need", "whistle", "pedo", "caca", "fart"]
 
-def check_keywords(text: str) -> bool:
+def checkKeywords(text: str) -> bool:
     """
     Checks if any of the keywords are present in the provided text.
     The text is converted to lowercase for comparison.

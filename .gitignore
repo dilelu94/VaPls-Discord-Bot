@@ -15,3 +15,9 @@ models/*
 .planning
 *.zip
 *.log
+cookies.txt
+ssh-key*.key
+
+# Local sync config (contains server-specific paths/hosts)
+lsyncd*.lua
+lsyncd.status
