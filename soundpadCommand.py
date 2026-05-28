@@ -174,8 +174,7 @@ class SoundpadView(discord.ui.View):
     async def on_audio_select(self, interaction: discord.Interaction):
         self.selected_file = interaction.data["values"][0]
         self.setup_components()
-        await interaction.response.defer()
-        await self.play_sound(interaction)
+        await self.update_message(interaction)
 
     async def on_play_click(self, interaction: discord.Interaction):
         await interaction.response.defer()
