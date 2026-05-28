@@ -20,8 +20,53 @@ import config
 import analytics
 from apiServer import startApiServer
 
+# DAVE workaround: py-cord 2.8 leaves packet.decrypted_data = None when DAVE is
+# not ready or the ssrc is not yet mapped, so the reader silently drops the
+# packet. We override decrypt_rtp to ALWAYS set packet.decrypted_data, falling
+# back to the raw payload (post outer-AEAD) when DAVE can't decrypt yet.
+from discord.voice.receive.reader import PacketDecryptor
+from discord.voice.packets.core import OPUS_SILENCE
+from nacl.exceptions import CryptoError
+try:
+    import davey
+except ImportError:
+    davey = None
+
+def patched_decrypt_rtp(self, packet):
+    state = self.client._connection
+    dave = getattr(state, "dave_session", None)
+    try:
+        raw_payload = self._decryptor_rtp(packet)
+    except (CryptoError, Exception):
+        packet.decrypted_data = OPUS_SILENCE
+        return OPUS_SILENCE
+
+    if packet.padding and len(raw_payload) > 0:
+        pad_len = raw_payload[-1]
+        if 0 < pad_len <= len(raw_payload):
+            raw_payload = raw_payload[:-pad_len]
+
+    ssrc_map = getattr(state, "ssrc_user_map", None) or getattr(state, "_ssrc_to_id", {})
+    uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
+
+    decrypted = None
+    if dave is not None and getattr(dave, "ready", False) and uid and davey is not None:
+        try:
+            decrypted = dave.decrypt(uid, davey.MediaType.audio, raw_payload)
+        except Exception:
+            decrypted = None
+
+    payload = decrypted if decrypted is not None else raw_payload
+    if packet.extended:
+        offset = packet.update_extended_header(payload)
+        packet.decrypted_data = payload[offset:]
+    else:
+        packet.decrypted_data = payload
+    return packet.decrypted_data
+
+PacketDecryptor.decrypt_rtp = patched_decrypt_rtp
+
 # Patch decode_packet to return silence on OpusError (corrupted stream)
-# (DAVE decryption is handled by py-cord 2.8 natively via _ssrc_to_id.)
 original_decode_packet = discord.opus.PacketDecoder._decode_packet
 def patched_decode_packet(self, packet):
     try:
