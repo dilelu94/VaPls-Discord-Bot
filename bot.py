@@ -163,7 +163,13 @@ class KeywordDetectorSink(discord.sinks.Sink):
                     result = json.loads(rec.Result())
                     text = result.get("text", "")
                     if text:
-                        print(f"[VOSK][{lang}] {user_id}: {text}")
+                        # logging.info goes through configured stream handler; print() can be lost
+                        # to stdout buffering when running under systemd without PYTHONUNBUFFERED.
+                        logging.info(f"[VOSK][{lang}] {user_id}: {text}")
+                        analytics.capture("voice transcription captured", guild=getattr(self.vc, "guild", None),
+                                          properties={"language": lang, "text_length": len(text),
+                                                      "matched_keyword": checkKeywords(text)},
+                                          distinct_id=str(user_id))
                         asyncio.run_coroutine_threadsafe(self.logToDiscord(user_id, text, lang), self.vc.client.loop)
                         if checkKeywords(text): self.triggerAudio(user_id, text); break
         except Exception: pass
@@ -210,7 +216,16 @@ intents = discord.Intents.default()
 intents.voice_states = True
 bot = discord.Bot(intents=intents, )
 
+_last_soundboard_entry: dict[int, float] = {}
+
 async def trigger_soundboard_entry(channel):
+    # Throttle: DAVE 4006 disconnects cause the bot to "rejoin" repeatedly,
+    # and we don't want milapollo to fire each time.
+    now = time.time()
+    last = _last_soundboard_entry.get(channel.id, 0.0)
+    if now - last < 60.0:
+        return
+    _last_soundboard_entry[channel.id] = now
     try:
         await asyncio.sleep(2)
         sounds = await channel.guild.fetch_sounds()
@@ -310,7 +325,14 @@ async def soundpad(ctx):
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
     _track_command(ctx, "quit")
-    # Search for voice client in this guild specifically
+    # Defer immediately: vc.disconnect() with force=True can hang ~10s when
+    # DAVE leaves the voice WS in a bad state, blowing past the 3s ack window.
+    if not ctx.response.is_done():
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
+
     vc = None
     for v in bot.voice_clients:
         if v.guild.id == ctx.guild.id:
@@ -321,17 +343,33 @@ async def quit(ctx):
         channel_name = vc.channel.name
         channel_id = str(vc.channel.id)
         try:
-            await vc.disconnect(force=True)
+            try:
+                await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
+            except asyncio.TimeoutError:
+                # Voice WS won't ack; tear down state directly so the slot frees.
+                try:
+                    vc.cleanup()
+                except Exception:
+                    pass
             analytics.capture("voice channel left", user=ctx.author, guild=ctx.guild,
                               properties={"channel_id": channel_id, "channel_name": channel_name,
                                           "trigger": "quit_command"})
-            await ctx.respond(f"👋 Desconectado correctamente de {channel_name}.")
+            try:
+                await ctx.followup.send(f"👋 Desconectado correctamente de {channel_name}.")
+            except discord.NotFound:
+                pass
         except Exception as e:
             analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
                                         properties={"action": "quit_disconnect"})
-            await ctx.respond(f"⚠️ Error al desconectar: {e}")
+            try:
+                await ctx.followup.send(f"⚠️ Error al desconectar: {e}")
+            except Exception:
+                pass
     else:
-        await ctx.respond("❌ No estoy conectado a voz en este servidor.")
+        try:
+            await ctx.followup.send("❌ No estoy conectado a voz en este servidor.")
+        except Exception:
+            pass
 
 @bot.slash_command(name="restart", description="devtool - no usar")
 async def restart(ctx):
