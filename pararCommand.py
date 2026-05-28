@@ -18,8 +18,11 @@ async def pararLogic(ctx: discord.ApplicationContext):
         channel_id = str(ctx.voice_client.channel.id)
         channel_name = ctx.voice_client.channel.name
         try:
-            ctx.voice_client.stop_recording()
-            setattr(ctx.voice_client, "recording", False)
+            if ctx.voice_client.is_recording():
+                ctx.voice_client.stop_recording()
+        except Exception as e:
+            print(f"[PARAR] stop_recording error (ignorado): {e}")
+        try:
             await ctx.voice_client.disconnect(force=True)
             analytics.capture("voice channel left", user=ctx.author, guild=ctx.guild,
                               properties={"channel_id": channel_id, "channel_name": channel_name,

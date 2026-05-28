@@ -18,57 +18,10 @@ from discord.ext import commands
 from keywords import checkKeywords
 import config
 import analytics
-from apiServer import start_api_server
-
-# DAVE PROTOCOL BYPASS - AGGRESSIVE
-from discord.voice.receive.reader import PacketDecryptor
-from discord.voice.packets.core import OPUS_SILENCE
-from nacl.exceptions import CryptoError
-try:
-    import davey
-except ImportError:
-    davey = None
-
-# Patch decrypt_rtp to handle DAVE encrypted packets
-def patched_decrypt_rtp(self, packet):
-    state = self.client._connection
-    dave = state.dave_session
-    try:
-        raw_payload = self._decryptor_rtp(packet)
-    except CryptoError: return OPUS_SILENCE
-    except Exception: return OPUS_SILENCE
-    
-    if packet.padding and len(raw_payload) > 0:
-        pad_len = raw_payload[-1]
-        if 0 < pad_len <= len(raw_payload): raw_payload = raw_payload[:-pad_len]
-                
-    uid = state.ssrc_user_map.get(packet.ssrc)
-    if dave and dave.ready and uid:
-        try:
-            if dave.can_passthrough(uid):
-                if packet.extended:
-                    offset = packet.update_extended_header(raw_payload)
-                    packet.decrypted_data = raw_payload[offset:]
-                else: packet.decrypted_data = raw_payload
-            else:
-                decrypted = dave.decrypt(uid, davey.MediaType.audio, raw_payload)
-                if packet.extended: packet.update_extended_header(raw_payload)
-                packet.decrypted_data = decrypted
-        except Exception:
-            if packet.extended:
-                offset = packet.update_extended_header(raw_payload)
-                packet.decrypted_data = raw_payload[offset:]
-            else: packet.decrypted_data = raw_payload
-    else:
-        if packet.extended:
-            offset = packet.update_extended_header(raw_payload)
-            packet.decrypted_data = raw_payload[offset:]
-        else: packet.decrypted_data = raw_payload
-    return packet.decrypted_data
-
-PacketDecryptor.decrypt_rtp = patched_decrypt_rtp
+from apiServer import startApiServer
 
 # Patch decode_packet to return silence on OpusError (corrupted stream)
+# (DAVE decryption is handled by py-cord 2.8 natively via _ssrc_to_id.)
 original_decode_packet = discord.opus.PacketDecoder._decode_packet
 def patched_decode_packet(self, packet):
     try:
@@ -117,8 +70,13 @@ if not discord.opus.is_loaded():
         except Exception: continue
 
 async def safe_defer(ctx):
-    try: await ctx.defer(); return True
-    except Exception: return False
+    if hasattr(ctx, "response") and ctx.response.is_done():
+        return True
+    try:
+        await ctx.defer()
+        return True
+    except Exception:
+        return False
 
 async def safe_respond(ctx, message):
     try:
@@ -143,12 +101,17 @@ class KeywordDetectorSink(discord.sinks.Sink):
 
     def walk_children(self): return []
     def is_opus(self): return False
+    def format_audio(self, audio): return audio
     def write(self, data, user):
         user_id = getattr(user, 'id', user)
         pcm_data = getattr(data, 'pcm', data)
         if not isinstance(pcm_data, (bytes, bytearray)) or len(pcm_data) == 0: return
         self.packet_count += 1
-        
+        if self.packet_count == 1:
+            logging.info(f"[VOSK] Primer paquete recibido (user_id={user_id}, bytes={len(pcm_data)})")
+        elif self.packet_count % 250 == 0:
+            logging.info(f"[VOSK] {self.packet_count} paquetes acumulados")
+
         if user_id not in self.recognizers:
             self.recognizers[user_id] = {}
             if model_es: self.recognizers[user_id]['es'] = vosk.KaldiRecognizer(model_es, 16000)
@@ -215,6 +178,10 @@ class KeywordDetectorSink(discord.sinks.Sink):
 
 intents = discord.Intents.default()
 intents.voice_states = True
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 bot = discord.Bot(intents=intents, )
 
 _last_soundboard_entry: dict[int, float] = {}
@@ -258,7 +225,7 @@ async def on_ready():
     asyncio.create_task(auto_join_existing_channels())
     if _api_runner is None:
         try:
-            _api_runner = await start_api_server(bot)
+            _api_runner = await startApiServer(bot)
         except Exception as e:
             print(f"⚠️ Failed to start HTTP API: {e}")
 
@@ -297,11 +264,23 @@ async def on_voice_state_update(member, before, after):
         await start_listening(vc)
 
 async def start_listening(vc):
-    if not getattr(vc, "recording", False):
-        print(f"[VOICE] Starting listener in {vc.channel.name}")
-        sink = KeywordDetectorSink(vc)
-        vc.start_recording(sink, lambda x: None)
-        setattr(vc, "recording", True)
+    if vc.is_recording():
+        return
+    # Esperar a que la conexión se estabilice (hasta 20s).
+    for _ in range(40):
+        if vc.is_connected():
+            break
+        await asyncio.sleep(0.5)
+    else:
+        print(f"[VOICE] Timeout esperando conexión en {vc.channel.name}")
+        return
+    await asyncio.sleep(1.0)  # buffer post-handshake
+    print(f"[VOICE] Starting listener in {vc.channel.name}")
+    sink = KeywordDetectorSink(vc)
+    try:
+        vc.start_recording(sink, lambda *a, **kw: None)
+    except Exception as e:
+        print(f"[VOICE] start_recording falló: {e}")
 
 def _track_command(ctx, name, extra=None):
     analytics.identify_user(ctx.author)
@@ -313,34 +292,32 @@ def _track_command(ctx, name, extra=None):
 
 @bot.slash_command(name="escuchar")
 async def escuchar(ctx):
+    await safe_defer(ctx)
     _track_command(ctx, "escuchar")
     await escucharLogic(ctx)
 
 @bot.slash_command(name="parar")
 async def parar(ctx):
+    await safe_defer(ctx)
     _track_command(ctx, "parar")
     await pararLogic(ctx)
 
-@bot.slash_command(name="play")
-async def play(ctx, query: str):
+@bot.slash_command(name="play", description="Reproduce una canción o playlist de YouTube")
+async def play(ctx, query: discord.Option(str, description="Nombre de la canción o URL de YouTube")):
+    await safe_defer(ctx)
     _track_command(ctx, "play", {"query_length": len(query or "")})
     await playLogic(ctx, query)
 
 @bot.slash_command(name="soundpad")
 async def soundpad(ctx):
+    await safe_defer(ctx)
     _track_command(ctx, "soundpad")
     await soundpadLogic(ctx)
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
+    await safe_defer(ctx)
     _track_command(ctx, "quit")
-    # Defer immediately: vc.disconnect() with force=True can hang ~10s when
-    # DAVE leaves the voice WS in a bad state, blowing past the 3s ack window.
-    if not ctx.response.is_done():
-        try:
-            await ctx.defer()
-        except Exception:
-            pass
 
     vc = None
     for v in bot.voice_clients:

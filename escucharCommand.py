@@ -57,20 +57,9 @@ async def escucharLogic(ctx: discord.ApplicationContext):
                 else:
                     return await safe_respond(ctx, f"❌ Error al conectar después de {attempt + 1} intentos: {e}")
         
-        # Stabilize connection (up to 20s)
-        isConnected = False
-        for i in range(40):  # 0.5s * 40 = 20s
-            if voiceClient.is_connected() and getattr(voiceClient, "ws", None):
-                isConnected = True
-                break
-            await asyncio.sleep(0.5)
-            
-        if not isConnected:
-            raise Exception("Timeout: la conexión de voz no se estabilizó.")
-        await asyncio.sleep(2.0)
-
-    # Guard: don't start a second recording session if already active
-    if getattr(voiceClient, "recording", False):
+    # Guard: don't start a second recording session if already active.
+    # start_listening() waits internally for the connection to stabilize.
+    if voiceClient.is_recording():
         print("DEBUG: Already recording, skipping start_recording.")
         return await safe_respond(ctx, "🎙️ ¡Ya estoy escuchando!")
 
