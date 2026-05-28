@@ -3,3 +3,4 @@ davey
 vosk
 python-dotenv
 psutil
+posthog>=7.15.0

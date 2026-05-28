@@ -17,6 +17,7 @@ import vosk
 from discord.ext import commands
 from keywords import checkKeywords
 import config
+import analytics
 
 # DAVE PROTOCOL BYPASS - AGGRESSIVE
 from discord.voice.receive.reader import PacketDecryptor
@@ -179,18 +180,30 @@ class KeywordDetectorSink(discord.sinks.Sink):
     def triggerAudio(self, userId, text):
         if self.vc.is_playing(): return
         text = text.lower()
+        guild = getattr(self.vc, "guild", None)
+        member = guild.get_member(userId) if guild else None
         if any(kw in text for kw in ["pedo", "caca", "fart"]):
             p = os.path.join(config.CUSTOM_AUDIO_PATH, "**/*Fart with reverb sound effect*.*")
             m = glob.glob(p, recursive=True)
             if m:
-                try: return self.vc.play(discord.FFmpegOpusAudio(m[0]))
+                try:
+                    self.vc.play(discord.FFmpegOpusAudio(m[0]))
+                    analytics.capture("keyword audio triggered", user=member, guild=guild,
+                                      properties={"keyword_group": "fart", "matched_text": text[:120],
+                                                  "audio_file": os.path.basename(m[0])})
+                    return
                 except Exception: pass
         keywords = text.split()
         for kw in keywords:
             p = os.path.join(config.CUSTOM_AUDIO_PATH, f"**/*{kw}*.*")
             m = glob.glob(p, recursive=True)
             if m:
-                try: self.vc.play(discord.FFmpegOpusAudio(m[0])); break
+                try:
+                    self.vc.play(discord.FFmpegOpusAudio(m[0]))
+                    analytics.capture("keyword audio triggered", user=member, guild=guild,
+                                      properties={"keyword_group": "word_match", "keyword": kw,
+                                                  "audio_file": os.path.basename(m[0])})
+                    break
                 except Exception: pass
 
 intents = discord.Intents.default()
@@ -240,7 +253,16 @@ async def auto_join_existing_channels():
 async def on_voice_state_update(member, before, after):
     if member == bot.user:
         if not before.channel and after.channel:
+            analytics.capture("voice channel joined", guild=after.channel.guild,
+                              properties={"channel_id": str(after.channel.id),
+                                          "channel_name": after.channel.name,
+                                          "trigger": "state_update"})
             asyncio.create_task(trigger_soundboard_entry(after.channel))
+        elif before.channel and not after.channel:
+            analytics.capture("voice channel left", guild=before.channel.guild,
+                              properties={"channel_id": str(before.channel.id),
+                                          "channel_name": before.channel.name,
+                                          "trigger": "state_update"})
         return
     if member.bot: return
     if after.channel and (not before.channel or before.channel != after.channel):
@@ -257,42 +279,71 @@ async def start_listening(vc):
         vc.start_recording(sink, lambda x: None)
         setattr(vc, "recording", True)
 
+def _track_command(ctx, name, extra=None):
+    analytics.identify_user(ctx.author)
+    props = {"command": name, "channel_id": str(getattr(ctx.channel, "id", "") or "")}
+    if extra:
+        props.update(extra)
+    analytics.capture("command invoked", user=ctx.author, guild=ctx.guild, properties=props)
+
+
 @bot.slash_command(name="escuchar")
-async def escuchar(ctx): await escucharLogic(ctx)
+async def escuchar(ctx):
+    _track_command(ctx, "escuchar")
+    await escucharLogic(ctx)
 
 @bot.slash_command(name="parar")
-async def parar(ctx): await pararLogic(ctx)
+async def parar(ctx):
+    _track_command(ctx, "parar")
+    await pararLogic(ctx)
 
 @bot.slash_command(name="play")
-async def play(ctx, query: str): await playLogic(ctx, query)
+async def play(ctx, query: str):
+    _track_command(ctx, "play", {"query_length": len(query or "")})
+    await playLogic(ctx, query)
 
 @bot.slash_command(name="soundpad")
-async def soundpad(ctx): await soundpadLogic(ctx)
+async def soundpad(ctx):
+    _track_command(ctx, "soundpad")
+    await soundpadLogic(ctx)
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
+    _track_command(ctx, "quit")
     # Search for voice client in this guild specifically
     vc = None
     for v in bot.voice_clients:
         if v.guild.id == ctx.guild.id:
             vc = v
             break
-    
+
     if vc:
+        channel_name = vc.channel.name
+        channel_id = str(vc.channel.id)
         try:
             await vc.disconnect(force=True)
-            await ctx.respond(f"👋 Desconectado correctamente de {vc.channel.name}.")
+            analytics.capture("voice channel left", user=ctx.author, guild=ctx.guild,
+                              properties={"channel_id": channel_id, "channel_name": channel_name,
+                                          "trigger": "quit_command"})
+            await ctx.respond(f"👋 Desconectado correctamente de {channel_name}.")
         except Exception as e:
+            analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
+                                        properties={"action": "quit_disconnect"})
             await ctx.respond(f"⚠️ Error al desconectar: {e}")
     else:
         await ctx.respond("❌ No estoy conectado a voz en este servidor.")
 
 @bot.slash_command(name="restart", description="devtool - no usar")
 async def restart(ctx):
+    _track_command(ctx, "restart")
     await ctx.respond("♻️ Reiniciando bot... (Esto cerrara el proceso actual)")
     print("[RESTART] Rebooting bot process...")
+    analytics.shutdown()
     # Usar sys.executable para asegurar que usamos el mismo python/venv
     os.execv(sys.executable, [sys.executable, "/home/ubuntu/vapls-discord-bot/bot.py"])
 
 if __name__ == "__main__":
-    bot.run(config.TOKEN)
+    try:
+        bot.run(config.TOKEN)
+    finally:
+        analytics.shutdown()

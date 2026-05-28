@@ -1,6 +1,7 @@
 import discord
 import asyncio
 import logging
+import analytics
 
 logger = logging.getLogger("bot.escuchar")
 
@@ -75,4 +76,7 @@ async def escucharLogic(ctx: discord.ApplicationContext):
 
     # Start listening
     await start_listening(voiceClient)
+    analytics.capture("voice channel joined", user=ctx.author, guild=ctx.guild,
+                      properties={"channel_id": str(channel.id), "channel_name": channel.name,
+                                  "trigger": "escuchar_command"})
     await safe_respond(ctx, f"🎙️ Escuchando en {channel.name}...")

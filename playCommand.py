@@ -2,6 +2,7 @@ import os
 import asyncio
 import discord
 import config
+import analytics
 
 # Global dictionary to track active player states per guild
 guildPlayers = {}
@@ -18,10 +19,17 @@ class GuildPlayer:
         self.textChannel = None
         self.isStopping = False
         self.isPrevious = False
+        self.lastRequester = None  # discord.Member of the user who last queued songs
 
     async def addSongs(self, songs, ctx):
         self.textChannel = ctx.channel
+        self.lastRequester = ctx.author
         self.queue.extend(songs)
+
+        analytics.capture("play songs queued", user=ctx.author, guild=ctx.guild,
+                          properties={"count": len(songs),
+                                      "queue_length": len(self.queue),
+                                      "first_title": songs[0]["title"] if songs else None})
 
         from bot import safeEdit
         if len(songs) > 1:
@@ -50,6 +58,8 @@ class GuildPlayer:
 
         await self.updateControlMessage(f"⬇️ Descargando e introduciendo al buffer: **{videoTitle}**...")
 
+        guild = getattr(self.vc, "guild", None)
+
         # Download song if not already cached
         if not os.path.exists(filepath):
             try:
@@ -57,7 +67,7 @@ class GuildPlayer:
                 inputStr = f"https://www.youtube.com/watch?v={videoId}"
                 proc = await asyncio.create_subprocess_exec(
                     ytDlpPath,
-                    
+
                     "-x",
                     "--audio-format", "mp3",
                     "--no-playlist",
@@ -68,12 +78,18 @@ class GuildPlayer:
                 )
                 await proc.communicate()
                 if proc.returncode != 0:
+                    analytics.capture("play song failed", user=self.lastRequester, guild=guild,
+                                      properties={"stage": "download", "video_id": videoId,
+                                                  "title": videoTitle, "returncode": proc.returncode})
                     await self.updateControlMessage(f"❌ Error al descargar {videoTitle}.")
                     # Skip to next song
                     self.bot.loop.create_task(self.skipSong())
                     return
             except Exception as e:
                 print(f"[PLAYER ERROR] Download exception: {e}")
+                analytics.capture_exception(e, user=self.lastRequester, guild=guild,
+                                            properties={"stage": "download", "video_id": videoId,
+                                                        "title": videoTitle})
                 await self.updateControlMessage(f"❌ Error al descargar {videoTitle}.")
                 self.bot.loop.create_task(self.skipSong())
                 return
@@ -86,9 +102,14 @@ class GuildPlayer:
                 asyncio.run_coroutine_threadsafe(self.onSongFinished(error), self.bot.loop)
 
             self.vc.play(audioSource, after=afterCallback)
+            analytics.capture("play song started", user=self.lastRequester, guild=guild,
+                              properties={"video_id": videoId, "title": videoTitle,
+                                          "queue_length": len(self.queue)})
             await self.updateControlMessage()
         except Exception as e:
             print(f"[PLAYER ERROR] Playback start exception: {e}")
+            analytics.capture_exception(e, user=self.lastRequester, guild=guild,
+                                        properties={"stage": "play", "video_id": videoId, "title": videoTitle})
             await self.updateControlMessage(f"❌ Error al reproducir {videoTitle}: {e}")
             try:
                 if os.path.exists(filepath):

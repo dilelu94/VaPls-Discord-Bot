@@ -2,6 +2,7 @@ import os
 import asyncio
 import discord
 import config
+import analytics
 
 class SoundpadView(discord.ui.View):
     def __init__(self, output_dir: str):
@@ -118,20 +119,43 @@ class SoundpadView(discord.ui.View):
 
         try:
             vc.play(discord.FFmpegOpusAudio(filepath))
+            analytics.capture("soundpad audio played", user=interaction.user, guild=interaction.guild,
+                              properties={"category": self.selected_category,
+                                          "audio_file": self.selected_file,
+                                          "after_reconnect": False})
             return await self.update_message(interaction, status_text=f"▶️ Reproduciendo: {self.selected_file}")
         except discord.ClientException as e:
             print(f"[SOUNDPAD] ClientException on play ({e}); forcing reconnect...")
+            analytics.capture("soundpad reconnect attempted", user=interaction.user, guild=interaction.guild,
+                              properties={"reason": str(e), "category": self.selected_category,
+                                          "audio_file": self.selected_file})
             vc, err = await self._force_reconnect(interaction)
             if err:
+                analytics.capture("soundpad playback failed", user=interaction.user, guild=interaction.guild,
+                                  properties={"stage": "reconnect", "error": err,
+                                              "category": self.selected_category,
+                                              "audio_file": self.selected_file})
                 return await interaction.followup.send(f"❌ Reconexión falló: {err}", ephemeral=True)
             try:
                 vc.play(discord.FFmpegOpusAudio(filepath))
+                analytics.capture("soundpad audio played", user=interaction.user, guild=interaction.guild,
+                                  properties={"category": self.selected_category,
+                                              "audio_file": self.selected_file,
+                                              "after_reconnect": True})
                 await self.update_message(interaction, status_text=f"▶️ Reproduciendo (tras reconectar): {self.selected_file}")
             except Exception as e2:
                 print(f"[SOUNDPAD ERROR] Retry failed: {e2}")
+                analytics.capture_exception(e2, user=interaction.user, guild=interaction.guild,
+                                            properties={"action": "soundpad_retry_play",
+                                                        "category": self.selected_category,
+                                                        "audio_file": self.selected_file})
                 await interaction.followup.send(f"❌ Error tras reconectar: {e2}", ephemeral=True)
         except Exception as e:
             print(f"[SOUNDPAD ERROR] Playback failed: {e}")
+            analytics.capture_exception(e, user=interaction.user, guild=interaction.guild,
+                                        properties={"action": "soundpad_play",
+                                                    "category": self.selected_category,
+                                                    "audio_file": self.selected_file})
             await interaction.followup.send(f"❌ Error de reproducción: {e}", ephemeral=True)
 
     async def on_category_select(self, interaction: discord.Interaction):
@@ -152,6 +176,9 @@ class SoundpadView(discord.ui.View):
 
     async def on_stop_click(self, interaction: discord.Interaction):
         if interaction.guild.voice_client: interaction.guild.voice_client.stop()
+        analytics.capture("soundpad audio stopped", user=interaction.user, guild=interaction.guild,
+                          properties={"category": self.selected_category,
+                                      "audio_file": self.selected_file})
         await self.update_message(interaction, status_text="⏹️ Detenido")
 
 async def soundpadLogic(ctx: discord.ApplicationContext):
@@ -173,6 +200,11 @@ async def soundpadLogic(ctx: discord.ApplicationContext):
     output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
     try:
         view = SoundpadView(output_dir)
+        analytics.capture("soundpad panel opened", user=ctx.author, guild=ctx.guild,
+                          properties={"categories_count": len(view.categories),
+                                      "default_category": view.selected_category})
         await ctx.respond("🎛️ Soundpad Control Panel", view=view)
     except Exception as e:
+        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
+                                    properties={"action": "soundpad_panel_open"})
         await ctx.respond(f"❌ Error: {e}")

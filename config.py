@@ -20,3 +20,7 @@ else:
     DEBUG_GUILD_IDS = None
 RAM_THRESHOLD_MB = int(os.getenv("RAM_THRESHOLD_MB", "300"))  # default 300 MiB
 PLAY_COOLDOWN = float(os.getenv("PLAY_COOLDOWN", "5"))  # seconds
+
+# PostHog product analytics
+POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
