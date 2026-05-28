@@ -68,7 +68,14 @@ class SoundpadView(discord.ui.View):
         clean_file = os.path.splitext(self.selected_file)[0] if self.selected_file else "Ninguno"
         embed.add_field(name="🔊 Sonido", value=clean_file, inline=True)
         if status_text: embed.add_field(name="⚡ Estado", value=status_text, inline=False)
-        await interaction.response.edit_message(embed=embed, view=self)
+        try:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=self)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self)
+        except discord.NotFound:
+            # Original message was deleted; nothing to do.
+            pass
 
     async def _force_reconnect(self, interaction: discord.Interaction):
         if not interaction.user.voice:
