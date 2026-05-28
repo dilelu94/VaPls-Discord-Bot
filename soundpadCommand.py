@@ -189,20 +189,31 @@ class SoundpadView(discord.ui.View):
         await self.update_message(interaction, status_text="⏹️ Detenido")
 
 async def soundpadLogic(ctx: discord.ApplicationContext):
+    # Defer up-front: channel.connect() can take 10s and the interaction
+    # token expires after 3s, which used to cause Interaction 40060 errors.
+    if not ctx.response.is_done():
+        try:
+            await ctx.defer()
+        except Exception:
+            pass
+
     if not ctx.author.voice:
-        return await ctx.respond("❌ Debes estar en un canal de voz.")
-    
+        return await ctx.followup.send("❌ Debes estar en un canal de voz.", ephemeral=True)
+
     vc = ctx.guild.voice_client
     if not vc:
         try:
             vc = await ctx.author.voice.channel.connect(reconnect=True, timeout=10.0)
         except Exception as e:
-            return await ctx.respond(f"❌ Error al conectar: {e}")
+            return await ctx.followup.send(f"❌ Error al conectar: {e}", ephemeral=True)
         from bot import start_listening
         await start_listening(vc)
         # trigger_soundboard_entry ya se dispara por on_voice_state_update
     elif vc.channel.id != ctx.author.voice.channel.id:
-        await vc.move_to(ctx.author.voice.channel)
+        try:
+            await vc.move_to(ctx.author.voice.channel)
+        except Exception:
+            pass
 
     output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
     try:
@@ -210,8 +221,8 @@ async def soundpadLogic(ctx: discord.ApplicationContext):
         analytics.capture("soundpad panel opened", user=ctx.author, guild=ctx.guild,
                           properties={"categories_count": len(view.categories),
                                       "default_category": view.selected_category})
-        await ctx.respond("🎛️ Soundpad Control Panel", view=view)
+        await ctx.followup.send("🎛️ Soundpad Control Panel", view=view)
     except Exception as e:
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
                                     properties={"action": "soundpad_panel_open"})
-        await ctx.respond(f"❌ Error: {e}")
+        await ctx.followup.send(f"❌ Error: {e}", ephemeral=True)
