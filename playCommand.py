@@ -65,14 +65,19 @@ class GuildPlayer:
             try:
                 ytDlpPath = config.YT_DLP_PATH
                 inputStr = f"https://www.youtube.com/watch?v={videoId}"
-                proc = await asyncio.create_subprocess_exec(
-                    ytDlpPath,
-
+                cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+                ytDlpArgs = [ytDlpPath]
+                if os.path.exists(cookiesPath):
+                    ytDlpArgs += ["--cookies", cookiesPath]
+                ytDlpArgs += [
                     "-x",
                     "--audio-format", "mp3",
                     "--no-playlist",
                     "-o", os.path.join(downloadsDir, "%(id)s.%(ext)s"),
                     inputStr,
+                ]
+                proc = await asyncio.create_subprocess_exec(
+                    *ytDlpArgs,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
@@ -347,14 +352,19 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     # 1. Fetch metadata (ID and Title)
     await safeEdit(ctx, "🔍 Buscando y obteniendo metadatos...")
     try:
-        proc = await asyncio.create_subprocess_exec(
-            config.YT_DLP_PATH,
-            
+        cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        ytDlpArgs = [config.YT_DLP_PATH]
+        if os.path.exists(cookiesPath):
+            ytDlpArgs += ["--cookies", cookiesPath]
+        ytDlpArgs += [
             "--flat-playlist",
             "--simulate",
             "--print", "%(id)s",
             "--print", "%(title)s",
             inputStr,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *ytDlpArgs,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )

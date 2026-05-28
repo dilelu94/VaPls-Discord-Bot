@@ -19,10 +19,10 @@ echo "Sistema operativo detectado: $OS_ID"
 if [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" ]]; then
     echo "Instalando dependencias mediante apt..."
     sudo apt-get update
-    sudo apt-get install -y python3-pip python3-venv ffmpeg git wget
+    sudo apt-get install -y python3-pip python3-venv ffmpeg git wget unzip
 elif [[ "$OS_ID" == "ol" || "$OS_ID" == "rhel" || "$OS_ID" == "centos" || "$OS_ID" == "rocky" || "$OS_ID" == "almalinux" ]]; then
     echo "Instalando dependencias mediante dnf..."
-    sudo dnf install -y python3 python3-pip git wget tar xz
+    sudo dnf install -y python3 python3-pip git wget tar xz unzip
     
     # Instalar FFmpeg mediante binario estático ya que no está en los repos oficiales por defecto
     if ! command -v ffmpeg &> /dev/null; then
@@ -48,6 +48,20 @@ if sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp
     echo "yt-dlp instalado correctamente en /usr/local/bin/yt-dlp"
 else
     echo "⚠️ Error al descargar yt-dlp desde GitHub. Se intentará usar pip más adelante."
+fi
+
+# Instalar deno (requerido por yt-dlp para extraer videos de YouTube)
+if ! command -v deno &> /dev/null; then
+    echo "Instalando deno (JS runtime requerido por yt-dlp)..."
+    curl -fsSL https://deno.land/install.sh | sh -s -- -y
+    if [ -x "$HOME/.deno/bin/deno" ]; then
+        sudo ln -sf "$HOME/.deno/bin/deno" /usr/local/bin/deno
+        echo "deno instalado y enlazado en /usr/local/bin/deno"
+    else
+        echo "⚠️ La instalación de deno falló."
+    fi
+else
+    echo "deno ya está instalado."
 fi
 
 # 2. Configurar el entorno virtual de Python
