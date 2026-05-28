@@ -4,3 +4,4 @@ vosk
 python-dotenv
 psutil
 posthog>=7.15.0
+aiohttp>=3.9

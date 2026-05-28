@@ -18,6 +18,7 @@ from discord.ext import commands
 from keywords import checkKeywords
 import config
 import analytics
+from apiServer import start_api_server
 
 # DAVE PROTOCOL BYPASS - AGGRESSIVE
 from discord.voice.receive.reader import PacketDecryptor
@@ -247,11 +248,19 @@ async def on_connect():
                 print(f"DEBUG: Error cleaning guild {guild_id}: {e}")
     print("DEBUG: Cleanup finished.")
 
+_api_runner = None
+
 @bot.event
 async def on_ready():
+    global _api_runner
     print(f"✅ Bot online as {bot.user}")
     await bot.sync_commands()
     asyncio.create_task(auto_join_existing_channels())
+    if _api_runner is None:
+        try:
+            _api_runner = await start_api_server(bot)
+        except Exception as e:
+            print(f"⚠️ Failed to start HTTP API: {e}")
 
 async def auto_join_existing_channels():
     await asyncio.sleep(2)
