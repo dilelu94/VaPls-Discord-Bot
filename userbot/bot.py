@@ -289,11 +289,11 @@ class TranscriberSink(voice_recv.AudioSink):
     is exceeded, the utterance is dropped with a log entry rather than queued.
     """
 
-    SILENCE_RMS_THRESHOLD = 80
+    SILENCE_RMS_THRESHOLD = 25
     SILENCE_FINAL_SECONDS = 0.8
     # Skip transcription if total speech accumulated for this user is shorter
     # than this many seconds — usually breath/laughter noise, not words.
-    MIN_SPEECH_SECONDS = 0.4
+    MIN_SPEECH_SECONDS = 0.3
     # Hard upper bound on a single utterance buffer (Whisper handles 30s but
     # we don't want one runaway buffer).
     MAX_UTTERANCE_SECONDS = 20.0

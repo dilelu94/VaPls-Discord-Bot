@@ -10,19 +10,23 @@ USER_TOKEN = os.getenv("USER_TOKEN")
 
 # --- faster-whisper transcription -----------------------------------------
 # Model name (e.g. "tiny", "base", "small") or a HuggingFace repo. Resolved
-# via faster-whisper's standard download path. "base" is the sweet spot for
-# Spanish on this VM (~280 MB RAM, ~7-10% WER).
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+# via faster-whisper's standard download path. "tiny" runs comfortably in
+# real-time on the Oracle Free Tier 2-vCPU VM; "base" tends to fall behind
+# and pile up utterances when several people speak.
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "tiny")
 # Quantization preset: "int8" runs on CPU with low memory; "float16" needs GPU.
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 # Directory where faster-whisper caches downloaded models. Empty = library default.
 WHISPER_CACHE_DIR = os.getenv("WHISPER_CACHE_DIR", "")
+# CTranslate2 thread count for inference. Match the VM vCPU count (2 on the
+# Oracle Free Tier E2.1.Micro) for best per-utterance throughput.
+WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "2"))
 
 # Concurrency caps: how many overlapping utterances may be transcribed at
 # once. When the main bot is playing audio (music/soundpad), we throttle to
 # leave CPU headroom for ffmpeg + the playback pipeline.
-MAX_CONCURRENT_IDLE = int(os.getenv("MAX_CONCURRENT_IDLE", "5"))
-MAX_CONCURRENT_WHILE_PLAYING = int(os.getenv("MAX_CONCURRENT_WHILE_PLAYING", "3"))
+MAX_CONCURRENT_IDLE = int(os.getenv("MAX_CONCURRENT_IDLE", "2"))
+MAX_CONCURRENT_WHILE_PLAYING = int(os.getenv("MAX_CONCURRENT_WHILE_PLAYING", "1"))
 
 # Main bot API (apiServer). Used to (a) check is_playing for throttling,
 # (b) POST /indio when a wake-word is heard. SECRET must match the main bot's
