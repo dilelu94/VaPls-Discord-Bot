@@ -13,6 +13,10 @@ logger = logging.getLogger("greeting")
 
 DEFAULT_GREETING = os.path.join("Audios", "Fish Carrot.m4a")
 
+# Normalize playback loudness so quieter files (Fish Carrot, etc.) come out
+# at the same perceived level as louder ones (Milapollo, etc.).
+FFMPEG_NORMALIZE_OPTS = '-af "dynaudnorm=p=0.95:f=200"'
+
 _last_greeting: dict[int, float] = {}
 _pending_trigger_user: dict[int, int] = {}
 
@@ -94,6 +98,6 @@ async def trigger_soundboard_entry(channel):
             logger.warning(f"[GREETING] file missing: {path}")
             return
         logger.info(f"[GREETING] playing: {path}")
-        vc.play(discord.FFmpegOpusAudio(path))
+        vc.play(discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS))
     except Exception as e:
         logger.exception(f"[GREETING] playback failed: {e}")

@@ -339,7 +339,7 @@ class SoundpadView(discord.ui.View):
             pass
 
         try:
-            vc.play(discord.FFmpegOpusAudio(filepath))
+            vc.play(discord.FFmpegOpusAudio(filepath, options='-af "dynaudnorm=p=0.95:f=200"'))
             analytics.capture("soundpad audio played", user=interaction.user, guild=interaction.guild,
                               properties={"category": self.selected_category,
                                           "audio_file": self.selected_file,
@@ -358,7 +358,7 @@ class SoundpadView(discord.ui.View):
                                               "audio_file": self.selected_file})
                 return await interaction.followup.send(f"❌ Reconexión falló: {err}", ephemeral=True)
             try:
-                vc.play(discord.FFmpegOpusAudio(filepath))
+                vc.play(discord.FFmpegOpusAudio(filepath, options='-af "dynaudnorm=p=0.95:f=200"'))
                 analytics.capture("soundpad audio played", user=interaction.user, guild=interaction.guild,
                                   properties={"category": self.selected_category,
                                               "audio_file": self.selected_file,
