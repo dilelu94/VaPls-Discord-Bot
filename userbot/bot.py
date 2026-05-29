@@ -425,10 +425,23 @@ async def _join_channel(channel: discord.VoiceChannel):
     existing = _vc_for_guild(channel.guild)
     try:
         if existing:
-            if existing.channel.id != channel.id:
-                log.info(f"[VOICE] Moving from {existing.channel.name} → {channel.name}")
-                await existing.move_to(channel)
-            vc = existing
+            if existing.channel.id == channel.id and existing.is_connected():
+                vc = existing
+            else:
+                log.info(f"[VOICE] Reconnecting: {existing.channel.name} → {channel.name}")
+                try:
+                    if existing.is_listening():
+                        existing.stop_listening()
+                except Exception:
+                    pass
+                try:
+                    await existing.disconnect(force=True)
+                except Exception as e:
+                    log.warning(f"[VOICE] disconnect error (ignored): {e}")
+                await asyncio.sleep(0.5)
+                vc = await channel.connect(
+                    cls=voice_recv.VoiceRecvClient, reconnect=True, timeout=20.0
+                )
         else:
             log.info(f"[VOICE] Connecting to {channel.name} ({channel.guild.name})")
             vc = await channel.connect(
