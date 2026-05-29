@@ -1,8 +1,11 @@
 """Slash command logic for /vapls and /indio.
 
 Both commands ask Google Gemini for a reply. /vapls is stateless (no memory).
-/indio keeps a short per-user conversation history so it behaves like a
-recurring character of the friend group.
+/indio keeps a short verbatim conversation history per guild PLUS a compressed
+"long-term" memory (rasgos por usuario, anécdotas, chistes internos). When the
+history grows past a threshold, the oldest turns are distilled into the
+long-term notes via a separate Gemini call (fire-and-forget) before being
+discarded — so the indio feels like a friend that remembers the group.
 """
 import asyncio
 import json
@@ -54,21 +57,39 @@ pregunta lo amerita (explicar algo técnico, contar una anécdota). Nunca \
 rompés el personaje para decir "como modelo de lenguaje..." ni nada similar.
 """
 
-_HISTORY_MAX_TURNS = 20           # 10 user + 10 model (chat grupal)
 _STORED_MSG_MAX_CHARS = 1500
 _HISTORY_TTL_SEC = 6 * 3600
 _DISCORD_CHUNK_LIMIT = 1990
 _MAX_CHUNKS = 4
 
+# Short-term history bounds (in turns; each /indio call appends 2 turns).
+# When history grows past the threshold we kick off a compression task that
+# distills the oldest turns into the long-term notes. HARD_CAP is the safety
+# slice that bounds RAM if compression keeps failing.
+_HISTORY_COMPRESS_THRESHOLD = 30  # ~15 mensajes user + 15 model
+_HISTORY_KEEP_AFTER_COMPRESS = 14  # se queda con los ~7 más recientes user+model
+_HISTORY_HARD_CAP = 50
+
+# Long-term memory bounds.
+_LONG_TERM_MAX_CHARS = 8000        # JSON dumpeado no debe pasar de esto
+_LT_TRAITS_PER_USER = 5
+_LT_QUESTIONS_PER_USER = 5
+_LT_ANECDOTES_PER_USER = 5
+_LT_GROUP_EVENTS = 10
+_LT_JOKES = 10
+
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
+_indio_long_term: dict[str, dict] = {}
 _indio_locks: dict[str, asyncio.Lock] = {}
 _persist_lock = asyncio.Lock()
+# Per-key flag: a compression task is in-flight, don't spawn another.
+_indio_compressing: set[str] = set()
 
 
 def _load_indio_state() -> None:
-    """Load history+last_seen from disk on startup. Silently no-ops if the
-    file is missing or unreadable — memory just starts empty."""
+    """Load history+last_seen+long_term from disk on startup. Silently no-ops
+    if the file is missing or unreadable — memory just starts empty."""
     path = config.INDIO_MEMORY_PATH
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -86,12 +107,16 @@ def _load_indio_state() -> None:
         if now - last_seen > _HISTORY_TTL_SEC:
             continue
         history = val.get("history", [])
+        long_term = val.get("long_term") or {}
         if isinstance(history, list) and history:
             _indio_history[key] = history
             _indio_last_seen[key] = last_seen
             loaded += 1
-    if loaded:
-        logger.info("indio memory: loaded %d entries from %s", loaded, path)
+        if isinstance(long_term, dict) and long_term:
+            _indio_long_term[key] = long_term
+    if loaded or _indio_long_term:
+        logger.info("indio memory: loaded %d entries (long_term keys=%d) from %s",
+                    loaded, len(_indio_long_term), path)
 
 
 async def _persist_indio_state() -> None:
@@ -99,10 +124,15 @@ async def _persist_indio_state() -> None:
     so concurrent turns don't clobber each other's writes."""
     path = config.INDIO_MEMORY_PATH
     async with _persist_lock:
+        keys = set(_indio_history) | set(_indio_long_term)
         payload = {
             "entries": {
-                k: {"history": _indio_history[k], "last_seen": _indio_last_seen.get(k, 0.0)}
-                for k in _indio_history
+                k: {
+                    "history": _indio_history.get(k, []),
+                    "last_seen": _indio_last_seen.get(k, 0.0),
+                    "long_term": _indio_long_term.get(k, {}),
+                }
+                for k in keys
             }
         }
         try:
@@ -173,12 +203,21 @@ def _split_for_discord(text: str) -> list[str]:
 
 
 def _evict_stale_indio() -> None:
+    """Drop short-term verbatim history when stale, but KEEP long_term memory
+    (la idea es que el indio se siga acordando del grupo aunque no charlemos
+    por un rato — como un amigo). last_seen también se mantiene como pista de
+    cuándo fue la última charla."""
     now = time.time()
-    stale = [uid for uid, ts in _indio_last_seen.items() if now - ts > _HISTORY_TTL_SEC]
-    for uid in stale:
-        _indio_history.pop(uid, None)
-        _indio_last_seen.pop(uid, None)
-        _indio_locks.pop(uid, None)
+    for key in list(_indio_last_seen.keys()):
+        if now - _indio_last_seen[key] <= _HISTORY_TTL_SEC:
+            continue
+        if key in _indio_compressing:
+            continue
+        _indio_history.pop(key, None)
+        # _indio_long_term y _indio_last_seen sobreviven.
+        # Lock se libera solo si no quedó nada relevante.
+        if key not in _indio_long_term:
+            _indio_locks.pop(key, None)
 
 
 async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
@@ -193,6 +232,233 @@ def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
     lines = (pregunta or "").splitlines() or [""]
     quoted = "\n".join(f"> {ln}" for ln in lines)
     return f"**{name}** preguntó:\n{quoted}\n\n"
+
+
+def _format_long_term(lt: dict) -> str:
+    """Render long-term memory as a compact Spanish block to inject into the
+    indio's system instruction. Natural-language form (no JSON) so the model
+    integrates it like context, not data."""
+    if not lt:
+        return ""
+    sections: list[str] = []
+    users = lt.get("users") or {}
+    if isinstance(users, dict) and users:
+        user_lines = ["Lo que sabés de los pibes del grupo:"]
+        for name, data in users.items():
+            if not isinstance(data, dict):
+                continue
+            traits = [str(x) for x in (data.get("traits") or []) if x]
+            qs = [str(x) for x in (data.get("preguntas_tipicas") or []) if x]
+            anec = [str(x) for x in (data.get("anecdotas") or []) if x]
+            chunk = [f"- {name}:"]
+            if traits:
+                chunk.append(f"   rasgos: {'; '.join(traits)}")
+            if qs:
+                chunk.append(f"   suele preguntar sobre: {'; '.join(qs)}")
+            if anec:
+                chunk.append(f"   anécdotas: {'; '.join(anec)}")
+            if len(chunk) > 1:
+                user_lines.extend(chunk)
+        if len(user_lines) > 1:
+            sections.append("\n".join(user_lines))
+    events = [str(x) for x in (lt.get("eventos_del_grupo") or []) if x]
+    if events:
+        sections.append("Cosas que pasaron en el grupo:\n" + "\n".join(f"- {e}" for e in events))
+    jokes = [str(x) for x in (lt.get("chistes_internos") or []) if x]
+    if jokes:
+        sections.append("Chistes internos del grupo:\n" + "\n".join(f"- {j}" for j in jokes))
+    return "\n\n".join(sections)
+
+
+_COMPRESS_SYSTEM = """\
+Sos un asistente que mantiene una memoria a largo plazo sobre un grupo de \
+amigos en un server de Discord. Recibís (a) la memoria actual en JSON y (b) \
+una conversación nueva del grupo. Tu trabajo es devolver SOLO un JSON \
+actualizado, sin texto adicional ni bloques markdown, con esta estructura \
+exacta:
+
+{
+  "users": {
+    "<nombre>": {
+      "traits": ["rasgos de personalidad o intereses"],
+      "preguntas_tipicas": ["qué tipo de cosas suele preguntar/decir"],
+      "anecdotas": ["momentos del grupo que lo involucran"]
+    }
+  },
+  "eventos_del_grupo": ["cosas memorables que pasaron en el chat"],
+  "chistes_internos": ["chistes recurrentes o referencias del grupo"]
+}
+
+Reglas estrictas:
+- NO inventes datos. Solo guardás lo que aparece textualmente o lo que se \
+  deduce directamente de la conversación.
+- Mantenés los datos previos a menos que la conversación los contradiga.
+- Cada string ≤120 caracteres.
+- Máx %d rasgos, %d preguntas_tipicas y %d anecdotas por usuario.
+- Máx %d eventos_del_grupo y %d chistes_internos en total.
+- Conservás los nombres tal cual aparecen entre corchetes ("[nombre]: ...").
+- No incluyas al "indio" como usuario (es el bot, no un miembro del grupo).
+- Español rioplatense, casual, conciso.
+- Devolvé SOLO el JSON. Sin ```json ni explicación.
+""" % (_LT_TRAITS_PER_USER, _LT_QUESTIONS_PER_USER, _LT_ANECDOTES_PER_USER,
+       _LT_GROUP_EVENTS, _LT_JOKES)
+
+
+def _extract_json(text: str) -> Optional[dict]:
+    """Defensive JSON parser: handles raw JSON, ```json``` fenced blocks, and
+    leading/trailing junk. Returns None on any failure."""
+    if not text:
+        return None
+    s = text.strip()
+    # Strip markdown fences if present.
+    if s.startswith("```"):
+        s = s.strip("`")
+        if s.lower().startswith("json"):
+            s = s[4:]
+        s = s.strip()
+    # Find the outermost {...}
+    start = s.find("{")
+    end = s.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(s[start:end + 1])
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def _clamp_long_term(lt: dict) -> dict:
+    """Enforce structure + per-section caps so a misbehaving Gemini response
+    can't blow up the prompt budget."""
+    out: dict = {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
+    users = lt.get("users") if isinstance(lt, dict) else None
+    if isinstance(users, dict):
+        for name, data in list(users.items())[:30]:
+            if not isinstance(data, dict):
+                continue
+            name = str(name)[:60]
+            if name.lower() == "indio":
+                continue
+            traits = [str(t)[:120] for t in (data.get("traits") or []) if t][:_LT_TRAITS_PER_USER]
+            qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t][:_LT_QUESTIONS_PER_USER]
+            anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t][:_LT_ANECDOTES_PER_USER]
+            if traits or qs or anec:
+                out["users"][name] = {
+                    "traits": traits,
+                    "preguntas_tipicas": qs,
+                    "anecdotas": anec,
+                }
+    events = lt.get("eventos_del_grupo") if isinstance(lt, dict) else None
+    if isinstance(events, list):
+        out["eventos_del_grupo"] = [str(e)[:120] for e in events if e][:_LT_GROUP_EVENTS]
+    jokes = lt.get("chistes_internos") if isinstance(lt, dict) else None
+    if isinstance(jokes, list):
+        out["chistes_internos"] = [str(j)[:120] for j in jokes if j][:_LT_JOKES]
+    # Final safety: if still too big after structural clamp, drop oldest events/jokes.
+    while len(json.dumps(out, ensure_ascii=False)) > _LONG_TERM_MAX_CHARS:
+        if out["eventos_del_grupo"]:
+            out["eventos_del_grupo"].pop(0)
+        elif out["chistes_internos"]:
+            out["chistes_internos"].pop(0)
+        elif out["users"]:
+            # Drop the oldest-inserted user.
+            first = next(iter(out["users"]))
+            out["users"].pop(first)
+        else:
+            break
+    return out
+
+
+def _turns_to_text(turns: list[dict]) -> str:
+    """Render a list of {role,parts:[{text}]} turns as plain text for the
+    compression prompt."""
+    lines: list[str] = []
+    for t in turns:
+        role = t.get("role", "?")
+        parts = t.get("parts") or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not text:
+            continue
+        speaker = "indio" if role == "model" else "grupo"
+        lines.append(f"{speaker}: {text}")
+    return "\n".join(lines)
+
+
+async def _compress_long_term(current_lt: dict, old_turns: list[dict]) -> Optional[dict]:
+    """Run a Gemini call to fold old verbatim turns into the long-term notes.
+    Returns the new long-term dict on success, None on any failure."""
+    if not old_turns:
+        return None
+    convo_text = _turns_to_text(old_turns)
+    if not convo_text.strip():
+        return None
+    user_message = (
+        "Memoria actual:\n"
+        f"{json.dumps(current_lt or {}, ensure_ascii=False, indent=2)}\n\n"
+        "Conversación nueva del grupo:\n"
+        f"{convo_text}\n\n"
+        "Devolveme SOLO el JSON actualizado."
+    )
+    try:
+        reply = await geminiClient.generate(
+            user_message=user_message,
+            system_instruction=_COMPRESS_SYSTEM,
+            history=None,
+            max_output_tokens=2048,
+        )
+    except geminiClient.GeminiError as e:
+        logger.warning("indio compress: gemini failed (%s, status=%s)", e.kind, e.status)
+        return None
+    except Exception:
+        logger.exception("indio compress: unexpected error")
+        return None
+    parsed = _extract_json(reply.text)
+    if parsed is None:
+        logger.warning("indio compress: JSON parse failed; raw=%r", reply.text[:200])
+        return None
+    return _clamp_long_term(parsed)
+
+
+async def _maybe_compress(mem_key: str) -> None:
+    """Fire-and-forget: if the short-term history is over the threshold,
+    distill its oldest portion into long-term notes and drop those turns from
+    short-term. Safe against concurrent /indio calls because: (a) we hold the
+    per-key lock only at read+write points, and (b) we slice from the FRONT by
+    count, not by index, so new turns appended during compression aren't lost."""
+    if mem_key in _indio_compressing:
+        return
+    lock = _indio_locks.get(mem_key)
+    if lock is None:
+        return
+    _indio_compressing.add(mem_key)
+    try:
+        async with lock:
+            history = _indio_history.get(mem_key, [])
+            if len(history) < _HISTORY_COMPRESS_THRESHOLD:
+                return
+            # Even count: keep both sides of each user/model pair aligned.
+            drop_count = len(history) - _HISTORY_KEEP_AFTER_COMPRESS
+            if drop_count % 2 == 1:
+                drop_count -= 1
+            if drop_count <= 0:
+                return
+            old_turns = history[:drop_count]
+            current_lt = dict(_indio_long_term.get(mem_key, {}))
+        new_lt = await _compress_long_term(current_lt, old_turns)
+        if new_lt is None:
+            logger.info("indio compress: skipped (lt unchanged) for %s", mem_key)
+            return
+        async with lock:
+            history = _indio_history.get(mem_key, [])
+            if len(history) >= drop_count:
+                _indio_history[mem_key] = history[drop_count:]
+            _indio_long_term[mem_key] = new_lt
+        await _persist_indio_state()
+        logger.info("indio compress: ok for %s (dropped %d turns, users=%d)",
+                    mem_key, drop_count, len(new_lt.get("users", {})))
+    finally:
+        _indio_compressing.discard(mem_key)
 
 
 def _error_message(kind: str, status: Optional[int], persona: str) -> str:
@@ -282,22 +548,27 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     async with lock:
         history_reset = False
         if nuevo:
-            had_history = bool(_indio_history.get(mem_key))
+            had_state = bool(_indio_history.get(mem_key)) or bool(_indio_long_term.get(mem_key))
             _indio_history.pop(mem_key, None)
             _indio_last_seen.pop(mem_key, None)
-            if had_history:
+            _indio_long_term.pop(mem_key, None)
+            if had_state:
                 history_reset = True
                 analytics.capture("indio history reset", user=ctx.author, guild=ctx.guild,
                                   properties={"trigger": "nuevo_param", "scope": "guild"})
         history_snapshot = list(_indio_history.get(mem_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
     if history_reset:
         await _persist_indio_state()
+
+    lt_block = _format_long_term(long_term_snapshot)
+    system_instruction = INDIO_SYSTEM + (f"\n\n{lt_block}" if lt_block else "")
 
     t0 = time.monotonic()
     try:
         reply = await geminiClient.generate(
             user_message=tagged_message,
-            system_instruction=INDIO_SYSTEM,
+            system_instruction=system_instruction,
             history=history_snapshot,
         )
     except geminiClient.GeminiError as e:
@@ -340,12 +611,17 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
-        if len(new_hist) > _HISTORY_MAX_TURNS:
-            new_hist = new_hist[-_HISTORY_MAX_TURNS:]
+        # Hard cap as a safety net if compression keeps failing.
+        if len(new_hist) > _HISTORY_HARD_CAP:
+            new_hist = new_hist[-_HISTORY_HARD_CAP:]
         _indio_history[mem_key] = new_hist
         _indio_last_seen[mem_key] = time.time()
         history_size_after = len(new_hist)
     await _persist_indio_state()
+
+    # Background distillation when the short-term log grows past threshold.
+    if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+        asyncio.create_task(_maybe_compress(mem_key))
 
     analytics.capture("indio invoked", user=ctx.author, guild=ctx.guild, properties={
         "prompt_length": len(pregunta or ""),
@@ -358,5 +634,6 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         "latency_ms": int((time.monotonic() - t0) * 1000),
         "history_size_before": len(history_snapshot),
         "history_size_after": history_size_after,
+        "long_term_users": len(long_term_snapshot.get("users", {}) or {}),
         "nuevo": nuevo,
     })
