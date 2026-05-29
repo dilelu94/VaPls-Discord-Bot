@@ -1,4 +1,5 @@
 # VaPls-Discord-Bot 🎙️🤖
+[![CI](https://github.com/dilelu94/VaPls-Discord-Bot/actions/workflows/ci.yml/badge.svg)](https://github.com/dilelu94/VaPls-Discord-Bot/actions/workflows/ci.yml)
 
 Un bot de voz para Discord que escucha canales de voz en tiempo real y reacciona a palabras clave específicas en español e inglés utilizando el motor de STT **Vosk** (offline).
 
@@ -61,6 +62,10 @@ Un bot de voz para Discord que escucha canales de voz en tiempo real y reacciona
 2. En Discord, usa los siguientes comandos de barra (Slash Commands):
    - `/escuchar`: El bot se une a tu canal de voz actual y comienza a monitorear.
    - `/parar`: El bot detiene la escucha y se desconecta.
+
+## CI/CD
+- **CI:** GitHub Actions ejecuta los tests (`python -m unittest discover -s tests`) en cada push y pull request.
+- **Próximos pasos (CD):** empaquetado/artefactos, credenciales de despliegue y aprobaciones por entorno.
 
 ## Estructura del proyecto
 - `bot.py`: Lógica principal y manejo de voz.
