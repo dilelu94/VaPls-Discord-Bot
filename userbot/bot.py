@@ -437,8 +437,16 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
         audio,
         language="es",
         beam_size=1,
-        vad_filter=True,
+        # vad_filter=True cropped legitimate audio in tests; we already gate
+        # on RMS in the sink, so let Whisper see the full buffer.
+        vad_filter=False,
         condition_on_previous_text=False,
+        # Initial prompt biases tokenization toward rioplatense Spanish + the
+        # wake word, which improves recognition of "indio" in short utterances.
+        initial_prompt=(
+            "Conversación en español rioplatense entre amigos. "
+            "Pueden decir 'indio' o 'che indio' al principio para invocar al bot."
+        ),
     )
     return " ".join(s.text.strip() for s in segments if s.text).strip()
 
