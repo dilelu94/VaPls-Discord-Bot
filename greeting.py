@@ -68,15 +68,23 @@ async def trigger_soundboard_entry(channel):
     user_id = _pending_trigger_user.pop(channel.id, None)
     last = _last_greeting.get(channel.id, 0.0)
     logger.info(f"[GREETING] trigger fired: channel={channel.id} user={user_id} since_last={now - last:.1f}s")
-    if now - last < 60.0:
-        logger.info(f"[GREETING] throttled (< 60s since last greeting on this channel)")
+    if now - last < 15.0:
+        logger.info(f"[GREETING] throttled (< 15s since last greeting on this channel)")
         return
     _last_greeting[channel.id] = now
     try:
-        await asyncio.sleep(2)
-        vc = channel.guild.voice_client
+        # py-cord rejects vc.play() until UDP discovery finishes (a few
+        # seconds after the WS handshake completes). Poll vc.is_connected()
+        # before trying to play. This is not DAVE-related — the bot needs
+        # the same UDP setup to send audio.
+        vc = None
+        for _ in range(40):
+            await asyncio.sleep(0.25)
+            vc = channel.guild.voice_client
+            if vc and vc.is_connected():
+                break
         if not vc or not vc.is_connected():
-            logger.info(f"[GREETING] skip: vc not connected (vc={vc})")
+            logger.info(f"[GREETING] skip: vc never became ready (vc={vc})")
             return
         if vc.is_playing():
             logger.info(f"[GREETING] skip: vc already playing")
