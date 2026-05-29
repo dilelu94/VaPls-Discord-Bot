@@ -1,0 +1,15 @@
+# Test/dev dependencies for the behavioral test suite.
+#
+# Note on py-cord: production (requirements.txt) pins the git "[voice]" build,
+# which needs libopus/ffmpeg to build and run. The tests only need to *import*
+# discord (type hints, FFmpegOpusAudio, ui.View), so here we use the plain
+# PyPI wheel — it installs fast and without system audio libs.
+#
+#   pip install -r requirements-dev.txt
+#   pytest
+pytest>=8
+pytest-asyncio>=0.23
+pytest-cov>=5
+py-cord>=2.8
+aiohttp>=3.9
+python-dotenv
