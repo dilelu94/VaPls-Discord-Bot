@@ -1,7 +1,7 @@
-import discord
 import analytics
 
-async def pararLogic(ctx: discord.ApplicationContext):
+
+async def pararLogic(ctx):
     from bot import safe_respond
     from playCommand import guildPlayers, clearGuildPlayer
 
@@ -10,27 +10,37 @@ async def pararLogic(ctx: discord.ApplicationContext):
             await guildPlayers[ctx.guild.id].stopPlayback()
         except Exception as e:
             print(f"[PARAR ERROR] Error stopping playback: {e}")
-            analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                        properties={"action": "parar_stop_playback"})
+            analytics.capture_exception(
+                e,
+                user=ctx.author,
+                guild=ctx.guild,
+                properties={"action": "parar_stop_playback"},
+            )
         clearGuildPlayer(ctx.guild.id)
 
     if ctx.voice_client:
         channel_id = str(ctx.voice_client.channel.id)
         channel_name = ctx.voice_client.channel.name
         try:
-            if ctx.voice_client.is_recording():
-                ctx.voice_client.stop_recording()
-        except Exception as e:
-            print(f"[PARAR] stop_recording error (ignorado): {e}")
-        try:
             await ctx.voice_client.disconnect(force=True)
-            analytics.capture("voice channel left", user=ctx.author, guild=ctx.guild,
-                              properties={"channel_id": channel_id, "channel_name": channel_name,
-                                          "trigger": "parar_command"})
+            analytics.capture(
+                "voice channel left",
+                user=ctx.author,
+                guild=ctx.guild,
+                properties={
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "trigger": "parar_command",
+                },
+            )
             await safe_respond(ctx, "👋 Desconectado.")
         except Exception as e:
-            analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                        properties={"action": "parar_disconnect"})
+            analytics.capture_exception(
+                e,
+                user=ctx.author,
+                guild=ctx.guild,
+                properties={"action": "parar_disconnect"},
+            )
             await safe_respond(ctx, f"❌ Error al desconectar: {e}")
     else:
         await safe_respond(ctx, "❌ No conectado.")

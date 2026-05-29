@@ -1,0 +1,18 @@
+[Unit]
+Description=VaPls voice transcription userbot (Spanish)
+After=network-online.target discord-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vapls-discord-bot/userbot
+EnvironmentFile=/home/ubuntu/vapls-discord-bot/userbot/.env
+ExecStart=/home/ubuntu/vapls-discord-bot/userbot/venv/bin/python3 bot.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

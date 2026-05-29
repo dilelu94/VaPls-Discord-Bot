@@ -1,0 +1,7 @@
+# Discord library for user accounts. discord.py-self is the maintained
+# fork of discord.py with selfbot voice + receive support. Installs as
+# `discord` (replacing any prior discord.py).
+discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self
+vosk
+python-dotenv
+aiohttp>=3.9

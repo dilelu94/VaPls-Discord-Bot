@@ -1,6 +1,4 @@
 py-cord[voice] @ git+https://github.com/Pycord-Development/pycord
-davey
-vosk
 python-dotenv
 psutil
 posthog>=7.15.0
