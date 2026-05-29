@@ -42,14 +42,19 @@ except ImportError:
 
 _dave_stats = {"total": 0, "dave_ok": 0, "dave_skip": 0, "dave_fail": 0}
 
+# Opus 20ms mono silence frame — used as fallback when DAVE decryption fails so
+# opus_decode produces silence instead of crashing the PacketRouter thread.
+_OPUS_SILENCE = b"\xf8\xff\xfe"
+
 
 def _install_dave_patch():
     _orig_init = AudioReader.__init__
 
-    def _patched_init(self, sink, voice_client, *, after=None):
-        _orig_init(self, sink, voice_client, after=after)
+    def _patched_init(self, sink, voice_client, *args, **kwargs):
+        _orig_init(self, sink, voice_client, *args, **kwargs)
         # Stash the voice client reference on the decryptor so the wrapped
         # _decrypt_rtp_* method can read dave_session + ssrc_user_map.
+        # Upstream AudioReader signature is (self, sink, voice_client, ...).
         self.decryptor._voice_client = voice_client
 
     AudioReader.__init__ = _patched_init
@@ -73,21 +78,20 @@ def _install_dave_patch():
                 _dave_stats["dave_skip"] += 1
                 return raw
 
-            # Try multiple paths to find the active VoiceConnectionState
-            # (discord.py-self stores it at different places depending on
-            # connection lifecycle).
-            dave = None
-            for path in ("_connection", "_state", "client._connection"):
-                obj = vc
-                for part in path.split("."):
-                    obj = getattr(obj, part, None)
-                    if obj is None:
-                        break
-                if obj is not None:
-                    candidate = getattr(obj, "dave_session", None)
-                    if candidate is not None:
-                        dave = candidate
-                        break
+            # In voice_recv's VoiceRecvClient (which subclasses VoiceClient),
+            # the active VoiceConnectionState lives at vc._connection, and the
+            # dave_session is set on it during reinit_dave_session.
+            state = getattr(vc, "_connection", None)
+            dave = getattr(state, "dave_session", None) if state else None
+
+            if n == 1:
+                log.info(
+                    f"[DAVE-DBG] vc_type={type(vc).__name__} "
+                    f"state_type={type(state).__name__ if state else None} "
+                    f"state_dave_attr={hasattr(state, 'dave_session') if state else None} "
+                    f"vc_attrs_with_dave={[a for a in dir(vc) if 'dave' in a.lower()]} "
+                    f"state_attrs_with_dave={[a for a in dir(state) if 'dave' in a.lower()] if state else []}"
+                )
 
             if dave is None or not getattr(dave, "ready", False):
                 _dave_stats["dave_skip"] += 1
@@ -95,15 +99,13 @@ def _install_dave_patch():
                     log.info(
                         f"[DAVE-DBG] #{n} dave not ready "
                         f"(dave={dave is not None}, "
-                        f"ready={getattr(dave, 'ready', None) if dave else None}, "
-                        f"vc_type={type(vc).__name__}, "
-                        f"vc_attrs={[a for a in dir(vc) if 'connect' in a.lower() or 'state' in a.lower() or 'dave' in a.lower()][:8]})"
+                        f"ready={getattr(dave, 'ready', None) if dave else None})"
                     )
-                return raw
+                return _OPUS_SILENCE
 
             ssrc_map = getattr(vc, "_ssrc_to_id", None)
             if not ssrc_map:
-                ssrc_map = getattr(state, "ssrc_user_map", {}) or {}
+                ssrc_map = getattr(vc, "ssrc_user_map", {}) or {}
             uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
             if not uid:
                 _dave_stats["dave_skip"] += 1
@@ -112,12 +114,12 @@ def _install_dave_patch():
                         f"[DAVE-DBG] #{n} no uid for ssrc={packet.ssrc} "
                         f"(map_size={len(ssrc_map) if ssrc_map else 0})"
                     )
-                return raw
+                return _OPUS_SILENCE
 
             try:
                 decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
                 _dave_stats["dave_ok"] += 1
-                if n <= 3:
+                if n <= 3 or n % 500 == 0:
                     log.info(
                         f"[DAVE-DBG] #{n} dave.decrypt OK uid={uid} "
                         f"in={len(raw)}B out={len(decrypted)}B"
@@ -127,7 +129,7 @@ def _install_dave_patch():
                 _dave_stats["dave_fail"] += 1
                 if n <= 5 or n % 500 == 0:
                     log.info(f"[DAVE-DBG] #{n} dave.decrypt failed: {e}")
-                return raw
+                return _OPUS_SILENCE
 
         setattr(PacketDecryptor, method_name, wrapped)
 
@@ -138,6 +140,33 @@ def _install_dave_patch():
         "aead_xchacha20_poly1305_rtpsize",
     ]:
         _wrap_method(f"_decrypt_rtp_{mode}")
+
+
+def _install_opus_resilience_patch():
+    """Stop OpusError from killing the PacketRouter thread.
+
+    When dave.decrypt() fails on a real Opus packet, the bytes we return are
+    not a valid Opus frame and opus_decode raises OpusError, which propagates
+    up the router thread's run() and kills the listener forever. Wrap the
+    decoder to swallow OpusError and produce silence instead.
+    """
+    from discord.ext.voice_recv import opus as _vr_opus
+    from discord.opus import OpusError
+
+    _orig_decode_packet = _vr_opus.PacketDecoder._decode_packet
+    _err_count = {"n": 0}
+
+    def safe_decode_packet(self, packet):
+        try:
+            return _orig_decode_packet(self, packet)
+        except OpusError as e:
+            _err_count["n"] += 1
+            n = _err_count["n"]
+            if n <= 3 or n % 500 == 0:
+                log.info(f"[OPUS-SAFE] #{n} swallowed OpusError: {e}")
+            return packet, b"\x00" * 3840
+
+    _vr_opus.PacketDecoder._decode_packet = safe_decode_packet
 
 
 # ---------- Logging --------------------------------------------------------
@@ -157,6 +186,8 @@ logging.getLogger("discord.voice_state").setLevel(logging.DEBUG)
 
 _install_dave_patch()
 log.info("DAVE decrypt monkey-patch installed.")
+_install_opus_resilience_patch()
+log.info("Opus decode resilience patch installed.")
 
 
 # Also wrap reinit_dave_session to confirm it runs and what protocol version
