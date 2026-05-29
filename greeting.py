@@ -9,7 +9,7 @@ import config
 # Map Discord user IDs to greeting audio paths relative to CUSTOM_AUDIO_PATH.
 # Add entries here to give specific users their own greeting sound.
 USER_GREETINGS: dict[int, str] = {
-    # Example: 123456789012345678: "Mila/Milapollo.mp3",
+    285116759525031937: "Mila/Milapollo.mp3",  # Mila
 }
 
 DEFAULT_GREETING = os.path.join("Audios", "Fish Carrot.m4a")
