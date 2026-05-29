@@ -59,7 +59,7 @@ guild con pre-descarga en segundo plano.
 - `/play`: reproduce música de YouTube.
 - `/soundpad`: panel de clips locales.
 - `/vapls`: respuestas Gemini sin memoria.
-- `/indio`: persona con memoria corta.
+- `/indio`: persona con memoria corta por guild + memoria de largo plazo destilada por Gemini.
 - `/parar`: detiene playback y desconecta.
 - `/quit`: desconecta sin limpiar cola.
 

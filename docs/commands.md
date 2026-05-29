@@ -6,7 +6,7 @@
 | `/parar` | Detiene la reproducción, limpia la cola y desconecta. | `pararCommand`, `playCommand`, `analytics` |
 | `/soundpad` | Abre el panel de Soundpad para reproducir clips locales. | `soundpadCommand`, `config`, `analytics` |
 | `/vapls` | Pregunta al bot Gemini sin memoria. | `geminiCommand`, `geminiClient`, `analytics` |
-| `/indio` | Conversación con memoria corta (persona “indio”). | `geminiCommand`, `geminiClient`, `analytics` |
+| `/indio` | Conversación con memoria corta por guild + memoria de largo plazo (rasgos, anécdotas, chistes internos) destilada por Gemini. | `geminiCommand`, `geminiClient`, `analytics` |
 | `/quit` | Desconecta el bot del canal de voz sin tocar la cola. | `bot.py`, `analytics` |
 | `/restart` | Reinicia el proceso del bot (dev-only). | `bot.py`, `analytics` |
 
