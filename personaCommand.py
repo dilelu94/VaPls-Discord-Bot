@@ -5,13 +5,17 @@ Both commands ask Google Gemini for a reply. /vapls is stateless (no memory).
 recurring character of the friend group.
 """
 import asyncio
+import json
 import logging
+import os
+import tempfile
 import time
 from typing import Optional
 
 import discord
 
 import analytics
+import config
 import geminiClient
 
 logger = logging.getLogger("bot.persona")
@@ -59,6 +63,71 @@ _MAX_CHUNKS = 4
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
 _indio_locks: dict[str, asyncio.Lock] = {}
+_persist_lock = asyncio.Lock()
+
+
+def _load_indio_state() -> None:
+    """Load history+last_seen from disk on startup. Silently no-ops if the
+    file is missing or unreadable — memory just starts empty."""
+    path = config.INDIO_MEMORY_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception:
+        logger.exception("indio memory load failed at %s", path)
+        return
+    entries = data.get("entries", {})
+    now = time.time()
+    loaded = 0
+    for key, val in entries.items():
+        last_seen = float(val.get("last_seen", 0))
+        if now - last_seen > _HISTORY_TTL_SEC:
+            continue
+        history = val.get("history", [])
+        if isinstance(history, list) and history:
+            _indio_history[key] = history
+            _indio_last_seen[key] = last_seen
+            loaded += 1
+    if loaded:
+        logger.info("indio memory: loaded %d entries from %s", loaded, path)
+
+
+async def _persist_indio_state() -> None:
+    """Atomic write of the full indio state to disk. Held under _persist_lock
+    so concurrent turns don't clobber each other's writes."""
+    path = config.INDIO_MEMORY_PATH
+    async with _persist_lock:
+        payload = {
+            "entries": {
+                k: {"history": _indio_history[k], "last_seen": _indio_last_seen.get(k, 0.0)}
+                for k in _indio_history
+            }
+        }
+        try:
+            await asyncio.to_thread(_write_json_atomic, path, payload)
+        except Exception:
+            logger.exception("indio memory persist failed at %s", path)
+
+
+def _write_json_atomic(path: str, payload: dict) -> None:
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".indio_", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+_load_indio_state()
 
 
 def _indio_memory_key(ctx: discord.ApplicationContext) -> str:
@@ -211,13 +280,18 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     tagged_message = f"[{speaker}]: {pregunta or ''}"
 
     async with lock:
+        history_reset = False
         if nuevo:
             had_history = bool(_indio_history.get(mem_key))
             _indio_history.pop(mem_key, None)
+            _indio_last_seen.pop(mem_key, None)
             if had_history:
+                history_reset = True
                 analytics.capture("indio history reset", user=ctx.author, guild=ctx.guild,
                                   properties={"trigger": "nuevo_param", "scope": "guild"})
         history_snapshot = list(_indio_history.get(mem_key, []))
+    if history_reset:
+        await _persist_indio_state()
 
     t0 = time.monotonic()
     try:
@@ -271,6 +345,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         _indio_history[mem_key] = new_hist
         _indio_last_seen[mem_key] = time.time()
         history_size_after = len(new_hist)
+    await _persist_indio_state()
 
     analytics.capture("indio invoked", user=ctx.author, guild=ctx.guild, properties={
         "prompt_length": len(pregunta or ""),

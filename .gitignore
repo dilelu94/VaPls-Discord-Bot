@@ -7,6 +7,9 @@ __pycache__/
 audio/*
 !audio/.gitkeep
 
+# Persisted runtime data (e.g. /indio conversation memory)
+data/
+
 # Vosk Models (too large for GitHub)
 models/*
 !models/.gitkeep
