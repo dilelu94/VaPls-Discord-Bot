@@ -103,6 +103,13 @@ async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
     return len(chunks)
 
 
+def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
+    name = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
+    lines = (pregunta or "").splitlines() or [""]
+    quoted = "\n".join(f"> {ln}" for ln in lines)
+    return f"**{name}** preguntó:\n{quoted}\n\n"
+
+
 def _error_message(kind: str, status: Optional[int], persona: str) -> str:
     is_indio = persona == "indio"
     if kind == "config":
@@ -161,7 +168,7 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         return
 
     try:
-        n_chunks = await _send_reply(ctx, reply.text)
+        n_chunks = await _send_reply(ctx, _format_user_header(ctx, pregunta) + reply.text)
     except Exception as e:
         logger.exception("vapls send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -229,7 +236,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     try:
-        n_chunks = await _send_reply(ctx, reply.text)
+        n_chunks = await _send_reply(ctx, _format_user_header(ctx, pregunta) + reply.text)
     except Exception as e:
         logger.exception("indio send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
