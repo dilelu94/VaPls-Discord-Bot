@@ -1,7 +1,22 @@
+"""Slash command implementation for /parar (stop playback and disconnect)."""
 import analytics
 
 
 async def pararLogic(ctx):
+    """Stop playback for the guild and disconnect the bot from voice.
+
+    Args:
+        ctx: Discord application context for the slash command.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Stops any active GuildPlayer, disconnects voice, and emits analytics.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     from bot import safe_respond
     from playCommand import guildPlayers, clearGuildPlayer
 

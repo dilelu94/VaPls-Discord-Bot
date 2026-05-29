@@ -195,11 +195,18 @@ log.info("✅ Spanish VOSK model loaded.")
 
 
 class TranscriberSink(voice_recv.AudioSink):
-    """Per-user Spanish transcription. write() is called once per Opus
-    frame from each speaking SSRC; voice_recv decodes to PCM before
-    delivery when wants_opus() is False."""
+    """Per-user Spanish transcription sink.
+
+    write() is called once per Opus frame from each speaking SSRC; voice_recv
+    decodes to PCM before delivery when wants_opus() is False.
+    """
 
     def __init__(self, client_ref: discord.Client):
+        """Initialize the sink and per-user recognizer state.
+
+        Args:
+            client_ref: Discord client used to schedule callbacks.
+        """
         super().__init__()
         self._client_ref = client_ref
         self.recognizers: dict[int, vosk.KaldiRecognizer] = {}
@@ -208,14 +215,36 @@ class TranscriberSink(voice_recv.AudioSink):
         self.start_time = time.time()
 
     def wants_opus(self) -> bool:
+        """Return False to receive decoded PCM audio.
+
+        Returns:
+            False to request decoded PCM frames.
+        """
         return False  # we want decoded PCM
 
     def cleanup(self) -> None:
+        """Release per-user recognizers and log summary.
+
+        Side Effects:
+            Clears recognizer state and logs packet counts.
+        """
         log.info(f"[VOSK] Sink cleanup. Total packets: {self.packet_count}")
         self.recognizers.clear()
         self.resample_states.clear()
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
+        """Process PCM frames, run Vosk, and dispatch transcripts.
+
+        Args:
+            source: Voice source (speaking member).
+            data: Voice data with PCM payload.
+
+        Returns:
+            None.
+
+        Side Effects:
+            Logs transcripts and schedules on_transcript callbacks.
+        """
         user_id = getattr(source, "id", None)
         if user_id is None:
             return
@@ -267,6 +296,11 @@ _http_session: Optional[aiohttp.ClientSession] = None
 
 
 async def _get_http() -> aiohttp.ClientSession:
+    """Return a cached aiohttp session for HTTP forwarding.
+
+    Returns:
+        Shared aiohttp ClientSession instance.
+    """
     global _http_session
     if _http_session is None or _http_session.closed:
         _http_session = aiohttp.ClientSession()
@@ -274,7 +308,21 @@ async def _get_http() -> aiohttp.ClientSession:
 
 
 async def on_transcript(user_id: int, text: str):
-    """Called every time the recognizer produces a final phrase."""
+    """Handle a completed transcription.
+
+    Args:
+        user_id: Discord user ID of the speaker.
+        text: Final transcription string.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Posts to a transcript channel and/or forwards to the main bot HTTP API.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if config.TRANSCRIPT_CHANNEL_NAME:
         try:
             for guild in client.guilds:
@@ -311,10 +359,26 @@ client = discord.Client(chunk_guilds_at_startup=False)
 
 
 def _guild_allowed(guild_id: int) -> bool:
+    """Return True if the guild is allowed by the allowlist.
+
+    Args:
+        guild_id: Discord guild ID.
+
+    Returns:
+        True when allowlisted or no allowlist is configured.
+    """
     return config.GUILD_ALLOWLIST is None or guild_id in config.GUILD_ALLOWLIST
 
 
 def _vc_for_guild(guild: discord.Guild) -> Optional[voice_recv.VoiceRecvClient]:
+    """Return the active VoiceRecvClient for a guild if present.
+
+    Args:
+        guild: Discord guild instance.
+
+    Returns:
+        VoiceRecvClient if connected; otherwise None.
+    """
     for vc in client.voice_clients:
         if vc.guild.id == guild.id:
             return vc  # type: ignore[return-value]
@@ -322,6 +386,14 @@ def _vc_for_guild(guild: discord.Guild) -> Optional[voice_recv.VoiceRecvClient]:
 
 
 async def _start_listening(vc: voice_recv.VoiceRecvClient):
+    """Ensure the sink is attached once the voice client is connected.
+
+    Args:
+        vc: Voice client to attach the sink to.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if vc.is_listening():
         return
     for _ in range(40):
@@ -340,6 +412,14 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
 
 
 async def _join_channel(channel: discord.VoiceChannel):
+    """Join or move to a voice channel and start listening.
+
+    Args:
+        channel: Voice channel to join.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if not _guild_allowed(channel.guild.id):
         return
     existing = _vc_for_guild(channel.guild)
@@ -361,6 +441,14 @@ async def _join_channel(channel: discord.VoiceChannel):
 
 
 async def _leave_if_empty(guild: discord.Guild):
+    """Disconnect from the guild voice channel if no humans remain.
+
+    Args:
+        guild: Discord guild instance.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     vc = _vc_for_guild(guild)
     if not vc:
         return
@@ -417,6 +505,11 @@ async def on_voice_state_update(member, before, after):
 
 
 async def main():
+    """Start the userbot client and clean up HTTP resources on exit.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if not config.USER_TOKEN:
         log.error("USER_TOKEN is not set. See .env.example for setup instructions.")
         sys.exit(1)

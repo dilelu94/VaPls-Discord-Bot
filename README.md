@@ -1,12 +1,14 @@
 # VaPls-Discord-Bot 🎙️🤖
 
-Un bot de voz para Discord que escucha canales de voz en tiempo real y reacciona a palabras clave específicas en español e inglés utilizando el motor de STT **Vosk** (offline).
+Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Gemini. La transcripción de voz en canales E2EE se maneja con un **userbot** separado.
 
 ## Características principales
-- **Detección bilingüe:** Escucha simultáneamente palabras clave en español ("necesito", "pito") e inglés ("i need", "whistle").
-- **Privacidad y rendimiento:** Procesamiento local (offline) con Vosk. Usa un vocabulario restringido para minimizar el uso de CPU.
-- **Grabación continua:** Utiliza `WaveSink` de Py-cord para capturar el audio de todos los usuarios en el canal.
-- **Respuesta automática:** Reproduce un audio específico (`audio/necesitopito.*`) cuando se detecta una coincidencia.
+- **/play con yt-dlp:** reproduce canciones o playlists desde YouTube.
+- **Soundpad interactivo:** panel para reproducir clips locales organizados por carpetas.
+- **Personas Gemini:** `/vapls` y `/indio` con respuestas en español.
+- **Saludos automáticos:** reproduce un audio al entrar a un canal de voz.
+- **Transcripción opcional:** userbot con Vosk para canales con DAVE/E2EE.
+- **HTTP API:** status, miembros, cola y reproducción de audio.
 
 ## Requisitos previos
 - **Python 3.10+**
@@ -14,6 +16,7 @@ Un bot de voz para Discord que escucha canales de voz en tiempo real y reacciona
 - Un bot de Discord creado en el [Developer Portal](https://discord.com/developers/applications) con los siguientes **Privileged Gateway Intents** activos:
   - Guild Members
   - Message Content
+ - (Opcional) una cuenta de usuario de Discord para el userbot de transcripción.
 
 ## Instalación
 
@@ -49,8 +52,8 @@ Un bot de voz para Discord que escucha canales de voz en tiempo real y reacciona
    rm models/es.zip models/en.zip
    ```
 
-5. **Añadir audios:**
-   Coloca el archivo de audio que deseas reproducir en la carpeta `audio/` con el nombre `necesitopito` (el bot detectará la extensión automáticamente, ej: `.mp3`, `.wav`).
+5. **Añadir audios locales (soundpad / saludos):**
+   Configura `CUSTOM_AUDIO_PATH` y coloca tus archivos por carpetas.
 
 ## Uso
 
@@ -59,12 +62,30 @@ Un bot de voz para Discord que escucha canales de voz en tiempo real y reacciona
    python bot.py
    ```
 2. En Discord, usa los siguientes comandos de barra (Slash Commands):
-   - `/escuchar`: El bot se une a tu canal de voz actual y comienza a monitorear.
-   - `/parar`: El bot detiene la escucha y se desconecta.
+   - `/play`: Busca o reproduce un link de YouTube.
+   - `/soundpad`: Abre el panel de soundpad.
+   - `/vapls`: Pregunta al bot Gemini.
+   - `/indio`: Charla con el personaje con memoria.
+   - `/parar`: Detiene reproducción y desconecta.
+   - `/quit`: Desconecta sin tocar la cola.
+
+## Documentación
+- [Arquitectura](docs/architecture.md)
+- [Configuración](docs/configuration.md)
+- [HTTP API](docs/api.md)
+- [Comandos](docs/commands.md)
+- [Operaciones](docs/operations.md)
+- [Testing](docs/testing.md)
+- [Contribución y docstrings](docs/contributing-docs.md)
+
+## Doc generation
+Los docstrings siguen estilo Google y se pueden renderizar con Sphinx +
+napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.md).
 
 ## Estructura del proyecto
-- `bot.py`: Lógica principal y manejo de voz.
-- `keywords.py`: Lista de palabras clave y lógica de detección.
-- `config.py`: Gestión de configuración y variables de entorno.
-- `models/`: Directorio para los modelos de Vosk.
-- `audio/`: Directorio para los archivos de respuesta sonora.
+- `bot.py`: Lógica principal, comandos y reproducción.
+- `userbot/bot.py`: Transcripción de voz con Vosk.
+- `playCommand.py`: Cola de música y yt-dlp.
+- `soundpadCommand.py`: UI de soundpad.
+- `apiServer.py`: HTTP API.
+- `config.py`: Configuración por entorno.

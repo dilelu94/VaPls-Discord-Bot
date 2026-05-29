@@ -1,7 +1,8 @@
 """PostHog product analytics wrapper.
 
 If POSTHOG_API_KEY is unset, every call is a no-op so the bot still works
-without a PostHog connection.
+without a PostHog connection. Depends on config.py and the optional posthog
+SDK.
 """
 import logging
 from typing import Any, Optional
@@ -31,6 +32,14 @@ except Exception as e:
 
 
 def _distinct_id(user) -> Optional[str]:
+    """Extract a PostHog distinct_id from a Discord user.
+
+    Args:
+        user: Discord user/member object.
+
+    Returns:
+        The user ID as a string, or None if unavailable.
+    """
     if user is None:
         return None
     uid = getattr(user, "id", None)
@@ -38,6 +47,17 @@ def _distinct_id(user) -> Optional[str]:
 
 
 def identify_user(user) -> None:
+    """Register/refresh a Discord user profile in PostHog.
+
+    Args:
+        user: Discord user/member object.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Sends identify/set calls to PostHog when enabled.
+    """
     if _client is None or user is None:
         return
     distinct_id = _distinct_id(user)
@@ -55,7 +75,17 @@ def identify_user(user) -> None:
 
 
 def identify_guild(guild) -> None:
-    """Register the Discord guild as a PostHog group (once per guild per process)."""
+    """Register the Discord guild as a PostHog group (once per process).
+
+    Args:
+        guild: Discord guild object.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Sends group_identify calls to PostHog when enabled.
+    """
     if _client is None or guild is None:
         return
     guild_id = str(getattr(guild, "id", "") or "")
@@ -83,6 +113,21 @@ def capture(
     properties: Optional[dict[str, Any]] = None,
     distinct_id: Optional[str] = None,
 ) -> None:
+    """Capture a product analytics event.
+
+    Args:
+        event: Event name.
+        user: Optional Discord user/member for distinct_id.
+        guild: Optional guild for group attribution.
+        properties: Additional event properties.
+        distinct_id: Optional explicit distinct_id override.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Emits a PostHog event when analytics are enabled.
+    """
     if _client is None:
         return
     did = distinct_id or _distinct_id(user)
@@ -107,6 +152,20 @@ def capture(
 
 
 def capture_exception(exc: BaseException, *, user=None, guild=None, properties: Optional[dict[str, Any]] = None) -> None:
+    """Report an exception to PostHog.
+
+    Args:
+        exc: Exception instance to report.
+        user: Optional Discord user/member context.
+        guild: Optional Discord guild context.
+        properties: Additional metadata to attach.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Sends exception telemetry to PostHog when enabled.
+    """
     if _client is None:
         return
     did = _distinct_id(user) or (f"bot-{getattr(guild, 'id', 'system')}")
@@ -120,6 +179,7 @@ def capture_exception(exc: BaseException, *, user=None, guild=None, properties: 
 
 
 def shutdown() -> None:
+    """Flush and close the PostHog client if it is active."""
     if _client is None:
         return
     try:

@@ -1,3 +1,4 @@
+"""Static per-user configuration used by greeting playback."""
 # Known Discord users and their per-feature config.
 # `greeting`: audio path relative to CUSTOM_AUDIO_PATH. Omit for default.
 USERS: dict[int, dict] = {

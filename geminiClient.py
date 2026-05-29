@@ -20,6 +20,7 @@ DEFAULT_TIMEOUT_SEC = 45
 
 
 class GeminiError(Exception):
+    """Typed error for Gemini API failures."""
     def __init__(self, msg: str, *, kind: str, status: Optional[int] = None,
                  finish_reason: Optional[str] = None):
         super().__init__(msg)
@@ -30,6 +31,8 @@ class GeminiError(Exception):
 
 @dataclass
 class GeminiReply:
+    """Parsed Gemini response payload."""
+
     text: str
     finish_reason: Optional[str]
     prompt_tokens: Optional[int]
@@ -46,6 +49,28 @@ async def generate(
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     max_output_tokens: int = 1024,
 ) -> GeminiReply:
+    """Generate a single Gemini reply for a user message.
+
+    Args:
+        user_message: User input text.
+        system_instruction: System prompt for persona guidance.
+        history: Optional conversation history in Gemini format.
+        model: Override model name; defaults to config.GEMINI_MODEL.
+        timeout_sec: Total HTTP timeout.
+        max_output_tokens: Max tokens for the response.
+
+    Returns:
+        GeminiReply with the rendered text and usage metadata.
+
+    Raises:
+        GeminiError: When configuration is missing or the API returns errors.
+
+    Side Effects:
+        Performs an outbound HTTPS request to the Gemini API.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if not config.GEMINI_API_KEY:
         raise GeminiError("GEMINI_API_KEY not set", kind="config")
 

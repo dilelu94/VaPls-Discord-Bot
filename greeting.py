@@ -1,3 +1,4 @@
+"""Greeting soundboard trigger helpers for voice channel joins."""
 import asyncio
 import logging
 import os
@@ -17,11 +18,31 @@ _pending_trigger_user: dict[int, int] = {}
 
 
 def set_pending_trigger(channel_id: int, user_id: int) -> None:
+    """Record the user that should be greeted for a channel join.
+
+    Args:
+        channel_id: Voice channel ID that will receive the greeting.
+        user_id: Discord user ID to associate with the greeting sound.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Stores pending trigger state in module-level memory.
+    """
     _pending_trigger_user[channel_id] = user_id
     logger.info(f"[GREETING] pending trigger set: channel={channel_id} user={user_id}")
 
 
 def _resolve_greeting_path(user_id):
+    """Resolve the greeting audio path for a user.
+
+    Args:
+        user_id: Discord user ID, or None to use the default greeting.
+
+    Returns:
+        Absolute or relative path to the greeting audio file.
+    """
     rel = USERS.get(user_id, {}).get("greeting") if user_id is not None else None
     if rel is None:
         rel = DEFAULT_GREETING
@@ -29,6 +50,20 @@ def _resolve_greeting_path(user_id):
 
 
 async def trigger_soundboard_entry(channel):
+    """Play the greeting audio for a channel if the throttle allows it.
+
+    Args:
+        channel: Discord voice channel where the bot is currently connected.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Plays audio through the active voice client and updates throttle state.
+
+    Async:
+        This function is a coroutine and must be awaited or scheduled.
+    """
     now = time.time()
     user_id = _pending_trigger_user.pop(channel.id, None)
     last = _last_greeting.get(channel.id, 0.0)

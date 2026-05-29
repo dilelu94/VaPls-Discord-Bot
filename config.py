@@ -1,3 +1,9 @@
+"""Runtime configuration for the main Discord bot.
+
+Values are loaded from environment variables (optionally via .env) at import
+time and shared across modules such as bot.py, playCommand.py, soundpadCommand.py,
+apiServer.py, analytics.py, and geminiClient.py.
+"""
 import os
 from dotenv import load_dotenv
 

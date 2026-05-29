@@ -1,3 +1,4 @@
+"""Unit tests for SoundpadView navigation and playback logic."""
 import os
 import shutil
 import unittest
@@ -9,6 +10,7 @@ import config
 from soundpadCommand import SoundpadView, soundpadLogic
 
 class MockVC:
+    """Minimal voice client stub used for Soundpad tests."""
     def __init__(self):
         self.played = None
         self.isPlayingState = False
@@ -35,6 +37,7 @@ class MockVC:
         self.isPausedState = False
 
 class TestSoundpadSubfoldersAndPagination(unittest.IsolatedAsyncioTestCase):
+    """Async test suite covering Soundpad navigation and playback."""
     async def asyncSetUp(self):
         self.temp_audio_dir = "/tmp/test_soundpad_navigation"
         os.makedirs(self.temp_audio_dir, exist_ok=True)

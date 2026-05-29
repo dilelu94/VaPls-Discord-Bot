@@ -2,7 +2,7 @@
 
 Both commands ask Google Gemini for a reply. /vapls is stateless (no memory).
 /indio keeps a short per-user conversation history so it behaves like a
-recurring character of the friend group.
+recurring character of the friend group. Depends on geminiClient and analytics.
 """
 import asyncio
 import logging
@@ -62,8 +62,14 @@ _indio_locks: dict[str, asyncio.Lock] = {}
 
 
 def _indio_memory_key(ctx: discord.ApplicationContext) -> str:
-    """Memoria por-guild (o por-DM si no hay guild). Compartida entre todos
-    los usuarios del mismo servidor."""
+    """Build the memory bucket key for the Indio persona.
+
+    Args:
+        ctx: Discord application context.
+
+    Returns:
+        A string key scoped to the guild (or DM if no guild).
+    """
     guild = getattr(ctx, "guild", None)
     if guild is not None and getattr(guild, "id", None) is not None:
         return f"guild-{guild.id}"
@@ -71,9 +77,17 @@ def _indio_memory_key(ctx: discord.ApplicationContext) -> str:
 
 
 def _split_for_discord(text: str) -> list[str]:
-    """Split text into chunks ≤_DISCORD_CHUNK_LIMIT chars, preserving line
-    boundaries when possible. Capped at _MAX_CHUNKS; the last chunk is
-    truncated with an ellipsis marker if the text would exceed the cap."""
+    """Split text into Discord-sized chunks.
+
+    Args:
+        text: Full response text.
+
+    Returns:
+        List of chunks capped at _MAX_CHUNKS.
+
+    Side Effects:
+        None. The last chunk may be truncated with an ellipsis.
+    """
     if len(text) <= _DISCORD_CHUNK_LIMIT:
         return [text]
 
@@ -104,6 +118,14 @@ def _split_for_discord(text: str) -> list[str]:
 
 
 def _evict_stale_indio() -> None:
+    """Drop expired Indio conversation histories.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Mutates in-memory history/lock dictionaries.
+    """
     now = time.time()
     stale = [uid for uid, ts in _indio_last_seen.items() if now - ts > _HISTORY_TTL_SEC]
     for uid in stale:
@@ -113,6 +135,21 @@ def _evict_stale_indio() -> None:
 
 
 async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
+    """Send a possibly multi-part reply to Discord.
+
+    Args:
+        ctx: Discord application context.
+        text: Full response text.
+
+    Returns:
+        Number of chunks sent.
+
+    Side Effects:
+        Sends follow-up messages via Discord.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     chunks = _split_for_discord(text)
     for c in chunks:
         await ctx.followup.send(c)
@@ -120,6 +157,15 @@ async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
 
 
 def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
+    """Format the user header and quoted question for responses.
+
+    Args:
+        ctx: Discord application context.
+        pregunta: Original user question.
+
+    Returns:
+        A formatted header string for the reply.
+    """
     name = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
     lines = (pregunta or "").splitlines() or [""]
     quoted = "\n".join(f"> {ln}" for ln in lines)
@@ -127,6 +173,16 @@ def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
 
 
 def _error_message(kind: str, status: Optional[int], persona: str) -> str:
+    """Return a user-facing error message for Gemini failures.
+
+    Args:
+        kind: Error type emitted by geminiClient.
+        status: Optional HTTP status.
+        persona: "vapls" or "indio".
+
+    Returns:
+        Localized error string for Discord.
+    """
     is_indio = persona == "indio"
     if kind == "config":
         return "⚙️ Gemini no está configurado. Avisale al admin."
@@ -151,6 +207,21 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
 
 
 async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
+    """Handle the /vapls command using a stateless Gemini prompt.
+
+    Args:
+        ctx: Discord application context.
+        pregunta: User prompt text.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Sends Discord messages and emits analytics events.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     t0 = time.monotonic()
     try:
         reply = await geminiClient.generate(
@@ -204,6 +275,22 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
 
 
 async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool):
+    """Handle the /indio command with short-term conversation memory.
+
+    Args:
+        ctx: Discord application context.
+        pregunta: User prompt text.
+        nuevo: Whether to reset the conversation history.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Updates in-memory history, sends Discord messages, and emits analytics.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     _evict_stale_indio()
     mem_key = _indio_memory_key(ctx)
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
