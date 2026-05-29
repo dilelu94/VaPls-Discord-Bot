@@ -3,6 +3,7 @@ import asyncio
 import discord
 import config
 import analytics
+from greeting import set_pending_trigger
 
 # Global dictionary to track active player states per guild
 guildPlayers = {}
@@ -325,6 +326,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     # Connect or move bot to the channel
     if ctx.voice_client is None:
         try:
+            set_pending_trigger(channel.id, ctx.author.id)
             vc = await channel.connect(reconnect=True)
         except Exception as e:
             return await safe_respond(ctx, f"❌ Error al conectar al canal: {e}")
@@ -338,6 +340,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
                 except Exception:
                     pass
                 setattr(vc, "recording", False)
+            set_pending_trigger(channel.id, ctx.author.id)
             await vc.move_to(channel)
 
     player = getGuildPlayer(ctx.guild.id, ctx.bot)
