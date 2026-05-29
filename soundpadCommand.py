@@ -92,11 +92,6 @@ class SoundpadView(discord.ui.View):
             vc = await interaction.user.voice.channel.connect(reconnect=True, timeout=10.0)
         except Exception as e:
             return None, f"Error al reconectar: {e}"
-        try:
-            from bot import start_listening
-            await start_listening(vc)
-        except Exception:
-            pass
         return vc, None
 
     async def play_sound(self, interaction: discord.Interaction):
@@ -208,8 +203,6 @@ async def soundpadLogic(ctx: discord.ApplicationContext):
             vc = await ctx.author.voice.channel.connect(reconnect=True, timeout=10.0)
         except Exception as e:
             return await ctx.followup.send(f"❌ Error al conectar: {e}", ephemeral=True)
-        from bot import start_listening
-        await start_listening(vc)
         # trigger_soundboard_entry ya se dispara por on_voice_state_update
     elif vc.channel.id != ctx.author.voice.channel.id:
         try:
