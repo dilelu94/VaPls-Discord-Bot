@@ -25,6 +25,23 @@ import vosk
 
 import config
 
+# Import the main bot's user mapping (parent directory) so we can show
+# friendly names instead of Discord display_name fallbacks.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+try:
+    from users import USERS as _USERS
+except Exception:
+    _USERS = {}
+
+
+def _name_for(user_id: int, member=None) -> str:
+    info = _USERS.get(user_id)
+    if info and info.get("name"):
+        return info["name"]
+    if member is not None:
+        return member.display_name
+    return f"User {user_id}"
+
 
 # ---------- DAVE decryption monkey-patch -----------------------------------
 # voice_recv decrypts only the outer AEAD layer; the inner Opus payload is
@@ -362,8 +379,8 @@ async def on_transcript(user_id: int, text: str):
                 )
                 if chan:
                     member = guild.get_member(user_id)
-                    name = member.display_name if member else f"User {user_id}"
-                    await chan.send(f"🎙️ **[ES] {name}:** {text}")
+                    name = _name_for(user_id, member)
+                    await chan.send(f"🎙️ **{name}:** {text}")
                     break
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
