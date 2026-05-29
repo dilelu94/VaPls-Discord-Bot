@@ -394,7 +394,7 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
     sections: list[str] = []
     if current_members:
         sections.append(
-            "Los pibes del grupo ahora son: " + ", ".join(current_members) + "."
+            "Mis amigos son: " + ", ".join(current_members) + "."
         )
     if not lt:
         return "\n\n".join(sections)
