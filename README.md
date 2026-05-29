@@ -1,4 +1,5 @@
 # VaPls-Discord-Bot 🎙️🤖
+[![CI](https://github.com/dilelu94/VaPls-Discord-Bot/actions/workflows/ci.yml/badge.svg)](https://github.com/dilelu94/VaPls-Discord-Bot/actions/workflows/ci.yml)
 
 Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Gemini. La transcripción de voz en canales E2EE se maneja con un **userbot** separado.
 
@@ -81,6 +82,10 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
 ## Doc generation
 Los docstrings siguen estilo Google y se pueden renderizar con Sphinx +
 napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.md).
+
+## CI/CD
+- **CI:** GitHub Actions ejecuta los tests (`python -m unittest discover -s tests`) en cada push y pull request.
+- **Próximos pasos (CD):** empaquetado/artefactos, credenciales de despliegue y aprobaciones por entorno.
 
 ## Estructura del proyecto
 - `bot.py`: Lógica principal, comandos y reproducción.
