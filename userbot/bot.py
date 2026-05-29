@@ -182,7 +182,10 @@ def _install_opus_resilience_patch():
             n = _err_count["n"]
             if n <= 3 or n % 500 == 0:
                 log.info(f"[OPUS-SAFE] #{n} swallowed OpusError: {e}")
-            return packet, b"\x00" * 3840
+            # Return empty PCM so the sink's `if not pcm_data: return` guard
+            # drops the packet entirely instead of feeding silence into VOSK,
+            # which would otherwise break the recognizer's context.
+            return packet, b""
 
     _vr_opus.PacketDecoder._decode_packet = safe_decode_packet
 
@@ -250,6 +253,14 @@ class TranscriberSink(voice_recv.AudioSink):
     decodes to PCM before delivery when wants_opus() is False.
     """
 
+    # RMS amplitude below this is treated as silence and dropped before
+    # being fed to VOSK. Range for 16-bit PCM is 0..32767; normal speech is
+    # 200-5000+, room noise typically <40.
+    SILENCE_RMS_THRESHOLD = 80
+    # Force a final result if we haven't fed audio in this many seconds — keeps
+    # frases from blending across long pauses.
+    SILENCE_FINAL_SECONDS = 0.8
+
     def __init__(self, client_ref: discord.Client):
         """Initialize the sink and per-user recognizer state.
 
@@ -260,6 +271,7 @@ class TranscriberSink(voice_recv.AudioSink):
         self._client_ref = client_ref
         self.recognizers: dict[int, vosk.KaldiRecognizer] = {}
         self.resample_states: dict[int, object] = {}
+        self.last_voice_ts: dict[int, float] = {}
         self.packet_count = 0
         self.start_time = time.time()
 
@@ -280,6 +292,7 @@ class TranscriberSink(voice_recv.AudioSink):
         log.info(f"[VOSK] Sink cleanup. Total packets: {self.packet_count}")
         self.recognizers.clear()
         self.resample_states.clear()
+        self.last_voice_ts.clear()
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
         """Process PCM frames, run Vosk, and dispatch transcripts.
@@ -322,6 +335,26 @@ class TranscriberSink(voice_recv.AudioSink):
 
         try:
             mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            # Drop near-silent frames so silence injected by the DAVE/Opus
+            # fallbacks doesn't reach VOSK and break recognizer context.
+            if audioop.rms(mono, 2) < self.SILENCE_RMS_THRESHOLD:
+                # If we've been silent long enough, flush any pending partial
+                # as a final result so the next utterance starts fresh.
+                last = self.last_voice_ts.get(user_id)
+                if last and (time.time() - last) > self.SILENCE_FINAL_SECONDS:
+                    rec = self.recognizers.get(user_id)
+                    if rec is not None:
+                        result = json.loads(rec.FinalResult())
+                        text = result.get("text", "").strip()
+                        if text:
+                            log.info(f"[VOSK][es] user_id={user_id}: {text}")
+                            asyncio.run_coroutine_threadsafe(
+                                on_transcript(user_id, text), self._client_ref.loop
+                            )
+                    self.last_voice_ts.pop(user_id, None)
+                return
+
+            self.last_voice_ts[user_id] = time.time()
             data_16k, new_state = audioop.ratecv(
                 mono, 2, 1, 48000, 16000, self.resample_states[user_id]
             )
