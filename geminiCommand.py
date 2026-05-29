@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 from typing import Optional
@@ -545,6 +546,21 @@ async def _maybe_compress(mem_key: str) -> None:
         _indio_compressing.discard(mem_key)
 
 
+_INDIO_PREFIX_RE = re.compile(
+    r"^\s*[\[\(]?\s*(el\s+)?indio\s*[\]\)]?\s*[:\-—]\s*",
+    re.IGNORECASE,
+)
+
+
+def _strip_indio_prefix(text: str) -> str:
+    """Drop any "[indio]:" / "Indio:" / "(el indio) -" style prefix the model
+    sometimes hallucinates, even though INDIO_SYSTEM tells it not to."""
+    if not text:
+        return text
+    out = _INDIO_PREFIX_RE.sub("", text, count=1)
+    return out.lstrip()
+
+
 async def _relay_to_userbot(channel_id: int, content: str,
                             reply_to_id: Optional[int]) -> bool:
     """POST the indio reply to the userbot's local /say endpoint so it gets
@@ -759,6 +775,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                                     properties={"action": "indio_unexpected"})
         return
 
+    clean_reply = _strip_indio_prefix(reply.text)
     relayed_via_userbot = False
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
@@ -769,13 +786,13 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         )
         if channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
             relayed_via_userbot = await _relay_to_userbot(
-                channel_id, reply.text, question_msg_id
+                channel_id, clean_reply, question_msg_id
             )
         if relayed_via_userbot:
             n_chunks = 1
         else:
             # Fallback: post the reply via vapls if relay is disabled or failed.
-            n_chunks = await _send_reply(ctx, reply.text)
+            n_chunks = await _send_reply(ctx, clean_reply)
     except Exception as e:
         logger.exception("indio send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -783,7 +800,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
-    model_turn = {"role": "model", "parts": [{"text": reply.text[:_STORED_MSG_MAX_CHARS]}]}
+    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
