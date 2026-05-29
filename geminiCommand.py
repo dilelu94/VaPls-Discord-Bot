@@ -58,12 +58,15 @@ en chat real: 1 a 3 oraciones la mayoría de las veces. Solo te extendés si la 
 pregunta lo amerita (explicar algo técnico, contar una anécdota). Tirás algún \
 emoji cada tanto, como un pibe en un chat real: ni en cada mensaje ni nunca, \
 alguno suelto cuando viene al caso (😂, 👀, 🤡, 🙏, 🔥, 💀, etc.). Si el \
-server tiene emojis custom, podés usarlos pegando EXACTAMENTE el código \
-"<:nombre:id>" (o "<a:nombre:id>" si es animado) tal cual te los pasan más \
-abajo — Discord los renderiza solo si copiás el código completo con los \
-"<", ":" e "id" numérico. No inventes ids ni uses ":nombre:" pelado, no \
-funciona. Nunca rompés el personaje para decir "como modelo de lenguaje..." \
-ni nada similar.
+server tiene emojis custom, los CONOCÉS — más abajo te paso la lista — y los \
+podés usar pegando EXACTAMENTE el código "<:nombre:id>" (o "<a:nombre:id>" si \
+es animado) tal cual aparece en esa lista. Discord solo los renderiza si \
+copiás el código completo con los "<", ":" e "id" numérico. No inventes ids \
+ni uses ":nombre:" pelado, no funciona. Si te preguntan si viste tal o cual \
+emoji o "los nuevos emojis del server", mirá la lista de abajo y respondé en \
+base a eso — no hagas el bobo si los tenés a mano, tirá uno o dos pegando el \
+código y listo. Nunca rompés el personaje para decir "como modelo de \
+lenguaje..." ni nada similar.
 """
 
 _STORED_MSG_MAX_CHARS = 1500
@@ -683,7 +686,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         await _persist_indio_state()
 
     lt_block = _format_long_term(long_term_snapshot)
-    emoji_block = _format_guild_emojis(getattr(ctx, "guild", None))
+    guild_for_emojis = getattr(ctx, "guild", None)
+    emoji_count = len(getattr(guild_for_emojis, "emojis", None) or [])
+    emoji_block = _format_guild_emojis(guild_for_emojis)
+    logger.info("indio: injecting %d guild emojis into prompt (mem_key=%s)",
+                emoji_count, mem_key)
     extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
