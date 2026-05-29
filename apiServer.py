@@ -526,9 +526,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
         """Trigger the indio persona from a voice transcription.
 
         Body JSON: {pregunta, speaker_name, guild_id?, channel_id?,
-        channel_name?, decifrar?}. Forwards to geminiCommand.askIndio, which
-        runs Gemini first to clean ASR errors before invoking the indio.
-        Returns immediately; the indio reply is delivered async to the channel.
+        channel_name?, decifrar?}. When ``decifrar`` is true (default), the raw
+        transcript is first passed through geminiCommand.decifrarTranscripcion
+        to fix ASR phonetic errors; the cleaned text is then handed to
+        askIndio. Returns immediately; the reply is delivered async.
         """
         try:
             data = await request.json()
@@ -543,15 +544,26 @@ def makeApp(bot: discord.Bot) -> web.Application:
         channel_name = data.get("channel_name")
         decifrar = bool(data.get("decifrar", True))
 
-        asyncio.create_task(geminiCommand.askIndio(
-            bot,
-            pregunta,
-            speaker_name=speaker_name,
-            guild_id=guild_id,
-            channel_id=channel_id,
-            channel_name=channel_name,
-            decifrar=decifrar,
-        ))
+        async def _run() -> None:
+            text = pregunta
+            if decifrar:
+                cleaned = await geminiCommand.decifrarTranscripcion(text)
+                if not cleaned:
+                    logger.info("indio voice: BASURA dropped raw=%r", text[:200])
+                    return
+                if cleaned != text:
+                    logger.info("indio voice: decifrado %r -> %r", text, cleaned)
+                text = cleaned
+            await geminiCommand.askIndio(
+                bot,
+                text,
+                speaker_name=speaker_name,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                channel_name=channel_name,
+            )
+
+        asyncio.create_task(_run())
         return web.json_response({"ok": True})
 
     async def playingState(request: web.Request) -> web.Response:

@@ -1086,12 +1086,12 @@ Reglas:
 """
 
 
-async def _decifrar_transcripcion(texto: str) -> str:
-    """Pass an ASR transcript through Gemini to clean phonetic errors.
+async def decifrarTranscripcion(texto: str) -> str:
+    """Run an ASR transcript through Gemini to clean phonetic errors.
 
     Returns the cleaned text, or "" when Gemini flags the input as BASURA
-    (so the caller can drop the utterance instead of forwarding noise to
-    the indio).
+    (so callers can drop the utterance instead of forwarding noise downstream).
+    Falls back to the raw text on Gemini failure.
     """
     texto = (texto or "").strip()
     if not texto:
@@ -1104,8 +1104,8 @@ async def _decifrar_transcripcion(texto: str) -> str:
             max_output_tokens=256,
         )
     except Exception:
-        logger.exception("decifrar transcripcion failed")
-        return texto  # fall back to raw transcript on Gemini failure
+        logger.exception("decifrarTranscripcion failed")
+        return texto
     out = (reply.text or "").strip().strip('"').strip("'")
     if out.upper().strip() == "BASURA":
         logger.info("decifrar: descartado como BASURA, raw=%r", texto[:200])
@@ -1119,8 +1119,7 @@ async def askIndio(bot: "discord.Bot",
                    *,
                    guild_id: Optional[int] = None,
                    channel_id: Optional[int] = None,
-                   channel_name: Optional[str] = None,
-                   decifrar: bool = False) -> bool:
+                   channel_name: Optional[str] = None) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -1133,9 +1132,6 @@ async def askIndio(bot: "discord.Bot",
             has the resolved channel.
         channel_id: Optional explicit channel ID. Wins over channel_name.
         channel_name: Channel name to resolve. Defaults to "bot-testing".
-        decifrar: When True, run the text through Gemini first to fix ASR
-            phonetic errors; intended for voice-driven calls. Returns False
-            if Gemini decides the input is unintelligible (BASURA).
 
     Behavior:
         The reply is posted via the userbot relay (the cuenta-real "Indio")
@@ -1148,13 +1144,6 @@ async def askIndio(bot: "discord.Bot",
     """
     if not text or not text.strip():
         return False
-    if decifrar:
-        cleaned = await _decifrar_transcripcion(text)
-        if not cleaned:
-            return False
-        if cleaned != text:
-            logger.info("askIndio decifrado: %r -> %r", text, cleaned)
-        text = cleaned
     target_channel_id: Optional[int] = channel_id
     target_guild_id: Optional[int] = guild_id
     if target_channel_id is None:
