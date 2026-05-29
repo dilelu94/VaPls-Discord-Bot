@@ -324,37 +324,75 @@ def _format_guild_emojis(guild) -> str:
     return "Emojis custom del server (pegá el código completo tal cual):\n" + "\n".join(lines)
 
 
-def _format_known_users(guild) -> str:
-    """Render the static USERS roster as a Spanish block so the indio knows
-    every member of the group by name even before they've ever talked to him.
-    If the guild is available we also mark who is currently a member; otherwise
-    we just list every name from users.py."""
-    if not _USERS:
-        return ""
-    guild_member_ids: set[int] = set()
-    if guild is not None:
-        try:
-            guild_member_ids = {m.id for m in getattr(guild, "members", []) or []}
-        except Exception:
-            guild_member_ids = set()
-    names_in_guild: list[str] = []
-    names_other: list[str] = []
-    for uid, info in _USERS.items():
-        name = (info or {}).get("name")
-        if not name:
+_MAIN_CHARS_ROLE = "Main characters"
+_ROSTER_CACHE_TTL_SEC = 300
+_roster_cache: dict[int, tuple[float, list[str]]] = {}
+_roster_lock = asyncio.Lock()
+
+
+async def _fetch_main_characters(guild_id: int) -> list[str]:
+    """Ask the userbot which guild members hold the "Main characters" role,
+    then map each to the nickname from users.py (fallback: display_name).
+    Returns [] if the relay is disabled, unreachable, or the role is missing."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return []
+    # /say -> /members on the same userbot relay.
+    members_url = url.rsplit("/", 1)[0] + "/members"
+    params = {"guild_id": str(guild_id), "role_name": _MAIN_CHARS_ROLE}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=5)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(members_url, params=params, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.warning("roster fetch HTTP %d", resp.status)
+                    return []
+                payload = await resp.json()
+    except Exception:
+        logger.exception("roster fetch failed")
+        return []
+    names: list[str] = []
+    for m in payload.get("members", []) or []:
+        if m.get("is_bot"):
             continue
-        if guild_member_ids and uid not in guild_member_ids:
-            names_other.append(name)
-        else:
-            names_in_guild.append(name)
-    if not names_in_guild and not names_other:
-        return ""
-    lines = ["Los pibes del grupo (los conocés a todos, son tus amigos):"]
-    if names_in_guild:
-        lines.append("- " + ", ".join(names_in_guild))
-    if names_other:
-        lines.append("Otros que a veces aparecen: " + ", ".join(names_other))
-    return "\n".join(lines)
+        try:
+            uid = int(m.get("id"))
+        except (TypeError, ValueError):
+            continue
+        info = _USERS.get(uid) or {}
+        name = info.get("name") or m.get("display_name") or m.get("global_name") or m.get("name")
+        if name:
+            names.append(name)
+    return names
+
+
+async def _get_main_characters(guild_id: int) -> list[str]:
+    """Cached lookup of the "Main characters" roster for a guild."""
+    now = time.time()
+    cached = _roster_cache.get(guild_id)
+    if cached and now - cached[0] < _ROSTER_CACHE_TTL_SEC:
+        return cached[1]
+    async with _roster_lock:
+        cached = _roster_cache.get(guild_id)
+        if cached and now - cached[0] < _ROSTER_CACHE_TTL_SEC:
+            return cached[1]
+        names = await _fetch_main_characters(guild_id)
+        _roster_cache[guild_id] = (time.time(), names)
+        return names
+
+
+def _format_known_users_block(names: list[str]) -> str:
+    """Render the roster block injected into the indio's system prompt."""
+    base = (
+        "VaPls es el bot oficial del grupo (no es persona, es el bot que corre "
+        "los comandos como /play, /vapls, etc.). Vos sos el indio."
+    )
+    if not names:
+        return base
+    roster = "Tus amigos del grupo (los miembros con rol \"Main characters\"): " + ", ".join(names) + "."
+    return base + "\n" + roster
 
 
 def _format_long_term(lt: dict) -> str:
@@ -771,12 +809,14 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         await _persist_indio_state()
 
     guild_for_extras = getattr(ctx, "guild", None)
-    roster_block = _format_known_users(guild_for_extras)
+    guild_id = getattr(guild_for_extras, "id", None)
+    main_chars = await _get_main_characters(int(guild_id)) if guild_id else []
+    roster_block = _format_known_users_block(main_chars)
     lt_block = _format_long_term(long_term_snapshot)
     emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
     emoji_block = _format_guild_emojis(guild_for_extras)
-    logger.info("indio: injecting roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
-                len(_USERS or {}),
+    logger.info("indio: injecting roster=%d (main_chars), lt_users=%d, emojis=%d (mem_key=%s)",
+                len(main_chars),
                 len((long_term_snapshot.get("users") or {})),
                 emoji_count, mem_key)
     extras = "\n\n".join(b for b in (roster_block, lt_block, emoji_block) if b)

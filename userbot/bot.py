@@ -253,11 +253,14 @@ import numpy as np
 from faster_whisper import WhisperModel
 
 log.info(f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
-        f"(compute_type={config.WHISPER_COMPUTE_TYPE}) ...")
+        f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
+        f"cpu_threads={config.WHISPER_CPU_THREADS}) ...")
 whisper_model = WhisperModel(
     config.WHISPER_MODEL,
     device="cpu",
     compute_type=config.WHISPER_COMPUTE_TYPE,
+    cpu_threads=config.WHISPER_CPU_THREADS,
+    num_workers=1,
     download_root=config.WHISPER_CACHE_DIR or None,
 )
 log.info("✅ Whisper model loaded.")
@@ -307,6 +310,9 @@ class TranscriberSink(voice_recv.AudioSink):
         self.start_time = time.time()
         self._active_lock = threading.Lock()
         self._active_count = 0
+        # Diagnostic: log RMS for the first packets per user to verify the
+        # silence threshold is sensible for the actual mic levels.
+        self._rms_seen: dict[int, int] = {}
 
     def wants_opus(self) -> bool:
         return False
@@ -345,6 +351,13 @@ class TranscriberSink(voice_recv.AudioSink):
             rms = audioop.rms(mono, 2)
             now = time.time()
 
+            # Diagnostic: log RMS for first few packets per user.
+            seen = self._rms_seen.get(user_id, 0)
+            if seen < 20:
+                log.info(f"[WHISPER-RMS] user={user_id} rms={rms} "
+                         f"threshold={self.SILENCE_RMS_THRESHOLD}")
+                self._rms_seen[user_id] = seen + 1
+
             if rms < self.SILENCE_RMS_THRESHOLD:
                 # Silence frame: check if we should finalize a pending utterance.
                 last = self.last_voice_ts.get(user_id)
@@ -376,10 +389,14 @@ class TranscriberSink(voice_recv.AudioSink):
         self.last_voice_ts.pop(user_id, None)
         self.had_voice[user_id] = False
         if not buf:
+            log.info(f"[WHISPER-FINAL] user={user_id} buf=empty, skip")
             return
         secs = len(buf) / (16000 * 2)
         if secs < self.MIN_SPEECH_SECONDS:
+            log.info(f"[WHISPER-FINAL] user={user_id} too short ({secs:.2f}s "
+                     f"< {self.MIN_SPEECH_SECONDS}s), skip")
             return
+        log.info(f"[WHISPER-FINAL] user={user_id} finalizing {secs:.2f}s")
 
         with self._active_lock:
             limit = self._concurrency_limit()
@@ -1117,6 +1134,8 @@ async def _relay_members(request: web.Request) -> web.Response:
     if guild is None:
         return web.json_response({"error": "guild not found"}, status=404)
 
+    role_name = (request.query.get("role_name") or "").strip().lower()
+
     members = list(guild.members)
     # If the cache looks suspiciously empty, ask the gateway for the full list.
     if len(members) < 5:
@@ -1128,6 +1147,18 @@ async def _relay_members(request: web.Request) -> web.Response:
             log.warning(f"[RELAY] fetch_members fallback failed: {e}")
             members = list(guild.members)
 
+    if role_name:
+        members = [
+            m for m in members
+            if any((r.name or "").lower() == role_name for r in (m.roles or []))
+        ]
+
+    # The userbot is itself a Discord user account, but for any "roster of
+    # friends" use case the relay should not return the userbot's own entry.
+    self_id = getattr(getattr(client, "user", None), "id", None)
+    if self_id is not None:
+        members = [m for m in members if m.id != self_id]
+
     payload = [
         {
             "id": str(m.id),
@@ -1135,10 +1166,15 @@ async def _relay_members(request: web.Request) -> web.Response:
             "global_name": getattr(m, "global_name", None) or "",
             "display_name": getattr(m, "display_name", None) or "",
             "is_bot": bool(getattr(m, "bot", False)),
+            "roles": [r.name for r in (m.roles or []) if r.name and r.name != "@everyone"],
         }
         for m in members
     ]
-    return web.json_response({"guild_id": guild_id, "members": payload})
+    return web.json_response({
+        "guild_id": guild_id,
+        "role_filter": role_name or None,
+        "members": payload,
+    })
 
 
 async def _start_relay() -> Optional[web.AppRunner]:
