@@ -32,26 +32,42 @@ INDIO_SYSTEM = """\
 Sos "el indio", un personaje del grupo de amigos en este server de Discord. NO \
 sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
-como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). Te \
-acordás de las cosas que charlaste antes con esta persona y podés hacer \
-referencia a ello. Sos opinable pero no agresivo. Si la conversación se pone \
-densa o trolleadora, seguís el chiste pero sin pasarte de mambo. Si te \
-preguntan si sos un bot, esquivás la pregunta con humor pero no mentís de \
-manera ofensiva. Mantenés respuestas cortas, como en un chat real: 1 a 3 \
-oraciones la mayoría de las veces. Solo te extendés si la pregunta lo amerita \
-(explicar algo técnico, contar una anécdota). Nunca rompés el personaje para \
-decir "como modelo de lenguaje..." ni nada similar.
+como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
+\
+Estás en un chat grupal con varios amigos a la vez. Cada mensaje del grupo te \
+llega con el formato "[nombre]: contenido" donde "nombre" es quién habla. Te \
+acordás de quién dijo qué y podés referirte a alguien por su nombre si hace \
+falta. NO empieces tus respuestas con "[indio]:" ni nada parecido: hablás \
+directo, como el indio. Si te hablan a vos directamente, respondé a esa \
+persona; si te preguntan por otra, contestá lo que sepas de la conversación \
+previa. \
+\
+Sos opinable pero no agresivo. Si la conversación se pone densa o trolleadora, \
+seguís el chiste sin pasarte de mambo. Si te preguntan si sos un bot, esquivás \
+con humor pero no mentís de manera ofensiva. Mantenés respuestas cortas, como \
+en chat real: 1 a 3 oraciones la mayoría de las veces. Solo te extendés si la \
+pregunta lo amerita (explicar algo técnico, contar una anécdota). Nunca \
+rompés el personaje para decir "como modelo de lenguaje..." ni nada similar.
 """
 
-_HISTORY_MAX_TURNS = 12           # 6 user + 6 model
+_HISTORY_MAX_TURNS = 20           # 10 user + 10 model (chat grupal)
 _STORED_MSG_MAX_CHARS = 1500
 _HISTORY_TTL_SEC = 6 * 3600
 _DISCORD_CHUNK_LIMIT = 1990
 _MAX_CHUNKS = 4
 
-_indio_history: dict[int, list[dict]] = {}
-_indio_last_seen: dict[int, float] = {}
-_indio_locks: dict[int, asyncio.Lock] = {}
+_indio_history: dict[str, list[dict]] = {}
+_indio_last_seen: dict[str, float] = {}
+_indio_locks: dict[str, asyncio.Lock] = {}
+
+
+def _indio_memory_key(ctx: discord.ApplicationContext) -> str:
+    """Memoria por-guild (o por-DM si no hay guild). Compartida entre todos
+    los usuarios del mismo servidor."""
+    guild = getattr(ctx, "guild", None)
+    if guild is not None and getattr(guild, "id", None) is not None:
+        return f"guild-{guild.id}"
+    return f"dm-{getattr(ctx.author, 'id', 'unknown')}"
 
 
 def _split_for_discord(text: str) -> list[str]:
@@ -189,22 +205,24 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
 
 async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool):
     _evict_stale_indio()
-    user_id = ctx.author.id
-    lock = _indio_locks.setdefault(user_id, asyncio.Lock())
+    mem_key = _indio_memory_key(ctx)
+    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
+    tagged_message = f"[{speaker}]: {pregunta or ''}"
 
     async with lock:
         if nuevo:
-            had_history = bool(_indio_history.get(user_id))
-            _indio_history.pop(user_id, None)
+            had_history = bool(_indio_history.get(mem_key))
+            _indio_history.pop(mem_key, None)
             if had_history:
                 analytics.capture("indio history reset", user=ctx.author, guild=ctx.guild,
-                                  properties={"trigger": "nuevo_param"})
-        history_snapshot = list(_indio_history.get(user_id, []))
+                                  properties={"trigger": "nuevo_param", "scope": "guild"})
+        history_snapshot = list(_indio_history.get(mem_key, []))
 
     t0 = time.monotonic()
     try:
         reply = await geminiClient.generate(
-            user_message=pregunta,
+            user_message=tagged_message,
             system_instruction=INDIO_SYSTEM,
             history=history_snapshot,
         )
@@ -243,15 +261,15 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                                     properties={"action": "indio_send"})
         return
 
-    user_turn = {"role": "user", "parts": [{"text": (pregunta or "")[:_STORED_MSG_MAX_CHARS]}]}
+    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
     model_turn = {"role": "model", "parts": [{"text": reply.text[:_STORED_MSG_MAX_CHARS]}]}
     async with lock:
-        existing = _indio_history.get(user_id, history_snapshot)
+        existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
         if len(new_hist) > _HISTORY_MAX_TURNS:
             new_hist = new_hist[-_HISTORY_MAX_TURNS:]
-        _indio_history[user_id] = new_hist
-        _indio_last_seen[user_id] = time.time()
+        _indio_history[mem_key] = new_hist
+        _indio_last_seen[mem_key] = time.time()
         history_size_after = len(new_hist)
 
     analytics.capture("indio invoked", user=ctx.author, guild=ctx.guild, properties={
