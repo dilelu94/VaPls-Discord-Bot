@@ -16,6 +16,7 @@ MODEL_PATH_EN = os.getenv("MODEL_PATH_EN", "models/vosk-model-small-en-us-0.15")
 AUDIO_DIR = os.getenv("AUDIO_DIR", "/var/home/dilelu/Desktop/Output")
 CUSTOM_AUDIO_PATH = os.getenv("CUSTOM_AUDIO_PATH", "/var/home/dilelu/Desktop/Output")
 YT_DLP_PATH = os.getenv("YT_DLP_PATH", "yt-dlp")
+YT_DLP_POT_BASE_URL = os.getenv("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416")
 
 # Guild IDs where slash commands are registered instantly (dev mode).
 # Leave empty or unset to register commands globally (may take up to 1h to propagate).

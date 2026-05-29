@@ -228,6 +228,8 @@ class GuildPlayer:
                 ytDlpArgs = [ytDlpPath]
                 if os.path.exists(cookiesPath):
                     ytDlpArgs += ["--cookies", cookiesPath]
+                if config.YT_DLP_POT_BASE_URL:
+                    ytDlpArgs += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
                 ytDlpArgs += [
                     "-x",
                     "--audio-format", "mp3",
@@ -443,6 +445,8 @@ class GuildPlayer:
                 ytDlpArgs = [ytDlpPath]
                 if os.path.exists(cookiesPath):
                     ytDlpArgs += ["--cookies", cookiesPath]
+                if config.YT_DLP_POT_BASE_URL:
+                    ytDlpArgs += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
                 ytDlpArgs += [
                     "-x",
                     "--audio-format", "mp3",
@@ -786,6 +790,8 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         ytDlpArgs = [config.YT_DLP_PATH]
         if os.path.exists(cookiesPath):
             ytDlpArgs += ["--cookies", cookiesPath]
+        if config.YT_DLP_POT_BASE_URL:
+            ytDlpArgs += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
         ytDlpArgs += [
             "--flat-playlist",
             "--simulate",
