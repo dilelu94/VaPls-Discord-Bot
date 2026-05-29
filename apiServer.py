@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 import logging
 from typing import Any, Optional
@@ -22,6 +23,12 @@ import geminiCommand
 from playCommand import guildPlayers
 
 logger = logging.getLogger("apiServer")
+
+# Health/uptime counters surfaced by GET /status. _PROCESS_START is set when
+# this module is imported; _GATEWAY_CONNECTED_AT is set by bot.py whenever the
+# Discord gateway hands us a connected session (on_ready / on_connect).
+_PROCESS_START = time.time()
+_GATEWAY_CONNECTED_AT: Optional[float] = None
 
 
 def _checkAuth(request: web.Request) -> Optional[web.Response]:
@@ -176,6 +183,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
         Async:
             This function is a coroutine and must be awaited.
         """
+        try:
+            voiceStatesCount = sum(
+                len(g.voice_states) if hasattr(g, "voice_states") else 0
+                for g in bot.guilds
+            )
+        except (AttributeError, TypeError):
+            voiceStatesCount = sum(
+                sum(1 for ch in g.voice_channels for _ in ch.members)
+                for g in bot.guilds
+            )
+
         return web.json_response({
             "ready": bot.is_ready(),
             "guilds": len(bot.guilds),
@@ -188,6 +206,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 }
                 for vc in bot.voice_clients
             ],
+            "uptime_seconds": int(time.time() - _PROCESS_START),
+            "gateway_connected_seconds_ago": (
+                int(time.time() - _GATEWAY_CONNECTED_AT)
+                if _GATEWAY_CONNECTED_AT is not None else None
+            ),
+            "voice_states_count": voiceStatesCount,
         })
 
     async def members(request: web.Request) -> web.Response:

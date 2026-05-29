@@ -265,15 +265,35 @@ whisper_model = WhisperModel(
 )
 log.info("✅ Whisper model loaded.")
 
-# Loose wake-word matcher: looks for an "indio"-like token anywhere near the
-# start of the phrase. Whisper sometimes hears "endio", "yndio", "yendo",
-# "indyo", "yndyo", etc., so we accept any "(in|en|yn|yen)d(i|y)o" variant.
-# We don't try to extract the pregunta — the whole transcript is forwarded to
-# askIndio which uses Gemini to decifrar typos before the indio answers.
-_WAKE_WORD_RE = re.compile(
-    r"\b(che\s+|hey\s+|el\s+)?[yi]?[ei]nd[iy]o\b",
-    re.IGNORECASE,
+import unicodedata
+
+
+def _normalize(s: str) -> str:
+    """Lowercase + strip diacritics for substring matching."""
+    n = unicodedata.normalize("NFD", s.lower())
+    return "".join(c for c in n if unicodedata.category(c) != "Mn")
+
+
+# Phonetic variants of "indio" that Whisper tends to produce. Order doesn't
+# matter; any substring match in the normalized transcript triggers the wake
+# word. Extend this list when logs surface new variants.
+_WAKE_WORD_TOKENS = (
+    "indio", "indyo",
+    "endio", "endyo",
+    "yndio", "yndyo",
+    "yendio", "yendyo",
+    "seinio", "seindio",
+    "cendio", "ceindio",
+    "sendio", "sendyo",
 )
+
+
+def _contains_wake_word(text: str) -> bool:
+    """Return True if ``text`` contains a known "indio" phonetic variant."""
+    if not text:
+        return False
+    norm = _normalize(text)
+    return any(tok in norm for tok in _WAKE_WORD_TOKENS)
 
 
 # ---------- Sink: Whisper transcription per speaking user ----------------
@@ -623,7 +643,7 @@ async def on_transcript(user_id: int, text: str):
     # entire raw transcript to the main bot's /indio endpoint. The server runs
     # it through Gemini (decifrar=True) to fix ASR errors before the indio
     # actually responds.
-    if (_WAKE_WORD_RE.search(text or "")
+    if (_contains_wake_word(text or "")
             and posted_channel_id is not None
             and posted_guild_id is not None):
         log.info(f"[INDIO-WAKE] user_id={user_id} raw={text!r}")

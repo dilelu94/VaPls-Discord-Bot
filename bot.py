@@ -19,6 +19,7 @@ from geminiCommand import vaplsLogic, indioLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics
+import apiServer
 from apiServer import startApiServer
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
@@ -128,6 +129,7 @@ async def on_connect():
         This function is a coroutine and must be awaited by the Discord client.
     """
     log.info("Connected to Gateway. Starting command cleanup...")
+    apiServer._GATEWAY_CONNECTED_AT = time.time()
     if config.DEBUG_GUILD_IDS:
         for guild_id in config.DEBUG_GUILD_IDS:
             try:
