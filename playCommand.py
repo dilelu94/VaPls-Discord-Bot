@@ -245,7 +245,7 @@ class GuildPlayer:
                     stderr=asyncio.subprocess.PIPE
                 )
                 self.activeDownloadProc = proc
-                await proc.communicate()
+                stdout, stderr = await proc.communicate()
                 self.activeDownloadProc = None
 
                 if not self.currentSong:
@@ -254,10 +254,13 @@ class GuildPlayer:
 
                 if proc.returncode != 0:
                     self.isDownloading = False
+                    errTail = stderr.decode('utf-8', errors='replace').strip().splitlines()[-5:]
+                    errMsg = " | ".join(errTail)
                     analytics.capture("play song failed", user=self.lastRequester, guild=guild,
                                       properties={"stage": "download", "video_id": videoId,
-                                                  "title": videoTitle, "returncode": proc.returncode})
-                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}")
+                                                  "title": videoTitle, "returncode": proc.returncode,
+                                                  "stderr_tail": errMsg[:500]})
+                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. stderr: {errMsg}")
                     if self.initialCtx:
                         try:
                             await self.initialCtx.interaction.edit_original_response(
@@ -461,13 +464,15 @@ class GuildPlayer:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE
                 )
-                await proc.communicate()
+                stdout, stderr = await proc.communicate()
                 if proc.returncode == 0:
                     duration = time.time() - startTime
                     fileSize = os.path.getsize(filepath) if os.path.exists(filepath) else 0
                     playLogger.info(f"[PRE-DOWNLOAD SUCCESS] Background downloaded '{videoTitle}' (ID: {videoId}) in {duration:.2f}s. Size: {fileSize} bytes ({fileSize / (1024*1024):.2f} MB)")
                 else:
-                    playLogger.warning(f"[PRE-DOWNLOAD FAIL] Failed to background download '{videoTitle}' (ID: {videoId}) with code {proc.returncode}")
+                    errTail = stderr.decode('utf-8', errors='replace').strip().splitlines()[-5:]
+                    errMsg = " | ".join(errTail)
+                    playLogger.warning(f"[PRE-DOWNLOAD FAIL] Failed to background download '{videoTitle}' (ID: {videoId}) with code {proc.returncode}. stderr: {errMsg}")
             except Exception as e:
                 playLogger.error(f"[PRE-DOWNLOAD ERROR] Exception background downloading '{videoTitle}': {e}")
             finally:
@@ -811,6 +816,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         if proc.returncode != 0:
             errMsg = stderr.decode('utf-8', errors='replace').strip()
             print(f"[PLAY ERROR] Metadata fetch failed: {errMsg}")
+            playLogger.error(f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. stderr: {errMsg[:500]}")
             return await safeEdit(ctx, f"❌ Error al buscar el video: {errMsg[:200]}")
 
         lines = stdout.decode('utf-8', errors='replace').strip().split('\n')
