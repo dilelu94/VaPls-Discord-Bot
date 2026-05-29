@@ -1,298 +1,253 @@
 import sys
 import os
 import logging
-import warnings
-import discord
 import asyncio
-import glob
-import json
-import audioop
-import vosk
+import time
+import discord
 from discord.ext import commands
-from keywords import check_keywords
+
+from playCommand import playLogic
+from pararCommand import pararLogic
+from soundpadCommand import soundpadLogic
+from personaCommand import vaplsLogic, indioLogic
+from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
+import analytics
+from apiServer import startApiServer
 
-# Standard logging
-logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
-logger = logging.getLogger('bot')
+# Voice receive / VOSK transcription moved to the userbot in ./userbot/.
+# This bot is now output-only: it joins voice channels solely to play music,
+# soundboard sounds, or chat greetings via /play and /soundpad. The userbot
+# (a real Discord account) handles audio capture and Spanish transcription
+# because DAVE (Discord's E2EE) does not give bots the MLS keys.
 
-# Suppress the DAVE protocol warning and VoiceClient deprecation warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning, message="Voice reception is currently broken")
-warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*VoiceClient is deprecated.*")
+logging.basicConfig(
+    level=logging.INFO,
+    stream=sys.stdout,
+    format='%(levelname)s:%(name)s: %(message)s',
+)
+log = logging.getLogger("bot")
 
-# Initialize Vosk models
-model_es = None
-model_en = None
-
-if os.path.exists(config.MODEL_PATH_ES):
-    model_es = vosk.Model(config.MODEL_PATH_ES)
-else:
-    print(f"Warning: Spanish model not found at {config.MODEL_PATH_ES}")
-
-if os.path.exists(config.MODEL_PATH_EN):
-    model_en = vosk.Model(config.MODEL_PATH_EN)
-else:
-    print(f"Warning: English model not found at {config.MODEL_PATH_EN}")
-
-# Ensure libopus is loaded
 if not discord.opus.is_loaded():
     for lib in ['libopus.so.0', 'libopus.so', 'opus']:
         try:
             discord.opus.load_opus(lib)
-            print(f"DEBUG: Loaded opus: {lib}")
             break
         except Exception:
             continue
 
-# Event loop fix for Python 3.12+
+
+async def safe_defer(ctx):
+    if hasattr(ctx, "response") and ctx.response.is_done():
+        return True
+    try:
+        await ctx.defer()
+        return True
+    except Exception:
+        return False
+
+
+async def safe_respond(ctx, message):
+    try:
+        if ctx.response.is_done():
+            await ctx.followup.send(message)
+        else:
+            await ctx.respond(message)
+    except Exception:
+        pass
+
+
+async def safeEdit(ctx, message):
+    try:
+        if ctx.response.is_done():
+            await ctx.interaction.edit_original_response(content=message)
+        else:
+            await ctx.respond(message)
+    except Exception:
+        await safe_respond(ctx, message)
+
+
+intents = discord.Intents.default()
+intents.voice_states = True
 try:
     asyncio.get_event_loop()
 except RuntimeError:
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    asyncio.set_event_loop(asyncio.new_event_loop())
+bot = discord.Bot(intents=intents)
 
-# Silence noisy Opus info logs
-logging.getLogger("discord.opus").setLevel(logging.WARNING)
-
-# Silence RecordingException during stop_recording
-# Using discord.VoiceClient which is the standard entry point in py-cord
-original_stop_recording = discord.VoiceClient.stop_recording
-def patched_stop_recording(self):
-    try:
-        return original_stop_recording(self)
-    except Exception: # Catch RecordingException and others
-        pass
-discord.VoiceClient.stop_recording = patched_stop_recording
-
-class KeywordDetectorSink(discord.sinks.WaveSink):
-    __sink_listeners__ = []
-
-    def __init__(self, vc, **kwargs):
-        # WaveSink in py-cord 2.8+ only takes filters as keyword args
-        super().__init__(**kwargs)
-        self.vc = vc
-        self.__sink_listeners__ = [] # Ensure instance also has it
-        self.recognizers = {}
-        self.resample_states = {}
-        self.packet_counts = {}
-        self.decoders = {}
-        # Vocabularies to speed up recognition and reduce CPU usage
-        self.vocab_es = '["necesito", "pito", "[unk]"]'
-        self.vocab_en = '["i need", "whistle", "[unk]"]'
-
-    def walk_children(self):
-        return []
-
-    def is_opus(self):
-        return True
-
-    def write(self, data, user):
-        user_id = getattr(user, 'id', user)
-        # In is_opus=True mode, data is a VoiceData object with .opus attribute
-        opus_bytes = getattr(data, 'opus', None)
-        if not opus_bytes:
-            return
-
-        if user_id not in self.decoders:
-            self.decoders[user_id] = discord.opus.Decoder()
-
-        try:
-            pcm_data = self.decoders[user_id].decode(opus_bytes, fec=False)
-        except discord.opus.OpusError as e:
-            if "corrupted stream" in str(e):
-                return
-            raise e
-
-        # Pass decodified PCM bytes to WaveSink base
-        super().write(pcm_data, user_id)
-        
-        if model_es is None and model_en is None:
-            return
-
-        if user_id not in self.recognizers:
-            self.recognizers[user_id] = {}
-            self.packet_counts[user_id] = 0
-            if model_es:
-                self.recognizers[user_id]['es'] = vosk.KaldiRecognizer(model_es, 16000, self.vocab_es)
-            if model_en:
-                self.recognizers[user_id]['en'] = vosk.KaldiRecognizer(model_en, 16000, self.vocab_en)
-            self.resample_states[user_id] = None
-
-        try:
-            self.packet_counts[user_id] += 1
-            # Log RMS every 100 packets to verify audio activity
-            if self.packet_counts[user_id] % 100 == 0:
-                rms = audioop.rms(pcm_data, 2)
-                print(f"DEBUG: Audio telemetry for User {user_id}: RMS={rms} ({self.packet_counts[user_id]} packets)")
-
-            # Convert to mono and resample to 16kHz for Vosk
-            mono_data = audioop.tomono(pcm_data, 2, 0.5, 0.5)
-            data_16k, new_state = audioop.ratecv(
-                mono_data, 2, 1, 48000, 16000, self.resample_states[user_id]
-            )
-            self.resample_states[user_id] = new_state
-            
-            detected = False
-            for lang, rec in self.recognizers[user_id].items():
-                if rec.AcceptWaveform(data_16k):
-                    result = json.loads(rec.Result())
-                    text = result.get("text", "")
-                    if text:
-                        print(f"[TRANSCRIPTION][{lang}] User {user_id}: {text}")
-                else:
-                    partial = json.loads(rec.PartialResult())
-                    text = partial.get("partial", "")
-                
-                if text and check_keywords(text):
-                    detected = True
-                    break
-            
-            if detected:
-                self.trigger_audio(user_id, text)
-        except Exception as e:
-            print(f"DEBUG: Vosk processing error: {e}")
-            pass
-
-    def trigger_audio(self, user_id, detected_text):
-        if self.vc.is_playing():
-            return
-        print(f"[BOT ACTION] Detected '{detected_text}' from User {user_id}. Playing audio.")
-        pattern = os.path.join(config.AUDIO_DIR, "necesitopito.*")
-        matches = glob.glob(pattern)
-        if matches:
-            try:
-                self.vc.play(discord.FFmpegOpusAudio(matches[0]))
-            except Exception as e:
-                print(f"Error playing audio: {e}")
-
-# Enable necessary intents
-intents = discord.Intents.default()
-intents.voice_states = True
-
-# Guild ID for testing
-bot = discord.Bot(intents=intents, debug_guilds=[523359466528440320])
 
 @bot.event
 async def on_connect():
-    print(f"DEBUG: Connected to Gateway. (Latency: {bot.latency*1000:.2f}ms)")
+    log.info("Connected to Gateway. Starting command cleanup...")
+    if config.DEBUG_GUILD_IDS:
+        for guild_id in config.DEBUG_GUILD_IDS:
+            try:
+                await bot.sync_commands(guild_ids=[guild_id], force=True)
+                log.info(f"Cleaned up local commands for guild {guild_id}")
+            except Exception as e:
+                log.warning(f"Error cleaning guild {guild_id}: {e}")
+    log.info("Cleanup finished.")
 
-@bot.event
-async def on_disconnect():
-    print("WARNING: Disconnected from Discord Gateway.")
 
-# Command sync flag to avoid spamming Discord
-synced = False
+_api_runner = None
+
 
 @bot.event
 async def on_ready():
-    global synced
-    print(f"✅ Bot is online as {bot.user}")
-    if not synced:
+    global _api_runner
+    log.info(f"Bot online as {bot.user}")
+    await bot.sync_commands()
+    if _api_runner is None:
         try:
-            await bot.sync_commands()
-            print("DEBUG: Commands synced successfully")
-            synced = True
+            _api_runner = await startApiServer(bot)
         except Exception as e:
-            print(f"ERROR: Failed to sync commands: {e}")
-    
-    print(f"DEBUG: Active Guilds: {[(guild.name, guild.id) for guild in bot.guilds]}")
-    # Application commands (Slash commands)
-    print(f"DEBUG: Slash Commands registered: {[cmd.name for cmd in bot.application_commands]}")
-    print(f"DEBUG: Pending Commands: {[cmd.name for cmd in bot.pending_application_commands]}")
-    print(f"DEBUG: All commands: {list(bot.all_commands.keys())}")
-    print("--- Ready to receive commands ---")
+            log.warning(f"Failed to start HTTP API: {e}")
+
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member == bot.user:
-        if before.channel and not after.channel:
-            print(f"DEBUG: Bot was disconnected from voice channel: {before.channel.name}")
-        elif not before.channel and after.channel:
-            print(f"DEBUG: Bot joined voice channel: {after.channel.name}")
-        elif before.channel != after.channel:
-            print(f"DEBUG: Bot moved voice channel from {before.channel.name} to {after.channel.name}")
-
-# Regular function for recording finished callback in py-cord 2.8+
-def on_record_finished(exception):
-    if exception:
-        print(f"DEBUG: Recording finished with error: {exception}")
-    else:
-        print("DEBUG: Recording session finished successfully.")
-
-@bot.slash_command(name="escuchar", description="Escucha palabras clave")
-async def escuchar(ctx: discord.ApplicationContext):
-    await ctx.defer()
-    print(f"[COMMAND] /escuchar used by {ctx.author} in {ctx.guild.name}")
-    
-    if not ctx.author.voice:
-        print(f"[COMMAND ERROR] {ctx.author} is not in a voice channel.")
-        return await ctx.followup.send("❌ ¡Debes estar en un canal de voz!")
-
-    channel = ctx.author.voice.channel
-    print(f"DEBUG: Attempting to connect to channel: {channel.name} (ID: {channel.id})")
-    
-    if ctx.voice_client:
-        if ctx.voice_client.channel.id == channel.id:
-            print("DEBUG: Already in the correct channel.")
-            return await ctx.followup.send("🎙️ ¡Ya estoy escuchando!")
-        else:
-            print(f"DEBUG: Moving to {channel.name}")
-            await ctx.voice_client.move_to(channel)
-            vc = ctx.voice_client
-    else:
-        try:
-            # VoiceClient handles DAVE protocol automatically in 2.8+ if davey is installed
-            vc = await channel.connect(timeout=60.0, reconnect=True)
-            print(f"DEBUG: Connected to {channel.name}")
-        except Exception as e:
-            print(f"[VOICE ERROR] Failed to connect: {e}")
-            return await ctx.followup.send(f"❌ Error al conectar: {e}")
-
-    try:
-        # Stabilize connection and wait for DAVE handshake
-        connected = False
-        for i in range(120): # Longer timeout for DAVE
-            if vc.is_connected() and vc.ws:
-                connected = True
-                break
-            await asyncio.sleep(0.5)
-
-        if not connected:
-            raise Exception("Timeout: Voice connection did not stabilize.")
-
-        # Extra delay for E2EE key exchange
-        await asyncio.sleep(2.0)
-        
-        print(f"DEBUG: Voice connection stabilized. Starting KeywordDetectorSink.")
-        vc.start_recording(
-            KeywordDetectorSink(vc),
-            on_record_finished
+    # The bot no longer auto-joins voice channels — that's the userbot's job
+    # now. We only track the bot's own voice state for analytics and greetings
+    # (when it joins via /play or /soundpad).
+    if member != bot.user:
+        return
+    if not before.channel and after.channel:
+        analytics.capture(
+            "voice channel joined",
+            guild=after.channel.guild,
+            properties={
+                "channel_id": str(after.channel.id),
+                "channel_name": after.channel.name,
+                "trigger": "state_update",
+            },
         )
-        await ctx.followup.send(f"🎙️ Escuchando en {channel.name}...")
-        
-    except Exception as e:
-        print(f"[VOICE ERROR] Post-connection failure: {e}")
-        if ctx.voice_client:
-            await ctx.voice_client.disconnect(force=True)
-        await ctx.followup.send(f"❌ Error de voz: {e}")
+        asyncio.create_task(trigger_soundboard_entry(after.channel))
+    elif before.channel and after.channel and before.channel.id != after.channel.id:
+        asyncio.create_task(trigger_soundboard_entry(after.channel))
+    elif before.channel and not after.channel:
+        analytics.capture(
+            "voice channel left",
+            guild=before.channel.guild,
+            properties={
+                "channel_id": str(before.channel.id),
+                "channel_name": before.channel.name,
+                "trigger": "state_update",
+            },
+        )
 
-@bot.slash_command(name="parar", description="Detiene y desconecta")
-async def parar(ctx: discord.ApplicationContext):
-    if ctx.voice_client:
+
+def _track_command(ctx, name, extra=None):
+    analytics.identify_user(ctx.author)
+    props = {"command": name, "channel_id": str(getattr(ctx.channel, "id", "") or "")}
+    if extra:
+        props.update(extra)
+    analytics.capture("command invoked", user=ctx.author, guild=ctx.guild, properties=props)
+
+
+@bot.slash_command(name="parar")
+async def parar(ctx):
+    await safe_defer(ctx)
+    _track_command(ctx, "parar")
+    await pararLogic(ctx)
+
+
+@bot.slash_command(name="play", description="Reproduce una canción o playlist de YouTube")
+async def play(ctx, query: discord.Option(str, description="Nombre de la canción o URL de YouTube")):
+    await safe_defer(ctx)
+    _track_command(ctx, "play", {"query_length": len(query or "")})
+    await playLogic(ctx, query)
+
+
+@bot.slash_command(name="soundpad")
+async def soundpad(ctx):
+    await safe_defer(ctx)
+    _track_command(ctx, "soundpad")
+    await soundpadLogic(ctx)
+
+
+@bot.slash_command(name="vapls", description="Preguntale al bot del server")
+async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
+    await safe_defer(ctx)
+    _track_command(ctx, "vapls", {"prompt_length": len(pregunta or "")})
+    await vaplsLogic(ctx, pregunta)
+
+
+@bot.slash_command(name="indio", description="Charla con el indio")
+async def indio(
+    ctx,
+    pregunta: discord.Option(str, description="Qué le decís al indio"),
+    nuevo: discord.Option(bool, description="Empezar conversación nueva", required=False, default=False),
+):
+    await safe_defer(ctx)
+    _track_command(ctx, "indio", {"prompt_length": len(pregunta or ""), "nuevo": bool(nuevo)})
+    await indioLogic(ctx, pregunta, nuevo)
+
+
+@bot.slash_command(name="quit", description="Sale del canal de voz")
+async def quit(ctx):
+    await safe_defer(ctx)
+    _track_command(ctx, "quit")
+
+    vc = None
+    for v in bot.voice_clients:
+        if v.guild.id == ctx.guild.id:
+            vc = v
+            break
+
+    if vc:
+        channel_name = vc.channel.name
+        channel_id = str(vc.channel.id)
         try:
-            ctx.voice_client.stop_recording()
-            await ctx.voice_client.disconnect(force=True)
-            await ctx.respond("👋 Desconectado.")
+            try:
+                await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    vc.cleanup()
+                except Exception:
+                    pass
+            analytics.capture(
+                "voice channel left",
+                user=ctx.author,
+                guild=ctx.guild,
+                properties={
+                    "channel_id": channel_id,
+                    "channel_name": channel_name,
+                    "trigger": "quit_command",
+                },
+            )
+            try:
+                await ctx.followup.send(f"👋 Desconectado correctamente de {channel_name}.")
+            except discord.NotFound:
+                pass
         except Exception as e:
-            await ctx.respond(f"❌ Error al desconectar: {e}")
+            analytics.capture_exception(
+                e,
+                user=ctx.author,
+                guild=ctx.guild,
+                properties={"action": "quit_disconnect"},
+            )
+            try:
+                await ctx.followup.send(f"⚠️ Error al desconectar: {e}")
+            except Exception:
+                pass
     else:
-        await ctx.respond("❌ No conectado.")
+        try:
+            await ctx.followup.send("❌ No estoy conectado a voz en este servidor.")
+        except Exception:
+            pass
+
+
+@bot.slash_command(name="restart", description="devtool - no usar")
+async def restart(ctx):
+    _track_command(ctx, "restart")
+    await ctx.respond("♻️ Reiniciando bot... (Esto cerrara el proceso actual)")
+    log.info("[RESTART] Rebooting bot process...")
+    analytics.shutdown()
+    os.execv(sys.executable, [sys.executable, "/home/ubuntu/vapls-discord-bot/bot.py"])
+
 
 if __name__ == "__main__":
-    if config.TOKEN:
-        try:
-            bot.run(config.TOKEN)
-        except Exception as e:
-            print(f"Bot fatal error: {e}")
-    else:
-        print("Error: No TOKEN found.")
+    try:
+        bot.run(config.TOKEN)
+    finally:
+        analytics.shutdown()
