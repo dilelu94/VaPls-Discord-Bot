@@ -1,8 +1,8 @@
-"""HTTP API for the Telegram bridge bot.
+"""HTTP API served alongside the main Discord bot.
 
-Runs an aiohttp server in the same asyncio loop as py-cord.
-Auth: every request must carry header X-API-Secret matching config.API_SECRET.
-Binds to config.API_HOST:config.API_PORT (default 127.0.0.1:8080).
+Runs an aiohttp server in the same asyncio loop as py-cord. Every request must
+include header X-API-Secret matching config.API_SECRET. Binds to
+config.API_HOST:config.API_PORT (default 127.0.0.1:8080).
 """
 from __future__ import annotations
 
@@ -22,6 +22,14 @@ logger = logging.getLogger("apiServer")
 
 
 def _checkAuth(request: web.Request) -> Optional[web.Response]:
+    """Validate the X-API-Secret header for a request.
+
+    Args:
+        request: Incoming aiohttp request.
+
+    Returns:
+        None if authorized, otherwise a JSON error response.
+    """
     if not config.API_SECRET:
         return web.json_response({"error": "API_SECRET not configured"}, status=503)
     if request.headers.get("X-API-Secret") != config.API_SECRET:
@@ -31,6 +39,18 @@ def _checkAuth(request: web.Request) -> Optional[web.Response]:
 
 @web.middleware
 async def authMiddleware(request: web.Request, handler):
+    """Reject unauthorized requests before hitting handlers.
+
+    Args:
+        request: Incoming aiohttp request.
+        handler: Downstream request handler.
+
+    Returns:
+        A web.Response from the handler or an auth error response.
+
+    Async:
+        This function is a coroutine and must be awaited by aiohttp.
+    """
     err = _checkAuth(request)
     if err is not None:
         return err
@@ -38,6 +58,14 @@ async def authMiddleware(request: web.Request, handler):
 
 
 def _serializeMemberVoice(member: discord.Member) -> dict:
+    """Serialize a member's voice state into a JSON-ready dict.
+
+    Args:
+        member: Discord member.
+
+    Returns:
+        Dictionary with voice-related fields.
+    """
     vs = member.voice
     return {
         "id": member.id,
@@ -52,13 +80,38 @@ def _serializeMemberVoice(member: discord.Member) -> dict:
 
 
 def _resolveGuild(bot: discord.Bot, guildId: int) -> Optional[discord.Guild]:
+    """Resolve a guild from the bot cache.
+
+    Args:
+        bot: Discord bot client.
+        guildId: Guild ID to resolve.
+
+    Returns:
+        Guild instance if cached; otherwise None.
+    """
     return bot.get_guild(guildId)
 
 
 def makeApp(bot: discord.Bot) -> web.Application:
+    """Create the aiohttp application with all API routes.
+
+    Args:
+        bot: Discord bot instance.
+
+    Returns:
+        Configured aiohttp Application.
+    """
     app = web.Application(middlewares=[authMiddleware], client_max_size=25 * 1024 * 1024)
 
     async def status(_: web.Request) -> web.Response:
+        """Return the bot readiness and voice client status.
+
+        Returns:
+            JSON response with readiness, guild count, and voice clients.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         return web.json_response({
             "ready": bot.is_ready(),
             "guilds": len(bot.guilds),
@@ -74,6 +127,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
         })
 
     async def members(request: web.Request) -> web.Response:
+        """List voice channels and optionally full guild members.
+
+        Args:
+            request: Incoming HTTP request with guild_id and voice_only.
+
+        Returns:
+            JSON response containing voice channel memberships.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         try:
             guildId = int(request.query["guild_id"])
         except (KeyError, ValueError):
@@ -107,6 +171,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.json_response(payload)
 
     async def user(request: web.Request) -> web.Response:
+        """Return details for a single guild member.
+
+        Args:
+            request: Incoming HTTP request with user_id and guild_id.
+
+        Returns:
+            JSON response containing member info and voice state.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         try:
             userId = int(request.match_info["user_id"])
             guildId = int(request.query["guild_id"])
@@ -149,6 +224,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
         })
 
     async def sendMessage(request: web.Request) -> web.Response:
+        """Post a message to a guild text channel.
+
+        Args:
+            request: Incoming HTTP request containing JSON body.
+
+        Returns:
+            JSON response with the created message ID.
+
+        Side Effects:
+            Sends a message to Discord.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         try:
             data = await request.json()
             guildId = int(data["guild_id"])
@@ -173,6 +262,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.json_response({"message_id": msg.id})
 
     async def _pickAutoVoiceChannel(guild: discord.Guild) -> Optional[discord.VoiceChannel]:
+        """Pick the most populated voice channel for autoplay."""
         candidates = [
             (ch, sum(1 for m in ch.members if not m.bot))
             for ch in guild.voice_channels
@@ -184,6 +274,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return candidates[0][0]
 
     async def playAudio(request: web.Request) -> web.Response:
+        """Play an uploaded audio file in a guild voice channel.
+
+        Args:
+            request: Incoming multipart request with file and guild_id.
+
+        Returns:
+            JSON response indicating playback target.
+
+        Side Effects:
+            Connects to voice, plays audio, and deletes the upload after playback.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if not request.content_type.startswith("multipart/"):
             return web.json_response({"error": "expected multipart"}, status=400)
 
@@ -271,6 +375,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
         })
 
     async def queue(request: web.Request) -> web.Response:
+        """Return the current playback queue for a guild.
+
+        Args:
+            request: Incoming HTTP request with guild_id.
+
+        Returns:
+            JSON response with queue and playback state.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         try:
             guildId = int(request.query["guild_id"])
         except (KeyError, ValueError):
@@ -303,6 +418,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
 
 async def startApiServer(bot: discord.Bot) -> web.AppRunner:
+    """Start the aiohttp server for the HTTP API.
+
+    Args:
+        bot: Discord bot instance.
+
+    Returns:
+        The aiohttp AppRunner so callers can shut down the server.
+
+    Side Effects:
+        Binds a TCP socket and logs the listening address.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if not config.API_SECRET:
         logger.warning("API_SECRET is empty - HTTP API will reject all requests. Set API_SECRET in .env to enable.")
     app = makeApp(bot)

@@ -1,3 +1,4 @@
+"""Runtime configuration for the voice transcription userbot."""
 import os
 from dotenv import load_dotenv
 

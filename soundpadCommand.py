@@ -1,3 +1,4 @@
+"""Soundpad slash command and UI for playing custom audio clips."""
 import os
 import asyncio
 import discord
@@ -6,7 +7,16 @@ import analytics
 from greeting import set_pending_trigger
 
 class SoundpadView(discord.ui.View):
+    """Interactive UI for browsing and playing soundpad audio files."""
     def __init__(self, output_dir: str):
+        """Initialize the soundpad view.
+
+        Args:
+            output_dir: Base directory containing category folders with audio.
+
+        Raises:
+            ValueError: If the directory is missing or empty.
+        """
         super().__init__(timeout=180)
         self.output_dir = output_dir
         self.message = None
@@ -29,6 +39,14 @@ class SoundpadView(discord.ui.View):
         self.setup_components()
 
     def get_subfolders(self, category: str):
+        """Return the list of subfolders for a category.
+
+        Args:
+            category: Category folder name.
+
+        Returns:
+            Sorted list of subfolder paths (including "/").
+        """
         cat_dir = os.path.join(self.output_dir, category)
         if not os.path.exists(cat_dir):
             return ["/"]
@@ -42,6 +60,15 @@ class SoundpadView(discord.ui.View):
         return sorted(subfolders)
 
     def get_folder_files(self, category: str, subfolder: str):
+        """List audio files in the selected category/subfolder.
+
+        Args:
+            category: Category folder name.
+            subfolder: Subfolder path ("/" for root).
+
+        Returns:
+            Sorted list of audio file paths relative to the category.
+        """
         if subfolder == "/":
             target_dir = os.path.join(self.output_dir, category)
         else:
@@ -63,6 +90,11 @@ class SoundpadView(discord.ui.View):
         return sorted(files)
 
     def setup_components(self):
+        """Build the select menus and buttons for the current state.
+
+        Side Effects:
+            Mutates the view's UI components.
+        """
         self.clear_items()
         
         # 1. Category Select (Row 0)
@@ -197,6 +229,18 @@ class SoundpadView(discord.ui.View):
         self.add_item(next_btn)
 
     async def update_message(self, interaction: discord.Interaction, status_text: str = None):
+        """Render the embed and edit the interaction message.
+
+        Args:
+            interaction: Interaction to update.
+            status_text: Optional status line shown in the embed.
+
+        Side Effects:
+            Edits the original interaction response.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         embed = discord.Embed(title="🎛️ Soundpad Panel", color=discord.Color.blurple())
         embed.add_field(name="📁 Categoría", value=self.selected_category, inline=True)
         
@@ -224,6 +268,18 @@ class SoundpadView(discord.ui.View):
             pass
 
     async def _force_reconnect(self, interaction: discord.Interaction):
+        """Reconnect the bot to the user's voice channel if needed.
+
+        Args:
+            interaction: Discord interaction with user voice state.
+
+        Returns:
+            Tuple of (voice_client, error_message). If error_message is not None
+            then reconnection failed.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if not interaction.user.voice:
             return None, "No estás en un canal de voz."
         for stale in list(interaction.client.voice_clients):
@@ -240,6 +296,17 @@ class SoundpadView(discord.ui.View):
         return vc, None
 
     async def play_sound(self, interaction: discord.Interaction):
+        """Play the currently selected soundpad audio file.
+
+        Args:
+            interaction: Interaction that requested playback.
+
+        Side Effects:
+            Connects to voice, plays audio, and emits analytics events.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         from playCommand import guildPlayers
         if interaction.guild.id in guildPlayers:
             player = guildPlayers[interaction.guild.id]
@@ -313,6 +380,17 @@ class SoundpadView(discord.ui.View):
             await interaction.followup.send(f"❌ Error de reproducción: {e}", ephemeral=True)
 
     async def on_category_select(self, interaction: discord.Interaction):
+        """Handle category selection changes.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Resets pagination state and re-renders the view.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         self.selected_category = interaction.data["values"][0]
         self.selected_subfolder = "/"
         self.current_page = 0
@@ -321,6 +399,17 @@ class SoundpadView(discord.ui.View):
         await self.update_message(interaction)
 
     async def on_subfolder_select(self, interaction: discord.Interaction):
+        """Handle subfolder selection changes.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Resets pagination state and re-renders the view.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         self.selected_subfolder = interaction.data["values"][0]
         self.current_page = 0
         self.selected_file = None
@@ -328,16 +417,49 @@ class SoundpadView(discord.ui.View):
         await self.update_message(interaction)
 
     async def on_audio_select(self, interaction: discord.Interaction):
+        """Handle audio selection changes.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Updates selected file and re-renders the view.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         selected_index = interaction.data["values"][0]
         self.selected_file = self.files_by_index.get(selected_index)
         self.setup_components()
         await self.update_message(interaction)
 
     async def on_play_click(self, interaction: discord.Interaction):
+        """Handle the Play button click.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Plays the selected audio file.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         await interaction.response.defer()
         await self.play_sound(interaction)
 
     async def on_stop_click(self, interaction: discord.Interaction):
+        """Handle the Stop button click.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Stops current playback and updates the UI.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if interaction.guild.voice_client: interaction.guild.voice_client.stop()
         analytics.capture("soundpad audio stopped", user=interaction.user, guild=interaction.guild,
                           properties={"category": self.selected_category,
@@ -345,6 +467,17 @@ class SoundpadView(discord.ui.View):
         await self.update_message(interaction, status_text="⏹️ Detenido")
 
     async def on_prev_click(self, interaction: discord.Interaction):
+        """Handle the Previous page button click.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Moves pagination backward and re-renders the UI.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if self.current_page > 0:
             self.current_page -= 1
             self.selected_file = None
@@ -354,6 +487,17 @@ class SoundpadView(discord.ui.View):
             await interaction.response.defer()
 
     async def on_next_click(self, interaction: discord.Interaction):
+        """Handle the Next page button click.
+
+        Args:
+            interaction: Discord interaction payload.
+
+        Side Effects:
+            Moves pagination forward and re-renders the UI.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if self.current_page < self.total_pages - 1:
             self.current_page += 1
             self.selected_file = None
@@ -363,6 +507,20 @@ class SoundpadView(discord.ui.View):
             await interaction.response.defer()
 
 async def soundpadLogic(ctx: discord.ApplicationContext):
+    """Handle the /soundpad slash command and open the UI panel.
+
+    Args:
+        ctx: Discord application context.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Connects to voice, sends a UI message, and emits analytics events.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if not ctx.response.is_done():
         try:
             await ctx.defer()

@@ -1,3 +1,9 @@
+"""Main Discord bot entrypoint for VaPls.
+
+Handles slash commands, voice playback, greeting triggers, analytics, and the
+HTTP API server. Voice receive/transcription is delegated to the userbot in
+./userbot/.
+"""
 import sys
 import os
 import logging
@@ -38,6 +44,20 @@ if not discord.opus.is_loaded():
 
 
 async def safe_defer(ctx):
+    """Defer a Discord interaction if it has not been responded to yet.
+
+    Args:
+        ctx: Discord command context/interaction wrapper.
+
+    Returns:
+        True if defer succeeded or was already done, False otherwise.
+
+    Side Effects:
+        Sends a deferred response via Discord.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     if hasattr(ctx, "response") and ctx.response.is_done():
         return True
     try:
@@ -48,6 +68,18 @@ async def safe_defer(ctx):
 
 
 async def safe_respond(ctx, message):
+    """Send a response or follow-up safely.
+
+    Args:
+        ctx: Discord command context/interaction wrapper.
+        message: Message content to send.
+
+    Side Effects:
+        Sends a message to Discord.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     try:
         if ctx.response.is_done():
             await ctx.followup.send(message)
@@ -58,6 +90,18 @@ async def safe_respond(ctx, message):
 
 
 async def safeEdit(ctx, message):
+    """Edit the original response or fallback to responding.
+
+    Args:
+        ctx: Discord command context/interaction wrapper.
+        message: Message content to send.
+
+    Side Effects:
+        Edits or sends a message via Discord.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     try:
         if ctx.response.is_done():
             await ctx.interaction.edit_original_response(content=message)
@@ -78,6 +122,11 @@ bot = discord.Bot(intents=intents)
 
 @bot.event
 async def on_connect():
+    """Sync per-guild commands on connect for debug guilds.
+
+    Async:
+        This function is a coroutine and must be awaited by the Discord client.
+    """
     log.info("Connected to Gateway. Starting command cleanup...")
     if config.DEBUG_GUILD_IDS:
         for guild_id in config.DEBUG_GUILD_IDS:
@@ -94,6 +143,11 @@ _api_runner = None
 
 @bot.event
 async def on_ready():
+    """Finalize startup tasks and launch the HTTP API server.
+
+    Async:
+        This function is a coroutine and must be awaited by the Discord client.
+    """
     global _api_runner
     log.info(f"Bot online as {bot.user}")
     await bot.sync_commands()
@@ -106,6 +160,11 @@ async def on_ready():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
+    """Track the bot's own voice state for analytics and greetings.
+
+    Async:
+        This function is a coroutine and must be awaited by the Discord client.
+    """
     # The bot no longer auto-joins voice channels — that's the userbot's job
     # now. We only track the bot's own voice state for analytics and greetings
     # (when it joins via /play or /soundpad).
@@ -137,6 +196,16 @@ async def on_voice_state_update(member, before, after):
 
 
 def _track_command(ctx, name, extra=None):
+    """Capture analytics for a slash command invocation.
+
+    Args:
+        ctx: Discord application context.
+        name: Command name.
+        extra: Optional dictionary of extra properties.
+
+    Side Effects:
+        Sends analytics events to PostHog when enabled.
+    """
     analytics.identify_user(ctx.author)
     props = {"command": name, "channel_id": str(getattr(ctx.channel, "id", "") or "")}
     if extra:
@@ -146,6 +215,17 @@ def _track_command(ctx, name, extra=None):
 
 @bot.slash_command(name="parar")
 async def parar(ctx):
+    """Slash command: stop playback and disconnect.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Stops playback via pararLogic and disconnects voice if needed.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     await safe_defer(ctx)
     _track_command(ctx, "parar")
     await pararLogic(ctx)
@@ -153,6 +233,18 @@ async def parar(ctx):
 
 @bot.slash_command(name="play", description="Reproduce una canción o playlist de YouTube")
 async def play(ctx, query: discord.Option(str, description="Nombre de la canción o URL de YouTube")):
+    """Slash command: queue and play a YouTube search or URL.
+
+    Args:
+        ctx: Discord application context.
+        query: Search text or YouTube URL.
+
+    Side Effects:
+        Joins voice and starts the GuildPlayer playback flow.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     await safe_defer(ctx)
     _track_command(ctx, "play", {"query_length": len(query or "")})
     await playLogic(ctx, query)
@@ -160,6 +252,17 @@ async def play(ctx, query: discord.Option(str, description="Nombre de la canció
 
 @bot.slash_command(name="soundpad")
 async def soundpad(ctx):
+    """Slash command: open the soundpad UI.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Connects to voice and sends an interactive view.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     await safe_defer(ctx)
     _track_command(ctx, "soundpad")
     await soundpadLogic(ctx)
@@ -167,6 +270,18 @@ async def soundpad(ctx):
 
 @bot.slash_command(name="vapls", description="Preguntale al bot del server")
 async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
+    """Slash command: ask the Gemini-backed VaPls persona.
+
+    Args:
+        ctx: Discord application context.
+        pregunta: User prompt text.
+
+    Side Effects:
+        Calls Gemini and sends the response back to Discord.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     await safe_defer(ctx)
     _track_command(ctx, "vapls", {"prompt_length": len(pregunta or "")})
     await vaplsLogic(ctx, pregunta)
@@ -178,6 +293,19 @@ async def indio(
     pregunta: discord.Option(str, description="Qué le decís al indio"),
     nuevo: discord.Option(bool, description="Empezar conversación nueva", required=False, default=False),
 ):
+    """Slash command: chat with the Indio persona (with history).
+
+    Args:
+        ctx: Discord application context.
+        pregunta: User prompt text.
+        nuevo: Whether to reset the conversation history.
+
+    Side Effects:
+        Calls Gemini, updates history, and sends responses to Discord.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     await safe_defer(ctx)
     _track_command(ctx, "indio", {"prompt_length": len(pregunta or ""), "nuevo": bool(nuevo)})
     await indioLogic(ctx, pregunta, nuevo)
@@ -185,6 +313,17 @@ async def indio(
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
+    """Slash command: disconnect the bot from voice.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Disconnects the voice client and emits analytics.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     await safe_defer(ctx)
     _track_command(ctx, "quit")
 
@@ -239,6 +378,17 @@ async def quit(ctx):
 
 @bot.slash_command(name="restart", description="devtool - no usar")
 async def restart(ctx):
+    """Slash command: restart the bot process (dev-only).
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Calls os.execv to replace the current process.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     _track_command(ctx, "restart")
     await ctx.respond("♻️ Reiniciando bot... (Esto cerrara el proceso actual)")
     log.info("[RESTART] Rebooting bot process...")

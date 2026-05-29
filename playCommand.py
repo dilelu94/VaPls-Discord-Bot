@@ -1,3 +1,9 @@
+"""Music playback and queue management for the /play command.
+
+Defines the GuildPlayer lifecycle, handles yt-dlp downloads, FFmpeg playback,
+and interactive UI controls for queue management. Depends on py-cord, yt-dlp,
+FFmpeg, config, analytics, and greeting triggers.
+"""
 import os
 import asyncio
 import discord
@@ -32,7 +38,15 @@ if os.path.exists(_downloadsDirInit):
 guildPlayers = {}
 
 class CancelDownloadView(discord.ui.View):
+    """UI view that lets a user cancel the initial yt-dlp download."""
     def __init__(self, player, videoId: str, videoTitle: str):
+        """Initialize the cancel button view.
+
+        Args:
+            player: GuildPlayer instance that owns the download.
+            videoId: YouTube video ID currently downloading.
+            videoTitle: Display title for the cancel confirmation.
+        """
         super().__init__(timeout=60)
         self.player = player
         self.videoId = videoId
@@ -40,11 +54,30 @@ class CancelDownloadView(discord.ui.View):
 
     @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.danger, custom_id="btn_cancel_dl")
     async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Handle the Cancel button click.
+
+        Args:
+            button: The Discord UI button instance.
+            interaction: Interaction that triggered the click.
+
+        Side Effects:
+            Aborts the download, clears the queue, and disconnects voice.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         await interaction.response.defer()
         await self.player.cancelDownload(self.videoId, self.videoTitle, interaction)
 
 class GuildPlayer:
+    """Per-guild playback state and queue manager."""
     def __init__(self, guildId: int, bot):
+        """Initialize the player state for a guild.
+
+        Args:
+            guildId: Discord guild ID.
+            bot: Discord bot client.
+        """
         self.guildId = guildId
         self.bot = bot
         self.queue = []         # List of {"id": str, "title": str}
@@ -63,6 +96,21 @@ class GuildPlayer:
         self.initialCtx = None
 
     async def addSongs(self, songs, ctx):
+        """Add one or more songs to the queue and start playback if idle.
+
+        Args:
+            songs: List of dicts with id/title metadata.
+            ctx: Discord application context.
+
+        Returns:
+            None.
+
+        Side Effects:
+            Updates queue, sends Discord messages, and may start playback.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         self.textChannel = ctx.channel
         self.lastRequester = ctx.author
         
@@ -100,6 +148,19 @@ class GuildPlayer:
             self.startPreDownloading()
 
     async def cancelDownload(self, videoId: str, videoTitle: str, interaction: discord.Interaction):
+        """Cancel an active download and reset playback state.
+
+        Args:
+            videoId: Video ID to cancel.
+            videoTitle: Display name for notifications.
+            interaction: Interaction used to edit the response.
+
+        Side Effects:
+            Kills download subprocess, clears queue, and disconnects voice.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         playLogger.info(f"[DOWNLOAD CANCEL] User cancelled download for '{videoTitle}' (ID: {videoId})")
         if self.activeDownloadProc:
             try:
@@ -123,6 +184,17 @@ class GuildPlayer:
             self.vc = None
 
     async def startPlayingCurrent(self):
+        """Ensure the current song is downloaded and start playback.
+
+        Returns:
+            None.
+
+        Side Effects:
+            Downloads audio with yt-dlp, plays via FFmpeg, updates UI.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if not self.currentSong or not self.vc:
             return
 
@@ -267,6 +339,17 @@ class GuildPlayer:
             self.bot.loop.create_task(self.skipSong())
 
     async def onSongFinished(self, error):
+        """Handle playback completion and advance the queue.
+
+        Args:
+            error: Playback error passed by Discord (if any).
+
+        Side Effects:
+            Deletes temporary files, mutates queue/history, updates UI.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if error:
             print(f"[PLAYER] Playback error: {error}")
             playLogger.error(f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}")
@@ -322,6 +405,14 @@ class GuildPlayer:
             await self.updateControlMessage("⏹️ Fin de la cola de reproducción.")
 
     async def predownloadQueue(self):
+        """Background task that pre-downloads queued songs.
+
+        Side Effects:
+            Downloads audio files to disk and updates download state.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         # We run a loop as long as the player is active and there are items in the queue
         while self.vc and (self.vc.is_playing() or self.vc.is_paused()) and self.queue:
             # Find the first item in the queue that is not yet downloaded and not currently downloading
@@ -380,10 +471,19 @@ class GuildPlayer:
             await asyncio.sleep(1)
 
     def startPreDownloading(self):
+        """Ensure the background pre-download task is running."""
         if not self.preDownloadTask or self.preDownloadTask.done():
             self.preDownloadTask = self.bot.loop.create_task(self.predownloadQueue())
 
     async def togglePausePlay(self):
+        """Pause or resume playback based on current state.
+
+        Side Effects:
+            Calls pause/resume on the voice client and updates UI.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if self.vc:
             if self.vc.is_playing():
                 self.vc.pause()
@@ -393,12 +493,28 @@ class GuildPlayer:
                 await self.updateControlMessage()
 
     async def skipSong(self):
+        """Skip the current song and advance the queue.
+
+        Side Effects:
+            Stops playback and triggers queue advancement.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if self.vc and (self.vc.is_playing() or self.vc.is_paused()):
             self.vc.stop()
         else:
             await self.onSongFinished(None)
 
     async def playPrevious(self):
+        """Play the previous song from history.
+
+        Side Effects:
+            Mutates queue/history and restarts playback.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if not self.history:
             return
         self.isPrevious = True
@@ -408,6 +524,14 @@ class GuildPlayer:
             await self.onSongFinished(None)
 
     async def stopPlayback(self):
+        """Stop playback and clear the queue.
+
+        Side Effects:
+            Clears queue state and stops the voice client if active.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         self.isStopping = True
         self.queue.clear()
         self.isDownloading = False
@@ -418,6 +542,17 @@ class GuildPlayer:
                 await self.onSongFinished(None)
 
     async def updateControlMessage(self, customStatus=None):
+        """Create or update the interactive control message.
+
+        Args:
+            customStatus: Optional status line override.
+
+        Side Effects:
+            Sends or edits a Discord embed with UI controls.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
         if not self.textChannel:
             return
 
@@ -474,12 +609,19 @@ class GuildPlayer:
 
 
 class PlayerControlView(discord.ui.View):
+    """Playback control buttons for the GuildPlayer UI."""
     def __init__(self, player: GuildPlayer):
+        """Initialize the control view for a player.
+
+        Args:
+            player: GuildPlayer instance to control.
+        """
         super().__init__(timeout=None)
         self.player = player
         self.updateButtonStates()
 
     def updateButtonStates(self):
+        """Update button labels and disabled state based on player status."""
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 if child.custom_id == "btn_prev":
@@ -496,31 +638,52 @@ class PlayerControlView(discord.ui.View):
 
     @discord.ui.button(label="⏮️ Anterior", style=discord.ButtonStyle.secondary, custom_id="btn_prev")
     async def previousButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Handle the Previous button click."""
         await interaction.response.defer()
         await self.player.playPrevious()
 
     @discord.ui.button(label="⏸️ Pausar", style=discord.ButtonStyle.primary, custom_id="btn_pause_play")
     async def pausePlayButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Handle the Pause/Resume button click."""
         await interaction.response.defer()
         await self.player.togglePausePlay()
 
     @discord.ui.button(label="⏭️ Siguiente", style=discord.ButtonStyle.secondary, custom_id="btn_next")
     async def nextButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Handle the Next button click."""
         await interaction.response.defer()
         await self.player.skipSong()
 
     @discord.ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger, custom_id="btn_stop")
     async def stopButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Handle the Stop button click."""
         await interaction.response.defer()
         await self.player.stopPlayback()
 
 
 def getGuildPlayer(guildId: int, bot) -> GuildPlayer:
+    """Return or create the GuildPlayer for a guild.
+
+    Args:
+        guildId: Discord guild ID.
+        bot: Discord bot client.
+
+    Returns:
+        GuildPlayer instance bound to the guild.
+    """
     if guildId not in guildPlayers:
         guildPlayers[guildId] = GuildPlayer(guildId, bot)
     return guildPlayers[guildId]
 
 def clearGuildPlayer(guildId: int):
+    """Clear a GuildPlayer and delete any queued downloads.
+
+    Args:
+        guildId: Discord guild ID.
+
+    Side Effects:
+        Cancels background tasks, deletes cached audio files, and clears state.
+    """
     if guildId in guildPlayers:
         player = guildPlayers[guildId]
         # Cancel background downloader task
@@ -561,6 +724,21 @@ def clearGuildPlayer(guildId: int):
         del guildPlayers[guildId]
 
 async def playLogic(ctx: discord.ApplicationContext, query: str):
+    """Handle the /play slash command.
+
+    Args:
+        ctx: Discord application context.
+        query: Search term or YouTube URL.
+
+    Returns:
+        None.
+
+    Side Effects:
+        Connects to voice, downloads audio with yt-dlp, and starts playback.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
     from bot import safe_defer, safe_respond, safeEdit
 
     if not await safe_defer(ctx):
