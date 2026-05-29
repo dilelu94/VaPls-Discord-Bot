@@ -2,6 +2,7 @@
 # `greeting`: audio path relative to CUSTOM_AUDIO_PATH. Omit for default.
 USERS: dict[int, dict] = {
     285116759525031937: {"name": "Mila", "greeting": "Mila/Milapollo.mp3"},
+    211354006805676032: {"name": "Miles"},
     189830039922016256: {"name": "Viny"},
     309714566265438221: {"name": "Chalo"},
     471420397049479180: {"name": "Fide"},
