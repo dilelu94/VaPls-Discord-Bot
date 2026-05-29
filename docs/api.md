@@ -79,15 +79,33 @@ Plays an uploaded audio file in a voice channel.
 - `guild_id` (required)
 - `channel_id` (optional)
 - `file` (required)
+- `reply_callback_url` (optional) — when set, after playback finishes the
+  bot asks the userbot to capture the voice channel's reply (up to
+  `reply_duration` seconds, default `USERBOT_RECORD_DEFAULT_DURATION`),
+  encode it to OGG/Opus, and POST it to this URL as multipart with fields:
+  `file` (the audio), `metadata` (the verbatim value you passed in
+  `reply_metadata`), `guild_id`, `channel_id`, `duration_seconds`.
+  Nothing is delivered when no one spoke in the channel during the window.
+- `reply_callback_secret` (optional) — sent as `X-API-Secret` on the
+  callback request.
+- `reply_metadata` (optional) — opaque payload (JSON string recommended)
+  echoed back so the Telegram bridge can route the audio to the originating
+  chat/message.
+- `reply_duration` (optional) — recording length in seconds; clamped to
+  `[1, RECORD_MAX_SECONDS]` on the userbot side.
 
 **Response**
 ```json
 {
   "played": true,
   "channel_id": 456,
-  "channel_name": "General"
+  "channel_name": "General",
+  "will_record_reply": true
 }
 ```
+
+`will_record_reply` is `true` only when `reply_callback_url` was supplied
+and the bot is configured (`USERBOT_RECORD_URL`) to forward to the userbot.
 
 ### GET `/queue?guild_id=...`
 Returns the current playback queue.

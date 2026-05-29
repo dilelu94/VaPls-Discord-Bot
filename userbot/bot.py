@@ -15,8 +15,9 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 from aiohttp import web
@@ -25,6 +26,13 @@ from discord.ext import voice_recv
 import vosk
 
 import config
+from recording import (
+    INPUT_SAMPLE_RATE as _REC_INPUT_SAMPLE_RATE,
+    INPUT_WIDTH as _REC_INPUT_WIDTH,
+    mix_pcm_frames,
+    trim_trailing_silence as _trim_trailing_silence,
+    pcm_to_ogg_opus,
+)
 
 # Import the main bot's user mapping (parent directory) so we can show
 # friendly names instead of Discord display_name fallbacks.
@@ -372,6 +380,99 @@ class TranscriberSink(voice_recv.AudioSink):
             log.exception(f"[VOSK] write error: {e}")
 
 
+# ---------- Sink: short raw-PCM recorder (mixed across speakers) ----------
+
+
+def trim_trailing_silence(pcm: bytes) -> bytes:
+    """Project wrapper that pulls the threshold from config."""
+    return _trim_trailing_silence(pcm, threshold=config.RECORD_RMS_THRESHOLD)
+
+
+class RecorderSink(voice_recv.AudioSink):
+    """Captures up to ``max_seconds`` of mixed PCM across all speakers.
+
+    The sink stays cheap during write() — it only buffers PCM with arrival
+    timestamps. The actual mixing into a fixed-length output buffer happens
+    when :meth:`finalize` is called (either by the orchestrator after the
+    window elapses, or by voice_recv's cleanup hook when the sink is
+    detached). ``finalize`` returns the same payload on subsequent calls,
+    so it's safe to invoke it from multiple paths.
+    """
+
+    def __init__(self, max_seconds: float,
+                 ignore_user_ids: Optional[set[int]] = None,
+                 rms_threshold: Optional[int] = None):
+        """Initialize the recorder.
+
+        Args:
+            max_seconds: Hard cap on captured duration. The buffer length
+                is always exactly this many seconds, with trailing silence
+                where no audio arrived.
+            ignore_user_ids: User IDs to drop entirely (e.g. the main bot
+                so its own playback doesn't leak into the recording).
+            rms_threshold: Optional override for the VAD threshold; default
+                is :data:`config.RECORD_RMS_THRESHOLD`.
+        """
+        super().__init__()
+        self.max_seconds = max_seconds
+        self.ignore_user_ids = ignore_user_ids or set()
+        self.rms_threshold = (rms_threshold if rms_threshold is not None
+                              else config.RECORD_RMS_THRESHOLD)
+        self.start_time = time.monotonic()
+        self._frames: list[tuple[float, bytes]] = []
+        self._lock = threading.Lock()
+        self._finalized = False
+        self._result: Optional[bytes] = None
+        self.had_voice = False
+        self.frame_count = 0
+
+    def wants_opus(self) -> bool:
+        return False
+
+    def write(self, source, data: voice_recv.VoiceData) -> None:
+        if self._finalized:
+            return
+        elapsed = time.monotonic() - self.start_time
+        if elapsed >= self.max_seconds:
+            return
+        user_id = getattr(source, "id", None)
+        if user_id is None or user_id in self.ignore_user_ids:
+            return
+        pcm = data.pcm
+        if not pcm:
+            return
+        try:
+            mono = audioop.tomono(pcm, _REC_INPUT_WIDTH, 0.5, 0.5)
+        except Exception:
+            log.exception("[REC] tomono failed")
+            return
+        try:
+            if audioop.rms(mono, _REC_INPUT_WIDTH) >= self.rms_threshold:
+                self.had_voice = True
+        except Exception:
+            pass
+        with self._lock:
+            self._frames.append((elapsed, mono))
+            self.frame_count += 1
+
+    def finalize(self) -> bytes:
+        """Mix collected frames into a single PCM buffer and return it."""
+        with self._lock:
+            if self._finalized:
+                return self._result or b""
+            self._finalized = True
+            frames = list(self._frames)
+        self._result = mix_pcm_frames(frames, self.max_seconds)
+        return self._result
+
+    def cleanup(self) -> None:
+        """voice_recv calls this when the sink is detached."""
+        try:
+            self.finalize()
+        except Exception:
+            log.exception("[REC] finalize from cleanup failed")
+
+
 # ---------- Optional downstream forwarding ---------------------------------
 
 _http_session: Optional[aiohttp.ClientSession] = None
@@ -683,12 +784,208 @@ async def _relay_say(request: web.Request) -> web.Response:
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
 
 
+# ---------- Voice recording orchestration ---------------------------------
+# Triggered by the main bot after a Telegram audio is played. We move the
+# userbot into the same voice channel, capture up to N seconds, and POST the
+# encoded result to a callback URL (typically a Telegram bridge endpoint
+# that wires it back into the original chat as a voice reply).
+
+_recording_locks: dict[int, asyncio.Lock] = {}
+
+
+def _record_lock_for(guild_id: int) -> asyncio.Lock:
+    lock = _recording_locks.get(guild_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _recording_locks[guild_id] = lock
+    return lock
+
+
+async def _run_recording(channel: discord.VoiceChannel,
+                         duration: float,
+                         callback_url: Optional[str],
+                         callback_secret: Optional[str],
+                         callback_metadata: Any) -> None:
+    """Move into ``channel``, capture audio, then POST it to ``callback_url``.
+
+    The transcriber sink is detached for the duration of the recording and
+    re-attached afterwards so normal Spanish transcription resumes. If no
+    speech was detected (or no callback URL was provided), nothing is sent.
+    """
+    guild = channel.guild
+    lock = _record_lock_for(guild.id)
+    if lock.locked():
+        log.info(f"[REC] another recording in flight for {guild.name}; skipping")
+        return
+    async with lock:
+        try:
+            await _join_channel(channel)
+        except Exception:
+            log.exception("[REC] join failed")
+            return
+        vc = _vc_for_guild(guild)
+        if vc is None or not vc.is_connected():
+            log.warning("[REC] not connected after join; abort")
+            return
+
+        # Detach the transcriber so its sink stops receiving frames.
+        try:
+            if vc.is_listening():
+                vc.stop_listening()
+        except Exception:
+            log.exception("[REC] stop_listening failed")
+
+        sink = RecorderSink(
+            max_seconds=duration,
+            ignore_user_ids=set(config.IGNORE_USER_IDS) | {client.user.id},
+        )
+        try:
+            vc.listen(sink)
+        except Exception:
+            log.exception("[REC] listen(RecorderSink) failed")
+            # Best-effort: restart transcription and bail.
+            await _start_listening(vc)
+            return
+
+        log.info(f"[REC] capturing up to {duration:.1f}s in {channel.name}")
+        try:
+            await asyncio.sleep(duration)
+        finally:
+            try:
+                if vc.is_listening():
+                    vc.stop_listening()
+            except Exception:
+                log.exception("[REC] post-record stop_listening failed")
+
+        pcm = sink.finalize()
+        had_voice = sink.had_voice
+        log.info(
+            f"[REC] done frames={sink.frame_count} had_voice={had_voice} "
+            f"raw_bytes={len(pcm)}"
+        )
+
+        # Resume normal transcription before doing slower work below.
+        try:
+            await _start_listening(vc)
+        except Exception:
+            log.exception("[REC] resume transcriber failed")
+
+        if not had_voice:
+            log.info("[REC] no voice activity detected; skipping callback")
+            return
+        if not callback_url:
+            log.info("[REC] no callback_url provided; discarding recording")
+            return
+
+        trimmed = trim_trailing_silence(pcm)
+        min_bytes = int(
+            config.RECORD_MIN_SECONDS * _REC_INPUT_SAMPLE_RATE * _REC_INPUT_WIDTH
+        )
+        if len(trimmed) < min_bytes:
+            log.info(
+                f"[REC] trimmed audio {len(trimmed)}B < min {min_bytes}B; "
+                f"skipping callback"
+            )
+            return
+
+        try:
+            ogg = await pcm_to_ogg_opus(trimmed)
+        except Exception:
+            log.exception("[REC] OGG/Opus encode failed; skipping callback")
+            return
+
+        try:
+            session = await _get_http()
+            form = aiohttp.FormData()
+            if callback_metadata is not None:
+                if not isinstance(callback_metadata, str):
+                    callback_metadata = json.dumps(callback_metadata)
+                form.add_field("metadata", callback_metadata)
+            form.add_field("guild_id", str(guild.id))
+            form.add_field("channel_id", str(channel.id))
+            form.add_field("duration_seconds",
+                           f"{len(trimmed) / (_REC_INPUT_SAMPLE_RATE * _REC_INPUT_WIDTH):.2f}")
+            form.add_field("file", ogg,
+                           filename="reply.ogg", content_type="audio/ogg")
+            headers = {}
+            if callback_secret:
+                headers["X-API-Secret"] = callback_secret
+            async with session.post(
+                callback_url,
+                data=form,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=30),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    log.warning(
+                        f"[REC] callback HTTP {resp.status}: {body[:200]}"
+                    )
+                else:
+                    log.info(f"[REC] callback delivered ({len(ogg)}B)")
+        except Exception:
+            log.exception("[REC] callback POST failed")
+
+
+async def _relay_record(request: web.Request) -> web.Response:
+    """Trigger a voice recording in a specific channel.
+
+    Body (JSON):
+      - guild_id (required)
+      - channel_id (required) — voice channel to record from
+      - duration (optional) — seconds; clamped to [1, RECORD_MAX_SECONDS]
+      - callback_url (optional) — where to POST the encoded OGG file
+      - callback_secret (optional) — X-API-Secret value for that POST
+      - callback_metadata (optional) — JSON object passed through verbatim
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    duration_raw = data.get("duration", config.RECORD_MAX_SECONDS)
+    try:
+        duration = float(duration_raw)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid duration"}, status=400)
+    duration = max(1.0, min(duration, config.RECORD_MAX_SECONDS))
+
+    callback_url = data.get("callback_url") or None
+    callback_secret = data.get("callback_secret") or None
+    callback_metadata = data.get("callback_metadata")
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return web.json_response({"error": "guild not found"}, status=404)
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.VoiceChannel):
+        return web.json_response(
+            {"error": "channel not found or not voice"}, status=404
+        )
+
+    asyncio.create_task(
+        _run_recording(channel, duration, callback_url,
+                       callback_secret, callback_metadata)
+    )
+    return web.json_response({"started": True, "duration": duration})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
         return None
     app = web.Application()
     app.router.add_post("/say", _relay_say)
+    app.router.add_post("/record", _relay_record)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

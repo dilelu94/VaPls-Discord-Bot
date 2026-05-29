@@ -45,4 +45,22 @@ RELAY_HOST = os.getenv("RELAY_HOST", "127.0.0.1")
 RELAY_PORT = int(os.getenv("RELAY_PORT", "8081"))
 RELAY_SECRET = os.getenv("RELAY_SECRET", "")
 
+# --- Voice recording (responses to Telegram audio) -------------------------
+# The main bot can POST /record to ask the userbot to capture up to N seconds
+# of mixed PCM from the voice channel and POST it back to a callback URL
+# (typically the Telegram bridge). The recording is encoded to OGG/Opus.
+
+# Hard upper bound on recording duration (seconds). The /record request may
+# ask for less, but never more.
+RECORD_MAX_SECONDS = float(os.getenv("RECORD_MAX_SECONDS", "20"))
+
+# RMS threshold over 16-bit PCM samples below which a frame is treated as
+# silence for voice-activity detection and trailing-silence trimming.
+RECORD_RMS_THRESHOLD = int(os.getenv("RECORD_RMS_THRESHOLD", "250"))
+
+# Minimum length in seconds of recorded audio to send back. If the trimmed
+# recording is shorter than this, we treat it as "no one spoke" and skip the
+# callback so the Telegram bridge doesn't reply with a tiny click.
+RECORD_MIN_SECONDS = float(os.getenv("RECORD_MIN_SECONDS", "0.6"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

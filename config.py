@@ -48,3 +48,16 @@ INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 INDIO_RELAY_URL = os.getenv("INDIO_RELAY_URL", "")
 INDIO_RELAY_SECRET = os.getenv("INDIO_RELAY_SECRET", "")
 INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
+
+# Userbot voice-recording endpoint. After /play-audio finishes playing a
+# Telegram-uploaded clip we ask the userbot to capture the voice channel's
+# reply and POST it back to the Telegram bridge. Leave USERBOT_RECORD_URL
+# empty to disable the feature entirely.
+USERBOT_RECORD_URL = os.getenv("USERBOT_RECORD_URL", "")
+USERBOT_RECORD_SECRET = os.getenv("USERBOT_RECORD_SECRET", INDIO_RELAY_SECRET)
+USERBOT_RECORD_DEFAULT_DURATION = float(
+    os.getenv("USERBOT_RECORD_DEFAULT_DURATION", "20")
+)
+USERBOT_RECORD_TRIGGER_TIMEOUT = float(
+    os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT", "5")
+)

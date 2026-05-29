@@ -7,11 +7,13 @@ config.API_HOST:config.API_PORT (default 127.0.0.1:8080).
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 import logging
-from typing import Optional
+from typing import Any, Optional
 
+import aiohttp
 import discord
 from aiohttp import web
 
@@ -77,6 +79,67 @@ def _serializeMemberVoice(member: discord.Member) -> dict:
         "self_mute": bool(vs and vs.self_mute),
         "self_deaf": bool(vs and vs.self_deaf),
     }
+
+
+async def _triggerUserbotRecording(*, guildId: int, channelId: int,
+                                   callbackUrl: str,
+                                   callbackSecret: Optional[str],
+                                   metadataRaw: Optional[str],
+                                   duration: float) -> None:
+    """Ask the userbot's relay to capture a voice reply.
+
+    Args:
+        guildId: Guild that hosts the voice channel.
+        channelId: Voice channel ID where the userbot should listen.
+        callbackUrl: URL the userbot will POST the recorded audio to.
+        callbackSecret: Optional X-API-Secret value for the callback request.
+        metadataRaw: Opaque payload (typically JSON) forwarded to the
+            callback so the Telegram bridge can route the audio back to the
+            originating message.
+        duration: Recording duration in seconds.
+
+    Side Effects:
+        Issues an HTTP POST to ``config.USERBOT_RECORD_URL``.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    if not config.USERBOT_RECORD_URL:
+        return
+    payload: dict[str, Any] = {
+        "guild_id": str(guildId),
+        "channel_id": str(channelId),
+        "duration": duration,
+    }
+    if callbackUrl:
+        payload["callback_url"] = callbackUrl
+    if callbackSecret:
+        payload["callback_secret"] = callbackSecret
+    if metadataRaw is not None:
+        try:
+            payload["callback_metadata"] = json.loads(metadataRaw)
+        except (TypeError, ValueError):
+            payload["callback_metadata"] = metadataRaw
+
+    headers = {}
+    if config.USERBOT_RECORD_SECRET:
+        headers["X-API-Secret"] = config.USERBOT_RECORD_SECRET
+    timeout = aiohttp.ClientTimeout(total=config.USERBOT_RECORD_TRIGGER_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(
+                config.USERBOT_RECORD_URL, json=payload, headers=headers,
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning(
+                        "userbot /record HTTP %d: %s", resp.status, body[:200]
+                    )
+    except asyncio.TimeoutError:
+        logger.warning("userbot /record timeout after %.1fs",
+                       config.USERBOT_RECORD_TRIGGER_TIMEOUT)
+    except Exception:
+        logger.exception("userbot /record trigger failed")
 
 
 def _resolveGuild(bot: discord.Bot, guildId: int) -> Optional[discord.Guild]:
@@ -284,6 +347,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         Side Effects:
             Connects to voice, plays audio, and deletes the upload after playback.
+            Optionally triggers the userbot to record a voice reply once
+            playback finishes.
 
         Async:
             This function is a coroutine and must be awaited.
@@ -296,6 +361,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
         targetChannelId: Optional[int] = None
         uploadPath: Optional[str] = None
         filename: Optional[str] = None
+        replyCallbackUrl: Optional[str] = None
+        replyCallbackSecret: Optional[str] = None
+        replyMetadata: Optional[str] = None
+        replyDuration: Optional[float] = None
 
         downloadsDir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
         os.makedirs(downloadsDir, exist_ok=True)
@@ -310,6 +379,27 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 raw = (await part.read()).decode().strip()
                 if raw:
                     targetChannelId = int(raw)
+            elif part.name == "reply_callback_url":
+                raw = (await part.read()).decode().strip()
+                if raw:
+                    replyCallbackUrl = raw
+            elif part.name == "reply_callback_secret":
+                raw = (await part.read()).decode().strip()
+                if raw:
+                    replyCallbackSecret = raw
+            elif part.name == "reply_metadata":
+                raw = (await part.read()).decode()
+                if raw.strip():
+                    replyMetadata = raw
+            elif part.name == "reply_duration":
+                raw = (await part.read()).decode().strip()
+                if raw:
+                    try:
+                        replyDuration = float(raw)
+                    except ValueError:
+                        return web.json_response(
+                            {"error": "invalid reply_duration"}, status=400
+                        )
             elif part.name == "file":
                 ext = os.path.splitext(part.filename or "")[1] or ".ogg"
                 filename = f"tg_{uuid.uuid4().hex}{ext}"
@@ -356,22 +446,45 @@ def makeApp(bot: discord.Bot) -> web.Application:
         except Exception:
             pass
 
-        def _cleanup(_err):
+        recordChannelId = vc.channel.id if vc.channel else None
+        wantRecording = bool(replyCallbackUrl and config.USERBOT_RECORD_URL
+                             and recordChannelId is not None)
+
+        def _afterPlay(_err):
             try:
                 os.remove(uploadPath)
             except Exception:
                 pass
+            if not wantRecording:
+                return
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _triggerUserbotRecording(
+                        guildId=guildId,
+                        channelId=recordChannelId,
+                        callbackUrl=replyCallbackUrl,
+                        callbackSecret=replyCallbackSecret,
+                        metadataRaw=replyMetadata,
+                        duration=(replyDuration
+                                  if replyDuration is not None
+                                  else config.USERBOT_RECORD_DEFAULT_DURATION),
+                    ),
+                    bot.loop,
+                )
+            except Exception:
+                logger.exception("schedule userbot recording failed")
 
         try:
-            vc.play(discord.FFmpegOpusAudio(uploadPath), after=_cleanup)
+            vc.play(discord.FFmpegOpusAudio(uploadPath), after=_afterPlay)
         except Exception as e:
-            _cleanup(None)
+            _afterPlay(None)
             return web.json_response({"error": f"play failed: {e}"}, status=500)
 
         return web.json_response({
             "played": True,
-            "channel_id": vc.channel.id if vc.channel else None,
+            "channel_id": recordChannelId,
             "channel_name": vc.channel.name if vc.channel else None,
+            "will_record_reply": wantRecording,
         })
 
     async def queue(request: web.Request) -> web.Response:
