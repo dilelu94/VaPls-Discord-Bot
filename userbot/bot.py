@@ -4,6 +4,9 @@ VaPls userbot: listens to Discord voice channels using a real user account
 
 Runs separately from the main Discord bot — the main bot still handles
 /play, /soundpad, slash commands, etc. This userbot is voice-input-only.
+
+Library stack: discord.py-self (user-token client) + discord-ext-voice-recv
+(voice receive extension) + vosk (offline ASR).
 """
 
 import asyncio
@@ -13,12 +16,128 @@ import logging
 import os
 import sys
 import time
+from typing import Optional
 
 import aiohttp
-import discord  # discord.py-self installs as `discord`
+import discord  # discord.py-self
+from discord.ext import voice_recv
 import vosk
 
 import config
+
+
+# ---------- DAVE decryption monkey-patch -----------------------------------
+# voice_recv decrypts only the outer AEAD layer; the inner Opus payload is
+# still DAVE-encrypted in E2EE channels. Because we're logged in as a real
+# user, dave_session has the MLS keys to decrypt — but voice_recv doesn't
+# know to call dave.decrypt(). Wrap each _decrypt_rtp_* method on
+# PacketDecryptor to apply DAVE decryption after AEAD.
+
+from discord.ext.voice_recv.reader import AudioReader, PacketDecryptor
+
+try:
+    import davey
+except ImportError:
+    davey = None
+
+_dave_stats = {"total": 0, "dave_ok": 0, "dave_skip": 0, "dave_fail": 0}
+
+
+def _install_dave_patch():
+    _orig_init = AudioReader.__init__
+
+    def _patched_init(self, voice_client, sink, after=None):
+        _orig_init(self, voice_client, sink, after=after)
+        # Stash the voice client reference on the decryptor so the wrapped
+        # _decrypt_rtp_* method can read dave_session + ssrc_user_map.
+        self.decryptor._voice_client = voice_client
+
+    AudioReader.__init__ = _patched_init
+
+    def _wrap_method(method_name):
+        original = getattr(PacketDecryptor, method_name, None)
+        if original is None:
+            return
+
+        def wrapped(self, packet):
+            raw = original(self, packet)
+            _dave_stats["total"] += 1
+            n = _dave_stats["total"]
+
+            if davey is None:
+                _dave_stats["dave_skip"] += 1
+                return raw
+
+            vc = getattr(self, "_voice_client", None)
+            if vc is None:
+                _dave_stats["dave_skip"] += 1
+                return raw
+
+            # Try multiple paths to find the active VoiceConnectionState
+            # (discord.py-self stores it at different places depending on
+            # connection lifecycle).
+            dave = None
+            for path in ("_connection", "_state", "client._connection"):
+                obj = vc
+                for part in path.split("."):
+                    obj = getattr(obj, part, None)
+                    if obj is None:
+                        break
+                if obj is not None:
+                    candidate = getattr(obj, "dave_session", None)
+                    if candidate is not None:
+                        dave = candidate
+                        break
+
+            if dave is None or not getattr(dave, "ready", False):
+                _dave_stats["dave_skip"] += 1
+                if n <= 5 or n % 500 == 0:
+                    log.info(
+                        f"[DAVE-DBG] #{n} dave not ready "
+                        f"(dave={dave is not None}, "
+                        f"ready={getattr(dave, 'ready', None) if dave else None}, "
+                        f"vc_type={type(vc).__name__}, "
+                        f"vc_attrs={[a for a in dir(vc) if 'connect' in a.lower() or 'state' in a.lower() or 'dave' in a.lower()][:8]})"
+                    )
+                return raw
+
+            ssrc_map = getattr(vc, "_ssrc_to_id", None)
+            if not ssrc_map:
+                ssrc_map = getattr(state, "ssrc_user_map", {}) or {}
+            uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
+            if not uid:
+                _dave_stats["dave_skip"] += 1
+                if n <= 5 or n % 500 == 0:
+                    log.info(
+                        f"[DAVE-DBG] #{n} no uid for ssrc={packet.ssrc} "
+                        f"(map_size={len(ssrc_map) if ssrc_map else 0})"
+                    )
+                return raw
+
+            try:
+                decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
+                _dave_stats["dave_ok"] += 1
+                if n <= 3:
+                    log.info(
+                        f"[DAVE-DBG] #{n} dave.decrypt OK uid={uid} "
+                        f"in={len(raw)}B out={len(decrypted)}B"
+                    )
+                return decrypted
+            except Exception as e:
+                _dave_stats["dave_fail"] += 1
+                if n <= 5 or n % 500 == 0:
+                    log.info(f"[DAVE-DBG] #{n} dave.decrypt failed: {e}")
+                return raw
+
+        setattr(PacketDecryptor, method_name, wrapped)
+
+    for mode in [
+        "xsalsa20_poly1305",
+        "xsalsa20_poly1305_suffix",
+        "xsalsa20_poly1305_lite",
+        "aead_xchacha20_poly1305_rtpsize",
+    ]:
+        _wrap_method(f"_decrypt_rtp_{mode}")
 
 
 # ---------- Logging --------------------------------------------------------
@@ -29,10 +148,37 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("userbot")
-# Silence verbose internals from the library.
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 logging.getLogger("discord.voice_client").setLevel(logging.INFO)
+# Crank up gateway logging to capture SESSION_DESCRIPTION + MLS handshake.
+logging.getLogger("discord.gateway").setLevel(logging.DEBUG)
+logging.getLogger("discord.voice_state").setLevel(logging.DEBUG)
+
+_install_dave_patch()
+log.info("DAVE decrypt monkey-patch installed.")
+
+
+# Also wrap reinit_dave_session to confirm it runs and what protocol version
+# Discord assigned to this user.
+from discord.voice_state import VoiceConnectionState as _VCS
+
+_orig_reinit = _VCS.reinit_dave_session
+
+
+async def _patched_reinit(self):
+    log.info(
+        f"[DAVE-INIT] reinit_dave_session called: "
+        f"dave_protocol_version={self.dave_protocol_version}"
+    )
+    await _orig_reinit(self)
+    log.info(
+        f"[DAVE-INIT] After reinit: dave_session={self.dave_session is not None}, "
+        f"ready={getattr(self.dave_session, 'ready', None) if self.dave_session else None}"
+    )
+
+
+_VCS.reinit_dave_session = _patched_reinit
 
 
 # ---------- VOSK setup -----------------------------------------------------
@@ -48,44 +194,42 @@ log.info("✅ Spanish VOSK model loaded.")
 # ---------- Sink: VOSK transcription per speaking user ---------------------
 
 
-class TranscriberSink(discord.sinks.Sink):
-    """Per-user Spanish transcription. Receives raw PCM frames from the
-    library's audio reader, downsamples 48k stereo → 16k mono, and feeds
-    them to a dedicated KaldiRecognizer per speaking user."""
+class TranscriberSink(voice_recv.AudioSink):
+    """Per-user Spanish transcription. write() is called once per Opus
+    frame from each speaking SSRC; voice_recv decodes to PCM before
+    delivery when wants_opus() is False."""
 
-    def __init__(self, client, **kwargs):
-        super().__init__(**kwargs)
-        self.client = client
-        # Stubs the library inspects when wiring sink event listeners.
-        self.__sink_listeners__ = []
+    def __init__(self, client_ref: discord.Client):
+        super().__init__()
+        self._client_ref = client_ref
         self.recognizers: dict[int, vosk.KaldiRecognizer] = {}
         self.resample_states: dict[int, object] = {}
         self.packet_count = 0
         self.start_time = time.time()
 
-    def walk_children(self):
-        return []
+    def wants_opus(self) -> bool:
+        return False  # we want decoded PCM
 
-    def is_opus(self):
-        # We want PCM, not Opus — the library should decode for us.
-        return False
+    def cleanup(self) -> None:
+        log.info(f"[VOSK] Sink cleanup. Total packets: {self.packet_count}")
+        self.recognizers.clear()
+        self.resample_states.clear()
 
-    def format_audio(self, audio):
-        return audio
-
-    def write(self, data, user):
-        user_id = getattr(user, "id", user)
+    def write(self, source, data: voice_recv.VoiceData) -> None:
+        user_id = getattr(source, "id", None)
+        if user_id is None:
+            return
         if user_id in config.IGNORE_USER_IDS:
             return
-        pcm_data = getattr(data, "pcm", data)
-        if not isinstance(pcm_data, (bytes, bytearray)) or not pcm_data:
+        pcm_data = data.pcm
+        if not pcm_data:
             return
 
         self.packet_count += 1
         if self.packet_count == 1:
             log.info(
-                f"[VOSK] First packet received (user_id={user_id}, "
-                f"bytes={len(pcm_data)})"
+                f"[VOSK] First packet received "
+                f"(user_id={user_id}, bytes={len(pcm_data)})"
             )
         elif self.packet_count % 500 == 0:
             elapsed = time.time() - self.start_time
@@ -111,7 +255,7 @@ class TranscriberSink(discord.sinks.Sink):
                 if text:
                     log.info(f"[VOSK][es] user_id={user_id}: {text}")
                     asyncio.run_coroutine_threadsafe(
-                        on_transcript(user_id, text), self.client.loop
+                        on_transcript(user_id, text), self._client_ref.loop
                     )
         except Exception as e:
             log.exception(f"[VOSK] write error: {e}")
@@ -119,8 +263,7 @@ class TranscriberSink(discord.sinks.Sink):
 
 # ---------- Optional downstream forwarding ---------------------------------
 
-
-_http_session: aiohttp.ClientSession | None = None
+_http_session: Optional[aiohttp.ClientSession] = None
 
 
 async def _get_http() -> aiohttp.ClientSession:
@@ -132,7 +275,6 @@ async def _get_http() -> aiohttp.ClientSession:
 
 async def on_transcript(user_id: int, text: str):
     """Called every time the recognizer produces a final phrase."""
-    # 1. Post to a configured text channel, if any.
     if config.TRANSCRIPT_CHANNEL_NAME:
         try:
             for guild in client.guilds:
@@ -147,7 +289,6 @@ async def on_transcript(user_id: int, text: str):
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
 
-    # 2. Forward to the main bot's HTTP API, if enabled.
     if config.ENABLE_HTTP_FORWARD:
         try:
             session = await _get_http()
@@ -173,9 +314,15 @@ def _guild_allowed(guild_id: int) -> bool:
     return config.GUILD_ALLOWLIST is None or guild_id in config.GUILD_ALLOWLIST
 
 
-async def _start_listening(vc: discord.VoiceClient):
-    """Wait for the connection to stabilize, then start_recording."""
-    if vc.is_recording():
+def _vc_for_guild(guild: discord.Guild) -> Optional[voice_recv.VoiceRecvClient]:
+    for vc in client.voice_clients:
+        if vc.guild.id == guild.id:
+            return vc  # type: ignore[return-value]
+    return None
+
+
+async def _start_listening(vc: voice_recv.VoiceRecvClient):
+    if vc.is_listening():
         return
     for _ in range(40):
         if vc.is_connected():
@@ -186,18 +333,16 @@ async def _start_listening(vc: discord.VoiceClient):
         return
     await asyncio.sleep(1.0)
     log.info(f"[VOICE] Starting listener in {vc.channel.name}")
-    sink = TranscriberSink(client)
     try:
-        vc.start_recording(sink, lambda *a, **kw: None)
+        vc.listen(TranscriberSink(client))
     except Exception as e:
-        log.exception(f"[VOICE] start_recording failed: {e}")
+        log.exception(f"[VOICE] listen() failed: {e}")
 
 
-async def _join_channel(channel: discord.VoiceChannel) -> discord.VoiceClient | None:
-    """Connect (or move) to a voice channel and start listening."""
+async def _join_channel(channel: discord.VoiceChannel):
     if not _guild_allowed(channel.guild.id):
-        return None
-    existing = discord.utils.get(client.voice_clients, guild=channel.guild)
+        return
+    existing = _vc_for_guild(channel.guild)
     try:
         if existing:
             if existing.channel.id != channel.id:
@@ -206,24 +351,28 @@ async def _join_channel(channel: discord.VoiceChannel) -> discord.VoiceClient | 
             vc = existing
         else:
             log.info(f"[VOICE] Connecting to {channel.name} ({channel.guild.name})")
-            vc = await channel.connect(reconnect=True, timeout=20.0)
+            vc = await channel.connect(
+                cls=voice_recv.VoiceRecvClient, reconnect=True, timeout=20.0
+            )
     except Exception as e:
         log.exception(f"[VOICE] Failed to join {channel.name}: {e}")
-        return None
+        return
     await _start_listening(vc)
-    return vc
 
 
 async def _leave_if_empty(guild: discord.Guild):
-    """Disconnect from a guild's voice channel if no humans are left."""
-    vc = discord.utils.get(client.voice_clients, guild=guild)
+    vc = _vc_for_guild(guild)
     if not vc:
         return
-    humans = [m for m in vc.channel.members if not m.bot and m.id != client.user.id]
+    humans = [
+        m for m in vc.channel.members
+        if not m.bot and m.id != client.user.id
+    ]
     if not humans:
         log.info(f"[VOICE] Channel {vc.channel.name} empty — leaving")
         try:
-            vc.stop_recording()
+            if vc.is_listening():
+                vc.stop_listening()
         except Exception:
             pass
         try:
@@ -235,36 +384,34 @@ async def _leave_if_empty(guild: discord.Guild):
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
-    # Auto-join any channel that already has humans in it.
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):
             continue
         for channel in guild.voice_channels:
-            humans = [m for m in channel.members if not m.bot and m.id != client.user.id]
+            humans = [
+                m for m in channel.members
+                if not m.bot and m.id != client.user.id
+            ]
             if humans:
                 await _join_channel(channel)
-                break  # one channel per guild for now
+                break
 
 
 @client.event
 async def on_voice_state_update(member, before, after):
     if member.id == client.user.id:
-        # Our own state change — ignore (we manage our own joins/leaves).
         return
     if member.bot or member.id in config.IGNORE_USER_IDS:
-        # Don't follow bots or ignored users.
         return
 
     guild = (after.channel or before.channel).guild
     if not _guild_allowed(guild.id):
         return
 
-    # A human joined a channel we're not in → follow them.
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
         await _join_channel(after.channel)
 
-    # A human left → if their old channel is now empty, leave too.
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
 

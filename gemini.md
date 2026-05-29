@@ -28,7 +28,22 @@ Este archivo sirve como referencia técnica y guía de desarrollo para que **Gem
   - `vosk-model-small-es-0.42` para español.
   - `vosk-model-small-en-us-0.15` para inglés.
 - **`audio/`**: Directorio donde se almacena el archivo `necesitopito.*` que se reproducirá en respuesta.
-- [run.sh](file:///var/home/dilelu/repos/vapls-discord-bot/run.sh) / [runMonitored.sh](file:///var/home/dilelu/repos/vapls-discord-bot/runMonitored.sh) / [autoRestart.sh](file:///var/home/dilelu/repos/vapls-discord-bot/autoRestart.sh): Scripts auxiliares para el inicio, redirección de logs (`botOutput.log`, `monitorAutoKill.log`) y reinicio automático en caso de caída.
+- [run.sh](file:///var/home/dilelu/repos/vapls-discord-bot/run.sh) / [runMonitored.sh](file:///var/home/dilelu/repos/vapls-discord-bot/runMonitored.sh) / [autoRestart.sh](file:///var/home/dilelu/repos/vapls-discord-bot/autoRestart.sh): Scripts auxiliares para el inicio, redirección de logs (`bot_output.log`, `monitor_auto_kill.log`) y reinicio automático en caso de caída.
+- [lsyncd_rvc.lua](file:///var/home/dilelu/repos/vapls-discord-bot/lsyncd_rvc.lua): Configuración de sincronización en tiempo real para subir audios generados por RVC_WebUI al servidor del bot.
+
+---
+
+## 🚀 Despliegue y Automatización
+
+### 1. Servicio de Sincronización (lsyncd)
+Para automatizar la subida de audios desde la máquina local al servidor, se utiliza un servicio de usuario de systemd:
+- **Servicio:** `lsyncd-rvc.service` (ubicado en `~/.config/systemd/user/`).
+- **Función:** Monitorea `~/repos/RVC_WebUI/Output/` y sincroniza (con eliminaciones) hacia el servidor en tiempo real.
+- **Llave SSH:** Utiliza `~/Downloads/ssh_key_rvc.key` (permisos 600).
+
+### 2. Optimización de CPU
+Se ha detectado que en entornos Linux/Bazzite, el uso de Proton puede disparar el proceso `xalia.exe` (accesibilidad de gamepad), consumiendo hasta un 40% de CPU.
+- **Fix:** Desactivado mediante la variable de entorno `PROTON_USE_XALIA=0` en los parámetros de lanzamiento de Lutris/Steam.
 
 ---
 

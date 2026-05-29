@@ -23,59 +23,204 @@ class SoundpadView(discord.ui.View):
             raise ValueError("No se encontraron carpetas (categorías) en la ruta de audios.")
             
         self.selected_category = self.categories[0]
+        self.selected_subfolder = "/"
+        self.current_page = 0
         self.selected_file = None
         self.setup_components()
 
-    def get_category_files(self, category: str):
+    def get_subfolders(self, category: str):
         cat_dir = os.path.join(self.output_dir, category)
-        if not os.path.exists(cat_dir): return []
+        if not os.path.exists(cat_dir):
+            return ["/"]
+        subfolders = ["/"]
+        for root, dirs, _ in os.walk(cat_dir):
+            for d in dirs:
+                if not d.startswith("."):
+                    full_path = os.path.join(root, d)
+                    rel_path = os.path.relpath(full_path, cat_dir)
+                    subfolders.append(rel_path)
+        return sorted(subfolders)
+
+    def get_folder_files(self, category: str, subfolder: str):
+        if subfolder == "/":
+            target_dir = os.path.join(self.output_dir, category)
+        else:
+            target_dir = os.path.join(self.output_dir, category, subfolder)
+            
+        if not os.path.exists(target_dir):
+            return []
+            
         files = []
-        for f in os.listdir(cat_dir):
-            if os.path.isfile(os.path.join(cat_dir, f)):
+        for f in os.listdir(target_dir):
+            full_path = os.path.join(target_dir, f)
+            if os.path.isfile(full_path):
                 _, ext = os.path.splitext(f)
-                if ext.lower() in {".opus", ".mp3", ".wav", ".ogg"}:
-                    files.append(f)
+                if ext.lower() in {".opus", ".mp3", ".wav", ".ogg", ".m4a"}:
+                    if subfolder == "/":
+                        files.append(f)
+                    else:
+                        files.append(os.path.join(subfolder, f))
         return sorted(files)
 
     def setup_components(self):
         self.clear_items()
-        category_options = [discord.SelectOption(label=cat, value=cat, default=(cat == self.selected_category)) for cat in self.categories[:25]]
-        category_select = discord.ui.Select(placeholder="📁 Selecciona una categoría...", options=category_options, row=0, custom_id="sp_category_select")
+        
+        # 1. Category Select (Row 0)
+        category_options = [
+            discord.SelectOption(
+                label=cat, 
+                value=cat, 
+                default=(cat == self.selected_category)
+            ) for cat in self.categories[:25]
+        ]
+        category_select = discord.ui.Select(
+            placeholder="📁 Selecciona una categoría...", 
+            options=category_options, 
+            row=0, 
+            custom_id="sp_category_select"
+        )
         category_select.callback = self.on_category_select
         self.add_item(category_select)
         
-        files = self.get_category_files(self.selected_category)
-        if files:
-            if not self.selected_file or self.selected_file not in files: self.selected_file = files[0]
-            audio_options = [discord.SelectOption(label=os.path.splitext(f)[0][:100], value=f, default=(f == self.selected_file)) for f in files[:25]]
-            audio_select = discord.ui.Select(placeholder="🔊 Selecciona un sonido...", options=audio_options, row=1, custom_id="sp_audio_select")
+        # 2. Subfolder Select (Row 1, if any exist)
+        subfolders = self.get_subfolders(self.selected_category)
+        has_subfolders = len(subfolders) > 1
+        
+        row_offset = 0
+        if has_subfolders:
+            subfolder_options = [
+                discord.SelectOption(
+                    label="Root (/)" if sub == "/" else sub.replace("/", " ➔ ").replace("\\", " ➔ ").replace("_", " ").replace("-", " ")[:100],
+                    value=sub,
+                    default=(sub == self.selected_subfolder)
+                ) for sub in subfolders[:25]
+            ]
+            subfolder_select = discord.ui.Select(
+                placeholder="📂 Selecciona una subcarpeta...", 
+                options=subfolder_options, 
+                row=1, 
+                custom_id="sp_subfolder_select"
+            )
+            subfolder_select.callback = self.on_subfolder_select
+            self.add_item(subfolder_select)
+            row_offset = 1
+            
+        # 3. Audio Select (Row 1 or Row 2)
+        files = self.get_folder_files(self.selected_category, self.selected_subfolder)
+        
+        page_size = 25
+        self.total_pages = max(1, (len(files) + page_size - 1) // page_size)
+        if self.current_page >= self.total_pages:
+            self.current_page = self.total_pages - 1
+        if self.current_page < 0:
+            self.current_page = 0
+            
+        page_files = files[self.current_page * page_size : (self.current_page + 1) * page_size]
+        self.files_by_index = {str(i): f for i, f in enumerate(page_files)}
+        
+        if page_files:
+            if not self.selected_file or self.selected_file not in files:
+                self.selected_file = page_files[0]
+            elif self.selected_file not in page_files:
+                self.selected_file = page_files[0]
+                
+            audio_options = []
+            for i, f in enumerate(page_files):
+                base_name = os.path.basename(f)
+                label = os.path.splitext(base_name)[0].replace("_", " ").replace("-", " ")
+                label = label[:100]
+                audio_options.append(
+                    discord.SelectOption(
+                        label=label,
+                        value=str(i),
+                        default=(f == self.selected_file)
+                    )
+                )
+            audio_select = discord.ui.Select(
+                placeholder="🔊 Selecciona un sonido...", 
+                options=audio_options, 
+                row=row_offset + 1, 
+                custom_id="sp_audio_select"
+            )
             audio_select.callback = self.on_audio_select
             self.add_item(audio_select)
         else:
             self.selected_file = None
-            self.add_item(discord.ui.Select(placeholder="⚠️ No hay audios", options=[discord.SelectOption(label="Vacío", value="none")], disabled=True, row=1))
+            self.files_by_index = {}
+            self.add_item(
+                discord.ui.Select(
+                    placeholder="⚠️ No hay audios en este directorio", 
+                    options=[discord.SelectOption(label="Vacío", value="none")], 
+                    disabled=True, 
+                    row=row_offset + 1,
+                    custom_id="sp_audio_select"
+                )
+            )
             
-        play_btn = discord.ui.Button(label="🔄 Reproducir", style=discord.ButtonStyle.success, row=2)
+        # 4. Action Row (Row 2 or Row 3)
+        prev_btn = discord.ui.Button(
+            label="◀️", 
+            style=discord.ButtonStyle.secondary, 
+            row=row_offset + 2, 
+            custom_id="btn_sp_prev",
+            disabled=(self.current_page == 0)
+        )
+        prev_btn.callback = self.on_prev_click
+        self.add_item(prev_btn)
+        
+        play_btn = discord.ui.Button(
+            label="🔄 Reproducir", 
+            style=discord.ButtonStyle.success, 
+            row=row_offset + 2,
+            custom_id="btn_sp_play"
+        )
         play_btn.callback = self.on_play_click
         self.add_item(play_btn)
         
-        stop_btn = discord.ui.Button(label="⏹️ Detener", style=discord.ButtonStyle.danger, row=2)
+        stop_btn = discord.ui.Button(
+            label="⏹️ Detener", 
+            style=discord.ButtonStyle.danger, 
+            row=row_offset + 2,
+            custom_id="btn_sp_stop"
+        )
         stop_btn.callback = self.on_stop_click
         self.add_item(stop_btn)
+        
+        next_btn = discord.ui.Button(
+            label="▶️", 
+            style=discord.ButtonStyle.secondary, 
+            row=row_offset + 2, 
+            custom_id="btn_sp_next",
+            disabled=(self.current_page == self.total_pages - 1)
+        )
+        next_btn.callback = self.on_next_click
+        self.add_item(next_btn)
 
     async def update_message(self, interaction: discord.Interaction, status_text: str = None):
         embed = discord.Embed(title="🎛️ Soundpad Panel", color=discord.Color.blurple())
         embed.add_field(name="📁 Categoría", value=self.selected_category, inline=True)
-        clean_file = os.path.splitext(self.selected_file)[0] if self.selected_file else "Ninguno"
+        
+        sub_label = "Root (/)" if self.selected_subfolder == "/" else self.selected_subfolder.replace("/", " ➔ ").replace("\\", " ➔ ")
+        embed.add_field(name="📂 Subcarpeta", value=sub_label, inline=True)
+        
+        if self.selected_file:
+            clean_file = os.path.basename(self.selected_file)
+            clean_file = os.path.splitext(clean_file)[0].replace("_", " ").replace("-", " ")
+        else:
+            clean_file = "Ninguno"
         embed.add_field(name="🔊 Sonido", value=clean_file, inline=True)
-        if status_text: embed.add_field(name="⚡ Estado", value=status_text, inline=False)
+        
+        embed.set_footer(text=f"Página {self.current_page + 1} de {self.total_pages}")
+        
+        if status_text: 
+            embed.add_field(name="⚡ Estado", value=status_text, inline=False)
+            
         try:
             if interaction.response.is_done():
                 await interaction.edit_original_response(embed=embed, view=self)
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
         except discord.NotFound:
-            # Original message was deleted; nothing to do.
             pass
 
     async def _force_reconnect(self, interaction: discord.Interaction):
@@ -95,10 +240,15 @@ class SoundpadView(discord.ui.View):
         return vc, None
 
     async def play_sound(self, interaction: discord.Interaction):
+        from playCommand import guildPlayers
+        if interaction.guild.id in guildPlayers:
+            player = guildPlayers[interaction.guild.id]
+            if player.currentSong:
+                return await interaction.followup.send("⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.", ephemeral=True)
+
         guild = interaction.guild
         vc = guild.voice_client
 
-        # _connected puede estar False transitoriamente durante renegociación DAVE.
         if not vc or not vc.is_connected():
             for _ in range(5):
                 await asyncio.sleep(0.3)
@@ -127,7 +277,7 @@ class SoundpadView(discord.ui.View):
                               properties={"category": self.selected_category,
                                           "audio_file": self.selected_file,
                                           "after_reconnect": False})
-            return await self.update_message(interaction, status_text=f"▶️ Reproduciendo: {self.selected_file}")
+            return await self.update_message(interaction, status_text=f"▶️ Reproduciendo: {os.path.basename(self.selected_file)}")
         except discord.ClientException as e:
             print(f"[SOUNDPAD] ClientException on play ({e}); forcing reconnect...")
             analytics.capture("soundpad reconnect attempted", user=interaction.user, guild=interaction.guild,
@@ -146,7 +296,7 @@ class SoundpadView(discord.ui.View):
                                   properties={"category": self.selected_category,
                                               "audio_file": self.selected_file,
                                               "after_reconnect": True})
-                await self.update_message(interaction, status_text=f"▶️ Reproduciendo (tras reconectar): {self.selected_file}")
+                await self.update_message(interaction, status_text=f"▶️ Reproduciendo (tras reconectar): {os.path.basename(self.selected_file)}")
             except Exception as e2:
                 print(f"[SOUNDPAD ERROR] Retry failed: {e2}")
                 analytics.capture_exception(e2, user=interaction.user, guild=interaction.guild,
@@ -164,12 +314,22 @@ class SoundpadView(discord.ui.View):
 
     async def on_category_select(self, interaction: discord.Interaction):
         self.selected_category = interaction.data["values"][0]
+        self.selected_subfolder = "/"
+        self.current_page = 0
+        self.selected_file = None
+        self.setup_components()
+        await self.update_message(interaction)
+
+    async def on_subfolder_select(self, interaction: discord.Interaction):
+        self.selected_subfolder = interaction.data["values"][0]
+        self.current_page = 0
         self.selected_file = None
         self.setup_components()
         await self.update_message(interaction)
 
     async def on_audio_select(self, interaction: discord.Interaction):
-        self.selected_file = interaction.data["values"][0]
+        selected_index = interaction.data["values"][0]
+        self.selected_file = self.files_by_index.get(selected_index)
         self.setup_components()
         await self.update_message(interaction)
 
@@ -184,14 +344,36 @@ class SoundpadView(discord.ui.View):
                                       "audio_file": self.selected_file})
         await self.update_message(interaction, status_text="⏹️ Detenido")
 
+    async def on_prev_click(self, interaction: discord.Interaction):
+        if self.current_page > 0:
+            self.current_page -= 1
+            self.selected_file = None
+            self.setup_components()
+            await self.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
+    async def on_next_click(self, interaction: discord.Interaction):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+            self.selected_file = None
+            self.setup_components()
+            await self.update_message(interaction)
+        else:
+            await interaction.response.defer()
+
 async def soundpadLogic(ctx: discord.ApplicationContext):
-    # Defer up-front: channel.connect() can take 10s and the interaction
-    # token expires after 3s, which used to cause Interaction 40060 errors.
     if not ctx.response.is_done():
         try:
             await ctx.defer()
         except Exception:
             pass
+
+    from playCommand import guildPlayers
+    if ctx.guild.id in guildPlayers:
+        player = guildPlayers[ctx.guild.id]
+        if player.currentSong:
+            return await ctx.followup.send("⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.", ephemeral=True)
 
     if not ctx.author.voice:
         return await ctx.followup.send("❌ Debes estar en un canal de voz.", ephemeral=True)
