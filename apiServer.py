@@ -525,29 +525,32 @@ def makeApp(bot: discord.Bot) -> web.Application:
     async def indioVoice(request: web.Request) -> web.Response:
         """Trigger the indio persona from a voice transcription.
 
-        Body JSON: {user_id, guild_id, channel_id, pregunta, speaker_name?}.
-        Spawns geminiCommand.indioFromVoice in the background so the call
-        returns immediately and the userbot doesn't have to wait on Gemini.
+        Body JSON: {pregunta, speaker_name, guild_id?, channel_id?,
+        channel_name?, decifrar?}. Forwards to geminiCommand.askIndio, which
+        runs Gemini first to clean ASR errors before invoking the indio.
+        Returns immediately; the indio reply is delivered async to the channel.
         """
         try:
             data = await request.json()
-            user_id = int(data["user_id"])
-            guild_id = int(data["guild_id"])
-            channel_id = int(data["channel_id"])
             pregunta = str(data["pregunta"]).strip()
         except Exception:
             return web.json_response({"error": "invalid body"}, status=400)
         if not pregunta:
             return web.json_response({"error": "empty pregunta"}, status=400)
-        speaker_name = data.get("speaker_name")
+        speaker_name = data.get("speaker_name") or "alguien"
+        guild_id = int(data["guild_id"]) if data.get("guild_id") else None
+        channel_id = int(data["channel_id"]) if data.get("channel_id") else None
+        channel_name = data.get("channel_name")
+        decifrar = bool(data.get("decifrar", True))
 
-        asyncio.create_task(geminiCommand.indioFromVoice(
+        asyncio.create_task(geminiCommand.askIndio(
             bot,
-            user_id=user_id,
+            pregunta,
+            speaker_name=speaker_name,
             guild_id=guild_id,
             channel_id=channel_id,
-            pregunta=pregunta,
-            speaker_name=speaker_name,
+            channel_name=channel_name,
+            decifrar=decifrar,
         ))
         return web.json_response({"ok": True})
 

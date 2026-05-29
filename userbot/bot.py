@@ -265,10 +265,13 @@ whisper_model = WhisperModel(
 )
 log.info("✅ Whisper model loaded.")
 
-# Detects "indio" / "che indio" / "el indio" at the START of the phrase.
-# Matches must contain a pregunta after the wake word (at least one char).
+# Loose wake-word matcher: looks for an "indio"-like token anywhere near the
+# start of the phrase. Whisper sometimes hears "endio", "yndio", "yendo",
+# "indyo", "yndyo", etc., so we accept any "(in|en|yn|yen)d(i|y)o" variant.
+# We don't try to extract the pregunta — the whole transcript is forwarded to
+# askIndio which uses Gemini to decifrar typos before the indio answers.
 _WAKE_WORD_RE = re.compile(
-    r"^\s*(che\s+|hey\s+|el\s+)?indio\b[\s,.;:!\?\-—]+(.+)$",
+    r"\b(che\s+|hey\s+|el\s+)?[yi]?[ei]nd[iy]o\b",
     re.IGNORECASE,
 )
 
@@ -441,12 +444,6 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
         # on RMS in the sink, so let Whisper see the full buffer.
         vad_filter=False,
         condition_on_previous_text=False,
-        # Initial prompt biases tokenization toward rioplatense Spanish + the
-        # wake word, which improves recognition of "indio" in short utterances.
-        initial_prompt=(
-            "Conversación en español rioplatense entre amigos. "
-            "Pueden decir 'indio' o 'che indio' al principio para invocar al bot."
-        ),
     )
     return " ".join(s.text.strip() for s in segments if s.text).strip()
 
@@ -622,20 +619,20 @@ async def on_transcript(user_id: int, text: str):
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
 
-    # Wake word: if the transcript starts with "indio" / "che indio", extract
-    # the pregunta and ask the main bot to invoke the indio persona.
-    match = _WAKE_WORD_RE.match(text or "")
-    if match and posted_channel_id is not None and posted_guild_id is not None:
-        pregunta = match.group(2).strip()
-        if pregunta:
-            log.info(f"[INDIO-WAKE] user_id={user_id} pregunta={pregunta!r}")
-            asyncio.create_task(_dispatch_to_indio(
-                user_id=user_id,
-                guild_id=posted_guild_id,
-                channel_id=posted_channel_id,
-                pregunta=pregunta,
-                speaker_name=speaker_name,
-            ))
+    # Wake word: if the transcript contains an "indio"-like token, hand the
+    # entire raw transcript to the main bot's /indio endpoint. The server runs
+    # it through Gemini (decifrar=True) to fix ASR errors before the indio
+    # actually responds.
+    if (_WAKE_WORD_RE.search(text or "")
+            and posted_channel_id is not None
+            and posted_guild_id is not None):
+        log.info(f"[INDIO-WAKE] user_id={user_id} raw={text!r}")
+        asyncio.create_task(_dispatch_to_indio(
+            guild_id=posted_guild_id,
+            channel_id=posted_channel_id,
+            pregunta=text,
+            speaker_name=speaker_name,
+        ))
 
     if config.ENABLE_HTTP_FORWARD:
         try:
@@ -653,9 +650,9 @@ async def on_transcript(user_id: int, text: str):
             log.warning(f"HTTP forward failed: {e}")
 
 
-async def _dispatch_to_indio(*, user_id: int, guild_id: int, channel_id: int,
+async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                              pregunta: str, speaker_name: Optional[str]) -> None:
-    """POST the pregunta to the main bot's /indio endpoint."""
+    """POST the raw transcript to the main bot's /indio endpoint."""
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
         return
@@ -664,11 +661,11 @@ async def _dispatch_to_indio(*, user_id: int, guild_id: int, channel_id: int,
         async with session.post(
             f"{config.MAIN_BOT_API_BASE}/indio",
             json={
-                "user_id": str(user_id),
                 "guild_id": str(guild_id),
                 "channel_id": str(channel_id),
                 "pregunta": pregunta,
                 "speaker_name": speaker_name,
+                "decifrar": True,
             },
             headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
             timeout=aiohttp.ClientTimeout(total=5),

@@ -383,30 +383,69 @@ async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) 
                     mem_key, len(expected))
 
 
+def _static_user_traits() -> dict[str, dict[str, list[str]]]:
+    """Pull manual traits/preguntas/anecdotas from users.py. Each entry can
+    optionally carry ``traits``, ``preguntas_tipicas`` and ``anecdotas``
+    lists; these are merged into the long-term render every time the indio
+    answers and are never overwritten by Gemini's compression cycle."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for info in _USERS.values():
+        if not isinstance(info, dict):
+            continue
+        name = info.get("name")
+        if not name:
+            continue
+        out[name] = {
+            "traits": [str(t) for t in (info.get("traits") or []) if t],
+            "preguntas_tipicas": [str(t) for t in (info.get("preguntas_tipicas") or []) if t],
+            "anecdotas": [str(t) for t in (info.get("anecdotas") or []) if t],
+        }
+    return out
+
+
+def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
+    """Combine the static per-user traits from users.py with whatever Gemini
+    has distilled in long-term memory. Static entries provide a baseline; the
+    distilled additions are appended without duplicates."""
+    merged = _static_user_traits()
+    if isinstance(lt_users, dict):
+        for name, data in lt_users.items():
+            if not isinstance(data, dict):
+                continue
+            bucket = merged.setdefault(str(name), {
+                "traits": [], "preguntas_tipicas": [], "anecdotas": [],
+            })
+            for key in ("traits", "preguntas_tipicas", "anecdotas"):
+                existing = bucket.setdefault(key, [])
+                for item in (data.get(key) or []):
+                    s = str(item)
+                    if s and s not in existing:
+                        existing.append(s)
+    return merged
+
+
 def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> str:
     """Render long-term memory as a compact Spanish block to inject into the
     indio's system instruction. Natural-language form (no JSON) so the model
     integrates it like context, not data.
 
-    ``current_members`` is the list of friends with the "Main characters" role,
-    refreshed once per day and persisted. It's rendered as a short header so
-    the indio always knows the current roster from his own memory."""
+    ``current_members`` is the friend roster (from users.py), rendered as a
+    short header so the indio always knows who his amigos are from his own
+    memory. Per-user dossiers merge static traits (users.py) with Gemini's
+    distilled long-term data."""
     sections: list[str] = []
     if current_members:
         sections.append(
             "Mis amigos son: " + ", ".join(current_members) + "."
         )
-    if not lt:
-        return "\n\n".join(sections)
-    users = lt.get("users") or {}
-    if isinstance(users, dict) and users:
-        user_lines = ["Lo que sabés de los pibes del grupo:"]
-        for name, data in users.items():
-            if not isinstance(data, dict):
-                continue
-            traits = [str(x) for x in (data.get("traits") or []) if x]
-            qs = [str(x) for x in (data.get("preguntas_tipicas") or []) if x]
-            anec = [str(x) for x in (data.get("anecdotas") or []) if x]
+    lt = lt or {}
+    user_dossiers = _merge_user_dossiers(lt.get("users") or {})
+    if user_dossiers:
+        user_lines = ["Lo que sabés de cada uno:"]
+        for name, data in user_dossiers.items():
+            traits = data.get("traits") or []
+            qs = data.get("preguntas_tipicas") or []
+            anec = data.get("anecdotas") or []
             chunk = [f"- {name}:"]
             if traits:
                 chunk.append(f"   rasgos: {'; '.join(traits)}")
@@ -1029,13 +1068,59 @@ async def indioFromVoice(
 _BOT_TESTING_CHANNEL_NAME = "bot-testing"
 
 
+DECIFRAR_SYSTEM = """\
+Sos un asistente que corrige transcripciones de voz a texto en español \
+rioplatense. La transcripción viene de un sistema ASR (Whisper) y puede tener \
+errores: palabras mal entendidas fonéticamente, repeticiones, palabras \
+inventadas o partes inaudibles. Devolvé SOLO el texto corregido, lo más fiel \
+posible a lo que el hablante probablemente quiso decir, en español \
+rioplatense natural. Sin comillas, sin prefijos como "Texto:", sin explicar.
+
+Reglas:
+- Si la transcripción es ininteligible o vacía, devolvé exactamente la \
+  palabra: BASURA
+- Si hay palabras claramente fonéticas (ruido), inferí qué se quiso decir.
+- No agregues información nueva.
+- Mantené la intención (pregunta, exclamación, etc.) y el voseo rioplatense.
+- Si el hablante invoca al "indio" o "che indio", mantené esa parte tal cual.
+"""
+
+
+async def _decifrar_transcripcion(texto: str) -> str:
+    """Pass an ASR transcript through Gemini to clean phonetic errors.
+
+    Returns the cleaned text, or "" when Gemini flags the input as BASURA
+    (so the caller can drop the utterance instead of forwarding noise to
+    the indio).
+    """
+    texto = (texto or "").strip()
+    if not texto:
+        return ""
+    try:
+        reply = await geminiClient.generate(
+            user_message=texto,
+            system_instruction=DECIFRAR_SYSTEM,
+            history=None,
+            max_output_tokens=256,
+        )
+    except Exception:
+        logger.exception("decifrar transcripcion failed")
+        return texto  # fall back to raw transcript on Gemini failure
+    out = (reply.text or "").strip().strip('"').strip("'")
+    if out.upper().strip() == "BASURA":
+        logger.info("decifrar: descartado como BASURA, raw=%r", texto[:200])
+        return ""
+    return out or texto
+
+
 async def askIndio(bot: "discord.Bot",
                    text: str,
                    speaker_name: str = "alguien",
                    *,
                    guild_id: Optional[int] = None,
                    channel_id: Optional[int] = None,
-                   channel_name: Optional[str] = None) -> bool:
+                   channel_name: Optional[str] = None,
+                   decifrar: bool = False) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -1048,6 +1133,9 @@ async def askIndio(bot: "discord.Bot",
             has the resolved channel.
         channel_id: Optional explicit channel ID. Wins over channel_name.
         channel_name: Channel name to resolve. Defaults to "bot-testing".
+        decifrar: When True, run the text through Gemini first to fix ASR
+            phonetic errors; intended for voice-driven calls. Returns False
+            if Gemini decides the input is unintelligible (BASURA).
 
     Behavior:
         The reply is posted via the userbot relay (the cuenta-real "Indio")
@@ -1060,6 +1148,13 @@ async def askIndio(bot: "discord.Bot",
     """
     if not text or not text.strip():
         return False
+    if decifrar:
+        cleaned = await _decifrar_transcripcion(text)
+        if not cleaned:
+            return False
+        if cleaned != text:
+            logger.info("askIndio decifrado: %r -> %r", text, cleaned)
+        text = cleaned
     target_channel_id: Optional[int] = channel_id
     target_guild_id: Optional[int] = guild_id
     if target_channel_id is None:
