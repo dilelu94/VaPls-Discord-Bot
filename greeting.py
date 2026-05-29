@@ -5,12 +5,7 @@ import time
 import discord
 
 import config
-
-# Map Discord user IDs to greeting audio paths relative to CUSTOM_AUDIO_PATH.
-# Add entries here to give specific users their own greeting sound.
-USER_GREETINGS: dict[int, str] = {
-    285116759525031937: "Mila/Milapollo.mp3",  # Mila
-}
+from users import USERS
 
 DEFAULT_GREETING = os.path.join("Audios", "Fish Carrot.m4a")
 
@@ -23,7 +18,7 @@ def set_pending_trigger(channel_id: int, user_id: int) -> None:
 
 
 def _resolve_greeting_path(user_id):
-    rel = USER_GREETINGS.get(user_id) if user_id is not None else None
+    rel = USERS.get(user_id, {}).get("greeting") if user_id is not None else None
     if rel is None:
         rel = DEFAULT_GREETING
     return os.path.join(config.CUSTOM_AUDIO_PATH, rel)
