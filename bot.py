@@ -15,7 +15,7 @@ from discord.ext import commands
 from playCommand import playLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic
-from personaCommand import vaplsLogic, indioLogic
+from geminiCommand import vaplsLogic, indioLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics

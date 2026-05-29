@@ -39,3 +39,4 @@ API_SECRET = os.getenv("API_SECRET", "")
 # Google Gemini API (https://aistudio.google.com/apikey) - tier gratuito
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
