@@ -1,9 +1,13 @@
 import asyncio
+import os
 import time
 
 import discord
 
+import config
+
 _last_soundboard_entry: dict[int, float] = {}
+MILAPOLLO_PATH = os.path.join(config.CUSTOM_AUDIO_PATH, "Mila", "Milapollo.mp3")
 
 async def trigger_soundboard_entry(channel):
     # Throttle: DAVE 4006 disconnects cause the bot to "rejoin" repeatedly,
@@ -15,7 +19,10 @@ async def trigger_soundboard_entry(channel):
     _last_soundboard_entry[channel.id] = now
     try:
         await asyncio.sleep(2)
-        sounds = await channel.guild.fetch_sounds()
-        milapollo = discord.utils.find(lambda s: s.name.lower() == "milapollo", sounds)
-        if milapollo: await channel.send_soundboard_sound(milapollo)
+        vc = channel.guild.voice_client
+        if not vc or not vc.is_connected() or vc.is_playing():
+            return
+        if not os.path.exists(MILAPOLLO_PATH):
+            return
+        vc.play(discord.FFmpegOpusAudio(MILAPOLLO_PATH))
     except Exception: pass
