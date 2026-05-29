@@ -17,14 +17,14 @@ VaPls runs as two cooperating processes:
 
 ## Module responsibilities and interactions
 - **bot.py**: Registers slash commands and event handlers. Calls into
-  `playCommand`, `soundpadCommand`, `personaCommand`, `greeting`, `analytics`,
+  `playCommand`, `soundpadCommand`, `geminiCommand`, `greeting`, `analytics`,
   and starts `apiServer`.
 - **playCommand.py**: `GuildPlayer` queue lifecycle, yt-dlp downloads, FFmpeg
   playback, and control UI. Emits analytics and uses `greeting` for entry
   triggers.
 - **soundpadCommand.py**: `SoundpadView` UI for browsing audio clips. Reuses
   `playCommand` state to prevent overlapping music playback. Emits analytics.
-- **personaCommand.py**: `/vapls` and `/indio` logic. Uses `geminiClient` and
+- **geminiCommand.py**: `/vapls` and `/indio` logic. Uses `geminiClient` and
   `analytics`.
 - **geminiClient.py**: Async HTTP client for Gemini generateContent.
 - **apiServer.py**: HTTP API for status, members, queue, and audio playback.
@@ -48,7 +48,7 @@ VaPls runs as two cooperating processes:
    to `BOT_API_BASE` (expects an external `/transcript` handler).
 
 ### Gemini responses
-1. `/vapls` or `/indio` → `personaCommand`.
+1. `/vapls` or `/indio` → `geminiCommand`.
 2. `geminiClient.generate` calls Gemini API.
 3. Responses are chunked and sent back to Discord.
 

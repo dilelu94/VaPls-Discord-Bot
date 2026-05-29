@@ -34,7 +34,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `userbot/bot.py`: transcripción de voz y forwarding opcional.
 - `playCommand.py`: cola de música y yt-dlp.
 - `soundpadCommand.py`: UI de soundpad.
-- `personaCommand.py`: `/vapls` y `/indio`.
+- `geminiCommand.py`: `/vapls` y `/indio`.
 - `apiServer.py`: HTTP API.
 - `geminiClient.py`: cliente Gemini.
 - `analytics.py`: wrapper PostHog.
