@@ -337,78 +337,50 @@ def _format_guild_emojis(guild) -> str:
     return "Emojis custom del server (pegá el código completo tal cual):\n" + "\n".join(lines)
 
 
-_MAIN_CHARS_ROLE = "Main characters"
-_ROSTER_REFRESH_INTERVAL_SEC = 24 * 3600  # refresh once per day
+_ROSTER_REFRESH_INTERVAL_SEC = 24 * 3600  # refresh from users.py once per day
 _roster_lock = asyncio.Lock()
 
 
-async def _fetch_main_characters(guild_id: int) -> list[str]:
-    """Ask the userbot which guild members hold the "Main characters" role,
-    then map each to the nickname from users.py (fallback: display_name).
-    Returns [] if the relay is disabled, unreachable, or the role is missing."""
-    url = config.INDIO_RELAY_URL
-    secret = config.INDIO_RELAY_SECRET
-    if not url or not secret:
-        return []
-    # /say -> /members on the same userbot relay.
-    members_url = url.rsplit("/", 1)[0] + "/members"
-    params = {"guild_id": str(guild_id), "role_name": _MAIN_CHARS_ROLE}
-    headers = {"X-API-Secret": secret}
-    timeout = aiohttp.ClientTimeout(total=5)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(members_url, params=params, headers=headers) as resp:
-                if resp.status != 200:
-                    logger.warning("roster fetch HTTP %d", resp.status)
-                    return []
-                payload = await resp.json()
-    except Exception:
-        logger.exception("roster fetch failed")
-        return []
-    names: list[str] = []
-    for m in payload.get("members", []) or []:
-        if m.get("is_bot"):
-            continue
-        try:
-            uid = int(m.get("id"))
-        except (TypeError, ValueError):
-            continue
-        info = _USERS.get(uid) or {}
-        name = info.get("name") or m.get("display_name") or m.get("global_name") or m.get("name")
-        if name:
-            names.append(name)
-    return names
+def _names_from_users_py() -> list[str]:
+    """Read the friend roster from the static users.py mapping. We use this as
+    the source of truth because discord.py-self can't reliably enumerate every
+    guild member from a user account (the cache is partial and fetch_members
+    only returns members the gateway has surfaced)."""
+    return [info["name"] for info in _USERS.values() if isinstance(info, dict) and info.get("name")]
 
 
 async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) -> None:
-    """Refresh the cached "Main characters" roster for a guild at most once
-    per ``_ROSTER_REFRESH_INTERVAL_SEC``. The names live alongside the indio's
-    long-term memory and are persisted to disk so they survive restarts. We
-    only fetch when the cache is older than the interval, so the indio doesn't
-    "read" the role list on every call — he just knows who they are because
-    it's in his memory."""
+    """Refresh the cached friend roster for a guild at most once per
+    ``_ROSTER_REFRESH_INTERVAL_SEC``. The names come from users.py and live
+    alongside the indio's long-term memory, persisted to disk so they
+    survive restarts. The indio doesn't "read" the list on every call — he
+    knows who they are because it's already in his memory."""
     if guild_id is None:
+        return
+    expected = _names_from_users_py()
+    if not expected:
         return
     now = time.time()
     last = _indio_members_refreshed_at.get(mem_key, 0.0)
-    if now - last < _ROSTER_REFRESH_INTERVAL_SEC and _indio_current_members.get(mem_key):
-        return
-    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+    current = _indio_current_members.get(mem_key)
+    # Refresh if (a) the TTL elapsed, (b) we never refreshed, or
+    # (c) users.py was edited and the stored list no longer matches.
+    if (now - last < _ROSTER_REFRESH_INTERVAL_SEC
+            and current == expected):
         return
     async with _roster_lock:
         last = _indio_members_refreshed_at.get(mem_key, 0.0)
-        if now - last < _ROSTER_REFRESH_INTERVAL_SEC and _indio_current_members.get(mem_key):
+        current = _indio_current_members.get(mem_key)
+        if (now - last < _ROSTER_REFRESH_INTERVAL_SEC
+                and current == expected):
             return
-        names = await _fetch_main_characters(int(guild_id))
-        if not names:
-            return
-        previous = _indio_current_members.get(mem_key)
-        _indio_current_members[mem_key] = names
+        previous = current
+        _indio_current_members[mem_key] = expected
         _indio_members_refreshed_at[mem_key] = time.time()
-    if previous != names:
+    if previous != expected:
         await _persist_indio_state()
-        logger.info("indio: refreshed current_members for %s (%d names)",
-                    mem_key, len(names))
+        logger.info("indio: refreshed current_members for %s (%d names from users.py)",
+                    mem_key, len(expected))
 
 
 def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> str:
@@ -980,7 +952,9 @@ async def indioFromVoice(
         history_snapshot = list(_indio_history.get(mem_key, []))
         long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
 
-    lt_block = _format_long_term(long_term_snapshot)
+    await _maybe_refresh_current_members(mem_key, guild_id)
+    current_members = list(_indio_current_members.get(mem_key, []))
+    lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
     extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
@@ -1050,3 +1024,68 @@ async def indioFromVoice(
         "relayed_via_userbot": relayed_via_userbot,
         "history_size_after": history_size_after,
     })
+
+
+_BOT_TESTING_CHANNEL_NAME = "bot-testing"
+
+
+async def askIndio(bot: "discord.Bot",
+                   text: str,
+                   speaker_name: str = "alguien",
+                   *,
+                   guild_id: Optional[int] = None,
+                   channel_id: Optional[int] = None,
+                   channel_name: Optional[str] = None) -> bool:
+    """Reusable entry point to talk to the indio from anywhere in the code.
+
+    Args:
+        bot: The main Discord bot client.
+        text: The user's message / question to the indio.
+        speaker_name: The friendly name to attribute the message to inside
+            the indio's memory (so he keeps track of who said what). Defaults
+            to "alguien" if you don't have a user.
+        guild_id: Optional guild ID; if omitted, picks the first guild that
+            has the resolved channel.
+        channel_id: Optional explicit channel ID. Wins over channel_name.
+        channel_name: Channel name to resolve. Defaults to "bot-testing".
+
+    Behavior:
+        The reply is posted via the userbot relay (the cuenta-real "Indio")
+        when configured, or via the bot itself as fallback. Uses the same
+        per-guild memory bucket as /indio so messages from this entry point
+        feed the same history and long-term memory.
+
+    Returns:
+        True if a reply was sent, False on any failure.
+    """
+    if not text or not text.strip():
+        return False
+    target_channel_id: Optional[int] = channel_id
+    target_guild_id: Optional[int] = guild_id
+    if target_channel_id is None:
+        target_guild_id = guild_id
+        if channel_name is None:
+            channel_name = _BOT_TESTING_CHANNEL_NAME
+        guilds = [bot.get_guild(target_guild_id)] if target_guild_id else list(bot.guilds)
+        for guild in guilds:
+            if guild is None:
+                continue
+            chan = discord.utils.get(getattr(guild, "text_channels", []) or [],
+                                     name=channel_name)
+            if chan is not None:
+                target_channel_id = chan.id
+                target_guild_id = guild.id
+                break
+    if target_channel_id is None or target_guild_id is None:
+        logger.warning("askIndio: could not resolve channel (guild=%s, name=%s)",
+                       guild_id, channel_name)
+        return False
+    await indioFromVoice(
+        bot,
+        user_id=0,
+        guild_id=target_guild_id,
+        channel_id=target_channel_id,
+        pregunta=text,
+        speaker_name=speaker_name,
+    )
+    return True
