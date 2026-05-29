@@ -2,6 +2,7 @@ import discord
 import asyncio
 import logging
 import analytics
+from greeting import set_pending_trigger
 
 logger = logging.getLogger("bot.escuchar")
 
@@ -36,6 +37,7 @@ async def escucharLogic(ctx: discord.ApplicationContext):
             return await safe_respond(ctx, "🎙️ ¡Ya estoy escuchando!")
         else:
             print(f"DEBUG: Moving to {channel.name}")
+            set_pending_trigger(channel.id, ctx.author.id)
             await ctx.voice_client.move_to(channel)
             await ctx.voice_client.edit(deafen=False)
             voiceClient = ctx.voice_client
@@ -44,6 +46,7 @@ async def escucharLogic(ctx: discord.ApplicationContext):
         voiceClient = None
         for attempt in range(3):
             try:
+                set_pending_trigger(channel.id, ctx.author.id)
                 voiceClient = await channel.connect(reconnect=True)
                 print(f"DEBUG: Connected to {channel.name} on attempt {attempt + 1}")
                 break

@@ -12,7 +12,7 @@ from playCommand import playLogic
 from escucharCommand import escucharLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic
-from greeting import trigger_soundboard_entry
+from greeting import trigger_soundboard_entry, set_pending_trigger
 import audioop
 import vosk
 from discord.ext import commands
@@ -297,8 +297,10 @@ async def auto_join_existing_channels():
     await asyncio.sleep(2)
     for guild in bot.guilds:
         for channel in guild.voice_channels:
-            if any(not m.bot for m in channel.members):
+            humans = [m for m in channel.members if not m.bot]
+            if humans:
                 try:
+                    set_pending_trigger(channel.id, humans[0].id)
                     vc = await channel.connect(reconnect=True, timeout=20.0)
                     await start_listening(vc)
                     return
@@ -313,6 +315,8 @@ async def on_voice_state_update(member, before, after):
                                           "channel_name": after.channel.name,
                                           "trigger": "state_update"})
             asyncio.create_task(trigger_soundboard_entry(after.channel))
+        elif before.channel and after.channel and before.channel.id != after.channel.id:
+            asyncio.create_task(trigger_soundboard_entry(after.channel))
         elif before.channel and not after.channel:
             analytics.capture("voice channel left", guild=before.channel.guild,
                               properties={"channel_id": str(before.channel.id),
@@ -323,8 +327,12 @@ async def on_voice_state_update(member, before, after):
     if after.channel and (not before.channel or before.channel != after.channel):
         vc = discord.utils.get(bot.voice_clients, guild=after.channel.guild)
         if vc:
-            if vc.channel.id != after.channel.id: await vc.move_to(after.channel)
-        else: vc = await after.channel.connect(reconnect=True)
+            if vc.channel.id != after.channel.id:
+                set_pending_trigger(after.channel.id, member.id)
+                await vc.move_to(after.channel)
+        else:
+            set_pending_trigger(after.channel.id, member.id)
+            vc = await after.channel.connect(reconnect=True)
         await start_listening(vc)
 
 async def start_listening(vc):
