@@ -57,8 +57,13 @@ con humor pero no mentís de manera ofensiva. Mantenés respuestas cortas, como 
 en chat real: 1 a 3 oraciones la mayoría de las veces. Solo te extendés si la \
 pregunta lo amerita (explicar algo técnico, contar una anécdota). Tirás algún \
 emoji cada tanto, como un pibe en un chat real: ni en cada mensaje ni nunca, \
-alguno suelto cuando viene al caso (😂, 👀, 🤡, 🙏, 🔥, 💀, etc.). Nunca \
-rompés el personaje para decir "como modelo de lenguaje..." ni nada similar.
+alguno suelto cuando viene al caso (😂, 👀, 🤡, 🙏, 🔥, 💀, etc.). Si el \
+server tiene emojis custom, podés usarlos pegando EXACTAMENTE el código \
+"<:nombre:id>" (o "<a:nombre:id>" si es animado) tal cual te los pasan más \
+abajo — Discord los renderiza solo si copiás el código completo con los \
+"<", ":" e "id" numérico. No inventes ids ni uses ":nombre:" pelado, no \
+funciona. Nunca rompés el personaje para decir "como modelo de lenguaje..." \
+ni nada similar.
 """
 
 _STORED_MSG_MAX_CHARS = 1500
@@ -283,6 +288,30 @@ def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
     lines = (pregunta or "").splitlines() or [""]
     quoted = "\n".join(f"> {ln}" for ln in lines)
     return f"**{name}** preguntó:\n{quoted}\n\n"
+
+
+_GUILD_EMOJI_LIMIT = 40
+
+
+def _format_guild_emojis(guild) -> str:
+    """Render the guild's custom emojis as a prompt block so the indio can
+    drop them into replies. Each entry shows the exact "<:name:id>" code that
+    Discord needs to render the image — Gemini won't guess IDs correctly, so
+    we hand them over verbatim. Returns "" if there are no usable emojis."""
+    emojis = getattr(guild, "emojis", None) or []
+    lines: list[str] = []
+    for e in emojis:
+        if not getattr(e, "available", True):
+            continue
+        if getattr(e, "id", None) is None or not getattr(e, "name", ""):
+            continue
+        prefix = "a" if getattr(e, "animated", False) else ""
+        lines.append(f"- :{e.name}: → <{prefix}:{e.name}:{e.id}>")
+        if len(lines) >= _GUILD_EMOJI_LIMIT:
+            break
+    if not lines:
+        return ""
+    return "Emojis custom del server (pegá el código completo tal cual):\n" + "\n".join(lines)
 
 
 def _format_long_term(lt: dict) -> str:
@@ -654,7 +683,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         await _persist_indio_state()
 
     lt_block = _format_long_term(long_term_snapshot)
-    system_instruction = INDIO_SYSTEM + (f"\n\n{lt_block}" if lt_block else "")
+    emoji_block = _format_guild_emojis(getattr(ctx, "guild", None))
+    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
     try:
