@@ -1,7 +1,17 @@
-# VaPls-Discord-Bot - Documentación para Gemini 🎙️🤖
+# VaPls-Discord-Bot — Guía para agentes de IA 🎙️🤖
 
-Este archivo es una guía rápida para asistentes de IA sobre la arquitectura,
-flujos principales y convenciones del proyecto.
+Guía rápida sobre la arquitectura, flujos principales y convenciones del
+proyecto. Es la **fuente canónica** de instrucciones para asistentes de IA.
+
+> **Setup de archivos:** este `AGENTS.md` es el original. `CLAUDE.md`, `GEMINI.md`
+> y `.github/copilot-instructions.md` son symlinks a este archivo; Codex lee
+> `AGENTS.md` directamente. Las skills viven en `.agents/skills/` y `.claude` es
+> un symlink a `.agents`. **Editá siempre los originales (`AGENTS.md` y `.agents/`),
+> nunca los symlinks.**
+
+## 🧠 Skills disponibles
+- [`behavioral-testing`](.agents/skills/behavioral-testing/SKILL.md): cómo escribir
+  tests en este repo. **Usala siempre que escribas o modifiques tests.**
 
 ## 📚 Documentación
 - [Arquitectura](docs/architecture.md)
@@ -63,41 +73,35 @@ guild con pre-descarga en segundo plano.
 - `/parar`: detiene playback y desconecta.
 - `/quit`: desconecta sin limpiar cola.
 
-## 🧪 Pruebas Unitarias
-Las pruebas viven en `tests/` y corren con **pytest** (+ `pytest-asyncio`). La
+## 🧪 Testing
+Los tests viven en `tests/` y corren con **pytest** (+ `pytest-asyncio`). La
 filosofía es testear *comportamiento observable*, no detalle de implementación:
 se mockea solo en los bordes reales (Discord, la API HTTP de Gemini, PostHog, el
 filesystem) y se asienta sobre los resultados (qué ve el usuario, qué estado
 queda), no sobre el texto exacto ni los conteos de llamadas — así el código se
-puede refactorizar sin romper los tests. Detalle completo en [docs/testing.md](docs/testing.md).
+puede refactorizar sin romper los tests.
 
-Cobertura actual (primer pase, ~80%):
-- `test_keywords.py`: detección de palabras clave (es/en, case-insensitive).
-- `test_config.py`: parseo/defaults de variables de entorno (recarga el módulo).
-- `test_discord_chunking.py`: corte de respuestas largas en chunks de Discord.
-- `test_error_messages.py` / `test_user_header.py`: mensajes de error por persona y header de cita.
-- `test_gemini_client.py`: parseo de respuestas y clasificación de errores de `geminiClient.generate` (boundary HTTP fakeado).
-- `test_vapls_logic.py` / `test_indio_logic.py`: lógica de `/vapls` y `/indio` (memoria por-guild, reset con `nuevo`, TTL, persistencia).
-- `test_long_term_memory.py`: helpers puros de la memoria a largo plazo.
-- `test_greeting.py`: saludo al entrar a un canal (throttle, resolución de path, skips).
-- `tests/testSoundpad.py`: suite original del soundpad.
+**Antes de tocar tests, leé la skill [`behavioral-testing`](.agents/skills/behavioral-testing/SKILL.md).**
+Detalle de cobertura en [docs/testing.md](docs/testing.md).
 
-Instalá las dependencias de test y corré la suite:
 ```bash
 pip install -r requirements-dev.txt
 pytest
 ```
 
+CI: `.github/workflows/ci.yml` corre `pytest` en cada push/PR.
 Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
-`soundpadCommand`. CI: `.github/workflows/ci.yml` corre `pytest` en cada push/PR.
+`soundpadCommand`.
 
 ## 📜 Doc generation
 Sphinx + napoleon recomendado. Ver [docs/contributing-docs.md](docs/contributing-docs.md).
 
-## 💡 Guía de Modificación para Gemini
-1. **Mantener DAVE patch:** No eliminar el patch en `userbot/bot.py` salvo que
+## 💡 Guía de Modificación
+1. **Tests primero (o junto al cambio):** seguí la skill `behavioral-testing`. No
+   marques una tarea como completa sin tests verdes.
+2. **Mantener DAVE patch:** No eliminar el patch en `userbot/bot.py` salvo que
    haya cambios claros en la API de Discord.
-2. **Config y .env:** Toda nueva variable de entorno debe documentarse en
+3. **Config y .env:** Toda nueva variable de entorno debe documentarse en
    `docs/configuration.md` (y `.env.example` si aplica).
-3. **Docs primero:** Mantener `README.md` y los docs alineados si cambia la
+4. **Docs primero:** Mantener `README.md` y los docs alineados si cambia la
    arquitectura o comandos.
