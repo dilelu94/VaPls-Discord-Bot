@@ -12,6 +12,7 @@ from playCommand import playLogic
 from escucharCommand import escucharLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic
+from personaCommand import vaplsLogic, indioLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import audioop
 import vosk
@@ -385,6 +386,22 @@ async def soundpad(ctx):
     await safe_defer(ctx)
     _track_command(ctx, "soundpad")
     await soundpadLogic(ctx)
+
+@bot.slash_command(name="vapls", description="Preguntale al bot del server")
+async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
+    await safe_defer(ctx)
+    _track_command(ctx, "vapls", {"prompt_length": len(pregunta or "")})
+    await vaplsLogic(ctx, pregunta)
+
+@bot.slash_command(name="indio", description="Charla con el indio")
+async def indio(
+    ctx,
+    pregunta: discord.Option(str, description="Qué le decís al indio"),
+    nuevo: discord.Option(bool, description="Empezar conversación nueva", required=False, default=False),
+):
+    await safe_defer(ctx)
+    _track_command(ctx, "indio", {"prompt_length": len(pregunta or ""), "nuevo": bool(nuevo)})
+    await indioLogic(ctx, pregunta, nuevo)
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
