@@ -21,6 +21,13 @@ models/*
 cookies.txt
 ssh-key*.key
 
+# Python / tests
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
 # Local sync config (contains server-specific paths/hosts)
 lsyncd*.lua
 lsyncd.status

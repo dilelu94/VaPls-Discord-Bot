@@ -64,9 +64,32 @@ guild con pre-descarga en segundo plano.
 - `/quit`: desconecta sin limpiar cola.
 
 ## 🧪 Pruebas Unitarias
+Las pruebas viven en `tests/` y corren con **pytest** (+ `pytest-asyncio`). La
+filosofía es testear *comportamiento observable*, no detalle de implementación:
+se mockea solo en los bordes reales (Discord, la API HTTP de Gemini, PostHog, el
+filesystem) y se asienta sobre los resultados (qué ve el usuario, qué estado
+queda), no sobre el texto exacto ni los conteos de llamadas — así el código se
+puede refactorizar sin romper los tests. Detalle completo en [docs/testing.md](docs/testing.md).
+
+Cobertura actual (primer pase, ~80%):
+- `test_keywords.py`: detección de palabras clave (es/en, case-insensitive).
+- `test_config.py`: parseo/defaults de variables de entorno (recarga el módulo).
+- `test_discord_chunking.py`: corte de respuestas largas en chunks de Discord.
+- `test_error_messages.py` / `test_user_header.py`: mensajes de error por persona y header de cita.
+- `test_gemini_client.py`: parseo de respuestas y clasificación de errores de `geminiClient.generate` (boundary HTTP fakeado).
+- `test_vapls_logic.py` / `test_indio_logic.py`: lógica de `/vapls` y `/indio` (memoria por-guild, reset con `nuevo`, TTL, persistencia).
+- `test_long_term_memory.py`: helpers puros de la memoria a largo plazo.
+- `test_greeting.py`: saludo al entrar a un canal (throttle, resolución de path, skips).
+- `tests/testSoundpad.py`: suite original del soundpad.
+
+Instalá las dependencias de test y corré la suite:
 ```bash
-python3 -m unittest tests/testSoundpad.py
+pip install -r requirements-dev.txt
+pytest
 ```
+
+Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
+`soundpadCommand`. CI: `.github/workflows/tests.yml` corre `pytest` en cada push/PR.
 
 ## 📜 Doc generation
 Sphinx + napoleon recomendado. Ver [docs/contributing-docs.md](docs/contributing-docs.md).
