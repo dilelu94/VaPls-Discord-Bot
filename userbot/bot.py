@@ -1,12 +1,15 @@
 """
 VaPls userbot: listens to Discord voice channels using a real user account
-(so DAVE E2EE works naturally) and transcribes Spanish speech with VOSK.
+(so DAVE E2EE works naturally) and transcribes Spanish speech with
+faster-whisper. When the wake word "indio" / "che indio" is detected at the
+start of a transcript, the pregunta is forwarded to the main bot's /indio
+endpoint so the indio persona can reply.
 
 Runs separately from the main Discord bot — the main bot still handles
 /play, /soundpad, slash commands, etc. This userbot is voice-input-only.
 
 Library stack: discord.py-self (user-token client) + discord-ext-voice-recv
-(voice receive extension) + vosk (offline ASR).
+(voice receive extension) + faster-whisper (CTranslate2-based ASR).
 """
 
 import asyncio
@@ -23,7 +26,6 @@ import aiohttp
 from aiohttp import web
 import discord  # discord.py-self
 from discord.ext import voice_recv
-import vosk
 
 import config
 from recording import (
@@ -241,84 +243,90 @@ async def _patched_reinit(self):
 _VCS.reinit_dave_session = _patched_reinit
 
 
-# ---------- VOSK setup -----------------------------------------------------
+# ---------- Whisper setup --------------------------------------------------
 
-log.info(f"Loading Spanish VOSK model from {config.MODEL_PATH_ES} ...")
-if not os.path.exists(config.MODEL_PATH_ES):
-    log.error(f"Spanish model not found at {config.MODEL_PATH_ES}")
-    sys.exit(1)
-model_es = vosk.Model(config.MODEL_PATH_ES)
-log.info("✅ Spanish VOSK model loaded.")
+import re
+import threading
+from collections import defaultdict, deque
+
+import numpy as np
+from faster_whisper import WhisperModel
+
+log.info(f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
+        f"(compute_type={config.WHISPER_COMPUTE_TYPE}) ...")
+whisper_model = WhisperModel(
+    config.WHISPER_MODEL,
+    device="cpu",
+    compute_type=config.WHISPER_COMPUTE_TYPE,
+    download_root=config.WHISPER_CACHE_DIR or None,
+)
+log.info("✅ Whisper model loaded.")
+
+# Detects "indio" / "che indio" / "el indio" at the START of the phrase.
+# Matches must contain a pregunta after the wake word (at least one char).
+_WAKE_WORD_RE = re.compile(
+    r"^\s*(che\s+|hey\s+|el\s+)?indio\b[\s,.;:!\?\-—]+(.+)$",
+    re.IGNORECASE,
+)
 
 
-# ---------- Sink: VOSK transcription per speaking user ---------------------
+# ---------- Sink: Whisper transcription per speaking user ----------------
 
 
 class TranscriberSink(voice_recv.AudioSink):
-    """Per-user Spanish transcription sink.
+    """Buffer voice frames per user, transcribe with Whisper on utterance end.
 
-    write() is called once per Opus frame from each speaking SSRC; voice_recv
-    decodes to PCM before delivery when wants_opus() is False.
+    Each speaker gets a rolling buffer that accumulates 16k-mono PCM. We detect
+    end-of-utterance with a simple RMS-based VAD: once we've seen voice and
+    then SILENCE_FINAL_SECONDS of near-silence, we hand the buffer off to
+    Whisper in a background thread.
+
+    Concurrency is capped via a counter that is checked against a dynamic
+    limit (5 normally, 3 while the main bot is playing audio). When the limit
+    is exceeded, the utterance is dropped with a log entry rather than queued.
     """
 
-    # RMS amplitude below this is treated as silence and dropped before
-    # being fed to VOSK. Range for 16-bit PCM is 0..32767; normal speech is
-    # 200-5000+, room noise typically <40.
     SILENCE_RMS_THRESHOLD = 80
-    # Force a final result if we haven't fed audio in this many seconds — keeps
-    # frases from blending across long pauses.
     SILENCE_FINAL_SECONDS = 0.8
+    # Skip transcription if total speech accumulated for this user is shorter
+    # than this many seconds — usually breath/laughter noise, not words.
+    MIN_SPEECH_SECONDS = 0.4
+    # Hard upper bound on a single utterance buffer (Whisper handles 30s but
+    # we don't want one runaway buffer).
+    MAX_UTTERANCE_SECONDS = 20.0
 
     def __init__(self, client_ref: discord.Client):
-        """Initialize the sink and per-user recognizer state.
-
-        Args:
-            client_ref: Discord client used to schedule callbacks.
-        """
         super().__init__()
         self._client_ref = client_ref
-        self.recognizers: dict[int, vosk.KaldiRecognizer] = {}
+        # Per-user mono-16k PCM accumulators.
+        self.buffers: dict[int, bytearray] = defaultdict(bytearray)
         self.resample_states: dict[int, object] = {}
         self.last_voice_ts: dict[int, float] = {}
+        self.had_voice: dict[int, bool] = defaultdict(bool)
         self.packet_count = 0
         self.start_time = time.time()
+        self._active_lock = threading.Lock()
+        self._active_count = 0
 
     def wants_opus(self) -> bool:
-        """Return False to receive decoded PCM audio.
-
-        Returns:
-            False to request decoded PCM frames.
-        """
-        return False  # we want decoded PCM
+        return False
 
     def cleanup(self) -> None:
-        """Release per-user recognizers and log summary.
-
-        Side Effects:
-            Clears recognizer state and logs packet counts.
-        """
-        log.info(f"[VOSK] Sink cleanup. Total packets: {self.packet_count}")
-        self.recognizers.clear()
+        log.info(f"[WHISPER] Sink cleanup. Total packets: {self.packet_count}")
+        self.buffers.clear()
         self.resample_states.clear()
         self.last_voice_ts.clear()
+        self.had_voice.clear()
+
+    def _concurrency_limit(self) -> int:
+        """Pick 3 while the main bot plays audio, else 5."""
+        return (config.MAX_CONCURRENT_WHILE_PLAYING
+                if _main_bot_is_playing()
+                else config.MAX_CONCURRENT_IDLE)
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
-        """Process PCM frames, run Vosk, and dispatch transcripts.
-
-        Args:
-            source: Voice source (speaking member).
-            data: Voice data with PCM payload.
-
-        Returns:
-            None.
-
-        Side Effects:
-            Logs transcripts and schedules on_transcript callbacks.
-        """
         user_id = getattr(source, "id", None)
-        if user_id is None:
-            return
-        if user_id in config.IGNORE_USER_IDS:
+        if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
         pcm_data = data.pcm
         if not pcm_data:
@@ -326,58 +334,134 @@ class TranscriberSink(voice_recv.AudioSink):
 
         self.packet_count += 1
         if self.packet_count == 1:
-            log.info(
-                f"[VOSK] First packet received "
-                f"(user_id={user_id}, bytes={len(pcm_data)})"
-            )
-        elif self.packet_count % 500 == 0:
+            log.info(f"[WHISPER] First packet received "
+                     f"(user_id={user_id}, bytes={len(pcm_data)})")
+        elif self.packet_count % 1000 == 0:
             elapsed = time.time() - self.start_time
-            log.info(
-                f"[VOSK] {self.packet_count} packets in {elapsed:.1f}s "
-                f"({self.packet_count / max(elapsed, 1):.0f} pkts/s)"
-            )
-
-        if user_id not in self.recognizers:
-            self.recognizers[user_id] = vosk.KaldiRecognizer(model_es, 16000)
-            self.resample_states[user_id] = None
+            log.info(f"[WHISPER] {self.packet_count} packets in {elapsed:.1f}s")
 
         try:
             mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
-            # Drop near-silent frames so silence injected by the DAVE/Opus
-            # fallbacks doesn't reach VOSK and break recognizer context.
-            if audioop.rms(mono, 2) < self.SILENCE_RMS_THRESHOLD:
-                # If we've been silent long enough, flush any pending partial
-                # as a final result so the next utterance starts fresh.
+            rms = audioop.rms(mono, 2)
+            now = time.time()
+
+            if rms < self.SILENCE_RMS_THRESHOLD:
+                # Silence frame: check if we should finalize a pending utterance.
                 last = self.last_voice_ts.get(user_id)
-                if last and (time.time() - last) > self.SILENCE_FINAL_SECONDS:
-                    rec = self.recognizers.get(user_id)
-                    if rec is not None:
-                        result = json.loads(rec.FinalResult())
-                        text = result.get("text", "").strip()
-                        if text:
-                            log.info(f"[VOSK][es] user_id={user_id}: {text}")
-                            asyncio.run_coroutine_threadsafe(
-                                on_transcript(user_id, text), self._client_ref.loop
-                            )
-                    self.last_voice_ts.pop(user_id, None)
+                if (last and self.had_voice.get(user_id)
+                        and (now - last) > self.SILENCE_FINAL_SECONDS):
+                    self._finalize_user(user_id)
                 return
 
-            self.last_voice_ts[user_id] = time.time()
+            # Voice: downsample + append to buffer.
             data_16k, new_state = audioop.ratecv(
-                mono, 2, 1, 48000, 16000, self.resample_states[user_id]
+                mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
             )
             self.resample_states[user_id] = new_state
-            rec = self.recognizers[user_id]
-            if rec.AcceptWaveform(data_16k):
-                result = json.loads(rec.Result())
-                text = result.get("text", "").strip()
-                if text:
-                    log.info(f"[VOSK][es] user_id={user_id}: {text}")
-                    asyncio.run_coroutine_threadsafe(
-                        on_transcript(user_id, text), self._client_ref.loop
-                    )
-        except Exception as e:
-            log.exception(f"[VOSK] write error: {e}")
+            self.buffers[user_id].extend(data_16k)
+            self.last_voice_ts[user_id] = now
+            self.had_voice[user_id] = True
+
+            # Force flush if a single utterance grew past the safety cap.
+            secs = len(self.buffers[user_id]) / (16000 * 2)
+            if secs > self.MAX_UTTERANCE_SECONDS:
+                self._finalize_user(user_id)
+        except Exception:
+            log.exception("[WHISPER] write error")
+
+    def _finalize_user(self, user_id: int) -> None:
+        """Hand the user's buffer to a background transcription task."""
+        buf = bytes(self.buffers.pop(user_id, b""))
+        self.resample_states.pop(user_id, None)
+        self.last_voice_ts.pop(user_id, None)
+        self.had_voice[user_id] = False
+        if not buf:
+            return
+        secs = len(buf) / (16000 * 2)
+        if secs < self.MIN_SPEECH_SECONDS:
+            return
+
+        with self._active_lock:
+            limit = self._concurrency_limit()
+            if self._active_count >= limit:
+                log.info(f"[WHISPER] capacity full ({self._active_count}/"
+                         f"{limit}); dropping {secs:.1f}s from user {user_id}")
+                return
+            self._active_count += 1
+
+        asyncio.run_coroutine_threadsafe(
+            self._transcribe_and_dispatch(user_id, buf, secs),
+            self._client_ref.loop,
+        )
+
+    async def _transcribe_and_dispatch(self, user_id: int, pcm_16k: bytes,
+                                       duration: float) -> None:
+        try:
+            t0 = time.monotonic()
+            text = await asyncio.to_thread(_run_whisper, pcm_16k)
+            dt = time.monotonic() - t0
+            if not text:
+                return
+            log.info(f"[WHISPER][es] user_id={user_id} "
+                     f"({duration:.1f}s audio, {dt*1000:.0f}ms transcribe): {text}")
+            await on_transcript(user_id, text)
+        except Exception:
+            log.exception("[WHISPER] transcribe failed")
+        finally:
+            with self._active_lock:
+                self._active_count -= 1
+
+
+def _run_whisper(pcm_16k_bytes: bytes) -> str:
+    """Run Whisper on s16le 16k mono bytes. Returns concatenated text."""
+    audio = (np.frombuffer(pcm_16k_bytes, dtype=np.int16)
+             .astype(np.float32) / 32768.0)
+    segments, _info = whisper_model.transcribe(
+        audio,
+        language="es",
+        beam_size=1,
+        vad_filter=True,
+        condition_on_previous_text=False,
+    )
+    return " ".join(s.text.strip() for s in segments if s.text).strip()
+
+
+# Cached "is the main bot playing audio" check — polled cheaply.
+_play_state = {"is_playing": False, "checked_at": 0.0}
+_play_state_lock = threading.Lock()
+
+
+def _main_bot_is_playing() -> bool:
+    """Best-effort cached check of the main bot's /playing endpoint."""
+    with _play_state_lock:
+        if time.monotonic() - _play_state["checked_at"] < 1.0:
+            return _play_state["is_playing"]
+    # Schedule a refresh in the event loop without blocking the audio thread.
+    try:
+        asyncio.run_coroutine_threadsafe(_refresh_play_state(), client.loop)
+    except Exception:
+        pass
+    with _play_state_lock:
+        return _play_state["is_playing"]
+
+
+async def _refresh_play_state() -> None:
+    if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
+        return
+    try:
+        session = await _get_http()
+        async with session.get(
+            f"{config.MAIN_BOT_API_BASE}/playing",
+            headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
+            timeout=aiohttp.ClientTimeout(total=2),
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                with _play_state_lock:
+                    _play_state["is_playing"] = bool(data.get("is_playing"))
+                    _play_state["checked_at"] = time.monotonic()
+    except Exception:
+        pass
 
 
 # ---------- Sink: short raw-PCM recorder (mixed across speakers) ----------
@@ -491,21 +575,12 @@ async def _get_http() -> aiohttp.ClientSession:
 
 
 async def on_transcript(user_id: int, text: str):
-    """Handle a completed transcription.
+    """Handle a completed transcription: post to transcript channel + optionally
+    forward to the main bot and trigger the indio on wake word."""
+    posted_channel_id: Optional[int] = None
+    posted_guild_id: Optional[int] = None
+    speaker_name: Optional[str] = None
 
-    Args:
-        user_id: Discord user ID of the speaker.
-        text: Final transcription string.
-
-    Returns:
-        None.
-
-    Side Effects:
-        Posts to a transcript channel and/or forwards to the main bot HTTP API.
-
-    Async:
-        This function is a coroutine and must be awaited.
-    """
     if config.TRANSCRIPT_CHANNEL_NAME:
         try:
             for guild in client.guilds:
@@ -514,11 +589,28 @@ async def on_transcript(user_id: int, text: str):
                 )
                 if chan:
                     member = guild.get_member(user_id)
-                    name = _name_for(user_id, member)
-                    await chan.send(f"🎙️ **{name}:** {text}")
+                    speaker_name = _name_for(user_id, member)
+                    await chan.send(f"🎙️ **{speaker_name}:** {text}")
+                    posted_channel_id = chan.id
+                    posted_guild_id = guild.id
                     break
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
+
+    # Wake word: if the transcript starts with "indio" / "che indio", extract
+    # the pregunta and ask the main bot to invoke the indio persona.
+    match = _WAKE_WORD_RE.match(text or "")
+    if match and posted_channel_id is not None and posted_guild_id is not None:
+        pregunta = match.group(2).strip()
+        if pregunta:
+            log.info(f"[INDIO-WAKE] user_id={user_id} pregunta={pregunta!r}")
+            asyncio.create_task(_dispatch_to_indio(
+                user_id=user_id,
+                guild_id=posted_guild_id,
+                channel_id=posted_channel_id,
+                pregunta=pregunta,
+                speaker_name=speaker_name,
+            ))
 
     if config.ENABLE_HTTP_FORWARD:
         try:
@@ -534,6 +626,33 @@ async def on_transcript(user_id: int, text: str):
             )
         except Exception as e:
             log.warning(f"HTTP forward failed: {e}")
+
+
+async def _dispatch_to_indio(*, user_id: int, guild_id: int, channel_id: int,
+                             pregunta: str, speaker_name: Optional[str]) -> None:
+    """POST the pregunta to the main bot's /indio endpoint."""
+    if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
+        log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
+        return
+    try:
+        session = await _get_http()
+        async with session.post(
+            f"{config.MAIN_BOT_API_BASE}/indio",
+            json={
+                "user_id": str(user_id),
+                "guild_id": str(guild_id),
+                "channel_id": str(channel_id),
+                "pregunta": pregunta,
+                "speaker_name": speaker_name,
+            },
+            headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
+            timeout=aiohttp.ClientTimeout(total=5),
+        ) as resp:
+            if resp.status >= 400:
+                body = await resp.text()
+                log.warning(f"[INDIO-WAKE] HTTP {resp.status}: {body[:200]}")
+    except Exception:
+        log.exception("[INDIO-WAKE] dispatch failed")
 
 
 # ---------- Discord client + auto-join logic -------------------------------
@@ -979,6 +1098,49 @@ async def _relay_record(request: web.Request) -> web.Response:
     return web.json_response({"started": True, "duration": duration})
 
 
+async def _relay_members(request: web.Request) -> web.Response:
+    """List every member of a guild as seen by the user account. Lets the
+    main bot enumerate users without needing the privileged "members" intent
+    enabled on its bot token."""
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        guild_id = int(request.query["guild_id"])
+    except (KeyError, ValueError):
+        return web.json_response({"error": "missing or invalid guild_id"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return web.json_response({"error": "guild not found"}, status=404)
+
+    members = list(guild.members)
+    # If the cache looks suspiciously empty, ask the gateway for the full list.
+    if len(members) < 5:
+        try:
+            members = []
+            async for m in guild.fetch_members(limit=None):
+                members.append(m)
+        except Exception as e:
+            log.warning(f"[RELAY] fetch_members fallback failed: {e}")
+            members = list(guild.members)
+
+    payload = [
+        {
+            "id": str(m.id),
+            "name": getattr(m, "name", None) or "",
+            "global_name": getattr(m, "global_name", None) or "",
+            "display_name": getattr(m, "display_name", None) or "",
+            "is_bot": bool(getattr(m, "bot", False)),
+        }
+        for m in members
+    ]
+    return web.json_response({"guild_id": guild_id, "members": payload})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -986,6 +1148,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app = web.Application()
     app.router.add_post("/say", _relay_say)
     app.router.add_post("/record", _relay_record)
+    app.router.add_get("/members", _relay_members)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

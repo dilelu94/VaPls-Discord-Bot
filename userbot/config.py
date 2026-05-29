@@ -8,12 +8,27 @@ load_dotenv()
 # Network → any request → headers → authorization. Treat as a secret.
 USER_TOKEN = os.getenv("USER_TOKEN")
 
-# Path to the Spanish VOSK model. Defaults to the model directory of the
-# main bot so we share the same files.
-MODEL_PATH_ES = os.getenv(
-    "MODEL_PATH_ES",
-    "/home/ubuntu/vapls-discord-bot/models/vosk-model-small-es-0.42",
-)
+# --- faster-whisper transcription -----------------------------------------
+# Model name (e.g. "tiny", "base", "small") or a HuggingFace repo. Resolved
+# via faster-whisper's standard download path. "base" is the sweet spot for
+# Spanish on this VM (~280 MB RAM, ~7-10% WER).
+WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+# Quantization preset: "int8" runs on CPU with low memory; "float16" needs GPU.
+WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
+# Directory where faster-whisper caches downloaded models. Empty = library default.
+WHISPER_CACHE_DIR = os.getenv("WHISPER_CACHE_DIR", "")
+
+# Concurrency caps: how many overlapping utterances may be transcribed at
+# once. When the main bot is playing audio (music/soundpad), we throttle to
+# leave CPU headroom for ffmpeg + the playback pipeline.
+MAX_CONCURRENT_IDLE = int(os.getenv("MAX_CONCURRENT_IDLE", "5"))
+MAX_CONCURRENT_WHILE_PLAYING = int(os.getenv("MAX_CONCURRENT_WHILE_PLAYING", "3"))
+
+# Main bot API (apiServer). Used to (a) check is_playing for throttling,
+# (b) POST /indio when a wake-word is heard. SECRET must match the main bot's
+# API_SECRET, otherwise both calls are skipped silently.
+MAIN_BOT_API_BASE = os.getenv("MAIN_BOT_API_BASE", "http://127.0.0.1:8080")
+MAIN_BOT_API_SECRET = os.getenv("MAIN_BOT_API_SECRET", "")
 
 # Main bot's HTTP API base (apiServer.py). Used to ship transcripts back
 # when ENABLE_HTTP_FORWARD is true.

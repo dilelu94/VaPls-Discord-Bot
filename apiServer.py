@@ -18,6 +18,7 @@ import discord
 from aiohttp import web
 
 import config
+import geminiCommand
 from playCommand import guildPlayers
 
 logger = logging.getLogger("apiServer")
@@ -521,12 +522,56 @@ def makeApp(bot: discord.Bot) -> web.Application:
             "is_playing": bool(vc and vc.is_playing()),
         })
 
+    async def indioVoice(request: web.Request) -> web.Response:
+        """Trigger the indio persona from a voice transcription.
+
+        Body JSON: {user_id, guild_id, channel_id, pregunta, speaker_name?}.
+        Spawns geminiCommand.indioFromVoice in the background so the call
+        returns immediately and the userbot doesn't have to wait on Gemini.
+        """
+        try:
+            data = await request.json()
+            user_id = int(data["user_id"])
+            guild_id = int(data["guild_id"])
+            channel_id = int(data["channel_id"])
+            pregunta = str(data["pregunta"]).strip()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        if not pregunta:
+            return web.json_response({"error": "empty pregunta"}, status=400)
+        speaker_name = data.get("speaker_name")
+
+        asyncio.create_task(geminiCommand.indioFromVoice(
+            bot,
+            user_id=user_id,
+            guild_id=guild_id,
+            channel_id=channel_id,
+            pregunta=pregunta,
+            speaker_name=speaker_name,
+        ))
+        return web.json_response({"ok": True})
+
+    async def playingState(request: web.Request) -> web.Response:
+        """Return whether the main bot is currently playing audio in any voice channel.
+
+        Used by the userbot to decide concurrency limits (3 vs 5 speakers).
+        """
+        playing_guilds = [
+            vc.guild.id for vc in bot.voice_clients if vc.is_playing()
+        ]
+        return web.json_response({
+            "is_playing": bool(playing_guilds),
+            "guild_ids": [str(gid) for gid in playing_guilds],
+        })
+
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
     app.router.add_post("/message", sendMessage)
     app.router.add_post("/play-audio", playAudio)
     app.router.add_get("/queue", queue)
+    app.router.add_post("/indio", indioVoice)
+    app.router.add_get("/playing", playingState)
     return app
 
 

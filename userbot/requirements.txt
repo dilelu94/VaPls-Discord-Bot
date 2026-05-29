@@ -6,6 +6,7 @@ discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self
 # user account can receive decoded PCM from speaking members. Install
 # discord.py-self AFTER this so it wins the `discord` namespace.
 discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv
-vosk
+faster-whisper>=1.0
+numpy
 python-dotenv
 aiohttp>=3.9
