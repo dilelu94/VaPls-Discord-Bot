@@ -51,6 +51,9 @@ USERS: dict[int, dict] = {
             "es re colgado, nunca quiere jugar a nada",
             "juega CS",
         ],
+        "preguntas_tipicas": [
+            "y la hermana de Mila?",
+        ],
     },
     309714566265438221: {
         "name": "Chalo",
@@ -127,6 +130,7 @@ USERS: dict[int, dict] = {
         "traits": [
             "uruguayo",
             "profesor de musica",
+            "ama trabajar con niños (es su laburo dando clases)",
         ],
     },
     268872891729182720: {
