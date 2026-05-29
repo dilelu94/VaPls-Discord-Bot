@@ -89,7 +89,7 @@ pytest
 ```
 
 Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
-`soundpadCommand`. CI: `.github/workflows/tests.yml` corre `pytest` en cada push/PR.
+`soundpadCommand`. CI: `.github/workflows/ci.yml` corre `pytest` en cada push/PR.
 
 ## 📜 Doc generation
 Sphinx + napoleon recomendado. Ver [docs/contributing-docs.md](docs/contributing-docs.md).
