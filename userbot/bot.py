@@ -46,8 +46,8 @@ _dave_stats = {"total": 0, "dave_ok": 0, "dave_skip": 0, "dave_fail": 0}
 def _install_dave_patch():
     _orig_init = AudioReader.__init__
 
-    def _patched_init(self, voice_client, sink, after=None):
-        _orig_init(self, voice_client, sink, after=after)
+    def _patched_init(self, sink, voice_client, *, after=None):
+        _orig_init(self, sink, voice_client, after=after)
         # Stash the voice client reference on the decryptor so the wrapped
         # _decrypt_rtp_* method can read dave_session + ssrc_user_map.
         self.decryptor._voice_client = voice_client
