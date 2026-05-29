@@ -25,6 +25,11 @@ import analytics
 import config
 import geminiClient
 
+try:
+    from users import USERS as _USERS
+except Exception:
+    _USERS: dict[int, dict] = {}
+
 logger = logging.getLogger("bot.gemini")
 
 VAPLS_SYSTEM = """\
@@ -317,6 +322,39 @@ def _format_guild_emojis(guild) -> str:
     if not lines:
         return ""
     return "Emojis custom del server (pegá el código completo tal cual):\n" + "\n".join(lines)
+
+
+def _format_known_users(guild) -> str:
+    """Render the static USERS roster as a Spanish block so the indio knows
+    every member of the group by name even before they've ever talked to him.
+    If the guild is available we also mark who is currently a member; otherwise
+    we just list every name from users.py."""
+    if not _USERS:
+        return ""
+    guild_member_ids: set[int] = set()
+    if guild is not None:
+        try:
+            guild_member_ids = {m.id for m in getattr(guild, "members", []) or []}
+        except Exception:
+            guild_member_ids = set()
+    names_in_guild: list[str] = []
+    names_other: list[str] = []
+    for uid, info in _USERS.items():
+        name = (info or {}).get("name")
+        if not name:
+            continue
+        if guild_member_ids and uid not in guild_member_ids:
+            names_other.append(name)
+        else:
+            names_in_guild.append(name)
+    if not names_in_guild and not names_other:
+        return ""
+    lines = ["Los pibes del grupo (los conocés a todos, son tus amigos):"]
+    if names_in_guild:
+        lines.append("- " + ", ".join(names_in_guild))
+    if names_other:
+        lines.append("Otros que a veces aparecen: " + ", ".join(names_other))
+    return "\n".join(lines)
 
 
 def _format_long_term(lt: dict) -> str:
@@ -732,13 +770,16 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     if history_reset:
         await _persist_indio_state()
 
+    guild_for_extras = getattr(ctx, "guild", None)
+    roster_block = _format_known_users(guild_for_extras)
     lt_block = _format_long_term(long_term_snapshot)
-    guild_for_emojis = getattr(ctx, "guild", None)
-    emoji_count = len(getattr(guild_for_emojis, "emojis", None) or [])
-    emoji_block = _format_guild_emojis(guild_for_emojis)
-    logger.info("indio: injecting %d guild emojis into prompt (mem_key=%s)",
+    emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
+    emoji_block = _format_guild_emojis(guild_for_extras)
+    logger.info("indio: injecting roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
+                len(_USERS or {}),
+                len((long_term_snapshot.get("users") or {})),
                 emoji_count, mem_key)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    extras = "\n\n".join(b for b in (roster_block, lt_block, emoji_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
@@ -830,4 +871,117 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         "long_term_users": len(long_term_snapshot.get("users", {}) or {}),
         "nuevo": nuevo,
         "relayed_via_userbot": relayed_via_userbot,
+    })
+
+
+async def indioFromVoice(
+    bot: "discord.Bot",
+    *,
+    user_id: int,
+    guild_id: int,
+    channel_id: int,
+    pregunta: str,
+    speaker_name: Optional[str] = None,
+) -> None:
+    """Trigger the indio persona from a voice transcription.
+
+    Behaves like indioLogic but without an ApplicationContext: resolves the
+    guild/channel directly from the bot and posts the reply via channel.send.
+    Shares the same per-guild memory bucket (_indio_memory_key returns
+    "guild-<id>") so voice + slash invocations build on the same history.
+    """
+    pregunta = (pregunta or "").strip()
+    if not pregunta:
+        return
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        logger.warning("indioFromVoice: guild %s not found", guild_id)
+        return
+    channel = guild.get_channel(channel_id) or bot.get_channel(channel_id)
+    if channel is None or not hasattr(channel, "send"):
+        logger.warning("indioFromVoice: channel %s not found", channel_id)
+        return
+    member = guild.get_member(user_id)
+    speaker = (speaker_name
+               or (member.display_name if member else None)
+               or "alguien")
+
+    _evict_stale_indio()
+    mem_key = f"guild-{guild_id}"
+    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    tagged_message = f"[{speaker}]: {pregunta}"
+
+    async with lock:
+        history_snapshot = list(_indio_history.get(mem_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
+
+    lt_block = _format_long_term(long_term_snapshot)
+    emoji_block = _format_guild_emojis(guild)
+    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
+
+    t0 = time.monotonic()
+    try:
+        reply = await geminiClient.generate(
+            user_message=tagged_message,
+            system_instruction=system_instruction,
+            history=history_snapshot,
+        )
+    except geminiClient.GeminiError as e:
+        msg = _error_message(e.kind, e.status, "indio")
+        try:
+            await channel.send(msg)
+        except Exception:
+            pass
+        analytics.capture("indio voice failed", user=member, guild=guild, properties={
+            "error_kind": e.kind,
+            "http_status": e.status,
+            "prompt_length": len(pregunta),
+        })
+        return
+    except Exception as e:
+        logger.exception("indioFromVoice unexpected error")
+        try:
+            await channel.send("❌ Algo se rompió. Probá de nuevo.")
+        except Exception:
+            pass
+        analytics.capture_exception(e, user=member, guild=guild,
+                                    properties={"action": "indio_voice_unexpected"})
+        return
+
+    clean_reply = _strip_indio_prefix(reply.text)
+    relayed_via_userbot = False
+    try:
+        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            relayed_via_userbot = await _relay_to_userbot(
+                channel_id, clean_reply, None
+            )
+        if not relayed_via_userbot:
+            for chunk in _split_for_discord(clean_reply):
+                await channel.send(chunk)
+    except Exception:
+        logger.exception("indioFromVoice send failed")
+        return
+
+    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
+    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
+    async with lock:
+        existing = _indio_history.get(mem_key, history_snapshot)
+        new_hist = list(existing) + [user_turn, model_turn]
+        if len(new_hist) > _HISTORY_HARD_CAP:
+            new_hist = new_hist[-_HISTORY_HARD_CAP:]
+        _indio_history[mem_key] = new_hist
+        _indio_last_seen[mem_key] = time.time()
+        history_size_after = len(new_hist)
+    await _persist_indio_state()
+
+    if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+        asyncio.create_task(_maybe_compress(mem_key))
+
+    analytics.capture("indio voice invoked", user=member, guild=guild, properties={
+        "prompt_length": len(pregunta),
+        "response_length": len(clean_reply),
+        "latency_ms": int((time.monotonic() - t0) * 1000),
+        "relayed_via_userbot": relayed_via_userbot,
+        "history_size_after": history_size_after,
     })
