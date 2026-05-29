@@ -19,6 +19,7 @@ import time
 from typing import Optional
 
 import aiohttp
+from aiohttp import web
 import discord  # discord.py-self
 from discord.ext import voice_recv
 import vosk
@@ -565,6 +566,104 @@ async def on_voice_state_update(member, before, after):
         await _leave_if_empty(guild)
 
 
+# ---------- Local relay HTTP server ---------------------------------------
+# Lets the main bot ask the userbot to post a message as the real user.
+# Used by /indio so the reply appears to come from "el indio" instead of
+# the vapls bot. Bound to localhost; secret-gated.
+
+_DISCORD_MSG_LIMIT = 2000
+
+
+def _split_for_relay(text: str) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= _DISCORD_MSG_LIMIT:
+        return [text]
+    chunks: list[str] = []
+    buf = ""
+    for line in text.splitlines(keepends=True):
+        if len(buf) + len(line) > _DISCORD_MSG_LIMIT:
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            while len(line) > _DISCORD_MSG_LIMIT:
+                chunks.append(line[:_DISCORD_MSG_LIMIT])
+                line = line[_DISCORD_MSG_LIMIT:]
+        buf += line
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+async def _relay_say(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        content = str(data["content"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    reply_to_id = data.get("reply_to_message_id")
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not hasattr(channel, "send"):
+        return web.json_response({"error": "channel not sendable"}, status=400)
+
+    chunks = _split_for_relay(content)
+    if not chunks:
+        return web.json_response({"error": "empty content"}, status=400)
+
+    reference = None
+    if reply_to_id is not None:
+        try:
+            reference = discord.MessageReference(
+                message_id=int(reply_to_id),
+                channel_id=channel_id,
+                fail_if_not_exists=False,
+            )
+        except Exception:
+            reference = None
+
+    message_ids: list[int] = []
+    try:
+        for i, chunk in enumerate(chunks):
+            kwargs = {}
+            if i == 0 and reference is not None:
+                kwargs["reference"] = reference
+            msg = await channel.send(chunk, **kwargs)
+            message_ids.append(msg.id)
+    except Exception as e:
+        log.exception("[RELAY] send failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
+
+
+async def _start_relay() -> Optional[web.AppRunner]:
+    if not config.RELAY_SECRET:
+        log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
+        return None
+    app = web.Application()
+    app.router.add_post("/say", _relay_say)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)
+    await site.start()
+    log.info(f"[RELAY] HTTP listening on http://{config.RELAY_HOST}:{config.RELAY_PORT}")
+    return runner
+
+
 async def main():
     """Start the userbot client and clean up HTTP resources on exit.
 
@@ -574,9 +673,15 @@ async def main():
     if not config.USER_TOKEN:
         log.error("USER_TOKEN is not set. See .env.example for setup instructions.")
         sys.exit(1)
+    relay_runner = await _start_relay()
     try:
         await client.start(config.USER_TOKEN)
     finally:
+        if relay_runner is not None:
+            try:
+                await relay_runner.cleanup()
+            except Exception:
+                pass
         if _http_session and not _http_session.closed:
             await _http_session.close()
 

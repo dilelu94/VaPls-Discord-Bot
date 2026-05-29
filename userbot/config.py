@@ -38,4 +38,11 @@ IGNORE_USER_IDS = {int(x) for x in _ignore_raw.split(",") if x.strip()}
 # account. Empty = no posting (logs only).
 TRANSCRIPT_CHANNEL_NAME = os.getenv("TRANSCRIPT_CHANNEL_NAME", "")
 
+# Local HTTP relay so the main bot can ask the userbot to post a message
+# as the real user account (used by /indio so replies look like they come
+# from "el indio" instead of vapls). Empty secret disables the endpoint.
+RELAY_HOST = os.getenv("RELAY_HOST", "127.0.0.1")
+RELAY_PORT = int(os.getenv("RELAY_PORT", "8081"))
+RELAY_SECRET = os.getenv("RELAY_SECRET", "")
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

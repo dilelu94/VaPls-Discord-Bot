@@ -41,3 +41,10 @@ API_SECRET = os.getenv("API_SECRET", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
+
+# Userbot relay: where the userbot exposes its POST /say endpoint so /indio
+# replies can be posted by the real user account instead of the vapls bot.
+# Empty INDIO_RELAY_URL disables relay (indio falls back to posting as vapls).
+INDIO_RELAY_URL = os.getenv("INDIO_RELAY_URL", "")
+INDIO_RELAY_SECRET = os.getenv("INDIO_RELAY_SECRET", "")
+INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))

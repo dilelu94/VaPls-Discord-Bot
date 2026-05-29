@@ -17,6 +17,7 @@ import tempfile
 import time
 from typing import Optional
 
+import aiohttp
 import discord
 
 import analytics
@@ -544,6 +545,36 @@ async def _maybe_compress(mem_key: str) -> None:
         _indio_compressing.discard(mem_key)
 
 
+async def _relay_to_userbot(channel_id: int, content: str,
+                            reply_to_id: Optional[int]) -> bool:
+    """POST the indio reply to the userbot's local /say endpoint so it gets
+    posted by the real user account. Returns True on success, False on any
+    failure (caller should fall back to posting via vapls)."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+    payload = {"channel_id": int(channel_id), "content": content}
+    if reply_to_id is not None:
+        payload["reply_to_message_id"] = int(reply_to_id)
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("indio relay HTTP %d: %s", resp.status, body[:200])
+                    return False
+                return True
+    except asyncio.TimeoutError:
+        logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
+        return False
+    except Exception:
+        logger.exception("indio relay failed")
+        return False
+
+
 def _error_message(kind: str, status: Optional[int], persona: str) -> str:
     """Return a user-facing error message for Gemini failures.
 
@@ -728,8 +759,23 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                                     properties={"action": "indio_unexpected"})
         return
 
+    relayed_via_userbot = False
     try:
-        n_chunks = await _send_reply(ctx, _format_user_header(ctx, pregunta) + reply.text)
+        question_header = _format_user_header(ctx, pregunta).rstrip()
+        question_msg = await ctx.followup.send(question_header)
+        question_msg_id = getattr(question_msg, "id", None)
+        channel_id = getattr(ctx, "channel_id", None) or getattr(
+            getattr(ctx, "channel", None), "id", None
+        )
+        if channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            relayed_via_userbot = await _relay_to_userbot(
+                channel_id, reply.text, question_msg_id
+            )
+        if relayed_via_userbot:
+            n_chunks = 1
+        else:
+            # Fallback: post the reply via vapls if relay is disabled or failed.
+            n_chunks = await _send_reply(ctx, reply.text)
     except Exception as e:
         logger.exception("indio send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -766,4 +812,5 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         "history_size_after": history_size_after,
         "long_term_users": len(long_term_snapshot.get("users", {}) or {}),
         "nuevo": nuevo,
+        "relayed_via_userbot": relayed_via_userbot,
     })
