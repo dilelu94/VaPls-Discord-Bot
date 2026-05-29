@@ -47,6 +47,8 @@ que se note.
 INDIO_SYSTEM = """\
 Sos "el indio", un personaje del grupo de amigos en este server de Discord. NO \
 sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
+Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
+comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
 \
@@ -104,6 +106,10 @@ _indio_locks: dict[str, asyncio.Lock] = {}
 _persist_lock = asyncio.Lock()
 # Per-key flag: a compression task is in-flight, don't spawn another.
 _indio_compressing: set[str] = set()
+# "Main characters" roster persisted alongside long-term memory. Refreshed
+# at most once per ``_ROSTER_REFRESH_INTERVAL_SEC``; see _maybe_refresh_current_members.
+_indio_current_members: dict[str, list[str]] = {}
+_indio_members_refreshed_at: dict[str, float] = {}
 
 
 def _load_indio_state() -> None:
@@ -123,19 +129,24 @@ def _load_indio_state() -> None:
     loaded = 0
     for key, val in entries.items():
         last_seen = float(val.get("last_seen", 0))
-        if now - last_seen > _HISTORY_TTL_SEC:
-            continue
         history = val.get("history", [])
         long_term = val.get("long_term") or {}
-        if isinstance(history, list) and history:
-            _indio_history[key] = history
-            _indio_last_seen[key] = last_seen
-            loaded += 1
+        current_members = val.get("current_members") or []
+        current_members_at = float(val.get("current_members_refreshed_at", 0) or 0)
+        keep_short_term = (now - last_seen <= _HISTORY_TTL_SEC)
+        if keep_short_term:
+            if isinstance(history, list) and history:
+                _indio_history[key] = history
+                _indio_last_seen[key] = last_seen
+                loaded += 1
         if isinstance(long_term, dict) and long_term:
             _indio_long_term[key] = long_term
-    if loaded or _indio_long_term:
-        logger.info("indio memory: loaded %d entries (long_term keys=%d) from %s",
-                    loaded, len(_indio_long_term), path)
+        if isinstance(current_members, list) and current_members:
+            _indio_current_members[key] = [str(n) for n in current_members if n]
+            _indio_members_refreshed_at[key] = current_members_at
+    if loaded or _indio_long_term or _indio_current_members:
+        logger.info("indio memory: loaded %d entries (long_term=%d, roster=%d) from %s",
+                    loaded, len(_indio_long_term), len(_indio_current_members), path)
 
 
 async def _persist_indio_state() -> None:
@@ -143,13 +154,15 @@ async def _persist_indio_state() -> None:
     so concurrent turns don't clobber each other's writes."""
     path = config.INDIO_MEMORY_PATH
     async with _persist_lock:
-        keys = set(_indio_history) | set(_indio_long_term)
+        keys = set(_indio_history) | set(_indio_long_term) | set(_indio_current_members)
         payload = {
             "entries": {
                 k: {
                     "history": _indio_history.get(k, []),
                     "last_seen": _indio_last_seen.get(k, 0.0),
                     "long_term": _indio_long_term.get(k, {}),
+                    "current_members": _indio_current_members.get(k, []),
+                    "current_members_refreshed_at": _indio_members_refreshed_at.get(k, 0.0),
                 }
                 for k in keys
             }
@@ -325,8 +338,7 @@ def _format_guild_emojis(guild) -> str:
 
 
 _MAIN_CHARS_ROLE = "Main characters"
-_ROSTER_CACHE_TTL_SEC = 300
-_roster_cache: dict[int, tuple[float, list[str]]] = {}
+_ROSTER_REFRESH_INTERVAL_SEC = 24 * 3600  # refresh once per day
 _roster_lock = asyncio.Lock()
 
 
@@ -368,40 +380,52 @@ async def _fetch_main_characters(guild_id: int) -> list[str]:
     return names
 
 
-async def _get_main_characters(guild_id: int) -> list[str]:
-    """Cached lookup of the "Main characters" roster for a guild."""
+async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) -> None:
+    """Refresh the cached "Main characters" roster for a guild at most once
+    per ``_ROSTER_REFRESH_INTERVAL_SEC``. The names live alongside the indio's
+    long-term memory and are persisted to disk so they survive restarts. We
+    only fetch when the cache is older than the interval, so the indio doesn't
+    "read" the role list on every call — he just knows who they are because
+    it's in his memory."""
+    if guild_id is None:
+        return
     now = time.time()
-    cached = _roster_cache.get(guild_id)
-    if cached and now - cached[0] < _ROSTER_CACHE_TTL_SEC:
-        return cached[1]
+    last = _indio_members_refreshed_at.get(mem_key, 0.0)
+    if now - last < _ROSTER_REFRESH_INTERVAL_SEC and _indio_current_members.get(mem_key):
+        return
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        return
     async with _roster_lock:
-        cached = _roster_cache.get(guild_id)
-        if cached and now - cached[0] < _ROSTER_CACHE_TTL_SEC:
-            return cached[1]
-        names = await _fetch_main_characters(guild_id)
-        _roster_cache[guild_id] = (time.time(), names)
-        return names
+        last = _indio_members_refreshed_at.get(mem_key, 0.0)
+        if now - last < _ROSTER_REFRESH_INTERVAL_SEC and _indio_current_members.get(mem_key):
+            return
+        names = await _fetch_main_characters(int(guild_id))
+        if not names:
+            return
+        previous = _indio_current_members.get(mem_key)
+        _indio_current_members[mem_key] = names
+        _indio_members_refreshed_at[mem_key] = time.time()
+    if previous != names:
+        await _persist_indio_state()
+        logger.info("indio: refreshed current_members for %s (%d names)",
+                    mem_key, len(names))
 
 
-def _format_known_users_block(names: list[str]) -> str:
-    """Render the roster block injected into the indio's system prompt."""
-    base = (
-        "VaPls es el bot oficial del grupo (no es persona, es el bot que corre "
-        "los comandos como /play, /vapls, etc.). Vos sos el indio."
-    )
-    if not names:
-        return base
-    roster = "Tus amigos del grupo (los miembros con rol \"Main characters\"): " + ", ".join(names) + "."
-    return base + "\n" + roster
-
-
-def _format_long_term(lt: dict) -> str:
+def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> str:
     """Render long-term memory as a compact Spanish block to inject into the
     indio's system instruction. Natural-language form (no JSON) so the model
-    integrates it like context, not data."""
-    if not lt:
-        return ""
+    integrates it like context, not data.
+
+    ``current_members`` is the list of friends with the "Main characters" role,
+    refreshed once per day and persisted. It's rendered as a short header so
+    the indio always knows the current roster from his own memory."""
     sections: list[str] = []
+    if current_members:
+        sections.append(
+            "Los pibes del grupo ahora son: " + ", ".join(current_members) + "."
+        )
+    if not lt:
+        return "\n\n".join(sections)
     users = lt.get("users") or {}
     if isinstance(users, dict) and users:
         user_lines = ["Lo que sabés de los pibes del grupo:"]
@@ -810,16 +834,17 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
 
     guild_for_extras = getattr(ctx, "guild", None)
     guild_id = getattr(guild_for_extras, "id", None)
-    main_chars = await _get_main_characters(int(guild_id)) if guild_id else []
-    roster_block = _format_known_users_block(main_chars)
-    lt_block = _format_long_term(long_term_snapshot)
+    # Lazy daily refresh of the Main characters roster into persistent memory.
+    await _maybe_refresh_current_members(mem_key, guild_id)
+    current_members = list(_indio_current_members.get(mem_key, []))
+    lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
     emoji_block = _format_guild_emojis(guild_for_extras)
-    logger.info("indio: injecting roster=%d (main_chars), lt_users=%d, emojis=%d (mem_key=%s)",
-                len(main_chars),
+    logger.info("indio: roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
+                len(current_members),
                 len((long_term_snapshot.get("users") or {})),
                 emoji_count, mem_key)
-    extras = "\n\n".join(b for b in (roster_block, lt_block, emoji_block) if b)
+    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
