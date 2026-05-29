@@ -30,6 +30,11 @@ try:
 except Exception:
     _USERS: dict[int, dict] = {}
 
+try:
+    from users import GROUP_LORE as _GROUP_LORE
+except Exception:
+    _GROUP_LORE: dict[str, list[str]] = {}
+
 logger = logging.getLogger("bot.gemini")
 
 VAPLS_SYSTEM = """\
@@ -457,10 +462,24 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
                 user_lines.extend(chunk)
         if len(user_lines) > 1:
             sections.append("\n".join(user_lines))
-    events = [str(x) for x in (lt.get("eventos_del_grupo") or []) if x]
+    # Merge static group lore (users.py:GROUP_LORE) with whatever Gemini has
+    # distilled in long_term. Static items go first; dynamic ones are appended
+    # without duplicates.
+    static_events = [str(x) for x in (_GROUP_LORE.get("eventos_del_grupo") or []) if x]
+    lt_events = [str(x) for x in (lt.get("eventos_del_grupo") or []) if x]
+    events = list(static_events)
+    for e in lt_events:
+        if e not in events:
+            events.append(e)
     if events:
         sections.append("Cosas que pasaron en el grupo:\n" + "\n".join(f"- {e}" for e in events))
-    jokes = [str(x) for x in (lt.get("chistes_internos") or []) if x]
+
+    static_jokes = [str(x) for x in (_GROUP_LORE.get("chistes_internos") or []) if x]
+    lt_jokes = [str(x) for x in (lt.get("chistes_internos") or []) if x]
+    jokes = list(static_jokes)
+    for j in lt_jokes:
+        if j not in jokes:
+            jokes.append(j)
     if jokes:
         sections.append("Chistes internos del grupo:\n" + "\n".join(f"- {j}" for j in jokes))
     return "\n\n".join(sections)
