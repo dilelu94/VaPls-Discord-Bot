@@ -18,7 +18,7 @@ import analytics
 import config
 import geminiClient
 
-logger = logging.getLogger("bot.persona")
+logger = logging.getLogger("bot.gemini")
 
 VAPLS_SYSTEM = """\
 Sos el bot del servidor de Discord "VaPls". Tu rol es ayudar a los amigos del \
