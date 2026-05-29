@@ -12,6 +12,7 @@ from playCommand import playLogic
 from escucharCommand import escucharLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic
+from greeting import trigger_soundboard_entry
 import audioop
 import vosk
 from discord.ext import commands
@@ -228,24 +229,6 @@ try:
 except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 bot = discord.Bot(intents=intents, )
-
-_last_soundboard_entry: dict[int, float] = {}
-
-async def trigger_soundboard_entry(channel):
-    # Throttle: DAVE 4006 disconnects cause the bot to "rejoin" repeatedly,
-    # and we don't want milapollo to fire each time.
-    now = time.time()
-    last = _last_soundboard_entry.get(channel.id, 0.0)
-    if now - last < 60.0:
-        return
-    _last_soundboard_entry[channel.id] = now
-    try:
-        await asyncio.sleep(2)
-        sounds = await channel.guild.fetch_sounds()
-        milapollo = discord.utils.find(lambda s: s.name.lower() == "milapollo", sounds)
-        if milapollo: await channel.send_soundboard_sound(milapollo)
-    except Exception: pass
-
 
 @bot.event
 async def on_connect():
