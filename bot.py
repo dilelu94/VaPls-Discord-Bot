@@ -21,10 +21,10 @@ import config
 import analytics
 from apiServer import startApiServer
 
-# DAVE workaround: py-cord 2.8 leaves packet.decrypted_data = None when DAVE is
-# not ready or the ssrc is not yet mapped, so the reader silently drops the
-# packet. We override decrypt_rtp to ALWAYS set packet.decrypted_data, falling
-# back to the raw payload (post outer-AEAD) when DAVE can't decrypt yet.
+# DAVE workaround: py-cord leaves packet.decrypted_data = None if
+# the DAVE branch fails, and the reader silently drops the packet. Patch
+# decrypt_rtp to always set packet.decrypted_data so we still receive audio
+# even if Discord enables DAVE despite our IDENTIFY downgrade.
 from discord.voice.receive.reader import PacketDecryptor
 from discord.voice.packets.core import OPUS_SILENCE
 from nacl.exceptions import CryptoError
@@ -33,12 +33,25 @@ try:
 except ImportError:
     davey = None
 
+_decrypt_call_count = {"total": 0, "outer_fail": 0, "no_uid": 0, "dave_ok": 0, "dave_fail": 0, "raw_fallback": 0}
+
 def patched_decrypt_rtp(self, packet):
     state = self.client._connection
     dave = getattr(state, "dave_session", None)
+    _decrypt_call_count["total"] += 1
+    n = _decrypt_call_count["total"]
     try:
         raw_payload = self._decryptor_rtp(packet)
-    except (CryptoError, Exception):
+    except CryptoError as e:
+        _decrypt_call_count["outer_fail"] += 1
+        if n <= 5 or n % 100 == 0:
+            logging.info(f"[DAVE-DBG] #{n} outer AEAD CryptoError: {e}")
+        packet.decrypted_data = OPUS_SILENCE
+        return OPUS_SILENCE
+    except Exception as e:
+        _decrypt_call_count["outer_fail"] += 1
+        if n <= 5 or n % 100 == 0:
+            logging.info(f"[DAVE-DBG] #{n} outer AEAD Exception: {type(e).__name__}: {e}")
         packet.decrypted_data = OPUS_SILENCE
         return OPUS_SILENCE
 
@@ -47,22 +60,43 @@ def patched_decrypt_rtp(self, packet):
         if 0 < pad_len <= len(raw_payload):
             raw_payload = raw_payload[:-pad_len]
 
-    ssrc_map = getattr(state, "ssrc_user_map", None) or getattr(state, "_ssrc_to_id", {})
+    ssrc_map = getattr(state, "ssrc_user_map", None)
+    if ssrc_map is None:
+        ssrc_map = getattr(state, "_ssrc_to_id", {})
     uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
+
+    if n <= 3:
+        logging.info(f"[DAVE-DBG] #{n} ssrc={packet.ssrc} raw_len={len(raw_payload)} dave_ready={dave and getattr(dave,'ready',False)} uid={uid} ssrc_map_size={len(ssrc_map) if ssrc_map else 0}")
 
     decrypted = None
     if dave is not None and getattr(dave, "ready", False) and uid and davey is not None:
         try:
             decrypted = dave.decrypt(uid, davey.MediaType.audio, raw_payload)
-        except Exception:
+            _decrypt_call_count["dave_ok"] += 1
+        except Exception as e:
+            _decrypt_call_count["dave_fail"] += 1
+            if n <= 5 or n % 100 == 0:
+                logging.info(f"[DAVE-DBG] #{n} dave.decrypt failed: {type(e).__name__}: {e}")
             decrypted = None
+    else:
+        if not uid:
+            _decrypt_call_count["no_uid"] += 1
+        _decrypt_call_count["raw_fallback"] += 1
 
     payload = decrypted if decrypted is not None else raw_payload
     if packet.extended:
-        offset = packet.update_extended_header(payload)
-        packet.decrypted_data = payload[offset:]
+        try:
+            offset = packet.update_extended_header(payload)
+            packet.decrypted_data = payload[offset:]
+        except Exception as e:
+            if n <= 5:
+                logging.info(f"[DAVE-DBG] #{n} extended header failed: {type(e).__name__}: {e}")
+            packet.decrypted_data = payload
     else:
         packet.decrypted_data = payload
+
+    if n % 250 == 0:
+        logging.info(f"[DAVE-DBG] cumulative: {_decrypt_call_count}")
     return packet.decrypted_data
 
 PacketDecryptor.decrypt_rtp = patched_decrypt_rtp
@@ -89,6 +123,8 @@ Decoder.decode = patched_decoder_decode
 
 # Standard logging
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format='%(levelname)s:%(name)s: %(message)s')
+# Temporarily enable DEBUG on the voice receive reader to diagnose packet drops.
+logging.getLogger("discord.voice.receive.reader").setLevel(logging.DEBUG)
 
 # Initialize Vosk models
 model_es = None
