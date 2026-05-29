@@ -6,7 +6,7 @@ USERS: dict[int, dict] = {
     211354006805676032: {"name": "Miles"},
     189830039922016256: {"name": "Viny", "greeting": "Audios/Necesito pito.m4a"},
     309714566265438221: {"name": "Chalo"},
-    471420397049479180: {"name": "Fide", "greeting": "Audios/Quandale Dingle/quandale-dingle.mp3"},
+    471420397049479180: {"name": "Fide", "greeting": "Audios/aughhhhhhhhhh.mp3"},
     231217010522980352: {"name": "Juji"},
     293815496866922507: {"name": "Seba"},
     428444575963807745: {"name": "Tobi"},
