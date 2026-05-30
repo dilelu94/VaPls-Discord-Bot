@@ -8,12 +8,14 @@ bot itself joins or leaves a voice channel, so callers that connect to voice
 do not need to wire it up explicitly. ``/parar`` and ``/quit`` also call
 ``stop_idle_watchdog`` defensively before disconnecting.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
 from typing import Optional
 
-import discord
+import discord  # noqa: F401  # kept for type hints under `from __future__ import annotations`
 
 import analytics
 import config
