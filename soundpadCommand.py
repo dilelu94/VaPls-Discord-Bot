@@ -1,10 +1,175 @@
 """Soundpad slash command and UI for playing custom audio clips."""
 import os
 import asyncio
+import difflib
 import discord
 import config
 import analytics
 from greeting import set_pending_trigger
+
+_AUDIO_EXTS = {".opus", ".mp3", ".wav", ".ogg", ".m4a"}
+
+
+def _normalize_clip_name(text: str) -> str:
+    """Normalize a string for fuzzy matching against clip names."""
+    return text.replace("_", " ").replace("-", " ").lower().strip()
+
+
+def iter_clips(output_dir: str):
+    """Yield ``(absolute_path, display_name)`` for every audio clip under ``output_dir``.
+
+    Walks all category folders (and their subfolders) and produces a normalized
+    display name suitable for fuzzy matching (lowercase, underscores/dashes
+    replaced with spaces).
+    """
+    if not os.path.isdir(output_dir):
+        return
+    for category in sorted(os.listdir(output_dir)):
+        cat_dir = os.path.join(output_dir, category)
+        if not os.path.isdir(cat_dir) or category.startswith("."):
+            continue
+        for root, dirs, files in os.walk(cat_dir):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for f in sorted(files):
+                _, ext = os.path.splitext(f)
+                if ext.lower() not in _AUDIO_EXTS:
+                    continue
+                abs_path = os.path.join(root, f)
+                stem = os.path.splitext(f)[0]
+                yield abs_path, _normalize_clip_name(stem)
+
+
+def find_best_match(query: str, output_dir: str, cutoff: float = 0.4):
+    """Return the absolute path of the clip whose name is most similar to ``query``.
+
+    Args:
+        query: Free-form search string.
+        output_dir: Soundpad root (same shape as ``CUSTOM_AUDIO_PATH``).
+        cutoff: Minimum similarity ratio (0..1). Below this no result is returned.
+
+    Returns:
+        Absolute path to the best-matching clip, or ``None`` if no clip exists or
+        no name is similar enough.
+    """
+    clips = list(iter_clips(output_dir))
+    if not clips:
+        return None
+    normalized_query = _normalize_clip_name(query)
+    if not normalized_query:
+        return None
+    names = [name for _, name in clips]
+    matches = difflib.get_close_matches(normalized_query, names, n=1, cutoff=cutoff)
+    if not matches:
+        return None
+    best = matches[0]
+    for path, name in clips:
+        if name == best:
+            return path
+    return None
+
+
+def _pick_populated_voice_channel(guild: discord.Guild):
+    """Return the voice channel in ``guild`` with the most non-bot members, or None."""
+    candidates = [
+        (ch, sum(1 for m in ch.members if not m.bot))
+        for ch in getattr(guild, "voice_channels", [])
+    ]
+    candidates = [c for c in candidates if c[1] > 0]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    return candidates[0][0]
+
+
+async def play_clip_by_query(
+    bot,
+    guild: discord.Guild,
+    query: str,
+    voice_channel: "discord.VoiceChannel | None" = None,
+    cutoff: float = 0.4,
+):
+    """Find the soundpad clip most similar to ``query`` and play it in ``guild``.
+
+    If the bot is not already in a voice channel, it joins ``voice_channel`` when
+    provided or the most-populated one otherwise, plays the clip, and disconnects
+    once playback finishes. If the bot was already connected, it plays in place
+    and stays connected.
+
+    Args:
+        bot: Discord client (used to look up an existing ``voice_client``).
+        guild: Guild where playback should happen.
+        query: Free-form search string matched against clip display names.
+        voice_channel: Optional explicit channel. Falls back to auto-pick.
+        cutoff: difflib similarity cutoff (0..1).
+
+    Returns:
+        Absolute path of the clip that was played, or ``None`` if no clip
+        matched, no voice channel was usable, or playback could not start.
+
+    Side Effects:
+        Connects/disconnects from voice, plays audio.
+    """
+    output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
+    path = find_best_match(query, output_dir, cutoff=cutoff)
+    if path is None:
+        return None
+
+    vc = discord.utils.get(bot.voice_clients, guild=guild) if bot is not None else None
+    had_to_connect = False
+
+    if vc is None or not vc.is_connected():
+        target = voice_channel or _pick_populated_voice_channel(guild)
+        if target is None:
+            return None
+        try:
+            vc = await target.connect(reconnect=True, timeout=10.0)
+            had_to_connect = True
+        except Exception:
+            return None
+    elif voice_channel is not None and getattr(vc.channel, "id", None) != voice_channel.id:
+        try:
+            await vc.move_to(voice_channel)
+        except Exception:
+            pass
+
+    try:
+        if vc.is_playing():
+            vc.stop()
+            await asyncio.sleep(0.2)
+    except Exception:
+        pass
+
+    done = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _after(_err):
+        try:
+            loop.call_soon_threadsafe(done.set)
+        except Exception:
+            pass
+
+    try:
+        vc.play(
+            discord.FFmpegOpusAudio(path, options='-af "dynaudnorm=p=0.95:f=200"'),
+            after=_after,
+        )
+    except Exception:
+        if had_to_connect:
+            try:
+                await vc.disconnect()
+            except Exception:
+                pass
+        return None
+
+    await done.wait()
+
+    if had_to_connect:
+        try:
+            await vc.disconnect()
+        except Exception:
+            pass
+
+    return path
 
 class SoundpadView(discord.ui.View):
     """Interactive UI for browsing and playing soundpad audio files."""
