@@ -506,6 +506,358 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
     return " ".join(s.text.strip() for s in segments if s.text).strip()
 
 
+# ---------- VOSK wake-word recognizer (gating layer for Whisper) -----------
+# VOSK is loaded lazily and only when WAKE_WORD_ENABLED is true. A KaldiRecognizer
+# is created per speaker with a restricted grammar so it only ever discriminates
+# between the "indio" variants and "[unk]" (anything else). That keeps the CPU
+# cost negligible — VOSK runs constantly while Whisper stays idle until the
+# wake word fires.
+
+_vosk_model = None  # type: ignore[assignment]
+_vosk_load_lock = threading.Lock()
+
+# Grammar fed to KaldiRecognizer. Lowercase only; we normalize the JSON output
+# before matching. "[unk]" is VOSK's catch-all for anything outside the grammar.
+_VOSK_GRAMMAR = json.dumps([
+    "indio",
+    "che indio",
+    "ey indio",
+    "[unk]",
+])
+
+# Substrings VOSK is allowed to emit that we treat as a wake-word hit.
+_VOSK_WAKE_TOKENS = ("indio",)
+
+
+def _load_vosk_model():
+    """Idempotently load the VOSK model from disk. Returns None if the model
+    path is empty or the load fails — in that case the caller falls back to the
+    legacy TranscriberSink so the userbot still works (just without gating)."""
+    global _vosk_model
+    if _vosk_model is not None:
+        return _vosk_model
+    with _vosk_load_lock:
+        if _vosk_model is not None:
+            return _vosk_model
+        if not config.VOSK_MODEL_PATH:
+            log.warning("[VOSK] VOSK_MODEL_PATH is empty; wake-word disabled.")
+            return None
+        if not os.path.isdir(config.VOSK_MODEL_PATH):
+            log.warning("[VOSK] model dir not found at %s; wake-word disabled.",
+                        config.VOSK_MODEL_PATH)
+            return None
+        try:
+            import vosk
+            vosk.SetLogLevel(-1)  # silence VOSK's own stdout chatter
+            log.info(f"Loading VOSK model from {config.VOSK_MODEL_PATH} ...")
+            _vosk_model = vosk.Model(config.VOSK_MODEL_PATH)
+            log.info("✅ VOSK model loaded.")
+            return _vosk_model
+        except Exception:
+            log.exception("[VOSK] failed to load model")
+            return None
+
+
+def _new_vosk_recognizer():
+    """Create a per-user KaldiRecognizer with the restricted grammar. Returns
+    None if VOSK isn't available so callers can fall back gracefully."""
+    model = _load_vosk_model()
+    if model is None:
+        return None
+    try:
+        import vosk
+        return vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
+    except Exception:
+        log.exception("[VOSK] failed to create recognizer")
+        return None
+
+
+def _vosk_heard_wake_word(rec) -> bool:
+    """Return True if the recognizer has emitted any "indio" token in either
+    its final-segment or partial-segment buffer. We check both so the wake word
+    fires as soon as VOSK is confident (~100-300ms after the user says it)."""
+    try:
+        partial = json.loads(rec.PartialResult() or "{}").get("partial", "")
+        if partial:
+            norm = _normalize(partial)
+            if any(tok in norm for tok in _VOSK_WAKE_TOKENS):
+                return True
+        result = json.loads(rec.Result() or "{}").get("text", "")
+        if result:
+            norm = _normalize(result)
+            if any(tok in norm for tok in _VOSK_WAKE_TOKENS):
+                return True
+    except Exception:
+        log.exception("[VOSK] failed to read recognizer state")
+    return False
+
+
+class WakeWordSink(voice_recv.AudioSink):
+    """VOSK-gated sink: Whisper only runs after VOSK hears "indio".
+
+    Per speaker we maintain:
+      - A VOSK KaldiRecognizer with a restricted grammar so it can only
+        recognize "indio" variants (or [unk] for everything else).
+      - A circular pre-buffer (last ``WAKE_WORD_PREBUFFER_SECONDS`` of mono
+        16k PCM) so when the wake word fires we have the audio leading up
+        to it, not just what comes after.
+      - A capture buffer that, once triggered, keeps growing until either
+        sustained silence or the max-capture timeout closes it.
+
+    Once a capture closes, the full PCM (pre-buffer + capture) is handed off
+    to Whisper in a background thread. If Whisper returns text containing a
+    wake-word token, ``on_transcript`` is invoked the same way the legacy
+    sink does — so the downstream "decifrar + askIndio" pipeline is untouched.
+    """
+
+    def __init__(self, client_ref: discord.Client):
+        super().__init__()
+        self._client_ref = client_ref
+        self._stopped = False
+        self.packet_count = 0
+        self.start_time = time.time()
+        # Per-user state.
+        self.recognizers: dict[int, Any] = {}
+        self.resample_states: dict[int, object] = {}
+        # Circular prebuffer of (timestamp, mono16k_chunk). We trim from the
+        # front whenever the oldest entry exceeds the prebuffer window.
+        self.prebuffers: dict[int, deque] = {}
+        # Active captures: user_id -> {"buf": bytearray, "started_at": float,
+        #                              "last_voice_ts": float}
+        self.captures: dict[int, dict] = {}
+        self._active_lock = threading.Lock()
+        self._active_count = 0
+        self._idle_loop_started = False
+
+    def wants_opus(self) -> bool:
+        return False
+
+    def cleanup(self) -> None:
+        log.info(f"[WAKE] Sink cleanup. Total packets: {self.packet_count}, "
+                 f"active captures: {len(self.captures)}")
+        self._stopped = True
+        self.recognizers.clear()
+        self.resample_states.clear()
+        self.prebuffers.clear()
+        self.captures.clear()
+
+    # ---- packet ingestion -------------------------------------------------
+
+    def write(self, source, data: voice_recv.VoiceData) -> None:
+        user_id = getattr(source, "id", None)
+        if user_id is None or user_id in config.IGNORE_USER_IDS:
+            return
+        pcm_data = data.pcm
+        if not pcm_data:
+            return
+
+        self.packet_count += 1
+        if self.packet_count == 1:
+            log.info(f"[WAKE] First packet received "
+                     f"(user_id={user_id}, bytes={len(pcm_data)})")
+            self._start_idle_watcher_once()
+        elif self.packet_count % 1000 == 0:
+            elapsed = time.time() - self.start_time
+            log.info(f"[WAKE] {self.packet_count} packets in {elapsed:.1f}s, "
+                     f"active_captures={len(self.captures)}")
+
+        try:
+            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            data_16k, new_state = audioop.ratecv(
+                mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
+            )
+            self.resample_states[user_id] = new_state
+            rms = audioop.rms(data_16k, 2)
+            now = time.time()
+
+            self._push_prebuffer(user_id, data_16k, now)
+
+            capture = self.captures.get(user_id)
+            if capture is not None:
+                self._extend_capture(user_id, capture, data_16k, rms, now)
+                # While capturing we don't need to keep feeding VOSK — the
+                # wake word already fired. Whisper sees the full phrase.
+                return
+
+            # Idle: feed VOSK and check for wake word.
+            rec = self._recognizer_for(user_id)
+            if rec is None:
+                return
+            rec.AcceptWaveform(data_16k)
+            if _vosk_heard_wake_word(rec):
+                log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
+                         f"starting capture")
+                self._start_capture(user_id, now)
+                # Reset the recognizer so leftover state doesn't trigger again
+                # on the next packet.
+                try:
+                    rec.Reset()
+                except Exception:
+                    pass
+        except Exception:
+            log.exception("[WAKE] write error")
+
+    # ---- prebuffer / capture helpers -------------------------------------
+
+    def _push_prebuffer(self, user_id: int, chunk: bytes, ts: float) -> None:
+        buf = self.prebuffers.get(user_id)
+        if buf is None:
+            buf = deque()
+            self.prebuffers[user_id] = buf
+        buf.append((ts, chunk))
+        # Evict frames older than the prebuffer window.
+        cutoff = ts - config.WAKE_WORD_PREBUFFER_SECONDS
+        while buf and buf[0][0] < cutoff:
+            buf.popleft()
+
+    def _recognizer_for(self, user_id: int):
+        rec = self.recognizers.get(user_id)
+        if rec is None:
+            rec = _new_vosk_recognizer()
+            if rec is not None:
+                self.recognizers[user_id] = rec
+        return rec
+
+    def _start_capture(self, user_id: int, now: float) -> None:
+        # Seed the capture buffer with the prebuffer contents so Whisper sees
+        # whatever the user said leading up to and including the wake word.
+        seed = bytearray()
+        for _ts, chunk in self.prebuffers.get(user_id, ()):  # iterate as-is
+            seed.extend(chunk)
+        self.captures[user_id] = {
+            "buf": seed,
+            "started_at": now,
+            "last_voice_ts": now,
+        }
+
+    def _extend_capture(self, user_id: int, capture: dict, chunk: bytes,
+                        rms: int, now: float) -> None:
+        capture["buf"].extend(chunk)
+        if rms >= TranscriberSink.SILENCE_RMS_THRESHOLD:
+            capture["last_voice_ts"] = now
+
+        # Close conditions: sustained silence OR max-capture timeout.
+        silence_for = now - capture["last_voice_ts"]
+        duration = now - capture["started_at"]
+        if silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS:
+            log.info(f"[WAKE] user={user_id} closing capture on silence "
+                     f"({silence_for:.2f}s, dur={duration:.2f}s)")
+            self._finalize_capture(user_id)
+        elif duration >= config.WAKE_WORD_MAX_CAPTURE_SECONDS:
+            log.info(f"[WAKE] user={user_id} closing capture on timeout "
+                     f"({duration:.2f}s)")
+            self._finalize_capture(user_id)
+
+    def _finalize_capture(self, user_id: int) -> None:
+        capture = self.captures.pop(user_id, None)
+        if not capture:
+            return
+        pcm = bytes(capture["buf"])
+        if not pcm:
+            return
+        secs = len(pcm) / (16000 * 2)
+        with self._active_lock:
+            limit = (config.MAX_CONCURRENT_WHILE_PLAYING
+                     if _main_bot_is_playing()
+                     else config.MAX_CONCURRENT_IDLE)
+            if self._active_count >= limit:
+                log.info(f"[WAKE] capacity full ({self._active_count}/"
+                         f"{limit}); dropping {secs:.1f}s from user {user_id}")
+                return
+            self._active_count += 1
+        asyncio.run_coroutine_threadsafe(
+            self._transcribe_and_dispatch(user_id, pcm, secs),
+            self._client_ref.loop,
+        )
+
+    # ---- idle watcher (closes captures when speaker stops sending) -------
+
+    def _start_idle_watcher_once(self) -> None:
+        if self._idle_loop_started:
+            return
+        self._idle_loop_started = True
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._idle_watcher(), self._client_ref.loop
+            )
+        except Exception:
+            log.exception("[WAKE] failed to start idle watcher")
+
+    async def _idle_watcher(self) -> None:
+        """voice_recv stops calling write() once the speaker goes silent, so
+        we poll every 250ms to close captures whose last voice frame is older
+        than the silence threshold (mirrors TranscriberSink's idle_watcher)."""
+        while not self._stopped:
+            try:
+                await asyncio.sleep(0.25)
+                now = time.time()
+                for uid in list(self.captures.keys()):
+                    cap = self.captures.get(uid)
+                    if not cap:
+                        continue
+                    silence_for = now - cap["last_voice_ts"]
+                    duration = now - cap["started_at"]
+                    if (silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS
+                            or duration >= config.WAKE_WORD_MAX_CAPTURE_SECONDS):
+                        log.info(f"[WAKE] idle-watcher closing capture for "
+                                 f"user={uid} (silence={silence_for:.2f}s, "
+                                 f"dur={duration:.2f}s)")
+                        self._finalize_capture(uid)
+            except Exception:
+                log.exception("[WAKE] idle watcher error")
+
+    # ---- Whisper handoff --------------------------------------------------
+
+    async def _transcribe_and_dispatch(self, user_id: int, pcm_16k: bytes,
+                                       duration: float) -> None:
+        try:
+            t0 = time.monotonic()
+            text = await asyncio.to_thread(_run_whisper, pcm_16k)
+            dt = time.monotonic() - t0
+            if not text:
+                log.info(f"[WAKE] user={user_id} Whisper returned empty "
+                         f"({duration:.1f}s audio, {dt*1000:.0f}ms); skip")
+                return
+            log.info(f"[WAKE][es] user_id={user_id} "
+                     f"({duration:.1f}s audio, {dt*1000:.0f}ms): {text}")
+            # Drop false positives: VOSK thought it heard "indio" but Whisper
+            # didn't transcribe any variant — caller asked us not to act.
+            if not _contains_wake_word(text):
+                log.info(f"[WAKE] user={user_id} Whisper text has no wake "
+                         f"word, dropping (likely VOSK false positive)")
+                return
+            # If the only content is the wake word itself with nothing else,
+            # caller asked us NOT to invoke the indio.
+            if not _has_text_beyond_wake_word(text):
+                log.info(f"[WAKE] user={user_id} only wake word, no question; "
+                         f"skip")
+                return
+            await on_transcript(user_id, text, via_wake_word=True)
+        except Exception:
+            log.exception("[WAKE] transcribe failed")
+        finally:
+            with self._active_lock:
+                self._active_count -= 1
+
+
+def _has_text_beyond_wake_word(text: str) -> bool:
+    """True if the transcript contains more than just the wake word itself.
+
+    "che indio" → False (no follow-up question).
+    "che indio cómo andás" → True.
+    """
+    if not text:
+        return False
+    norm = _normalize(text)
+    for tok in _WAKE_WORD_TOKENS:
+        norm = norm.replace(tok, " ")
+    # Strip leftover punctuation and common filler words ("che", "ey", "el").
+    cleaned = re.sub(r"[^a-zñü ]+", " ", norm)
+    cleaned = re.sub(r"\b(che|ey|el|hey|oye|ehh?)\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return bool(cleaned)
+
+
 # Cached "is the main bot playing audio" check — polled cheaply.
 _play_state = {"is_playing": False, "checked_at": 0.0}
 _play_state_lock = threading.Lock()
@@ -654,14 +1006,25 @@ async def _get_http() -> aiohttp.ClientSession:
     return _http_session
 
 
-async def on_transcript(user_id: int, text: str):
+async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False):
     """Handle a completed transcription: post to transcript channel + optionally
-    forward to the main bot and trigger the indio on wake word."""
+    forward to the main bot and trigger the indio on wake word.
+
+    ``via_wake_word`` is set by WakeWordSink so we can skip the unconditional
+    channel post (the user explicitly asked us to stop spamming bot-testing
+    with every utterance). When the wake-word path triggers, we still post the
+    transcript so the question is visible in the channel right above the
+    indio's reply, but we never post anything that didn't pass the wake-word
+    gate.
+    """
+    should_post = (via_wake_word
+                   or config.DEBUG_TRANSCRIBE_ALL
+                   or not config.WAKE_WORD_ENABLED)
     posted_channel_id: Optional[int] = None
     posted_guild_id: Optional[int] = None
     speaker_name: Optional[str] = None
 
-    if config.TRANSCRIPT_CHANNEL_NAME:
+    if config.TRANSCRIPT_CHANNEL_NAME and should_post:
         try:
             for guild in client.guilds:
                 chan = discord.utils.get(
@@ -676,6 +1039,21 @@ async def on_transcript(user_id: int, text: str):
                     break
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
+
+    # Resolve the destination guild/channel even when we skipped the post (so
+    # the wake-word path can still dispatch to /indio). Re-uses the same lookup
+    # the channel post would have done.
+    if posted_channel_id is None and config.TRANSCRIPT_CHANNEL_NAME:
+        for guild in client.guilds:
+            chan = discord.utils.get(
+                guild.text_channels, name=config.TRANSCRIPT_CHANNEL_NAME
+            )
+            if chan:
+                member = guild.get_member(user_id)
+                speaker_name = _name_for(user_id, member)
+                posted_channel_id = chan.id
+                posted_guild_id = guild.id
+                break
 
     # Wake word: if the transcript contains an "indio"-like token, hand the
     # entire raw transcript to the main bot's /indio endpoint. The server runs
@@ -867,11 +1245,28 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
         log.warning(f"[VOICE] Timeout waiting for connection in {vc.channel.name}")
         return
     await asyncio.sleep(1.0)
-    log.info(f"[VOICE] Starting listener in {vc.channel.name}")
+    sink = _make_voice_sink()
+    log.info(f"[VOICE] Starting listener in {vc.channel.name} "
+             f"(sink={type(sink).__name__})")
     try:
-        vc.listen(TranscriberSink(client))
+        vc.listen(sink)
     except Exception as e:
         log.exception(f"[VOICE] listen() failed: {e}")
+
+
+def _make_voice_sink() -> voice_recv.AudioSink:
+    """Pick the right sink based on config flags.
+
+    Default: WakeWordSink (VOSK-gated Whisper, no spam in the transcript channel).
+    DEBUG_TRANSCRIBE_ALL=true or WAKE_WORD_ENABLED=false or VOSK unavailable:
+    fall back to the legacy TranscriberSink so the userbot still works.
+    """
+    if config.WAKE_WORD_ENABLED and not config.DEBUG_TRANSCRIBE_ALL:
+        if _load_vosk_model() is not None:
+            return WakeWordSink(client)
+        log.warning("[VOICE] WAKE_WORD_ENABLED but VOSK unavailable; "
+                    "falling back to TranscriberSink")
+    return TranscriberSink(client)
 
 
 async def _join_channel(channel: discord.VoiceChannel):

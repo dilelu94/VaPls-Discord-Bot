@@ -28,6 +28,36 @@ WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "4"))
 MAX_CONCURRENT_IDLE = int(os.getenv("MAX_CONCURRENT_IDLE", "5"))
 MAX_CONCURRENT_WHILE_PLAYING = int(os.getenv("MAX_CONCURRENT_WHILE_PLAYING", "3"))
 
+# --- Wake-word gating (VOSK pre-filter + Whisper on demand) ---------------
+# When WAKE_WORD_ENABLED is true, the userbot uses a tiny VOSK recognizer with
+# a restricted grammar (only "indio" / "che indio" / "[unk]") to watch every
+# speaker continuously. Whisper only runs on a captured chunk AFTER VOSK has
+# heard the wake word — saves CPU and Gemini quota, and keeps the transcript
+# channel clean (no more posting every random utterance).
+WAKE_WORD_ENABLED = os.getenv("WAKE_WORD_ENABLED", "true").lower() == "true"
+# Filesystem path to a VOSK model directory (e.g. vosk-model-small-es-0.42).
+# Required when WAKE_WORD_ENABLED=true. Empty string disables the feature
+# even if the flag is on (and we fall back to the legacy TranscriberSink).
+VOSK_MODEL_PATH = os.getenv(
+    "VOSK_MODEL_PATH",
+    "/home/ubuntu/vapls-discord-bot/models/vosk-model-small-es-0.42",
+)
+# Audio kept in a per-user circular buffer BEFORE the wake word fires. When
+# VOSK detects "indio", this pre-roll is prepended to the captured chunk so
+# Whisper sees the full phrase even if the user said "che indio contame…"
+# all in one breath without a pause.
+WAKE_WORD_PREBUFFER_SECONDS = float(os.getenv("WAKE_WORD_PREBUFFER_SECONDS", "2.5"))
+# Hard upper bound on how long we keep capturing audio after the wake word.
+# Protects against runaway buffers if silence detection misfires.
+WAKE_WORD_MAX_CAPTURE_SECONDS = float(os.getenv("WAKE_WORD_MAX_CAPTURE_SECONDS", "12.0"))
+# Sustained silence inside a capture that closes it. Keep it close to the
+# regular VAD final-silence threshold (~0.8s) so users feel a natural cutoff.
+WAKE_WORD_SILENCE_FINAL_SECONDS = float(os.getenv("WAKE_WORD_SILENCE_FINAL_SECONDS", "0.8"))
+# Debug switch: when true the userbot falls back to the legacy TranscriberSink
+# (transcribes EVERY utterance, posts every line to the transcript channel).
+# Useful for visualizing what Whisper hears in the channel while debugging.
+DEBUG_TRANSCRIBE_ALL = os.getenv("DEBUG_TRANSCRIBE_ALL", "false").lower() == "true"
+
 # Main bot API (apiServer). Used to (a) check is_playing for throttling,
 # (b) POST /indio when a wake-word is heard. SECRET must match the main bot's
 # API_SECRET, otherwise both calls are skipped silently.
