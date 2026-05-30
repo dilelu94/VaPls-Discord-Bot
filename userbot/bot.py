@@ -312,7 +312,7 @@ class TranscriberSink(voice_recv.AudioSink):
     is exceeded, the utterance is dropped with a log entry rather than queued.
     """
 
-    SILENCE_RMS_THRESHOLD = 25
+    SILENCE_RMS_THRESHOLD = 50
     SILENCE_FINAL_SECONDS = 0.8
     # Skip transcription if total speech accumulated for this user is shorter
     # than this many seconds — usually breath/laughter noise, not words.
@@ -460,9 +460,11 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
         audio,
         language="es",
         beam_size=1,
-        # vad_filter=True cropped legitimate audio in tests; we already gate
-        # on RMS in the sink, so let Whisper see the full buffer.
-        vad_filter=False,
+        vad_filter=True,
+        initial_prompt=(
+            "Conversación en español rioplatense con voseo. "
+            "Se menciona a veces a 'indio' o 'che indio'."
+        ),
         condition_on_previous_text=False,
     )
     return " ".join(s.text.strip() for s in segments if s.text).strip()

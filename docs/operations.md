@@ -1,5 +1,10 @@
 # Operations (Runbook)
 
+## Server
+- **Producción**: Oracle Cloud Ampere A1 — 4 OCPU (Neoverse N1 aarch64) / 24 GB RAM.
+- **Stack**: Ubuntu 22.04+ aarch64. `faster-whisper` (CTranslate2 con wheels aarch64), `py-cord`, `discord.py-self`, `ffmpeg`.
+- **Razón del upgrade desde E2.1.Micro (1 GB)**: faster-whisper `base` saturaba la CPU (~27s para 1.4s de audio); el modelo `small` ahora corre real-time con concurrencia 5 y deja headroom para `/play` simultáneo.
+
 ## Deployment scripts
 - `deploy.sh`: Instala dependencias, crea venv, copia `.env`, y registra
   `discord-bot.service` para systemd.

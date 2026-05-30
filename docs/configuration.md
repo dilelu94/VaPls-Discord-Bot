@@ -25,13 +25,20 @@
 | Variable | Required | Default | Description / implications |
 | --- | --- | --- | --- |
 | `USER_TOKEN` | ✅ | none | Discord **user** token. Required to start `userbot/bot.py`. |
-| `MODEL_PATH_ES` | ❌ | `/home/ubuntu/vapls-discord-bot/models/vosk-model-small-es-0.42` | Spanish Vosk model path. |
+| `WHISPER_MODEL` | ❌ | `small` | faster-whisper model size. `small` on the Ampere A1 4/24 server; revert to `base` on smaller VMs. |
+| `WHISPER_COMPUTE_TYPE` | ❌ | `int8` | CTranslate2 quantization. `int8` for CPU; `float16` for GPU. |
+| `WHISPER_CACHE_DIR` | ❌ | empty | Where to cache the downloaded Whisper model. |
+| `WHISPER_CPU_THREADS` | ❌ | `4` | CTranslate2 threads. Match vCPU count of the host. |
+| `MAX_CONCURRENT_IDLE` | ❌ | `5` | Max overlapping utterances transcribed when the main bot is idle. |
+| `MAX_CONCURRENT_WHILE_PLAYING` | ❌ | `3` | Max overlapping utterances while main bot plays audio (ffmpeg headroom). |
 | `GUILD_ALLOWLIST` | ❌ | empty | Comma-separated guild IDs to join; empty = all. |
 | `IGNORE_USER_IDS` | ❌ | empty | User IDs to ignore for transcription (e.g., main bot). |
 | `TRANSCRIPT_CHANNEL_NAME` | ❌ | empty | Text channel name for posting transcripts. |
 | `ENABLE_HTTP_FORWARD` | ❌ | `false` | Enables HTTP forwarding to the main bot API. |
 | `BOT_API_BASE` | ❌ | `http://127.0.0.1:8080` | Base URL for HTTP forwarding. |
 | `BOT_API_SECRET` | ❌ | empty | Must match `API_SECRET` when forwarding. |
+| `MAIN_BOT_API_BASE` | ❌ | `http://127.0.0.1:8080` | Main bot API for `/playing` polling and `/indio` invocation. |
+| `MAIN_BOT_API_SECRET` | ❌ | empty | Auth for `MAIN_BOT_API_BASE`; must match main bot's `API_SECRET`. |
 | `LOG_LEVEL` | ❌ | `INFO` | Python logging level for the userbot. |
 
 ## Security notes
