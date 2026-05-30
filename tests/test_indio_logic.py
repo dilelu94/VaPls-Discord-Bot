@@ -6,7 +6,7 @@ distillation task is spawned during these tests."""
 import asyncio
 import os
 import time
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -283,6 +283,133 @@ async def test_play_sound_goes_through_userbot_relay(
     assert soundpad_posts[-1]["json"]["query"] == "milapollo"
     # The direct fallback was NOT used.
     direct_clip.assert_not_awaited()
+
+
+async def test_skip_music_calls_player_skip(
+        indio, ctx_factory, patch_generate, reply_factory, monkeypatch):
+    """Pure control verbs (skip/pause/resume/stop) don't go through any
+    relay — they call methods on the existing GuildPlayer directly."""
+    import playCommand
+    fake_player = MagicMock()
+    fake_player.skipSong = AsyncMock()
+    fake_player.vc = MagicMock()
+    fake_player.vc.is_playing = MagicMock(return_value=True)
+    fake_player.vc.is_paused = MagicMock(return_value=False)
+    monkeypatch.setitem(playCommand.guildPlayers, 100, fake_player)
+
+    patch_generate(reply=reply_factory(
+        text="dale, salteo",
+        function_calls=[{"name": "skip_music", "args": {}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "saltea este tema", nuevo=False)
+    await _drain_pending_tasks()
+
+    fake_player.skipSong.assert_awaited_once()
+
+
+async def test_pause_music_only_pauses_when_playing(
+        indio, ctx_factory, patch_generate, reply_factory, monkeypatch):
+    import playCommand
+    fake_player = MagicMock()
+    fake_player.togglePausePlay = AsyncMock()
+    fake_player.vc = MagicMock()
+    fake_player.vc.is_playing = MagicMock(return_value=True)
+    fake_player.vc.is_paused = MagicMock(return_value=False)
+    monkeypatch.setitem(playCommand.guildPlayers, 100, fake_player)
+
+    patch_generate(reply=reply_factory(
+        text="dale, freno",
+        function_calls=[{"name": "pause_music", "args": {}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "pausá", nuevo=False)
+    await _drain_pending_tasks()
+
+    fake_player.togglePausePlay.assert_awaited_once()
+
+
+async def test_pause_music_noop_when_not_playing(
+        indio, ctx_factory, patch_generate, reply_factory, monkeypatch):
+    import playCommand
+    fake_player = MagicMock()
+    fake_player.togglePausePlay = AsyncMock()
+    fake_player.vc = MagicMock()
+    fake_player.vc.is_playing = MagicMock(return_value=False)
+    fake_player.vc.is_paused = MagicMock(return_value=False)
+    monkeypatch.setitem(playCommand.guildPlayers, 100, fake_player)
+
+    patch_generate(reply=reply_factory(
+        text="hmm, nada está sonando",
+        function_calls=[{"name": "pause_music", "args": {}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "pausá", nuevo=False)
+    await _drain_pending_tasks()
+
+    fake_player.togglePausePlay.assert_not_awaited()
+
+
+async def test_resume_music_only_resumes_when_paused(
+        indio, ctx_factory, patch_generate, reply_factory, monkeypatch):
+    import playCommand
+    fake_player = MagicMock()
+    fake_player.togglePausePlay = AsyncMock()
+    fake_player.vc = MagicMock()
+    fake_player.vc.is_playing = MagicMock(return_value=False)
+    fake_player.vc.is_paused = MagicMock(return_value=True)
+    monkeypatch.setitem(playCommand.guildPlayers, 100, fake_player)
+
+    patch_generate(reply=reply_factory(
+        text="dale, va",
+        function_calls=[{"name": "resume_music", "args": {}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "seguí con la música", nuevo=False)
+    await _drain_pending_tasks()
+
+    fake_player.togglePausePlay.assert_awaited_once()
+
+
+async def test_stop_music_calls_stop_playback(
+        indio, ctx_factory, patch_generate, reply_factory, monkeypatch):
+    import playCommand
+    fake_player = MagicMock()
+    fake_player.stopPlayback = AsyncMock()
+    fake_player.vc = MagicMock()
+    fake_player.vc.is_playing = MagicMock(return_value=True)
+    fake_player.vc.is_paused = MagicMock(return_value=False)
+    monkeypatch.setitem(playCommand.guildPlayers, 100, fake_player)
+
+    patch_generate(reply=reply_factory(
+        text="listo, paro",
+        function_calls=[{"name": "stop_music", "args": {}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "pará la música", nuevo=False)
+    await _drain_pending_tasks()
+
+    fake_player.stopPlayback.assert_awaited_once()
+
+
+async def test_control_music_with_no_active_player_is_noop(
+        indio, ctx_factory, patch_generate, reply_factory, monkeypatch):
+    """If no music has been queued yet, skip/pause/resume/stop should
+    silently no-op instead of creating an empty player."""
+    import playCommand
+    # Make sure no player exists for this guild.
+    playCommand.guildPlayers.pop(100, None)
+
+    patch_generate(reply=reply_factory(
+        text="hmm, no hay nada sonando",
+        function_calls=[{"name": "skip_music", "args": {}}],
+    ))
+
+    # Just verify no crash and no player was implicitly created.
+    await indioLogic(ctx_factory(guild_id=100), "saltea", nuevo=False)
+    await _drain_pending_tasks()
+
+    assert 100 not in playCommand.guildPlayers
 
 
 async def test_unknown_function_call_is_ignored(

@@ -56,11 +56,13 @@ Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
 comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
 \
 Si el grupo te pide música/un tema/una canción, usás la tool `play_music`. Si \
-te piden un audio/sonido/clip del soundpad, usás la tool `play_sound`. Una \
-sola tool por mensaje y solo cuando te lo piden de verdad. Antes de llamarla, \
-mandá un texto BREVE de confirmación ("dale, va Queen", "tomá milapollo") — \
-sin chamuyo. Nunca digas "no puedo" o "no me anda": las tools andan, las \
-usás y listo. \
+te piden un audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te \
+piden controlar la música que está sonando, usás `skip_music` (saltear/cambiar), \
+`pause_music` (pausar/frenar), `resume_music` (despausar/seguir) o `stop_music` \
+(parar y limpiar la cola). Una sola tool por mensaje y solo cuando te lo piden \
+de verdad. Antes de llamarla, mandá un texto BREVE de confirmación ("dale, va \
+Queen", "tomá milapollo", "dale, salteo") — sin chamuyo. Nunca digas "no puedo" \
+o "no me anda": las tools andan, las usás y listo. \
 \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
@@ -135,6 +137,39 @@ _INDIO_TOOLS = [
             },
             "required": ["name"],
         },
+    },
+    {
+        "name": "skip_music",
+        "description": (
+            "Saltear el tema actual y pasar al siguiente de la cola. "
+            "Usala cuando piden 'saltea', 'skip', 'pasá al que sigue', "
+            "'el siguiente', 'cambiá de tema'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "pause_music",
+        "description": (
+            "Pausar la música que está sonando ahora. Usala cuando "
+            "piden 'pausá', 'frená', 'pará un toque'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "resume_music",
+        "description": (
+            "Despausar / retomar la música que estaba pausada. Usala "
+            "cuando piden 'seguí', 'dale', 'reanudá', 'volvé a poner'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "stop_music",
+        "description": (
+            "Parar la música y vaciar la cola. Usala cuando piden "
+            "'pará la música', 'basta', 'cortala', 'limpiá la cola'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
     },
 ]
 
@@ -732,21 +767,33 @@ async def _maybe_compress(mem_key: str) -> None:
         _indio_compressing.discard(mem_key)
 
 
-_FUNCTION_CALL_TO_ACTION = {
+# Maps each Gemini tool name to its internal action label and the key under
+# ``args`` where the string argument lives (or ``None`` if the tool takes no
+# arguments — pure control verbs like skip/pause/resume/stop).
+_FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "play_music": ("PLAY_MUSIC", "query"),
     "play_sound": ("PLAY_SOUND", "name"),
+    "skip_music": ("SKIP_MUSIC", None),
+    "pause_music": ("PAUSE_MUSIC", None),
+    "resume_music": ("RESUME_MUSIC", None),
+    "stop_music": ("STOP_MUSIC", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
     "PLAY_SOUND": "🔊 Tomá",
+    "SKIP_MUSIC": "⏭️ Siguiente",
+    "PAUSE_MUSIC": "⏸️ Pausando",
+    "RESUME_MUSIC": "▶️ Dale, va",
+    "STOP_MUSIC": "⏹️ Listo",
 }
 _ACTION_ARG_MAX_CHARS = 200
 
 
 def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, str]]:
     """Translate Gemini function calls into the (action, arg) tuples that
-    ``_dispatch_indio_actions`` understands. Unknown tool names and empty or
-    non-string args are logged and skipped — we don't want a malformed call to
+    ``_dispatch_indio_actions`` understands. For tools without arguments
+    the tuple's second element is the empty string. Unknown tool names and
+    malformed args are logged and skipped — we don't want a bad call to
     fall through and dispatch with garbage."""
     actions: list[tuple[str, str]] = []
     for call in function_calls or []:
@@ -758,6 +805,10 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
             logger.warning("indio: unknown tool call '%s' (args=%r)", name, call.get("args"))
             continue
         action, arg_key = mapping
+        if arg_key is None:
+            # Argument-less control verb (skip/pause/resume/stop).
+            actions.append((action, ""))
+            continue
         args = call.get("args") or {}
         raw = args.get(arg_key) if isinstance(args, dict) else None
         if not isinstance(raw, str):
@@ -869,6 +920,37 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     msg = played_path or "no match"
                 statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                 logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
+            elif action in ("SKIP_MUSIC", "PAUSE_MUSIC", "RESUME_MUSIC", "STOP_MUSIC"):
+                # Pure playback controls don't have a slash command equivalent —
+                # they only exist as UI buttons on the player. We talk to the
+                # GuildPlayer directly. If no player exists for this guild it
+                # means nothing was ever queued, so we no-op instead of
+                # implicitly creating one.
+                player = playCommand.guildPlayers.get(int(guild_id))
+                if player is None:
+                    statuses.append(f"{action.lower()}: no active player")
+                    logger.info("indio %s: no active player for guild %s", action, guild_id)
+                    continue
+                vc = getattr(player, "vc", None)
+                if action == "SKIP_MUSIC":
+                    await player.skipSong()
+                    statuses.append("skip: ok")
+                elif action == "STOP_MUSIC":
+                    await player.stopPlayback()
+                    statuses.append("stop: ok")
+                elif action == "PAUSE_MUSIC":
+                    if vc and vc.is_playing():
+                        await player.togglePausePlay()
+                        statuses.append("pause: ok")
+                    else:
+                        statuses.append("pause: not playing")
+                elif action == "RESUME_MUSIC":
+                    if vc and vc.is_paused():
+                        await player.togglePausePlay()
+                        statuses.append("resume: ok")
+                    else:
+                        statuses.append("resume: not paused")
+                logger.info("indio %s → %s", action, statuses[-1])
         except Exception:
             logger.exception("indio action %s failed", action)
     return statuses
