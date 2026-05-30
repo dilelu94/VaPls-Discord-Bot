@@ -115,6 +115,7 @@ async def safeEdit(ctx, message):
 
 intents = discord.Intents.default()
 intents.voice_states = True
+intents.members = True  # Privileged: poblar guild.members + ch.members desde el handshake del gateway, sin esperar a chunking on-demand.
 try:
     asyncio.get_event_loop()
 except RuntimeError:
