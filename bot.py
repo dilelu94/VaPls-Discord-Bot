@@ -301,15 +301,13 @@ async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
 @bot.slash_command(name="indio", description="Charla con el indio")
 async def indio(
     ctx,
-    pregunta: discord.Option(str, description="Qué le decís al indio"),
-    nuevo: discord.Option(bool, description="Empezar conversación nueva", required=False, default=False),
+    charla: discord.Option(str, description="Qué le decís al indio"),
 ):
     """Slash command: chat with the Indio persona (with history).
 
     Args:
         ctx: Discord application context.
-        pregunta: User prompt text.
-        nuevo: Whether to reset the conversation history.
+        charla: User message to the Indio.
 
     Side Effects:
         Calls Gemini, updates history, and sends responses to Discord.
@@ -318,8 +316,8 @@ async def indio(
         This function is a coroutine and must be awaited.
     """
     await safe_defer(ctx)
-    _track_command(ctx, "indio", {"prompt_length": len(pregunta or ""), "nuevo": bool(nuevo)})
-    await indioLogic(ctx, pregunta, nuevo)
+    _track_command(ctx, "indio", {"prompt_length": len(charla or "")})
+    await indioLogic(ctx, charla, False)
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
