@@ -30,4 +30,5 @@ htmlcov/
 
 # Local sync config (contains server-specific paths/hosts)
 lsyncd*.lua
+lsyncd*.service
 lsyncd.status

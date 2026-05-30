@@ -115,8 +115,12 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 
 El usuario corre **lsyncd** en su PC para mantener `audio_output/` del server espejado con `/home/dilelu/repos/RVC_WebUI/Output/` (donde RVC genera clips de voz). Sin esto, los clips nuevos no llegan al soundpad.
 
-**Config (local, gitignored):** `lsyncd_rvc.lua` en la raíz del repo.
+**Config (local, gitignored):** dos archivos en la raíz del repo, ambos con paths absolutos del usuario:
+- `lsyncd_rvc.lua` — config de lsyncd (source/target/ssh-key).
+- `lsyncd-rvc.service` — systemd user unit que corre `lsyncd -nodaemon lsyncd_rvc.lua`.
+
 ```lua
+-- lsyncd_rvc.lua
 source = "/home/dilelu/repos/RVC_WebUI/Output/"
 host = "ubuntu@141.148.84.55"
 targetdir = "/home/ubuntu/vapls-discord-bot/audio_output/"
@@ -124,8 +128,13 @@ identityFile = "/var/home/dilelu/.ssh/vapls"
 delete = true   -- borra del server lo que se borró en local
 ```
 
-**Manejo:** corre como **systemd user service** en la PC del usuario:
-- `lsyncd-rvc.service`
+**Instalación en una PC fresh:** symlinkear el unit a `~/.config/systemd/user/` y habilitarlo. Linger se activa para que arranque al boot sin login.
+```bash
+ln -s "$(pwd)/lsyncd-rvc.service" ~/.config/systemd/user/lsyncd-rvc.service
+loginctl enable-linger "$USER"   # solo la primera vez
+systemctl --user daemon-reload
+systemctl --user enable --now lsyncd-rvc.service
+```
 
 Comandos útiles:
 ```bash
