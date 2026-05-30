@@ -21,6 +21,7 @@ USERS: dict[int, dict] = {
         "name": "Mila",
         "greeting": "Mila/Milapollo.mp3",
         "traits": [
+            "sexo: mujer",
             "bombera, trabaja de seguridad",
             "hace turnos de 24 horas",
             "de Quilmes",
@@ -33,6 +34,7 @@ USERS: dict[int, dict] = {
     211354006805676032: {
         "name": "Miles",
         "traits": [
+            "sexo: hombre",
             "programador del carajo (con IA)",
             "tiene novia",
             "de El Talar de Pacheco (Tigre)",
@@ -44,6 +46,7 @@ USERS: dict[int, dict] = {
         "name": "Viny",
         "greeting": "Audios/Necesito pito.m4a",
         "traits": [
+            "sexo: hombre",
             "pelado",
             "no tiene trabajo",
             "de Gualeguaychu",
@@ -58,6 +61,7 @@ USERS: dict[int, dict] = {
     309714566265438221: {
         "name": "Chalo",
         "traits": [
+            "sexo: hombre",
             "programador jr",
             "le gusta pescar",
         ],
@@ -69,6 +73,7 @@ USERS: dict[int, dict] = {
         "name": "Fide",
         "greeting": "Audios/aughhhhhhhhhh.mp3",
         "traits": [
+            "sexo: hombre",
             "medio nazi (chiste interno del grupo)",
             "de Gualeguaychu",
         ],
@@ -76,6 +81,7 @@ USERS: dict[int, dict] = {
     231217010522980352: {
         "name": "Juji",
         "traits": [
+            "sexo: hombre",
             "esta en una secta",
             "no entra a Discord hace un monton",
         ],
@@ -83,6 +89,7 @@ USERS: dict[int, dict] = {
     293815496866922507: {
         "name": "Seba",
         "traits": [
+            "sexo: hombre",
             "judio (emoji de jugo en chiste interno)",
             "no labura nunca",
             "millonario",
@@ -95,6 +102,7 @@ USERS: dict[int, dict] = {
     428444575963807745: {
         "name": "Tobi",
         "traits": [
+            "sexo: hombre",
             "es gobernado",
             "tiene una impresora 3D",
             "mejor amigo de toda la vida del indio (jardin y escuela juntos)",
@@ -108,6 +116,7 @@ USERS: dict[int, dict] = {
     495255209715433472: {
         "name": "Franko",
         "traits": [
+            "sexo: hombre",
             "falopero, drogadicto (chiste interno del grupo)",
             "de Gualeguaychu",
             "juega CS",
@@ -121,6 +130,7 @@ USERS: dict[int, dict] = {
     581288610410790912: {
         "name": "Caro",
         "traits": [
+            "sexo: mujer",
             "gotica, tatuadora",
             "amiga del indio (la unica mujer del grupo de mejores amigos)",
         ],
@@ -129,6 +139,7 @@ USERS: dict[int, dict] = {
         "name": "Enrique",
         "greeting": "Audios/enrique.mp3",
         "traits": [
+            "sexo: hombre",
             "uruguayo",
             "profesor de musica",
             "ama trabajar con niños (es su laburo dando clases)",
@@ -138,6 +149,7 @@ USERS: dict[int, dict] = {
         "name": "Mati",
         "greeting": "Audios/Fart_with_reverb_sound_effect.wav",
         "traits": [
+            "sexo: hombre",
             "programador senior",
             "tiene una gata gorda que considera su hija",
             "es de baja estatura y no le gusta que se lo recuerden",
@@ -150,6 +162,7 @@ USERS: dict[int, dict] = {
     310165756384116736: {
         "name": "Magote",
         "traits": [
+            "sexo: hombre",
             "municipal, ñoqui (chiste interno: no labura)",
             "tiene una hija",
             "casado",
@@ -167,7 +180,7 @@ GROUP_LORE: dict[str, list[str]] = {
         "algunos del grupo juegan WoW, Overwatch o Dota",
         "Fide, Viny y Franko son de Gualeguaychu; Mila de Quilmes; Miles de El Talar (Tigre)",
         "Tobi, Magote, Miles y Caro son los mejores amigos del indio (todos hombres menos Caro)",
-        "Bibi es un amigo de toda la vida del indio: ama los muros, a veces llora, el indio tiene fotos con el",
+        "Bibi (hombre) es un amigo de toda la vida del indio: ama los muros, a veces llora, el indio tiene fotos con el. No tiene Discord pero el indio tiene su numero y le puede pedir unos bonbons si quisiera",
     ],
     "chistes_internos": [
         "los que juegan CS son giles, los que juegan Dota unos capos",
