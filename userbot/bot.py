@@ -1006,14 +1006,83 @@ def _autoreply_mark_fired(guild_id: int, channel_id: int) -> None:
     _INDIO_AUTO_HOURLY.setdefault(guild_id, []).append(now)
 
 
+_GEMINI_KEY_DM_RE = _re.compile(
+    r"\b(?:AIza[\w-]{20,80}|AQ\.[A-Za-z0-9_\-]{20,120})"
+)
+
+
+async def _handle_gemini_key_dm(message) -> bool:
+    """If ``message`` is a DM that contains Gemini-shaped API keys, POST the
+    raw text to the main bot's /gemini-key endpoint and reply with a short
+    confirmation. Returns True when handled (so the caller skips the
+    auto-reply path), False otherwise."""
+    guild = getattr(message, "guild", None)
+    if guild is not None:
+        return False
+    text = (message.content or "")
+    if not _GEMINI_KEY_DM_RE.search(text):
+        return False
+    if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
+        log.warning("[GEMINI-KEY-DM] main bot API not configured, can't forward")
+        return True  # handled (silenciamos al user, no le pedimos retry)
+    owner_id = str(message.author.id)
+    owner_name = (getattr(message.author, "display_name", None)
+                  or getattr(message.author, "name", "unknown"))
+    payload = {
+        "text": text,
+        "owner_id": owner_id,
+        "owner_name": owner_name,
+        "source": "dm:userbot",
+    }
+    try:
+        session = await _get_http()
+        async with session.post(
+            f"{config.MAIN_BOT_API_BASE}/gemini-key",
+            json=payload,
+            headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status >= 400:
+                body = await resp.text()
+                log.warning(f"[GEMINI-KEY-DM] HTTP {resp.status}: {body[:200]}")
+                return True
+            data = await resp.json(content_type=None)
+    except Exception:
+        log.exception("[GEMINI-KEY-DM] forward failed")
+        return True
+    results = (data or {}).get("results") or []
+    added = sum(1 for r in results if r.get("ok"))
+    dupes = sum(1 for r in results
+                if not r.get("ok") and r.get("reason") == "already in pool")
+    failed = len(results) - added - dupes
+    lines: list[str] = []
+    if added:
+        lines.append(f"✅ Sumé {added} key(s) al pool. ¡Gracias {owner_name}!")
+    if dupes:
+        lines.append(f"ℹ️ {dupes} key(s) ya estaban cargadas.")
+    if failed:
+        lines.append(f"❌ {failed} key(s) no las pude sumar (formato inválido?).")
+    if lines:
+        try:
+            await message.channel.send("\n".join(lines))
+        except Exception:
+            log.exception("[GEMINI-KEY-DM] reply failed")
+    log.info(
+        f"[GEMINI-KEY-DM] from {owner_name} ({owner_id}): "
+        f"added={added} dupes={dupes} failed={failed}"
+    )
+    return True
+
+
 @client.event
 async def on_message(message):
     """Auto-reply trigger: when any human (not the userbot, not other bots,
     not a slash command typed as text) writes a message that contains the
     word "indio", forward the full text to the main bot's /indio endpoint
-    so the persona answers in the same channel."""
-    if not config.INDIO_AUTO_REPLY_ENABLED:
-        return
+    so the persona answers in the same channel.
+
+    Also: DMs containing Gemini API keys get forwarded to the main bot's
+    /gemini-key endpoint, with no auto-reply firing."""
     if message.author is None:
         return
     if message.author.id == client.user.id:
@@ -1021,6 +1090,11 @@ async def on_message(message):
     if getattr(message.author, "bot", False):
         return
     if message.author.id in config.IGNORE_USER_IDS:
+        return
+    # DM con keys de Gemini: lo procesamos y cortamos.
+    if await _handle_gemini_key_dm(message):
+        return
+    if not config.INDIO_AUTO_REPLY_ENABLED:
         return
     content = (message.content or "").strip()
     if not content:

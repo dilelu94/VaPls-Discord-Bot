@@ -21,6 +21,7 @@ import config
 import analytics
 import apiServer
 from apiServer import startApiServer
+import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
@@ -113,8 +114,15 @@ async def safeEdit(ctx, message):
         await safe_respond(ctx, message)
 
 
+geminiKeys.load_from_disk()
+
 intents = discord.Intents.default()
 intents.voice_states = True
+# Necesario para que on_message reciba DMs (handler que detecta API keys
+# de Gemini cuando los users se las mandan al bot por privado).
+intents.messages = True
+intents.dm_messages = True
+intents.message_content = True
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -204,6 +212,61 @@ async def on_voice_state_update(member, before, after):
             stop_idle_watchdog(before.channel.guild.id)
         except Exception:
             log.exception("failed to stop idle watchdog")
+
+
+@bot.event
+async def on_message(message):
+    """DM handler that absorbs Gemini API keys.
+
+    When a user DMs the bot and the message contains one or more strings that
+    look like Gemini API keys (``AIzaSy…`` or ``AQ.Ab8RN6…``), we hot-add them
+    to the pool and reply with a short confirmation crediting the donor.
+    Messages in guild channels (slash commands, anything else) are ignored —
+    this is purely an opt-in donation channel.
+    """
+    if message.author is None or message.author.bot:
+        return
+    if message.guild is not None:
+        return  # solo DMs
+    content = (message.content or "").strip()
+    if not content:
+        return
+    found = geminiKeys.extract_keys_from_text(content)
+    if not found:
+        return
+    owner_id = str(message.author.id)
+    owner_name = getattr(message.author, "display_name", None) \
+        or getattr(message.author, "name", "unknown")
+    added: list[str] = []
+    dupes: list[str] = []
+    failed: list[tuple[str, str]] = []
+    for k in found:
+        ok, reason = await geminiKeys.add_key(
+            k, owner_id=owner_id, owner_name=owner_name, source="dm:bot",
+        )
+        if ok:
+            added.append(k)
+        elif reason == "already in pool":
+            dupes.append(k)
+        else:
+            failed.append((k, reason))
+    lines: list[str] = []
+    if added:
+        lines.append(f"✅ Sumé {len(added)} key(s) al pool. ¡Gracias {owner_name}!")
+    if dupes:
+        lines.append(f"ℹ️ {len(dupes)} key(s) ya estaban cargadas.")
+    if failed:
+        lines.append("❌ Algunas no pude sumarlas:\n" +
+                     "\n".join(f"- {r}" for _, r in failed))
+    if lines:
+        try:
+            await message.channel.send("\n".join(lines))
+        except Exception:
+            log.exception("on_message: reply failed")
+    log.info(
+        "gemini key DM from %s (%s): added=%d dupes=%d failed=%d",
+        owner_name, owner_id, len(added), len(dupes), len(failed),
+    )
 
 
 def _track_command(ctx, name, extra=None):

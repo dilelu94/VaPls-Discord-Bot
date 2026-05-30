@@ -52,6 +52,11 @@ GEMINI_API_KEYS: list[str] = _parse_gemini_keys()
 # truthy check; mantenelo apuntando a la primera key del pool.
 GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else None
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Archivo persistente con el pool de keys (gitignored). geminiKeys.py lo lee
+# al startup y lo escribe cuando alguien manda una key nueva por DM. Si no
+# existe, se siembra con GEMINI_API_KEYS del .env.
+GEMINI_KEYS_FILE = os.getenv("GEMINI_KEYS_FILE", "gemini_keys.json")
+GEMINI_KEYS_DONATION_URL = "https://aistudio.google.com/apikey"
 INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 
 # Userbot relay: where the userbot exposes its POST /say endpoint so /indio

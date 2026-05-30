@@ -12,6 +12,7 @@ from typing import Optional
 import aiohttp
 
 import config
+import geminiKeys
 
 logger = logging.getLogger("bot.gemini")
 
@@ -32,11 +33,19 @@ _key_cooldowns: dict[str, float] = {}
 _next_key_idx: int = 0
 
 
+def _pool_keys() -> list[str]:
+    """Return the current pool. Prefers geminiKeys (loaded from JSON, can
+    grow at runtime via DM); falls back to the static config list when the
+    JSON pool was never populated (e.g. tests)."""
+    from_disk = geminiKeys.active_keys()
+    return from_disk or list(config.GEMINI_API_KEYS)
+
+
 def _available_keys() -> list[str]:
     """Return all configured keys whose cooldown has expired (or never set)."""
     import time as _time
     now = _time.monotonic()
-    return [k for k in config.GEMINI_API_KEYS if _key_cooldowns.get(k, 0.0) <= now]
+    return [k for k in _pool_keys() if _key_cooldowns.get(k, 0.0) <= now]
 
 
 def _pick_key() -> Optional[str]:
@@ -47,7 +56,7 @@ def _pick_key() -> Optional[str]:
     can decide whether to wait or surface a 429).
     """
     global _next_key_idx
-    keys = config.GEMINI_API_KEYS
+    keys = _pool_keys()
     if not keys:
         return None
     available = _available_keys()
@@ -129,7 +138,7 @@ async def generate(
     Async:
         This function is a coroutine and must be awaited.
     """
-    if not config.GEMINI_API_KEYS:
+    if not _pool_keys():
         raise GeminiError("GEMINI_API_KEY not set", kind="config")
 
     mdl = model or config.GEMINI_MODEL
@@ -155,7 +164,7 @@ async def generate(
     status = 0
     last_429_msg: Optional[str] = None
     # Probamos hasta una vez por key configurada antes de rendirnos.
-    attempts = max(1, len(config.GEMINI_API_KEYS))
+    attempts = max(1, len(_pool_keys()))
     used_keys: set[str] = set()
     try:
         for attempt in range(attempts):

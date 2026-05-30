@@ -938,8 +938,12 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
             else "⏱️ Gemini tardó demasiado. Probá de nuevo."
     if kind == "http":
         if status == 429:
-            return "⏳ Pará pará, tantas preguntas no — esperá un toque." if is_indio \
-                else "⏳ Llegamos al límite de Gemini (10 RPM / 250 día). Esperá un toque."
+            return (
+                f"⏳ Me quedé sin cupo de IA por ahora. Si querés que "
+                f"siga respondiendo, conseguite una key gratis en "
+                f"{config.GEMINI_KEYS_DONATION_URL} (botón \"Create API key\") "
+                f"y mandámela por DM al bot — la sumo al pool al toque."
+            )
         return f"🌐 Algo se rompió (HTTP {status}). Probá de nuevo." if is_indio \
             else f"❌ Gemini falló (HTTP {status})."
     if kind == "blocked":
@@ -978,8 +982,11 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "vapls")
+        # Cuando es rate-limit, mostramos solo al que invocó para no
+        # ensuciar el canal con texto que no aporta a la conversación.
+        is_rate_limited = e.kind == "http" and e.status == 429
         try:
-            await ctx.followup.send(msg)
+            await ctx.followup.send(msg, ephemeral=is_rate_limited)
         except Exception:
             pass
         analytics.capture("vapls failed", user=ctx.author, guild=ctx.guild, properties={
@@ -1085,8 +1092,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "indio")
+        is_rate_limited = e.kind == "http" and e.status == 429
         try:
-            await ctx.followup.send(msg)
+            await ctx.followup.send(msg, ephemeral=is_rate_limited)
         except Exception:
             pass
         analytics.capture("indio failed", user=ctx.author, guild=ctx.guild, properties={
@@ -1232,11 +1240,16 @@ async def indioFromVoice(
             tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
-        msg = _error_message(e.kind, e.status, "indio")
-        try:
-            await channel.send(msg)
-        except Exception:
-            pass
+        # En voz/auto-reply silenciamos el 429: el aviso "conseguite una key"
+        # ya lo ve quien invoca /indio o /vapls explicito; spamear el canal
+        # cada vez que alguien dice "indio" pasivamente seria peor.
+        is_rate_limited = e.kind == "http" and e.status == 429
+        if not is_rate_limited:
+            msg = _error_message(e.kind, e.status, "indio")
+            try:
+                await channel.send(msg)
+            except Exception:
+                pass
         analytics.capture("indio voice failed", user=member, guild=guild, properties={
             "error_kind": e.kind,
             "http_status": e.status,

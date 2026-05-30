@@ -20,6 +20,7 @@ from aiohttp import web
 
 import config
 import geminiCommand
+import geminiKeys
 from playCommand import guildPlayers
 
 logger = logging.getLogger("apiServer")
@@ -603,6 +604,35 @@ def makeApp(bot: discord.Bot) -> web.Application:
             "guild_ids": [str(gid) for gid in playing_guilds],
         })
 
+    async def submitGeminiKey(request: web.Request) -> web.Response:
+        """Receive one or more Gemini API keys from the userbot (or any
+        loopback caller) and add them to the pool.
+
+        Body JSON: {text, owner_id, owner_name, source?}. ``text`` is the raw
+        DM content from which we extract candidate keys; ``owner_id`` /
+        ``owner_name`` identify the donor. Returns a per-key breakdown so the
+        caller can craft a reply.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        text = str(data.get("text") or "")
+        owner_id = str(data.get("owner_id") or "")
+        owner_name = str(data.get("owner_name") or "unknown")
+        source = str(data.get("source") or "dm:userbot")
+        candidates = geminiKeys.extract_keys_from_text(text)
+        results: list[dict] = []
+        for k in candidates:
+            ok, reason = await geminiKeys.add_key(
+                k, owner_id=owner_id, owner_name=owner_name, source=source,
+            )
+            results.append({"key_tail": k[-6:], "ok": ok, "reason": reason})
+        return web.json_response({
+            "found": len(candidates),
+            "results": results,
+        })
+
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
@@ -611,6 +641,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/queue", queue)
     app.router.add_post("/indio", indioVoice)
     app.router.add_get("/playing", playingState)
+    app.router.add_post("/gemini-key", submitGeminiKey)
     return app
 
 
