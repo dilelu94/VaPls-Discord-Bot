@@ -1237,7 +1237,12 @@ async def decifrarTranscripcion(texto: str) -> str:
     if out.upper().strip() == "BASURA":
         logger.info("decifrar: descartado como BASURA, raw=%r", texto[:200])
         return ""
-    return out or texto
+    final = out or texto
+    if final != texto:
+        logger.info("decifrar: raw=%r -> cleaned=%r", texto[:200], final[:200])
+    else:
+        logger.info("decifrar: passthrough %r", texto[:200])
+    return final
 
 
 async def askIndio(bot: "discord.Bot",
