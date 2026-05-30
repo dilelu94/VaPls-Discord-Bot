@@ -178,7 +178,10 @@ class TestSoundpadSubfoldersAndPagination(unittest.IsolatedAsyncioTestCase):
         view.selected_file = "Quandale Dingle/sub/nested.m4a"
         await view.play_sound(self.interaction)
         expected_path = os.path.join(self.temp_audio_dir, "Audios", "Quandale Dingle/sub/nested.m4a")
-        mockFfmpeg.assert_called_once_with(expected_path)
+        # Only the resolved path is the behavior under test; FFmpeg options
+        # (e.g. dynaudnorm normalization) may be passed but are unrelated.
+        mockFfmpeg.assert_called_once()
+        self.assertEqual(mockFfmpeg.call_args.args[0], expected_path)
         self.assertTrue(self.vc.is_playing())
 
     @patch("playCommand.guildPlayers")
