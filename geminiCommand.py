@@ -784,15 +784,39 @@ def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
     return fallback
 
 
+async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
+                                    query: str) -> tuple[bool, str]:
+    """Ask the userbot to invoke a VaPls slash command (`/play` or
+    `/soundpad`) from the real user account, so Discord shows the full
+    "Indio used /play" interaction. Returns (ok, message)."""
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        return False, "relay not configured"
+    invoke_url = config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/" + endpoint
+    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    payload = {"channel_id": int(channel_id), "query": query}
+    timeout = aiohttp.ClientTimeout(total=10)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(invoke_url, json=payload, headers=headers) as resp:
+                if resp.status < 400:
+                    return True, query
+                body = await resp.text()
+                return False, f"relay HTTP {resp.status}: {body[:100]}"
+    except Exception as exc:
+        logger.warning("indio %s relay failed: %s", endpoint, exc)
+        return False, f"relay error: {exc}"
+
+
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
                                    reply_channel_id: Optional[int] = None
                                    ) -> list[str]:
-    """Run any PLAY_* actions the indio emitted. For PLAY_MUSIC we also post
-    "/play <query>" via the userbot relay before triggering playback, so it
-    looks like the indio user actually typed the slash command. Returns short
-    status strings for logging; the indio's main reply is sent separately."""
+    """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
+    PLAY_SOUND are invoked through the userbot relay so they show up as
+    real "/play" / "/soundpad" slash commands in the chat. Falls back to
+    in-process playback if the relay is unavailable. Returns short status
+    strings for logging; the indio's main reply is sent separately."""
     if not actions or guild_id is None or bot is None:
         return []
     statuses: list[str] = []
@@ -804,36 +828,14 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     for action, arg in actions:
         try:
             if action == "PLAY_MUSIC":
-                # Ask the userbot to invoke /play as a real Discord slash
-                # command in #sick-tunes. This shows the full interaction
-                # flow: "Indio used /play" + VaPls download-progress message.
-                ok = False
-                msg = "relay not configured"
-                if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-                    invoke_url = (
-                        config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/invoke_play"
-                    )
-                    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
-                    payload = {
-                        "channel_id": config.INDIO_PLAY_CHANNEL_ID,
-                        "query": arg,
-                    }
-                    timeout = aiohttp.ClientTimeout(total=10)
-                    try:
-                        async with aiohttp.ClientSession(timeout=timeout) as sess:
-                            async with sess.post(
-                                invoke_url, json=payload, headers=headers
-                            ) as resp:
-                                if resp.status < 400:
-                                    ok, msg = True, arg
-                                else:
-                                    body = await resp.text()
-                                    msg = f"relay HTTP {resp.status}: {body[:100]}"
-                    except Exception as exc:
-                        msg = f"relay error: {exc}"
-                        logger.warning("indio PLAY_MUSIC relay failed: %s", exc)
+                # /play always lands in #sick-tunes regardless of where the
+                # conversation is — music has its own dedicated room.
+                ok, msg = await _invoke_slash_via_userbot(
+                    "invoke_play",
+                    channel_id=config.INDIO_PLAY_CHANNEL_ID,
+                    query=arg,
+                )
                 if not ok:
-                    # Fallback: trigger playback directly without slash UI.
                     logger.warning(
                         "indio PLAY_MUSIC relay failed (%s); falling back to playFromIndio",
                         msg,
@@ -842,21 +844,36 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                 statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                 logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
             elif action == "PLAY_SOUND":
-                try:
-                    from soundpadCommand import play_clip_by_query
-                except Exception:
-                    logger.exception("indio PLAY_SOUND: soundpadCommand import failed")
-                    continue
-                guild = bot.get_guild(int(guild_id)) if bot is not None else None
-                if guild is None:
-                    statuses.append(f"sound: fail — guild {guild_id} not found")
-                    logger.warning("indio PLAY_SOUND: guild %s not found", guild_id)
-                    continue
-                played_path = await play_clip_by_query(bot, guild, query=arg)
-                ok = played_path is not None
-                msg = played_path or "no match"
+                # /soundpad fires in the same channel where the chat is
+                # happening; falls back to the music channel only if the
+                # caller didn't provide one (voice-trigger edge case).
+                sound_channel_id = reply_channel_id or config.INDIO_PLAY_CHANNEL_ID
+                ok, msg = await _invoke_slash_via_userbot(
+                    "invoke_soundpad",
+                    channel_id=sound_channel_id,
+                    query=arg,
+                )
+                if not ok:
+                    logger.warning(
+                        "indio PLAY_SOUND relay failed (%s); falling back to play_clip_by_query",
+                        msg,
+                    )
+                    try:
+                        from soundpadCommand import play_clip_by_query
+                    except Exception:
+                        logger.exception("indio PLAY_SOUND: soundpadCommand import failed")
+                        statuses.append("sound: fail — import error")
+                        continue
+                    guild = bot.get_guild(int(guild_id))
+                    if guild is None:
+                        statuses.append(f"sound: fail — guild {guild_id} not found")
+                        logger.warning("indio PLAY_SOUND: guild %s not found", guild_id)
+                        continue
+                    played_path = await play_clip_by_query(bot, guild, query=arg)
+                    ok = played_path is not None
+                    msg = played_path or "no match"
                 statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
-                logger.info("indio PLAY_SOUND '%s' → ok=%s path=%s", arg, ok, played_path)
+                logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
         except Exception:
             logger.exception("indio action %s failed", action)
     return statuses

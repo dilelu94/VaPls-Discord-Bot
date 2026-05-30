@@ -1449,6 +1449,59 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
+async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
+    """Ask the userbot to invoke VaPls's /soundpad slash command with a
+    ``query`` argument so the clip plays under the real user account.
+    Mirrors :func:`_relay_invoke_play` so the indio can choose a clip and
+    have it look like a real slash invocation in the channel."""
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        query = str(data["query"]).strip()
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not query:
+        return web.json_response({"error": "empty query"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not hasattr(channel, "slash_commands"):
+        return web.json_response({"error": "channel has no slash_commands"}, status=400)
+
+    try:
+        cmds_iter = channel.slash_commands(query="soundpad")
+        if hasattr(cmds_iter, "__aiter__"):
+            cmds = [c async for c in cmds_iter]
+        else:
+            cmds = await cmds_iter
+    except Exception as e:
+        log.exception("[RELAY-SOUNDPAD] slash_commands() failed")
+        return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
+
+    sp_cmd = discord.utils.get(cmds, name="soundpad")
+    if sp_cmd is None:
+        log.warning("[RELAY-SOUNDPAD] /soundpad command not found in channel %s", channel_id)
+        return web.json_response({"error": "soundpad command not found in channel"}, status=404)
+
+    try:
+        await sp_cmd(query=query)
+        log.info(f"[RELAY-SOUNDPAD] invoked /soundpad query={query!r} in channel={channel_id}")
+        return web.json_response({"invoked": True, "query": query})
+    except Exception as e:
+        log.exception("[RELAY-SOUNDPAD] invocation failed")
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -1458,6 +1511,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/record", _relay_record)
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)
+    app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

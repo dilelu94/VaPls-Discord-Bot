@@ -221,6 +221,70 @@ async def test_function_call_with_empty_text_falls_back(
     assert any(b.strip() for b in bodies)
 
 
+@pytest.fixture
+def enable_relay(monkeypatch):
+    """Configure relay URLs so the indio dispatch goes through the slash
+    invocation path. Captures every relay POST for assertions."""
+    import config
+    monkeypatch.setattr(config, "INDIO_RELAY_URL",
+                        "http://127.0.0.1:8081/say", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "secret", raising=False)
+    posts: list[dict] = []
+
+    class _Resp:
+        def __init__(self, status=200):
+            self.status = status
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def text(self):
+            return ""
+
+    class _Sess:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def post(self, url, json=None, headers=None, **_):
+            posts.append({"url": url, "json": json, "headers": headers})
+            return _Resp(status=200)
+
+    import aiohttp
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **k: _Sess())
+    return posts
+
+
+async def test_play_sound_goes_through_userbot_relay(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, enable_relay):
+    # When the relay is configured, the indio invokes /soundpad as a real
+    # slash command via the userbot — not the direct play_clip_by_query path.
+    import soundpadCommand
+    direct_clip = AsyncMock(return_value="/x.ogg")
+    monkeypatch.setattr(soundpadCommand, "play_clip_by_query", direct_clip)
+
+    patch_generate(reply=reply_factory(
+        text="tomá milapollo",
+        function_calls=[{"name": "play_sound", "args": {"name": "milapollo"}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "tirate un audio milapollo", nuevo=False)
+    await _drain_pending_tasks()
+
+    # The HTTP request hit /invoke_soundpad with the right query.
+    soundpad_posts = [p for p in enable_relay if "/invoke_soundpad" in p["url"]]
+    assert soundpad_posts, "indio should POST to /invoke_soundpad when relay is enabled"
+    assert soundpad_posts[-1]["json"]["query"] == "milapollo"
+    # The direct fallback was NOT used.
+    direct_clip.assert_not_awaited()
+
+
 async def test_unknown_function_call_is_ignored(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
