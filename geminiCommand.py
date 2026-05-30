@@ -1379,16 +1379,19 @@ async def indioFromVoice(
             tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
-        # En voz/auto-reply silenciamos el 429: el aviso "conseguite una key"
-        # ya lo ve quien invoca /indio o /vapls explicito; spamear el canal
-        # cada vez que alguien dice "indio" pasivamente seria peor.
-        is_rate_limited = e.kind == "http" and e.status == 429
-        if not is_rate_limited:
-            msg = _error_message(e.kind, e.status, "indio")
-            try:
+        # Posteamos el aviso (incluido el 429 "conseguite una key") via el
+        # userbot cuando esta disponible, asi el "Indio real" es quien dice
+        # que se quedo sin cupo. Fallback a channel.send con la identidad
+        # del bot vapls.
+        msg = _error_message(e.kind, e.status, "indio")
+        try:
+            relayed = False
+            if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                relayed = await _relay_to_userbot(channel_id, msg, None)
+            if not relayed:
                 await channel.send(msg)
-            except Exception:
-                pass
+        except Exception:
+            logger.exception("indioFromVoice error-send failed")
         analytics.capture("indio voice failed", user=member, guild=guild, properties={
             "error_kind": e.kind,
             "http_status": e.status,
