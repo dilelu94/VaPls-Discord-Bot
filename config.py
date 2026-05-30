@@ -38,7 +38,19 @@ API_PORT = int(os.getenv("API_PORT", "8080"))
 API_SECRET = os.getenv("API_SECRET", "")
 
 # Google Gemini API (https://aistudio.google.com/apikey) - tier gratuito
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Soporta una sola key (GEMINI_API_KEY) o un pool comma-separated
+# (GEMINI_API_KEYS) que el cliente rota con failover en HTTP 429.
+def _parse_gemini_keys() -> list[str]:
+    multi = os.getenv("GEMINI_API_KEYS", "")
+    if multi:
+        return [k.strip() for k in multi.split(",") if k.strip()]
+    single = os.getenv("GEMINI_API_KEY", "").strip()
+    return [single] if single else []
+
+GEMINI_API_KEYS: list[str] = _parse_gemini_keys()
+# Back-compat: many call sites still read GEMINI_API_KEY as the "is configured?"
+# truthy check; mantenelo apuntando a la primera key del pool.
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else None
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 

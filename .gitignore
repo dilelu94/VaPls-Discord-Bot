@@ -21,6 +21,9 @@ models/*
 cookies.txt
 ssh-key*.key
 
+# Mapeo de API keys de Gemini a sus dueños (vive en el server, contiene secretos)
+gemini_keys.json
+
 # Python / tests
 .venv/
 venv/

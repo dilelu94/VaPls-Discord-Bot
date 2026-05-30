@@ -18,6 +18,54 @@ logger = logging.getLogger("bot.gemini")
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 DEFAULT_TIMEOUT_SEC = 45
 
+# Cooldown aplicado a una key cuando devuelve HTTP 429. El free tier de Gemini
+# es 10 RPM, asi que 60s alcanza para que el cupo se libere.
+_KEY_COOLDOWN_SEC = 60.0
+# Cuando todas las keys estan en cooldown, esperamos como mucho esto antes de
+# rendirnos y devolver el ultimo 429 al caller.
+_MAX_FAILOVER_WAIT_SEC = 3.0
+
+# Map key -> timestamp (monotonic) hasta cuando esta marcada como agotada.
+_key_cooldowns: dict[str, float] = {}
+# Indice round-robin para empezar la busqueda desde una key distinta cada vez,
+# asi balanceamos cuando hay multiples keys sanas en paralelo.
+_next_key_idx: int = 0
+
+
+def _available_keys() -> list[str]:
+    """Return all configured keys whose cooldown has expired (or never set)."""
+    import time as _time
+    now = _time.monotonic()
+    return [k for k in config.GEMINI_API_KEYS if _key_cooldowns.get(k, 0.0) <= now]
+
+
+def _pick_key() -> Optional[str]:
+    """Pick the next non-cooled-down key in round-robin order.
+
+    Returns ``None`` when there are no keys configured. When every key is in
+    cooldown, returns the one whose cooldown expires soonest (so the caller
+    can decide whether to wait or surface a 429).
+    """
+    global _next_key_idx
+    keys = config.GEMINI_API_KEYS
+    if not keys:
+        return None
+    available = _available_keys()
+    if available:
+        start = _next_key_idx % len(keys)
+        for offset in range(len(keys)):
+            candidate = keys[(start + offset) % len(keys)]
+            if candidate in available:
+                _next_key_idx = (start + offset + 1) % len(keys)
+                return candidate
+    # Todas en cooldown: devolvemos la que se libera antes.
+    return min(keys, key=lambda k: _key_cooldowns.get(k, 0.0))
+
+
+def _mark_cooldown(key: str) -> None:
+    import time as _time
+    _key_cooldowns[key] = _time.monotonic() + _KEY_COOLDOWN_SEC
+
 
 class GeminiError(Exception):
     """Typed error for Gemini API failures."""
@@ -81,7 +129,7 @@ async def generate(
     Async:
         This function is a coroutine and must be awaited.
     """
-    if not config.GEMINI_API_KEY:
+    if not config.GEMINI_API_KEYS:
         raise GeminiError("GEMINI_API_KEY not set", kind="config")
 
     mdl = model or config.GEMINI_MODEL
@@ -100,28 +148,64 @@ async def generate(
     if tools:
         body["tools"] = [{"function_declarations": tools}]
     url = GEMINI_ENDPOINT.format(model=mdl)
-    params = {"key": config.GEMINI_API_KEY}
     headers = {"Content-Type": "application/json"}
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
 
+    data: Optional[dict] = None
+    status = 0
+    last_429_msg: Optional[str] = None
+    # Probamos hasta una vez por key configurada antes de rendirnos.
+    attempts = max(1, len(config.GEMINI_API_KEYS))
+    used_keys: set[str] = set()
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async with sess.post(url, params=params, headers=headers, json=body) as resp:
-                status = resp.status
-                try:
-                    data = await resp.json(content_type=None)
-                except Exception as e:
-                    raise GeminiError(f"JSON parse failed: {e}", kind="parse", status=status)
+        for attempt in range(attempts):
+            picked = _pick_key()
+            if picked is None:
+                raise GeminiError("GEMINI_API_KEY not set", kind="config")
+            if picked in used_keys:
+                # Ya probamos todas las keys disponibles; _pick_key esta
+                # devolviendo "la menos peor" que ya esta en cooldown.
+                # Devolvemos el 429 acumulado.
+                raise GeminiError(
+                    f"HTTP 429: {last_429_msg or 'all keys rate-limited'}",
+                    kind="http",
+                    status=429,
+                )
+            used_keys.add(picked)
+            params = {"key": picked}
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.post(url, params=params, headers=headers, json=body) as resp:
+                    status = resp.status
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as e:
+                        raise GeminiError(f"JSON parse failed: {e}", kind="parse", status=status)
 
-                if status < 200 or status >= 300:
-                    # Surface API error message if available
+                    if 200 <= status < 300:
+                        break
+
                     err = (data or {}).get("error") if isinstance(data, dict) else None
                     msg = (err or {}).get("message") if isinstance(err, dict) else None
+                    if status == 429:
+                        _mark_cooldown(picked)
+                        last_429_msg = msg or "rate limited"
+                        logger.warning(
+                            "gemini key …%s hit 429 (attempt %d/%d): %s",
+                            picked[-6:], attempt + 1, attempts, last_429_msg,
+                        )
+                        continue
                     raise GeminiError(
                         f"HTTP {status}: {msg or 'request failed'}",
                         kind="http",
                         status=status,
                     )
+        else:
+            # No conseguimos respuesta 2xx con ninguna key: el ultimo error fue 429.
+            raise GeminiError(
+                f"HTTP 429: {last_429_msg or 'all keys rate-limited'}",
+                kind="http",
+                status=429,
+            )
     except GeminiError:
         raise
     except asyncio.TimeoutError as e:

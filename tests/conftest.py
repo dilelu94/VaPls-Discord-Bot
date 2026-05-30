@@ -180,7 +180,13 @@ def gemini_http(monkeypatch):
     """
     import aiohttp
     import config
+    import geminiClient
     monkeypatch.setattr(config, "GEMINI_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(config, "GEMINI_API_KEYS", ["test-key"], raising=False)
+    # Limpiamos el estado del pool entre tests para que un 429 anterior no
+    # deje a "test-key" en cooldown y contamine el proximo caso.
+    geminiClient._key_cooldowns.clear()
+    geminiClient._next_key_idx = 0
 
     class _Spy:
         requests: list = []
