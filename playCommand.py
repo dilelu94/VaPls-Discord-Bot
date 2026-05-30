@@ -12,6 +12,8 @@ import analytics
 import time
 import logging
 from logging.handlers import RotatingFileHandler
+from typing import Optional
+
 from greeting import set_pending_trigger
 
 # Configure a rotating logger for play command steps
@@ -833,3 +835,249 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
     # Add songs to player queue
     await player.addSongs(songs, ctx)
+
+
+# ---------- Programmatic entry points (no slash ctx) -----------------------
+# These let other modules (notably geminiCommand when the indio decides to
+# play music or a sound) drive playback without a Discord interaction.
+
+
+def _pick_voice_channel(bot, guild_id: int) -> Optional[discord.VoiceChannel]:
+    """Pick the most-populated voice channel in the guild, or the channel
+    the bot is already connected to. Returns None if no usable channel."""
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return None
+    # Prefer where the bot is already connected.
+    if guild.voice_client and getattr(guild.voice_client, "channel", None):
+        return guild.voice_client.channel
+    candidates = []
+    for ch in guild.voice_channels:
+        humans = sum(1 for m in ch.members if not m.bot)
+        if humans > 0:
+            candidates.append((ch, humans))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: c[1], reverse=True)
+    return candidates[0][0]
+
+
+def _pick_text_channel(bot, guild_id: int, preferred_name: str = "sick-tunes"):
+    """Find the announcement text channel for playback. Prefers a channel
+    named ``preferred_name`` (default "sick-tunes"); falls back to any
+    text channel the bot can write to."""
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return None
+    chan = discord.utils.get(guild.text_channels, name=preferred_name)
+    if chan is not None:
+        return chan
+    for ch in guild.text_channels:
+        perms = ch.permissions_for(guild.me) if guild.me else None
+        if perms is None or perms.send_messages:
+            return ch
+    return None
+
+
+async def _yt_dlp_search(query: str) -> list[dict]:
+    """Run yt-dlp to resolve the query to song metadata. Returns a list of
+    {id, title, duration_string} dicts; empty list on any failure."""
+    inputStr = query.strip()
+    if not (inputStr.startswith("http://") or inputStr.startswith("https://")
+            or inputStr.startswith("ytsearch:")):
+        inputStr = f"ytsearch1:{inputStr}"
+    cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+    args = [config.YT_DLP_PATH]
+    if os.path.exists(cookiesPath):
+        args += ["--cookies", cookiesPath]
+    if config.YT_DLP_POT_BASE_URL:
+        args += ["--extractor-args",
+                 f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+    args += [
+        "--flat-playlist", "--simulate",
+        "--print", "%(id)s",
+        "--print", "%(title)s",
+        "--print", "%(duration_string)s",
+        inputStr,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+    except Exception as e:
+        playLogger.warning(f"[PLAY-INDIO] yt-dlp spawn failed: {e}")
+        return []
+    if proc.returncode != 0:
+        playLogger.warning(f"[PLAY-INDIO] yt-dlp rc={proc.returncode}: "
+                           f"{stderr.decode('utf-8', 'replace').strip()[:200]}")
+        return []
+    lines = [l.strip() for l in stdout.decode("utf-8", "replace").strip().split("\n") if l.strip()]
+    songs: list[dict] = []
+    for i in range(0, len(lines) - 2, 3):
+        dur = lines[i + 2]
+        songs.append({
+            "id": lines[i],
+            "title": lines[i + 1],
+            "duration_string": dur if dur != "NA" else "",
+        })
+    return songs
+
+
+async def playFromIndio(bot, guild_id: int, query: str,
+                        voice_channel_id: Optional[int] = None,
+                        text_channel_name: str = "sick-tunes") -> tuple[bool, str]:
+    """Queue a YouTube search/URL programmatically — no slash ctx required.
+
+    Used by the indio when someone asks him to play music. Picks a voice
+    channel automatically, posts status in ``#sick-tunes`` (or any text
+    channel the bot can write to), and reuses GuildPlayer's playback engine.
+
+    Returns:
+        (ok, message): ``ok=True`` if playback started or song queued;
+        the message is a short user-facing status.
+    """
+    if not query or not query.strip():
+        return False, "query vacio"
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return False, "guild no encontrado"
+
+    voice_channel = None
+    if voice_channel_id:
+        ch = guild.get_channel(int(voice_channel_id))
+        if isinstance(ch, discord.VoiceChannel):
+            voice_channel = ch
+    if voice_channel is None:
+        voice_channel = _pick_voice_channel(bot, guild_id)
+    if voice_channel is None:
+        return False, "no hay nadie en un canal de voz para reproducir"
+
+    text_channel = _pick_text_channel(bot, guild_id, text_channel_name)
+
+    vc = guild.voice_client
+    try:
+        if vc is None or not vc.is_connected():
+            set_pending_trigger(voice_channel.id, bot.user.id if bot.user else 0)
+            vc = await voice_channel.connect(reconnect=True)
+        elif vc.channel.id != voice_channel.id:
+            if getattr(vc, "recording", False):
+                try:
+                    vc.stop_recording()
+                except Exception:
+                    pass
+                setattr(vc, "recording", False)
+            set_pending_trigger(voice_channel.id, bot.user.id if bot.user else 0)
+            await vc.move_to(voice_channel)
+    except Exception as e:
+        playLogger.warning(f"[PLAY-INDIO] voice connect failed: {e}")
+        return False, f"no pude conectarme a voz: {e}"
+
+    songs = await _yt_dlp_search(query)
+    if not songs:
+        return False, "no encontre nada en YouTube con esa busqueda"
+
+    player = getGuildPlayer(guild_id, bot)
+    player.vc = vc
+    if text_channel is not None:
+        player.textChannel = text_channel
+
+    isFirst = (not player.currentSong and len(player.queue) == 0)
+    player.queue.extend(songs)
+    analytics.capture("play songs queued", guild=guild, properties={
+        "count": len(songs),
+        "queue_length": len(player.queue),
+        "first_title": songs[0]["title"],
+        "source": "indio",
+    })
+
+    title = songs[0]["title"]
+    note = f"🎶 **{title}** {'arrancando' if isFirst else 'a la cola'} (pedido al indio)."
+    if text_channel is not None:
+        try:
+            await text_channel.send(note)
+        except Exception:
+            pass
+
+    if not player.currentSong and player.queue:
+        player.currentSong = player.queue.pop(0)
+        try:
+            await player.startPlayingCurrent()
+        except Exception as e:
+            playLogger.exception("[PLAY-INDIO] startPlayingCurrent failed")
+            return False, f"falló el inicio: {e}"
+    else:
+        # If already playing, just trigger pre-download.
+        try:
+            player.startPreDownloading()
+        except Exception:
+            pass
+
+    return True, title
+
+
+async def playSoundFromIndio(bot, guild_id: int, sound_query: str) -> tuple[bool, str]:
+    """Play a local sound clip programmatically. Skips if music is currently
+    playing — the indio shouldn't step on the music. ``sound_query`` is a
+    fuzzy match against filenames under ``config.CUSTOM_AUDIO_PATH``.
+
+    Returns:
+        (ok, message).
+    """
+    if not sound_query or not sound_query.strip():
+        return False, "sound query vacio"
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return False, "guild no encontrado"
+
+    # Refuse if music is playing.
+    player = guildPlayers.get(guild_id)
+    if player is not None and player.currentSong:
+        return False, "hay musica sonando, no toco el soundpad"
+    vc = guild.voice_client
+    if vc and vc.is_playing():
+        return False, "vapls ya esta reproduciendo algo, paso"
+
+    # Locate the sound file under CUSTOM_AUDIO_PATH (recursive fuzzy match).
+    root = getattr(config, "CUSTOM_AUDIO_PATH", None) or getattr(config, "AUDIO_DIR", None)
+    if not root or not os.path.isdir(root):
+        return False, "CUSTOM_AUDIO_PATH no configurado"
+    needle = sound_query.strip().lower()
+    matches: list[str] = []
+    for dirpath, _dirs, files in os.walk(root):
+        for f in files:
+            if not f.lower().endswith((".mp3", ".wav", ".ogg", ".m4a", ".flac")):
+                continue
+            if needle in f.lower():
+                matches.append(os.path.join(dirpath, f))
+    if not matches:
+        return False, f"no encontre un sonido que matchee '{sound_query}'"
+    matches.sort(key=lambda p: len(os.path.basename(p)))
+    filepath = matches[0]
+
+    voice_channel = _pick_voice_channel(bot, guild_id)
+    if voice_channel is None:
+        return False, "no hay nadie en voz para reproducir el sonido"
+
+    try:
+        if vc is None or not vc.is_connected():
+            vc = await voice_channel.connect(reconnect=True)
+        elif vc.channel.id != voice_channel.id:
+            await vc.move_to(voice_channel)
+    except Exception as e:
+        return False, f"no pude conectarme a voz: {e}"
+
+    try:
+        if vc.is_playing():
+            vc.stop()
+            await asyncio.sleep(0.2)
+        vc.play(discord.FFmpegOpusAudio(filepath))
+    except Exception as e:
+        playLogger.exception("[PLAY-INDIO] sound playback failed")
+        return False, f"falló la reproduccion: {e}"
+
+    return True, os.path.basename(filepath)

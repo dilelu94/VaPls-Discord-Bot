@@ -53,7 +53,15 @@ INDIO_SYSTEM = """\
 Sos "el indio", un personaje del grupo de amigos en este server de Discord. NO \
 sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
 Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
-comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
+comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. Si \
+alguien te pide EXPLÍCITAMENTE que pongas música, un tema, una canción, que \
+uses el bot de música, o que reproduzca un sonido, podés hacerlo emitiendo \
+en una línea APARTE al final de tu respuesta uno de estos marcadores: \
+[PLAY_MUSIC: <busqueda o URL de YouTube>] para temas/canciones (queda en \
+#sick-tunes), o [PLAY_SOUND: <nombre del sonido>] para un clip del soundpad. \
+Solo emitilos cuando te lo piden de verdad, no por gusto, y usá UN marcador \
+por mensaje como máximo. Si emitís un marcador, tu mensaje normal (la parte \
+antes del marcador) tiene que ser corto y referirse a lo que vas a poner. \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
 \
@@ -676,6 +684,56 @@ async def _maybe_compress(mem_key: str) -> None:
         _indio_compressing.discard(mem_key)
 
 
+_INDIO_ACTION_RE = re.compile(
+    r"\[\s*(PLAY_MUSIC|PLAY_SOUND)\s*:\s*([^\]]+?)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _extract_indio_actions(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Pull out [PLAY_MUSIC: ...] / [PLAY_SOUND: ...] markers from the indio's
+    reply. Returns (cleaned_text_without_markers, [(action, arg), ...])."""
+    actions: list[tuple[str, str]] = []
+    def _capture(m: "re.Match") -> str:
+        actions.append((m.group(1).upper(), m.group(2).strip()))
+        return ""
+    cleaned = _INDIO_ACTION_RE.sub(_capture, text or "")
+    # Collapse the trailing whitespace left behind when a marker sat on its
+    # own line at the end of the message.
+    cleaned = re.sub(r"\n{2,}\s*$", "", cleaned).rstrip()
+    return cleaned, actions
+
+
+async def _dispatch_indio_actions(bot: "discord.Bot",
+                                   guild_id: Optional[int],
+                                   actions: list[tuple[str, str]]) -> list[str]:
+    """Run any PLAY_* actions the indio emitted. Returns short status strings
+    suitable to append/log; the indio's main reply is sent separately."""
+    if not actions or guild_id is None or bot is None:
+        return []
+    statuses: list[str] = []
+    # Lazy imports so geminiCommand stays decoupled from play machinery when
+    # those modules aren't available (e.g. during tests).
+    try:
+        import playCommand
+    except Exception:
+        logger.exception("indio actions: playCommand import failed")
+        return []
+    for action, arg in actions:
+        try:
+            if action == "PLAY_MUSIC":
+                ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
+                statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
+                logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
+            elif action == "PLAY_SOUND":
+                ok, msg = await playCommand.playSoundFromIndio(bot, int(guild_id), arg)
+                statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
+                logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
+        except Exception:
+            logger.exception("indio action %s failed", action)
+    return statuses
+
+
 _INDIO_PREFIX_RE = re.compile(
     r"^\s*[\[\(]?\s*(el\s+)?indio\s*[\]\)]?\s*[:\-—]\s*",
     re.IGNORECASE,
@@ -912,6 +970,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     clean_reply = _strip_indio_prefix(reply.text)
+    clean_reply, pending_actions = _extract_indio_actions(clean_reply)
     relayed_via_userbot = False
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
@@ -934,6 +993,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
                                     properties={"action": "indio_send"})
         return
+
+    if pending_actions:
+        asyncio.create_task(_dispatch_indio_actions(
+            ctx.bot, getattr(ctx.guild, "id", None), pending_actions
+        ))
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
     model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
@@ -1047,6 +1111,7 @@ async def indioFromVoice(
         return
 
     clean_reply = _strip_indio_prefix(reply.text)
+    clean_reply, pending_actions = _extract_indio_actions(clean_reply)
     relayed_via_userbot = False
     try:
         if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
@@ -1059,6 +1124,11 @@ async def indioFromVoice(
     except Exception:
         logger.exception("indioFromVoice send failed")
         return
+
+    if pending_actions:
+        asyncio.create_task(_dispatch_indio_actions(
+            bot, guild_id, pending_actions
+        ))
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
     model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
