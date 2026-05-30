@@ -98,6 +98,12 @@ if [ -d userbot ]; then
     source venv/bin/activate
     pip install --upgrade pip
     pip install -r requirements.txt
+    # discord-ext-voice-recv arrastra discord.py como dep transitiva y
+    # colisiona con discord.py-self en el namespace `discord` (rompe con
+    # "Client.__init__() missing 'intents'"). Forzar a discord.py-self
+    # a ganar el namespace.
+    pip uninstall -y discord.py 2>/dev/null || true
+    pip install --force-reinstall --no-deps "discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self"
     deactivate
     popd > /dev/null
 
