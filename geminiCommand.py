@@ -24,6 +24,7 @@ import discord
 import analytics
 import config
 import geminiClient
+import geminiKeys
 
 try:
     from users import USERS as _USERS
@@ -1001,6 +1002,28 @@ async def _relay_to_userbot(channel_id: int, content: str,
         return False
 
 
+def _format_contributors_line() -> str:
+    """Render the deduped list of donors backing the current Gemini pool.
+
+    Counts keys per ``owner_name`` so it's clear who contributed how much
+    (Miles aporta 3 keys, etc.). Owners labeled ``unknown`` (e.g. the .env
+    bootstrap) are skipped so the line stays meaningful.
+    """
+    counts: dict[str, int] = {}
+    for entry in geminiKeys.list_entries():
+        name = (entry.get("owner_name") or "").strip()
+        if not name or name.lower() == "unknown":
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return ""
+    parts = [
+        f"{name} ({n})" if n > 1 else name
+        for name, n in counts.items()
+    ]
+    return f"🙏 Contribuyentes actuales: {', '.join(parts)}."
+
+
 def _error_message(kind: str, status: Optional[int], persona: str) -> str:
     """Return a user-facing error message for Gemini failures.
 
@@ -1020,12 +1043,14 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
             else "⏱️ Gemini tardó demasiado. Probá de nuevo."
     if kind == "http":
         if status == 429:
-            return (
+            base = (
                 f"⏳ Me quedé sin cupo de IA por ahora. Si querés que "
                 f"siga respondiendo, conseguite una key gratis en "
                 f"{config.GEMINI_KEYS_DONATION_URL} (botón \"Create API key\") "
                 f"y mandámela por DM al bot — la sumo al pool al toque."
             )
+            credits = _format_contributors_line()
+            return f"{base}\n\n{credits}" if credits else base
         return f"🌐 Algo se rompió (HTTP {status}). Probá de nuevo." if is_indio \
             else f"❌ Gemini falló (HTTP {status})."
     if kind == "blocked":
@@ -1176,7 +1201,24 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         msg = _error_message(e.kind, e.status, "indio")
         is_rate_limited = e.kind == "http" and e.status == 429
         try:
-            await ctx.followup.send(msg, ephemeral=is_rate_limited)
+            if is_rate_limited:
+                # Posteamos el aviso visible para todos via el userbot (cuando
+                # esta disponible) para que el indio "real" sea quien dice que
+                # se quedo sin cupo. Header primero, para dar contexto.
+                header = _format_user_header(ctx, pregunta).rstrip()
+                await ctx.followup.send(header)
+                channel_id = getattr(ctx, "channel_id", None) or getattr(
+                    getattr(ctx, "channel", None), "id", None
+                )
+                relayed = False
+                if (channel_id is not None
+                        and config.INDIO_RELAY_URL
+                        and config.INDIO_RELAY_SECRET):
+                    relayed = await _relay_to_userbot(channel_id, msg, None)
+                if not relayed:
+                    await ctx.followup.send(msg)
+            else:
+                await ctx.followup.send(msg)
         except Exception:
             pass
         analytics.capture("indio failed", user=ctx.author, guild=ctx.guild, properties={
