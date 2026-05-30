@@ -1426,7 +1426,11 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         return web.json_response({"error": "channel has no slash_commands"}, status=400)
 
     try:
-        cmds = await channel.slash_commands()
+        cmds_iter = channel.slash_commands(query="play")
+        if hasattr(cmds_iter, "__aiter__"):
+            cmds = [c async for c in cmds_iter]
+        else:
+            cmds = await cmds_iter
     except Exception as e:
         log.exception("[RELAY-PLAY] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)

@@ -46,14 +46,12 @@ else
     sudo pacman -S python python-pip ffmpeg git || sudo yum install python3 python3-pip ffmpeg git || true
 fi
 
-# Instalar/actualizar yt-dlp de forma global
-echo "Instalando yt-dlp..."
-if sudo wget -q https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -O /usr/local/bin/yt-dlp; then
-    sudo chmod a+rx /usr/local/bin/yt-dlp
-    echo "yt-dlp instalado correctamente en /usr/local/bin/yt-dlp"
-else
-    echo "⚠️ Error al descargar yt-dlp desde GitHub. Se intentará usar pip más adelante."
-fi
+# Instalar yt-dlp nightly + plugin bgutil POT en ~/.local/bin (user-scope).
+# El plugin necesita estar en el MISMO Python env que yt-dlp para que lo detecte.
+# Apuntá YT_DLP_PATH=$HOME/.local/bin/yt-dlp en .env.
+echo "Instalando yt-dlp nightly + plugin bgutil-ytdlp-pot-provider..."
+pip install --user --upgrade --pre 'yt-dlp[default]' bgutil-ytdlp-pot-provider
+echo "yt-dlp instalado en $HOME/.local/bin/yt-dlp"
 
 # Instalar deno (requerido por yt-dlp para extraer videos de YouTube)
 if ! command -v deno &> /dev/null; then
@@ -68,6 +66,52 @@ if ! command -v deno &> /dev/null; then
 else
     echo "deno ya está instalado."
 fi
+
+# Instalar Node.js (necesario para el bgutil-pot provider server)
+if ! command -v node &> /dev/null || [ "$(node -v | sed 's/v\([0-9]*\).*/\1/')" -lt 18 ]; then
+    echo "Instalando Node.js 20..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+else
+    echo "Node.js $(node -v) ya está instalado."
+fi
+
+# Instalar bgutil-pot-provider (server Node.js que genera PO Tokens para evitar
+# el bot-check de YouTube). Corre en localhost:4416 y lo consume yt-dlp vía el
+# plugin instalado arriba. Configurá YT_DLP_POT_BASE_URL=http://127.0.0.1:4416 en .env.
+POT_DIR="$HOME/bgutil-pot-provider"
+if [ ! -d "$POT_DIR" ]; then
+    echo "Clonando bgutil-pot-provider en $POT_DIR..."
+    git clone https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git "$POT_DIR"
+fi
+echo "Building bgutil-pot-provider server..."
+pushd "$POT_DIR/server" > /dev/null
+npm install --no-audit --no-fund
+npx --yes tsc
+popd > /dev/null
+
+# Systemd unit para el provider
+echo "Configurando bgutil-pot.service..."
+cat <<EOF | sudo tee /etc/systemd/system/bgutil-pot.service > /dev/null
+[Unit]
+Description=bgutil-pot YouTube POT provider
+After=network.target
+
+[Service]
+Type=simple
+User=${USER}
+WorkingDirectory=${POT_DIR}/server
+ExecStart=/usr/bin/node ${POT_DIR}/server/build/main.js
+Restart=on-failure
+RestartSec=5
+Environment=PORT=4416
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now bgutil-pot.service
+echo "bgutil-pot.service activo en puerto 4416"
 
 # 2. Configurar el entorno virtual de Python
 echo "Creando entorno virtual de Python..."
