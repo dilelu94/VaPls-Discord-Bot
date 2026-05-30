@@ -66,6 +66,16 @@ class TestSoundpadSubfoldersAndPagination(unittest.IsolatedAsyncioTestCase):
         self.patcher2 = patch.object(config, "AUDIO_DIR", self.temp_audio_dir)
         self.patcher1.start()
         self.patcher2.start()
+
+        # /soundpad is gated on the caller having a Gemini key. Seed the pool
+        # with a key owned by the test user so the gate is satisfied.
+        import geminiKeys
+        self._keys_snapshot = list(geminiKeys._keys)
+        geminiKeys._keys.clear()
+        geminiKeys._keys.append({
+            "key": "AIza" + "x" * 35, "owner_name": "Tester",
+            "owner_id": "777", "note": "", "source": "test",
+        })
         
         self.vc = MockVC()
         
@@ -74,6 +84,8 @@ class TestSoundpadSubfoldersAndPagination(unittest.IsolatedAsyncioTestCase):
         self.ctx.bot = MagicMock()
         self.ctx.guild = MagicMock()
         self.ctx.guild.id = 12345
+        self.ctx.author = MagicMock()
+        self.ctx.author.id = 777  # matches the seeded key owner_id
         self.ctx.channel = MagicMock()
         self.ctx.author.voice = MagicMock()
         self.ctx.author.voice.channel = MagicMock()
@@ -102,6 +114,9 @@ class TestSoundpadSubfoldersAndPagination(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.patcher1.stop()
         self.patcher2.stop()
+        import geminiKeys
+        geminiKeys._keys.clear()
+        geminiKeys._keys.extend(self._keys_snapshot)
         if os.path.exists(self.temp_audio_dir):
             shutil.rmtree(self.temp_audio_dir)
 

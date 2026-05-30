@@ -5,6 +5,7 @@ import difflib
 import discord
 import config
 import analytics
+import geminiKeys
 from greeting import set_pending_trigger
 
 _AUDIO_EXTS = {".opus", ".mp3", ".wav", ".ogg", ".m4a"}
@@ -728,6 +729,20 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
             await ctx.defer()
         except Exception:
             pass
+
+    if not geminiKeys.has_user_key(ctx.author.id):
+        contributors = geminiKeys.format_contributors_line()
+        msg = (
+            "🔒 Para usar **/soundpad** necesitás aportar una API key de Gemini al pool del bot.\n\n"
+            f"**Cómo conseguirla:** entrá a {config.GEMINI_KEYS_DONATION_URL}, "
+            "clickeá *Create API key* (es gratis con una cuenta de Google) "
+            "y mandámela por DM al bot. Apenas la sumo al pool podés usar el comando."
+        )
+        if contributors:
+            msg = f"{msg}\n\n{contributors}"
+        analytics.capture("soundpad gated", user=ctx.author, guild=ctx.guild,
+                          properties={"reason": "no_user_key"})
+        return await ctx.followup.send(msg, ephemeral=True)
 
     from playCommand import guildPlayers
     if ctx.guild.id in guildPlayers:

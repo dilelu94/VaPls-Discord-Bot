@@ -1018,25 +1018,9 @@ async def _relay_to_userbot(channel_id: int, content: str,
 
 
 def _format_contributors_line() -> str:
-    """Render the deduped list of donors backing the current Gemini pool.
-
-    Counts keys per ``owner_name`` so it's clear who contributed how much
-    (Miles aporta 3 keys, etc.). Owners labeled ``unknown`` (e.g. the .env
-    bootstrap) are skipped so the line stays meaningful.
-    """
-    counts: dict[str, int] = {}
-    for entry in geminiKeys.list_entries():
-        name = (entry.get("owner_name") or "").strip()
-        if not name or name.lower() == "unknown":
-            continue
-        counts[name] = counts.get(name, 0) + 1
-    if not counts:
-        return ""
-    parts = [
-        f"{name} ({n})" if n > 1 else name
-        for name, n in counts.items()
-    ]
-    return f"🙏 Contribuyentes actuales: {', '.join(parts)}."
+    """Thin wrapper kept for module-internal callers; logic now lives in
+    ``geminiKeys`` so other commands (e.g. /soundpad) can reuse it."""
+    return geminiKeys.format_contributors_line()
 
 
 def _error_message(kind: str, status: Optional[int], persona: str) -> str:

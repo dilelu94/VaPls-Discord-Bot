@@ -260,8 +260,34 @@ def no_music_playing(monkeypatch):
     monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=False)
 
 
+@pytest.fixture
+def gemini_pool():
+    """Drive the gemini key pool from tests without touching disk."""
+    import geminiKeys
+    snapshot = list(geminiKeys._keys)
+
+    def _set(entries):
+        geminiKeys._keys.clear()
+        geminiKeys._keys.extend(entries)
+
+    _set([])
+    yield _set
+    geminiKeys._keys.clear()
+    geminiKeys._keys.extend(snapshot)
+
+
+@pytest.fixture
+def caller_has_key(gemini_pool):
+    """Register a key owned by the default tester (user_id=1)."""
+    gemini_pool([
+        {"key": "AIza" + "x" * 35, "owner_name": "Tester",
+         "owner_id": "1", "note": "", "source": "test"},
+    ])
+    return gemini_pool
+
+
 async def test_soundpad_slash_with_query_plays_matched_clip_and_replies(
-    soundpad_dir, no_music_playing
+    soundpad_dir, no_music_playing, caller_has_key
 ):
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     guild = _make_guild([channel])
@@ -279,7 +305,7 @@ async def test_soundpad_slash_with_query_plays_matched_clip_and_replies(
 
 
 async def test_soundpad_slash_with_query_informs_user_when_no_match(
-    soundpad_dir, no_music_playing
+    soundpad_dir, no_music_playing, caller_has_key
 ):
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     guild = _make_guild([channel])
@@ -295,7 +321,7 @@ async def test_soundpad_slash_with_query_informs_user_when_no_match(
 
 
 async def test_soundpad_slash_with_query_rejects_user_not_in_voice(
-    soundpad_dir, no_music_playing
+    soundpad_dir, no_music_playing, caller_has_key
 ):
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     guild = _make_guild([channel])
@@ -311,7 +337,7 @@ async def test_soundpad_slash_with_query_rejects_user_not_in_voice(
 
 
 async def test_soundpad_slash_with_query_attaches_stop_button(
-    soundpad_dir, no_music_playing
+    soundpad_dir, no_music_playing, caller_has_key
 ):
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     guild = _make_guild([channel])
@@ -326,6 +352,88 @@ async def test_soundpad_slash_with_query_attaches_stop_button(
     assert isinstance(view, SoundpadStopView)
     labels = [getattr(item, "label", "") or "" for item in view.children]
     assert any("Parar" in lbl for lbl in labels), f"missing stop button, got {labels}"
+
+
+# --------------------------------------------------------------------------
+# Gemini-key gate
+# --------------------------------------------------------------------------
+def test_has_user_key_matches_only_donors_owning_the_id(gemini_pool):
+    import geminiKeys
+    gemini_pool([
+        {"key": "AIza" + "a" * 35, "owner_name": "Miles", "owner_id": "42",
+         "note": "", "source": "dm"},
+        {"key": "AIza" + "b" * 35, "owner_name": "unknown", "owner_id": "",
+         "note": "", "source": "env"},
+    ])
+    assert geminiKeys.has_user_key(42) is True
+    assert geminiKeys.has_user_key("42") is True
+    assert geminiKeys.has_user_key(99) is False
+    assert geminiKeys.has_user_key(None) is False
+    assert geminiKeys.has_user_key("") is False
+
+
+def test_format_contributors_line_skips_unknown_and_counts_repeats(gemini_pool):
+    import geminiKeys
+    gemini_pool([
+        {"key": "AIza1", "owner_name": "Miles", "owner_id": "1"},
+        {"key": "AIza2", "owner_name": "Miles", "owner_id": "1"},
+        {"key": "AIza3", "owner_name": "Joel", "owner_id": "2"},
+        {"key": "AIza4", "owner_name": "unknown", "owner_id": ""},
+    ])
+    line = geminiKeys.format_contributors_line()
+    assert "Miles (2)" in line
+    assert "Joel" in line
+    assert "unknown" not in line.lower()
+
+
+def test_format_contributors_line_empty_when_no_named_donors(gemini_pool):
+    import geminiKeys
+    gemini_pool([{"key": "x", "owner_name": "unknown", "owner_id": ""}])
+    assert geminiKeys.format_contributors_line() == ""
+
+
+async def test_soundpad_blocks_user_without_key_with_helpful_message(
+    soundpad_dir, no_music_playing, gemini_pool
+):
+    # Pool has donors but the caller is not among them.
+    gemini_pool([
+        {"key": "AIza" + "a" * 35, "owner_name": "Miles", "owner_id": "999",
+         "note": "", "source": "dm"},
+    ])
+    channel = _FakeVoiceChannel(channel_id=10, member_count=2)
+    guild = _make_guild([channel])
+    guild.id = 999
+    ctx = _make_slash_ctx(channel, guild)  # author.id == 1, no key
+
+    await soundpadLogic(ctx, query="bob esponja")
+
+    # Caller saw an ephemeral message that explains the situation.
+    blocking = [m for m in ctx.sent_messages if m.get("ephemeral")]
+    assert blocking, "expected an ephemeral rejection message"
+    text = blocking[0]["content"]
+    assert "API key" in text or "api key" in text.lower()
+    assert config.GEMINI_KEYS_DONATION_URL in text  # how to get one
+    assert "Miles" in text  # contributors list
+    # And nothing actually played.
+    assert channel.connected_vc is None
+
+
+async def test_soundpad_blocks_panel_mode_too_when_no_key(
+    soundpad_dir, no_music_playing, gemini_pool
+):
+    gemini_pool([])  # no donors at all
+    channel = _FakeVoiceChannel(channel_id=10, member_count=2)
+    guild = _make_guild([channel])
+    guild.id = 999
+    ctx = _make_slash_ctx(channel, guild)
+
+    await soundpadLogic(ctx)  # no query → panel path
+
+    blocking = [m for m in ctx.sent_messages if m.get("ephemeral")]
+    assert blocking, "panel mode should be gated too"
+    # No view (panel) should have been sent.
+    views = [m.get("view") for m in ctx.sent_messages if m.get("view") is not None]
+    assert not views
 
 
 async def test_soundpad_stop_button_stops_playback_and_disables_view():

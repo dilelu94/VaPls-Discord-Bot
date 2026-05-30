@@ -63,6 +63,42 @@ def list_entries() -> list[dict]:
     return list(_keys)
 
 
+def has_user_key(user_id) -> bool:
+    """True iff this Discord user_id has at least one key in the pool.
+
+    ``owner_id`` is stored as a string. Empty owner_ids (e.g. the ``.env``
+    bootstrap source) never match a real Discord id.
+    """
+    if user_id is None:
+        return False
+    target = str(user_id)
+    if not target:
+        return False
+    return any((item.get("owner_id") or "") == target for item in _keys)
+
+
+def format_contributors_line() -> str:
+    """Render the deduped list of donors backing the current pool.
+
+    Counts keys per ``owner_name`` so credit is proportional to donations.
+    Owners labeled ``unknown`` (e.g. ``.env`` bootstrap) are skipped.
+    Returns ``""`` when there is nothing meaningful to show.
+    """
+    counts: dict[str, int] = {}
+    for entry in _keys:
+        name = (entry.get("owner_name") or "").strip()
+        if not name or name.lower() == "unknown":
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return ""
+    parts = [
+        f"{name} ({n})" if n > 1 else name
+        for name, n in counts.items()
+    ]
+    return f"🙏 Contribuyentes actuales: {', '.join(parts)}."
+
+
 def load_from_disk(path: Optional[str] = None) -> int:
     """Load the key registry from ``path`` (defaults to ``GEMINI_KEYS_FILE``).
 
