@@ -39,6 +39,56 @@ if os.path.exists(_downloadsDirInit):
 # Global dictionary to track active player states per guild
 guildPlayers = {}
 
+
+def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
+    """Mapea stderr de yt-dlp (o exception) a un mensaje accionable para el usuario.
+
+    Devuelve un string corto que explica la causa probable. Si no matchea ningún
+    patrón conocido, devuelve la última línea no vacía del stderr (recortada).
+    """
+    if not stderr:
+        if returncode == 2 or "No such file" in str(returncode):
+            return "yt-dlp no está instalado en el server."
+        return f"yt-dlp falló (returncode={returncode}) sin output. Revisá play.log."
+
+    s = stderr.lower()
+    # Discord/UX-friendly diagnostics ordered by specificity.
+    if "sign in to confirm you're not a bot" in s or "confirm you're not a bot" in s:
+        return ("YouTube pide login (bot-check). Las cookies del server pueden estar "
+                "caducas — re-exportalas y subílas con upload-cookies-discord-bot.sh.")
+    if "sign in to confirm your age" in s or "age-restricted" in s or "age restricted" in s:
+        return "El video tiene restricción de edad y las cookies del server no la pasan."
+    if "members-only" in s or "members only" in s or "join this channel to get access" in s:
+        return "El video es members-only del canal — no se puede descargar."
+    if "private video" in s or "this video is private" in s:
+        return "El video es privado."
+    if "video unavailable" in s or "this video is unavailable" in s:
+        return "Video no disponible (eliminado o bloqueado en tu región)."
+    if "premiere will begin" in s or "premieres in" in s:
+        return "Es un premiere que todavía no empezó."
+    if "live event will begin" in s or "this live event" in s:
+        return "Es un live que todavía no empezó."
+    if "video is no longer available" in s or "copyright" in s:
+        return "Video bloqueado por copyright."
+    if "http error 429" in s or "too many requests" in s:
+        return "YouTube nos rate-limiteó (HTTP 429). Esperá unos minutos."
+    if "http error 403" in s:
+        return "YouTube devolvió 403 — probable bot-check o token de stream vencido."
+    if "unable to extract" in s and "player response" in s:
+        return ("yt-dlp no pudo parsear el video — probablemente está desactualizado. "
+                "Correr: pip install --user --upgrade --pre yt-dlp")
+    if "no supported javascript runtime" in s:
+        return "Falta deno en el server (yt-dlp lo necesita para resolver JS de YouTube)."
+    if "no video formats found" in s or "requested format is not available" in s:
+        return "No hay formato de audio disponible para ese video."
+    if "name or service not known" in s or "temporary failure in name resolution" in s:
+        return "El server no resuelve DNS (problema de red)."
+    if "connection refused" in s or "connection reset" in s:
+        return "Conexión rechazada/reseteada (red o YouTube cayéndose)."
+    # Fallback: última línea no vacía de stderr, recortada.
+    last = next((ln.strip() for ln in reversed(stderr.splitlines()) if ln.strip()), "")
+    return last[:300] if last else f"yt-dlp falló (returncode={returncode})."
+
 class CancelDownloadView(discord.ui.View):
     """UI view that lets a user cancel the initial yt-dlp download."""
     def __init__(self, player, videoId: str, videoTitle: str):
@@ -254,24 +304,26 @@ class GuildPlayer:
 
                 if proc.returncode != 0:
                     self.isDownloading = False
-                    errTail = stderr.decode('utf-8', errors='replace').strip().splitlines()[-5:]
+                    stderrStr = stderr.decode('utf-8', errors='replace')
+                    errTail = stderrStr.strip().splitlines()[-5:]
                     errMsg = " | ".join(errTail)
+                    reason = _diagnoseYtDlpFailure(stderrStr, proc.returncode)
                     analytics.capture("play song failed", user=self.lastRequester, guild=guild,
                                       properties={"stage": "download", "video_id": videoId,
                                                   "title": videoTitle, "returncode": proc.returncode,
-                                                  "stderr_tail": errMsg[:500]})
-                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. stderr: {errMsg}")
+                                                  "stderr_tail": errMsg[:500], "reason": reason})
+                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. reason: {reason}. stderr: {errMsg}")
                     if self.initialCtx:
                         try:
                             await self.initialCtx.interaction.edit_original_response(
-                                content=f"❌ Error al descargar: **{videoTitle}**",
+                                content=f"❌ Error al descargar **{videoTitle}**: {reason}",
                                 view=None
                             )
                         except Exception:
                             pass
                         self.initialCtx = None
                     if self.controlMessage is not None:
-                        await self.updateControlMessage(f"❌ Error al descargar {videoTitle}.")
+                        await self.updateControlMessage(f"❌ Error al descargar {videoTitle}: {reason}")
                     # Skip to next song
                     self.bot.loop.create_task(self.skipSong())
                     return
@@ -285,22 +337,25 @@ class GuildPlayer:
                     # Download was cancelled
                     return
                 self.isDownloading = False
+                reason = _diagnoseYtDlpFailure(str(e))
+                if isinstance(e, FileNotFoundError):
+                    reason = f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env."
                 print(f"[PLAYER ERROR] Download exception: {e}")
                 analytics.capture_exception(e, user=self.lastRequester, guild=guild,
                                             properties={"stage": "download", "video_id": videoId,
-                                                        "title": videoTitle})
-                playLogger.error(f"[DOWNLOAD ERROR] Exception downloading '{videoTitle}': {e}")
+                                                        "title": videoTitle, "reason": reason})
+                playLogger.error(f"[DOWNLOAD ERROR] Exception downloading '{videoTitle}': {e} → reason: {reason}")
                 if self.initialCtx:
                     try:
                         await self.initialCtx.interaction.edit_original_response(
-                            content=f"❌ Error al descargar: **{videoTitle}**",
+                            content=f"❌ Error al descargar **{videoTitle}**: {reason}",
                             view=None
                         )
                     except Exception:
                         pass
                     self.initialCtx = None
                 if self.controlMessage is not None:
-                    await self.updateControlMessage(f"❌ Error al descargar {videoTitle}.")
+                    await self.updateControlMessage(f"❌ Error al descargar {videoTitle}: {reason}")
                 self.bot.loop.create_task(self.skipSong())
                 return
             finally:
@@ -815,9 +870,10 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             errMsg = stderr.decode('utf-8', errors='replace').strip()
-            print(f"[PLAY ERROR] Metadata fetch failed: {errMsg}")
-            playLogger.error(f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. stderr: {errMsg[:500]}")
-            return await safeEdit(ctx, f"❌ Error al buscar el video: {errMsg[:200]}")
+            reason = _diagnoseYtDlpFailure(errMsg, proc.returncode)
+            print(f"[PLAY ERROR] Metadata fetch failed: {reason} ({errMsg[:200]})")
+            playLogger.error(f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. reason: {reason}. stderr: {errMsg[:500]}")
+            return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
         lines = stdout.decode('utf-8', errors='replace').strip().split('\n')
         lines = [l.strip() for l in lines if l.strip()]
@@ -835,9 +891,14 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
         if not songs:
             return await safeEdit(ctx, "❌ No se pudieron obtener los metadatos del video.")
+    except FileNotFoundError as e:
+        playLogger.error(f"[METADATA FAIL] yt-dlp binary missing at {config.YT_DLP_PATH}: {e}")
+        return await safeEdit(ctx, f"❌ yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.")
     except Exception as e:
+        reason = _diagnoseYtDlpFailure(str(e))
+        playLogger.error(f"[METADATA FAIL] Exception during metadata fetch for '{query}': {e} → reason: {reason}")
         print(f"[PLAY ERROR] Exception during metadata fetch: {e}")
-        return await safeEdit(ctx, f"❌ Error al buscar el video: {e}")
+        return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
     # Add songs to player queue
     await player.addSongs(songs, ctx)
