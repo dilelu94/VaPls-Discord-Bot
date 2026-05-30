@@ -19,16 +19,21 @@ echo "Sistema operativo detectado: $OS_ID"
 if [[ "$OS_ID" == "ubuntu" || "$OS_ID" == "debian" ]]; then
     echo "Instalando dependencias mediante apt..."
     sudo apt-get update
-    sudo apt-get install -y python3-pip python3-venv ffmpeg git wget unzip
+    sudo apt-get install -y python3-pip python3-venv ffmpeg libopus0 libsodium23 git wget unzip
 elif [[ "$OS_ID" == "ol" || "$OS_ID" == "rhel" || "$OS_ID" == "centos" || "$OS_ID" == "rocky" || "$OS_ID" == "almalinux" ]]; then
     echo "Instalando dependencias mediante dnf..."
     sudo dnf install -y python3 python3-pip git wget tar xz unzip
-    
+
     # Instalar FFmpeg mediante binario estático ya que no está en los repos oficiales por defecto
     if ! command -v ffmpeg &> /dev/null; then
-        echo "Instalando FFmpeg (binario estático)..."
-        wget -q https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz
-        tar -xf ffmpeg-release-amd64-static.tar.xz
+        case "$(uname -m)" in
+            x86_64)  FFMPEG_ARCH=amd64 ;;
+            aarch64) FFMPEG_ARCH=arm64 ;;
+            *) echo "Arquitectura no soportada para FFmpeg estático: $(uname -m)"; exit 1 ;;
+        esac
+        echo "Instalando FFmpeg (binario estático ${FFMPEG_ARCH})..."
+        wget -q "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-${FFMPEG_ARCH}-static.tar.xz"
+        tar -xf "ffmpeg-release-${FFMPEG_ARCH}-static.tar.xz"
         sudo mv ffmpeg-*-static/ffmpeg /usr/local/bin/
         sudo mv ffmpeg-*-static/ffprobe /usr/local/bin/
         rm -rf ffmpeg-*-static*
@@ -82,7 +87,32 @@ else
     echo "El archivo .env ya existe."
 fi
 
-# 4. Crear el servicio de systemd para control 24/7
+# 4. Crear directorio de estado persistente del main bot (INDIO_MEMORY_PATH)
+mkdir -p data
+
+# 5. Configurar entorno virtual + .env + servicio del userbot
+if [ -d userbot ]; then
+    echo "Configurando entorno virtual del userbot..."
+    pushd userbot > /dev/null
+    python3 -m venv venv
+    source venv/bin/activate
+    pip install --upgrade pip
+    pip install -r requirements.txt
+    deactivate
+    popd > /dev/null
+
+    if [ ! -f userbot/.env ]; then
+        echo "Creando userbot/.env desde userbot/.env.example..."
+        cp userbot/.env.example userbot/.env
+        echo "⚠️  ATENCIÓN: editá userbot/.env con USER_TOKEN y demás credenciales."
+    else
+        echo "El archivo userbot/.env ya existe."
+    fi
+else
+    echo "⚠️  Directorio userbot/ no encontrado, salteando provisión del userbot."
+fi
+
+# 6. Crear el servicio de systemd para control 24/7
 echo "Configurando el servicio de systemd (discord-bot.service)..."
 CURRENT_DIR=$(pwd)
 CURRENT_USER=$USER
@@ -104,9 +134,18 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# Recargar systemd para reconocer el nuevo servicio
+# 7. Registrar el servicio del userbot (unit versionado en el repo)
+if [ -f userbot/vapls-userbot.service ]; then
+    echo "Instalando vapls-userbot.service..."
+    sudo cp userbot/vapls-userbot.service /etc/systemd/system/vapls-userbot.service
+fi
+
+# Recargar systemd para reconocer los servicios nuevos
 sudo systemctl daemon-reload
 sudo systemctl enable discord-bot
+if [ -f /etc/systemd/system/vapls-userbot.service ]; then
+    sudo systemctl enable vapls-userbot
+fi
 
 echo "=== Configuración completada con éxito ==="
 echo ""
