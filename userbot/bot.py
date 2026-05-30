@@ -586,17 +586,18 @@ def _new_vosk_recognizer():
 
 
 def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
-    """Return True if VOSK has emitted "indio" in a stable utterance segment.
+    """Return True if VOSK has emitted "indio" in a stable utterance segment
+    AND the word came with context (not aliased on its own).
 
-    We only check ``Result()`` (the finalized segment) — never
-    ``PartialResult()``. Partials are extremely noisy with a small grammar
-    and were the main source of false positives that saturated Whisper.
+    We only check ``Result()`` (the finalized segment), and we require the
+    segment to contain "indio" together with at least one neighbouring word.
+    A bare "indio" by itself almost always means VOSK forced a vowel-rich
+    sound into the wake word — those were the bulk of the false positives.
 
     ``accepted`` is the return value of the most recent
     ``rec.AcceptWaveform(chunk)``: VOSK finalizes a segment when it detects
-    sustained silence, and ``AcceptWaveform`` returns True in that case.
-    Reading ``Result()`` only when accepted=True avoids us pulling state
-    every frame when nothing has finalized.
+    sustained silence. Reading Result() only when accepted=True avoids
+    pulling state every frame when nothing has finalized.
     """
     if not accepted:
         return False
@@ -605,7 +606,17 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
         if not text:
             return False
         norm = _normalize(text)
-        return any(tok in norm for tok in _VOSK_WAKE_TOKENS)
+        tokens = [t for t in norm.split() if t]
+        # Need "indio" present...
+        if not any(tok in tokens for tok in _VOSK_WAKE_TOKENS):
+            return False
+        # ...and at least one OTHER recognized word with it. A solitary
+        # "indio" is the smoking gun for a false positive.
+        non_wake_words = [t for t in tokens if t not in _VOSK_WAKE_TOKENS]
+        if not non_wake_words:
+            log.info(f"[VOSK] bare wake word, ignoring (text={text!r})")
+            return False
+        return True
     except Exception:
         log.exception("[VOSK] failed to read recognizer state")
         return False
