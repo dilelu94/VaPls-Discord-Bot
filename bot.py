@@ -261,22 +261,33 @@ async def play(ctx, query: discord.Option(str, description="Nombre de la canció
     await playLogic(ctx, query)
 
 
-@bot.slash_command(name="soundpad")
-async def soundpad(ctx):
-    """Slash command: open the soundpad UI.
+@bot.slash_command(name="soundpad", description="Abre el panel o reproduce un clip por nombre")
+async def soundpad(
+    ctx,
+    query: discord.Option(
+        str,
+        description="Nombre aproximado del clip a reproducir (vacío = abrir panel)",
+        required=False,
+        default=None,
+    ) = None,
+):
+    """Slash command: open the soundpad UI or play a clip by fuzzy name.
 
     Args:
         ctx: Discord application context.
+        query: Optional search string. When provided, the bot finds the
+            closest-matching clip and plays it directly instead of opening
+            the panel.
 
     Side Effects:
-        Connects to voice and sends an interactive view.
+        Connects to voice and either sends an interactive view or plays a clip.
 
     Async:
         This function is a coroutine and must be awaited.
     """
     await safe_defer(ctx)
-    _track_command(ctx, "soundpad")
-    await soundpadLogic(ctx)
+    _track_command(ctx, "soundpad", {"query_length": len(query or "")})
+    await soundpadLogic(ctx, query=query)
 
 
 @bot.slash_command(name="vapls", description="Preguntale al bot del server")

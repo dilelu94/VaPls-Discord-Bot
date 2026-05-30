@@ -7,12 +7,12 @@ These pin the contract callers rely on:
 """
 import os
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import config
-from soundpadCommand import find_best_match, iter_clips, play_clip_by_query
+from soundpadCommand import find_best_match, iter_clips, play_clip_by_query, soundpadLogic
 
 
 # --------------------------------------------------------------------------
@@ -214,6 +214,91 @@ async def test_play_clip_by_query_disconnects_after_playback_when_it_had_to_conn
 
     assert channel.connected_vc is not None
     assert channel.connected_vc.disconnected, "one-shot should disconnect after playback"
+
+
+# --------------------------------------------------------------------------
+# /soundpad slash command with optional `query`
+# --------------------------------------------------------------------------
+def _make_slash_ctx(channel: _FakeVoiceChannel, guild):
+    """Build a fake ApplicationContext that exercises the /soundpad logic."""
+    ctx = MagicMock(name="ApplicationContext")
+    ctx.guild = guild
+    ctx.bot = SimpleNamespace(voice_clients=[])
+    ctx.author = SimpleNamespace(
+        id=1,
+        display_name="Tester",
+        name="tester",
+        voice=SimpleNamespace(channel=channel),
+    )
+    ctx.response = MagicMock()
+    ctx.response.is_done = MagicMock(return_value=True)
+    ctx.defer = AsyncMock()
+    sent: list[str] = []
+
+    async def _send(content=None, **kwargs):
+        sent.append(content)
+
+    ctx.followup = MagicMock()
+    ctx.followup.send = AsyncMock(side_effect=_send)
+    ctx.sent_messages = sent
+    return ctx
+
+
+@pytest.fixture
+def no_music_playing(monkeypatch):
+    """Stub playCommand.guildPlayers so the music-playing check is a no-op."""
+    import playCommand
+    monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=False)
+
+
+async def test_soundpad_slash_with_query_plays_matched_clip_and_replies(
+    soundpad_dir, no_music_playing
+):
+    channel = _FakeVoiceChannel(channel_id=10, member_count=2)
+    guild = _make_guild([channel])
+    guild.id = 999
+    ctx = _make_slash_ctx(channel, guild)
+
+    await soundpadLogic(ctx, query="bob esponja")
+
+    # The user got told what is being played and the bot did join the channel.
+    text = "\n".join(m for m in ctx.sent_messages if m)
+    assert "Reproduciendo" in text or "reproduciendo" in text.lower()
+    assert "bob esponja".lower() in text.lower().replace("_", " ").replace("-", " ")
+    assert channel.connected_vc is not None
+    assert channel.connected_vc.played is not None
+
+
+async def test_soundpad_slash_with_query_informs_user_when_no_match(
+    soundpad_dir, no_music_playing
+):
+    channel = _FakeVoiceChannel(channel_id=10, member_count=2)
+    guild = _make_guild([channel])
+    guild.id = 999
+    ctx = _make_slash_ctx(channel, guild)
+
+    await soundpadLogic(ctx, query="zzz nothing similar zzz")
+
+    text = "\n".join(m for m in ctx.sent_messages if m)
+    assert "encontr" in text.lower()  # "No encontré"
+    # No connection should have happened on a miss.
+    assert channel.connected_vc is None
+
+
+async def test_soundpad_slash_with_query_rejects_user_not_in_voice(
+    soundpad_dir, no_music_playing
+):
+    channel = _FakeVoiceChannel(channel_id=10, member_count=2)
+    guild = _make_guild([channel])
+    guild.id = 999
+    ctx = _make_slash_ctx(channel, guild)
+    ctx.author.voice = None  # user not in any voice channel
+
+    await soundpadLogic(ctx, query="bob esponja")
+
+    text = "\n".join(m for m in ctx.sent_messages if m)
+    assert "voz" in text.lower() or "voice" in text.lower()
+    assert channel.connected_vc is None
 
 
 async def test_play_clip_by_query_stays_connected_if_bot_was_already_in_voice(soundpad_dir, monkeypatch):

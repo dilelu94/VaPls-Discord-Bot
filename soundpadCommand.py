@@ -671,17 +671,20 @@ class SoundpadView(discord.ui.View):
         else:
             await interaction.response.defer()
 
-async def soundpadLogic(ctx: discord.ApplicationContext):
-    """Handle the /soundpad slash command and open the UI panel.
+async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = None):
+    """Handle the /soundpad slash command.
 
     Args:
         ctx: Discord application context.
+        query: Optional fuzzy search. When provided, finds the most similar
+            clip and plays it directly instead of opening the UI panel.
 
     Returns:
         None.
 
     Side Effects:
-        Connects to voice, sends a UI message, and emits analytics events.
+        Connects to voice, sends a UI message or plays a clip, and emits
+        analytics events.
 
     Async:
         This function is a coroutine and must be awaited.
@@ -700,6 +703,27 @@ async def soundpadLogic(ctx: discord.ApplicationContext):
 
     if not ctx.author.voice:
         return await ctx.followup.send("❌ Debes estar en un canal de voz.", ephemeral=True)
+
+    if query:
+        played = await play_clip_by_query(
+            ctx.bot,
+            ctx.guild,
+            query,
+            voice_channel=ctx.author.voice.channel,
+        )
+        if played is None:
+            analytics.capture("soundpad query miss", user=ctx.author, guild=ctx.guild,
+                              properties={"query": query})
+            return await ctx.followup.send(
+                f"🔎 No encontré ningún clip parecido a `{query}`.",
+                ephemeral=True,
+            )
+        analytics.capture("soundpad query played", user=ctx.author, guild=ctx.guild,
+                          properties={"query": query,
+                                      "audio_file": os.path.basename(played)})
+        return await ctx.followup.send(
+            f"▶️ Reproduciendo: **{os.path.splitext(os.path.basename(played))[0]}**"
+        )
 
     vc = ctx.guild.voice_client
     if not vc:
