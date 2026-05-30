@@ -10,6 +10,7 @@ discarded — so the indio feels like a friend that remembers the group.
 Depends on geminiClient and analytics.
 """
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -1456,21 +1457,57 @@ Reglas:
 """
 
 
+# Cache de resultados de decifrar para ahorrar calls a Gemini ante falsos
+# positivos de wake-word que producen transcripciones repetidas (ej. ruido
+# ambiente que Whisper devuelve siempre como la misma frase). La clave se
+# normaliza (lower + whitespace) para captar variantes triviales. El valor es
+# lo que devolvió Gemini ("" para BASURA, texto limpio para el resto).
+_DECIFRAR_CACHE_MAX = 256
+_decifrar_cache: "collections.OrderedDict[str, str]" = collections.OrderedDict()
+
+
+def _decifrar_cache_key(texto: str) -> str:
+    return re.sub(r"\s+", " ", texto.lower()).strip()
+
+
+def _decifrar_cache_get(key: str) -> Optional[str]:
+    if key in _decifrar_cache:
+        _decifrar_cache.move_to_end(key)
+        return _decifrar_cache[key]
+    return None
+
+
+def _decifrar_cache_put(key: str, value: str) -> None:
+    _decifrar_cache[key] = value
+    _decifrar_cache.move_to_end(key)
+    while len(_decifrar_cache) > _DECIFRAR_CACHE_MAX:
+        _decifrar_cache.popitem(last=False)
+
+
 async def decifrarTranscripcion(texto: str) -> str:
     """Run an ASR transcript through Gemini to clean phonetic errors.
 
     Returns the cleaned text, or "" when Gemini flags the input as BASURA
     (so callers can drop the utterance instead of forwarding noise downstream).
     Falls back to the raw text on Gemini failure.
+
+    Results are cached per normalized input so repeated noise transcriptions
+    (typical with wake-word false positives) don't burn Gemini quota.
     """
     texto = (texto or "").strip()
     if not texto:
         return ""
+    cache_key = _decifrar_cache_key(texto)
+    cached = _decifrar_cache_get(cache_key)
+    if cached is not None:
+        logger.info("decifrar: cache hit raw=%r -> %r", texto[:200], cached[:200])
+        return cached
     try:
         reply = await geminiClient.generate(
             user_message=texto,
             system_instruction=DECIFRAR_SYSTEM,
             history=None,
+            model=config.GEMINI_DECIFRAR_MODEL,
             max_output_tokens=256,
         )
     except Exception:
@@ -1479,12 +1516,14 @@ async def decifrarTranscripcion(texto: str) -> str:
     out = (reply.text or "").strip().strip('"').strip("'")
     if out.upper().strip() == "BASURA":
         logger.info("decifrar: descartado como BASURA, raw=%r", texto[:200])
+        _decifrar_cache_put(cache_key, "")
         return ""
     final = out or texto
     if final != texto:
         logger.info("decifrar: raw=%r -> cleaned=%r", texto[:200], final[:200])
     else:
         logger.info("decifrar: passthrough %r", texto[:200])
+    _decifrar_cache_put(cache_key, final)
     return final
 
 

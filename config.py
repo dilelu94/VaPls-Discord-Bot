@@ -52,6 +52,11 @@ GEMINI_API_KEYS: list[str] = _parse_gemini_keys()
 # truthy check; mantenelo apuntando a la primera key del pool.
 GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else None
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Modelo usado por decifrarTranscripcion (limpieza de transcripciones ASR).
+# Es una tarea corta/correctiva donde flash-lite alcanza, y tiene 4x la cuota
+# diaria del free tier (1000 RPD vs 250) — esto libera cupo del modelo grande
+# para el /indio.
+GEMINI_DECIFRAR_MODEL = os.getenv("GEMINI_DECIFRAR_MODEL", "gemini-2.5-flash-lite")
 # Archivo persistente con el pool de keys (gitignored). geminiKeys.py lo lee
 # al startup y lo escribe cuando alguien manda una key nueva por DM. Si no
 # existe, se siembra con GEMINI_API_KEYS del .env.
