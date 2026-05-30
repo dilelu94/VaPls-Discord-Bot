@@ -312,7 +312,7 @@ class TranscriberSink(voice_recv.AudioSink):
     is exceeded, the utterance is dropped with a log entry rather than queued.
     """
 
-    SILENCE_RMS_THRESHOLD = 50
+    SILENCE_RMS_THRESHOLD = 15
     SILENCE_FINAL_SECONDS = 0.8
     # Skip transcription if total speech accumulated for this user is shorter
     # than this many seconds — usually breath/laughter noise, not words.
