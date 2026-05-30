@@ -934,25 +934,39 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     logger.info("indio %s: no active player for guild %s", action, guild_id)
                     continue
                 vc = getattr(player, "vc", None)
+                control_ok = False
                 if action == "SKIP_MUSIC":
                     await player.skipSong()
                     statuses.append("skip: ok")
+                    control_ok = True
                 elif action == "STOP_MUSIC":
                     await player.stopPlayback()
                     statuses.append("stop: ok")
+                    control_ok = True
                 elif action == "PAUSE_MUSIC":
                     if vc and vc.is_playing():
                         await player.togglePausePlay()
                         statuses.append("pause: ok")
+                        control_ok = True
                     else:
                         statuses.append("pause: not playing")
                 elif action == "RESUME_MUSIC":
                     if vc and vc.is_paused():
                         await player.togglePausePlay()
                         statuses.append("resume: ok")
+                        control_ok = True
                     else:
                         statuses.append("resume: not paused")
                 logger.info("indio %s → %s", action, statuses[-1])
+                # Mirror the control in the playback channel via the userbot
+                # so the action is visible in #sick-tunes (these tools don't
+                # have slash commands of their own to land there).
+                if control_ok:
+                    await _relay_to_userbot(
+                        config.INDIO_PLAY_CHANNEL_ID,
+                        _ACTION_FALLBACK_TEXT.get(action, "👍"),
+                        reply_to_id=None,
+                    )
         except Exception:
             logger.exception("indio action %s failed", action)
     return statuses
