@@ -1927,6 +1927,48 @@ async def _relay_members(request: web.Request) -> web.Response:
     })
 
 
+def _command_owner_id(cmd) -> Optional[int]:
+    """Extract the owning bot's user/application id from a SlashCommand.
+    discord.py-self surfaces this as either ``application_id`` directly or
+    ``application.id`` depending on the cached path."""
+    app_id = getattr(cmd, "application_id", None)
+    if app_id is not None:
+        try:
+            return int(app_id)
+        except (TypeError, ValueError):
+            pass
+    app = getattr(cmd, "application", None)
+    if app is not None:
+        app_id = getattr(app, "id", None)
+        if app_id is not None:
+            try:
+                return int(app_id)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _pick_vapls_command(cmds, name: str):
+    """Pick the slash command named ``name`` that belongs to the VaPls bot.
+    Other bots in the guild (e.g. legacy music bots) may expose commands
+    with the same name; filtering by owning bot id keeps us from invoking
+    the wrong one. Returns ``None`` if no command owned by VaPls is found —
+    we'd rather fail loudly than invoke another bot's slash command by
+    accident."""
+    matches_by_name = [c for c in cmds if getattr(c, "name", None) == name]
+    for c in matches_by_name:
+        if _command_owner_id(c) == config.VAPLS_BOT_ID:
+            return c
+    if matches_by_name:
+        log.warning(
+            "[RELAY] /%s exists in channel but no instance is owned by VaPls "
+            "bot %s (candidates: %s)",
+            name, config.VAPLS_BOT_ID,
+            [_command_owner_id(c) for c in matches_by_name],
+        )
+    return None
+
+
 async def _relay_invoke_play(request: web.Request) -> web.Response:
     """Ask the userbot (a real Discord user account) to invoke VaPls's /play
     slash command in a given text channel, using the query string supplied by
@@ -1967,9 +2009,12 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         log.exception("[RELAY-PLAY] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
 
-    play_cmd = discord.utils.get(cmds, name="play")
+    play_cmd = _pick_vapls_command(cmds, "play")
     if play_cmd is None:
-        log.warning("[RELAY-PLAY] /play command not found in channel %s", channel_id)
+        log.warning(
+            "[RELAY-PLAY] VaPls /play not found in channel %s (saw %d candidates)",
+            channel_id, len(cmds),
+        )
         return web.json_response({"error": "play command not found in channel"}, status=404)
 
     try:
@@ -2020,9 +2065,12 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         log.exception("[RELAY-SOUNDPAD] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
 
-    sp_cmd = discord.utils.get(cmds, name="soundpad")
+    sp_cmd = _pick_vapls_command(cmds, "soundpad")
     if sp_cmd is None:
-        log.warning("[RELAY-SOUNDPAD] /soundpad command not found in channel %s", channel_id)
+        log.warning(
+            "[RELAY-SOUNDPAD] VaPls /soundpad not found in channel %s (saw %d candidates)",
+            channel_id, len(cmds),
+        )
         return web.json_response({"error": "soundpad command not found in channel"}, status=404)
 
     try:

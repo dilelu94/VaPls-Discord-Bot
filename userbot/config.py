@@ -98,6 +98,13 @@ RELAY_HOST = os.getenv("RELAY_HOST", "127.0.0.1")
 RELAY_PORT = int(os.getenv("RELAY_PORT", "8081"))
 RELAY_SECRET = os.getenv("RELAY_SECRET", "")
 
+# Bot user ID of the main VaPls bot. Used to disambiguate /play and /soundpad
+# slash commands when other bots in the guild expose commands with the same
+# name (e.g. legacy music bots). For Discord bots the application_id equals
+# the bot user_id, so this single value filters both. Default is the VaPls
+# production bot ID.
+VAPLS_BOT_ID = int(os.getenv("VAPLS_BOT_ID", "1489830543074918482"))
+
 # --- Voice recording (responses to Telegram audio) -------------------------
 # The main bot can POST /record to ask the userbot to capture up to N seconds
 # of mixed PCM from the voice channel and POST it back to a callback URL
