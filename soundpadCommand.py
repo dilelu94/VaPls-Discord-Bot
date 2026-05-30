@@ -671,6 +671,40 @@ class SoundpadView(discord.ui.View):
         else:
             await interaction.response.defer()
 
+class SoundpadStopView(discord.ui.View):
+    """One-button view shown while a /soundpad query-mode clip is playing.
+
+    Pressing the button stops playback. ``play_clip_by_query`` is awaiting the
+    voice client's ``after`` callback, so stopping triggers the same teardown
+    (and disconnect, when the bot had to connect itself) as natural completion.
+    """
+    def __init__(self, guild: discord.Guild):
+        super().__init__(timeout=600)
+        self.guild = guild
+        self.message = None
+
+    @discord.ui.button(label="⏹️ Parar", style=discord.ButtonStyle.danger,
+                       custom_id="sp_query_stop")
+    async def on_stop(self, button: discord.ui.Button, interaction: discord.Interaction):
+        try:
+            await interaction.response.defer()
+        except Exception:
+            pass
+        vc = self.guild.voice_client
+        if vc and vc.is_playing():
+            try:
+                vc.stop()
+            except Exception:
+                pass
+        for item in self.children:
+            item.disabled = True
+        try:
+            if self.message is not None:
+                await self.message.edit(view=self)
+        except Exception:
+            pass
+
+
 async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = None):
     """Handle the /soundpad slash command.
 
@@ -705,25 +739,41 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
         return await ctx.followup.send("❌ Debes estar en un canal de voz.", ephemeral=True)
 
     if query:
-        played = await play_clip_by_query(
-            ctx.bot,
-            ctx.guild,
-            query,
-            voice_channel=ctx.author.voice.channel,
-        )
-        if played is None:
+        output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
+        match_path = find_best_match(query, output_dir)
+        if match_path is None:
             analytics.capture("soundpad query miss", user=ctx.author, guild=ctx.guild,
                               properties={"query": query})
             return await ctx.followup.send(
                 f"🔎 No encontré ningún clip parecido a `{query}`.",
                 ephemeral=True,
             )
+
+        display = _normalize_clip_name(os.path.splitext(os.path.basename(match_path))[0])
+        view = SoundpadStopView(ctx.guild)
+        message = await ctx.followup.send(
+            f"▶️ Reproduciendo: **{display}**",
+            view=view,
+        )
+        view.message = message
         analytics.capture("soundpad query played", user=ctx.author, guild=ctx.guild,
                           properties={"query": query,
-                                      "audio_file": os.path.basename(played)})
-        return await ctx.followup.send(
-            f"▶️ Reproduciendo: **{os.path.splitext(os.path.basename(played))[0]}**"
+                                      "audio_file": os.path.basename(match_path)})
+
+        await play_clip_by_query(
+            ctx.bot,
+            ctx.guild,
+            query,
+            voice_channel=ctx.author.voice.channel,
         )
+
+        for item in view.children:
+            item.disabled = True
+        try:
+            await message.edit(view=view)
+        except Exception:
+            pass
+        return
 
     vc = ctx.guild.voice_client
     if not vc:

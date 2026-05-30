@@ -12,7 +12,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import config
-from soundpadCommand import find_best_match, iter_clips, play_clip_by_query, soundpadLogic
+from soundpadCommand import (
+    SoundpadStopView,
+    find_best_match,
+    iter_clips,
+    play_clip_by_query,
+    soundpadLogic,
+)
 
 
 # --------------------------------------------------------------------------
@@ -233,10 +239,13 @@ def _make_slash_ctx(channel: _FakeVoiceChannel, guild):
     ctx.response = MagicMock()
     ctx.response.is_done = MagicMock(return_value=True)
     ctx.defer = AsyncMock()
-    sent: list[str] = []
+    sent: list[dict] = []
 
     async def _send(content=None, **kwargs):
-        sent.append(content)
+        sent.append({"content": content, **kwargs})
+        msg = MagicMock(name="Message")
+        msg.edit = AsyncMock()
+        return msg
 
     ctx.followup = MagicMock()
     ctx.followup.send = AsyncMock(side_effect=_send)
@@ -262,7 +271,7 @@ async def test_soundpad_slash_with_query_plays_matched_clip_and_replies(
     await soundpadLogic(ctx, query="bob esponja")
 
     # The user got told what is being played and the bot did join the channel.
-    text = "\n".join(m for m in ctx.sent_messages if m)
+    text = "\n".join(m["content"] for m in ctx.sent_messages if m.get("content"))
     assert "Reproduciendo" in text or "reproduciendo" in text.lower()
     assert "bob esponja".lower() in text.lower().replace("_", " ").replace("-", " ")
     assert channel.connected_vc is not None
@@ -279,7 +288,7 @@ async def test_soundpad_slash_with_query_informs_user_when_no_match(
 
     await soundpadLogic(ctx, query="zzz nothing similar zzz")
 
-    text = "\n".join(m for m in ctx.sent_messages if m)
+    text = "\n".join(m["content"] for m in ctx.sent_messages if m.get("content"))
     assert "encontr" in text.lower()  # "No encontré"
     # No connection should have happened on a miss.
     assert channel.connected_vc is None
@@ -296,9 +305,51 @@ async def test_soundpad_slash_with_query_rejects_user_not_in_voice(
 
     await soundpadLogic(ctx, query="bob esponja")
 
-    text = "\n".join(m for m in ctx.sent_messages if m)
+    text = "\n".join(m["content"] for m in ctx.sent_messages if m.get("content"))
     assert "voz" in text.lower() or "voice" in text.lower()
     assert channel.connected_vc is None
+
+
+async def test_soundpad_slash_with_query_attaches_stop_button(
+    soundpad_dir, no_music_playing
+):
+    channel = _FakeVoiceChannel(channel_id=10, member_count=2)
+    guild = _make_guild([channel])
+    guild.id = 999
+    ctx = _make_slash_ctx(channel, guild)
+
+    await soundpadLogic(ctx, query="bob esponja")
+
+    views = [m.get("view") for m in ctx.sent_messages if m.get("view") is not None]
+    assert views, "expected a view to be attached to the playback message"
+    view = views[0]
+    assert isinstance(view, SoundpadStopView)
+    labels = [getattr(item, "label", "") or "" for item in view.children]
+    assert any("Parar" in lbl for lbl in labels), f"missing stop button, got {labels}"
+
+
+async def test_soundpad_stop_button_stops_playback_and_disables_view():
+    channel = _FakeVoiceChannel(channel_id=10)
+    vc = _FakeVoiceClient(channel)
+    vc._playing = True
+    guild = SimpleNamespace(voice_client=vc, voice_channels=[channel])
+
+    view = SoundpadStopView(guild)
+    msg = MagicMock(name="Message")
+    msg.edit = AsyncMock()
+    view.message = msg
+
+    interaction = MagicMock(name="Interaction")
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+
+    # Trigger the button by simulating a click through py-cord's callback path.
+    button_item = view.children[0]
+    await button_item.callback(interaction)
+
+    assert not vc.is_playing(), "stop button should halt current playback"
+    assert all(item.disabled for item in view.children), "items should be disabled after click"
+    msg.edit.assert_awaited()
 
 
 async def test_play_clip_by_query_stays_connected_if_bot_was_already_in_voice(soundpad_dir, monkeypatch):
