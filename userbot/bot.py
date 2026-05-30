@@ -336,16 +336,51 @@ class TranscriberSink(voice_recv.AudioSink):
         # Diagnostic: log RMS for the first packets per user to verify the
         # silence threshold is sensible for the actual mic levels.
         self._rms_seen: dict[int, int] = {}
+        self._stopped = False
+        self._idle_loop_started = False
 
     def wants_opus(self) -> bool:
         return False
 
     def cleanup(self) -> None:
         log.info(f"[WHISPER] Sink cleanup. Total packets: {self.packet_count}")
+        self._stopped = True
         self.buffers.clear()
         self.resample_states.clear()
         self.last_voice_ts.clear()
         self.had_voice.clear()
+
+    def _start_idle_watcher_once(self) -> None:
+        """Lazy-start the idle watcher on first packet.
+
+        voice_recv only calls write() when packets arrive, so the in-write
+        silence-detection branch never fires after a speaker stops talking
+        (no further packets = no further checks). This background task
+        polls every 250ms and finalizes buffers whose last voice frame is
+        older than SILENCE_FINAL_SECONDS.
+        """
+        if self._idle_loop_started:
+            return
+        self._idle_loop_started = True
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._idle_watcher(), self._client_ref.loop
+            )
+        except Exception:
+            log.exception("[WHISPER] failed to start idle watcher")
+
+    async def _idle_watcher(self) -> None:
+        while not self._stopped:
+            try:
+                await asyncio.sleep(0.25)
+                now = time.time()
+                for uid in list(self.last_voice_ts.keys()):
+                    last = self.last_voice_ts.get(uid)
+                    if (last and self.had_voice.get(uid)
+                            and (now - last) > self.SILENCE_FINAL_SECONDS):
+                        self._finalize_user(uid)
+            except Exception:
+                log.exception("[WHISPER] idle watcher error")
 
     def _concurrency_limit(self) -> int:
         """Pick 3 while the main bot plays audio, else 5."""
@@ -365,6 +400,7 @@ class TranscriberSink(voice_recv.AudioSink):
         if self.packet_count == 1:
             log.info(f"[WHISPER] First packet received "
                      f"(user_id={user_id}, bytes={len(pcm_data)})")
+            self._start_idle_watcher_once()
         elif self.packet_count % 1000 == 0:
             elapsed = time.time() - self.start_time
             log.info(f"[WHISPER] {self.packet_count} packets in {elapsed:.1f}s")
