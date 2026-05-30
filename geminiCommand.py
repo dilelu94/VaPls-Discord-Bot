@@ -780,9 +780,21 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                 statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                 logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
             elif action == "PLAY_SOUND":
-                ok, msg = await playCommand.playSoundFromIndio(bot, int(guild_id), arg)
+                try:
+                    from soundpadCommand import play_clip_by_query
+                except Exception:
+                    logger.exception("indio PLAY_SOUND: soundpadCommand import failed")
+                    continue
+                guild = bot.get_guild(int(guild_id)) if bot is not None else None
+                if guild is None:
+                    statuses.append(f"sound: fail — guild {guild_id} not found")
+                    logger.warning("indio PLAY_SOUND: guild %s not found", guild_id)
+                    continue
+                played_path = await play_clip_by_query(bot, guild, query=arg)
+                ok = played_path is not None
+                msg = played_path or "no match"
                 statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
-                logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
+                logger.info("indio PLAY_SOUND '%s' → ok=%s path=%s", arg, ok, played_path)
         except Exception:
             logger.exception("indio action %s failed", action)
     return statuses
