@@ -437,6 +437,7 @@ class GuildPlayer:
             playLogger.info(f"[PLAYBACK STOP] Playback stopped. Queue cleared.")
             self.currentSong = None
             await self.updateControlMessage("⏹️ Reproducción detenida y cola vaciada.")
+            await self._leaveVoice("stop")
             return
 
         # Previous action
@@ -465,6 +466,58 @@ class GuildPlayer:
         else:
             self.currentSong = None
             await self.updateControlMessage("⏹️ Fin de la cola de reproducción.")
+            await self._leaveVoice("queue_finished")
+
+    async def _leaveVoice(self, reason: str):
+        """Disconnect from voice after playback ends.
+
+        Args:
+            reason: Short tag for logs/analytics (e.g. "stop", "queue_finished").
+
+        Side Effects:
+            Disconnects the voice client, fires analytics, clears self.vc.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
+        vc = self.vc
+        if not vc:
+            return
+        channel = getattr(vc, "channel", None)
+        channel_name = getattr(channel, "name", None)
+        channel_id = getattr(channel, "id", None)
+        try:
+            if getattr(vc, "recording", False):
+                try:
+                    vc.stop_recording()
+                except Exception:
+                    pass
+                setattr(vc, "recording", False)
+            try:
+                await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
+            except asyncio.TimeoutError:
+                try:
+                    vc.cleanup()
+                except Exception:
+                    pass
+            playLogger.info(f"[PLAYBACK LEAVE] Disconnected from voice ({reason}).")
+            try:
+                analytics.capture(
+                    "voice channel left",
+                    user=self.lastRequester,
+                    guild=self.bot.get_guild(self.guildId) if self.bot else None,
+                    properties={
+                        "channel_id": str(channel_id) if channel_id else None,
+                        "channel_name": channel_name,
+                        "trigger": f"play_{reason}",
+                    },
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            playLogger.warning(f"[PLAYBACK LEAVE] Error disconnecting ({reason}): {e}")
+        finally:
+            self.vc = None
 
     async def predownloadQueue(self):
         """Background task that pre-downloads queued songs.
