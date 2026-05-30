@@ -24,14 +24,34 @@ proyecto. Es la **fuente canónica** de instrucciones para asistentes de IA.
 
 ## 📋 Descripción General
 **VaPls-Discord-Bot** corre en dos procesos:
-- **Main bot**: comandos, playback de audio, soundpad, Gemini y HTTP API.
-- **Userbot**: transcripción de voz (DAVE/E2EE) con Vosk.
+- **Main bot**: comandos, playback de audio, soundpad, Gemini, HTTP API y puente con Telegram.
+- **Userbot** (alias *Indio*): transcripción de voz (DAVE/E2EE) con `faster-whisper` y captura de voice-reply para Telegram.
+
+## 🌐 Servidor de producción (2026-05-30)
+| | |
+|---|---|
+| **Host** | `ubuntu@141.148.84.55` |
+| **OS** | Ubuntu 22.04 aarch64 |
+| **Shape** | Oracle VM.Standard.A1.Flex — 4 OCPU / 24 GB RAM / 4 Gbps NIC |
+| **SSH key (local)** | `/var/home/dilelu/.ssh/vapls` |
+| **Repo path** | `/home/ubuntu/vapls-discord-bot/` |
+| **Services** | `discord-bot.service` (main bot) + `vapls-userbot.service` (userbot) |
+
+**Migrado desde** `ubuntu@129.80.59.99` (Oracle Linux amd64, instancia E2.1.Micro) el 2026-05-30. El server viejo quedó wipe-eado del bot pero sigue prendido para otros usos.
+
+**Deploy workflow:**
+```bash
+rsync -avz -e "ssh -i /var/home/dilelu/.ssh/vapls" \
+  <archivos cambiados> ubuntu@141.148.84.55:/home/ubuntu/vapls-discord-bot/
+ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
+  'sudo systemctl restart discord-bot.service'  # + vapls-userbot.service si cambió userbot/
+```
 
 ## 🛠️ Stack Tecnológico y Dependencias
 - **Lenguaje:** Python 3.10+
 - **Discord bot:** `py-cord`
 - **Userbot:** `discord.py-self` + `discord-ext-voice-recv`
-- **STT:** `vosk` (offline)
+- **STT:** `faster-whisper` (CTranslate2, offline, modelo `small` int8 en el server ARM 4/24)
 - **Audio:** `FFmpeg`, `audioop`
 - **HTTP:** `aiohttp`
 - **Configuración:** `python-dotenv`
@@ -58,12 +78,30 @@ El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 ### 2) Pipeline de transcripción (TranscriberSink)
 1. Recibe PCM desde `voice_recv`.
 2. Convierte a mono y re-samplea a 16 kHz.
-3. Ejecuta Vosk y genera texto final.
-4. `on_transcript` publica en un canal de texto y/o forwardea por HTTP.
+3. Ejecuta `faster-whisper` (modelo `small`, `int8`, CPU threads = vCPU count) y genera texto final.
+4. `on_transcript` publica en un canal de texto y/o forwardea por HTTP al main bot (`/indio` para wake word, opcional `/message` con `ENABLE_HTTP_FORWARD`).
 
 ### 3) Playback de música (GuildPlayer)
 `/play` descarga con yt-dlp, reproduce con FFmpeg y mantiene cola/estado por
 guild con pre-descarga en segundo plano.
+
+## 📡 Integración con el bot de Telegram
+
+El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por header `X-API-Secret`) que un bot de Telegram externo usa como puente. Endpoints relevantes:
+- `POST /message` — publica texto en un canal de Discord.
+- `POST /play-audio` — descarga un audio de Telegram y lo reproduce en el canal de voz de Discord. Auto-elige canal (preferencia: donde está el Indio; fallback: el más poblado). Acepta un `replyCallbackUrl` opcional.
+- `POST /indio` — invoca al Indio con una pregunta (memoria corta + lore destilado).
+- `GET /status` `GET /members` `GET /user/{id}` `GET /queue` `GET /playing` — read-only.
+
+**Voice-reply flow (Discord → Telegram):**
+1. Telegram bridge llama `POST /play-audio` con `replyCallbackUrl=<url Telegram>`.
+2. Main bot reproduce el audio en el canal de voz.
+3. Al terminar, si `USERBOT_RECORD_URL` está seteado, el main bot le pide al **userbot** (loopback `POST 127.0.0.1:8081/record`) que grabe hasta `USERBOT_RECORD_DEFAULT_DURATION` segundos del mismo canal.
+4. El userbot capta el audio (con VAD por RMS), lo encodea en OGG y hace `POST replyCallbackUrl` con el blob.
+5. El bot de Telegram lo recibe y lo publica del lado Telegram.
+
+**Indio relay (texto del Indio → Telegram via userbot):**
+Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad del **userbot real** (no con la del bot vapls), llama `POST 127.0.0.1:8081/say` del userbot con `INDIO_RELAY_SECRET`. Útil para que las respuestas autom. en chat parezcan venir del Indio "real".
 
 ## 🛠️ Comandos de Discord (Slash Commands)
 - `/play`: reproduce música de YouTube.
@@ -72,6 +110,58 @@ guild con pre-descarga en segundo plano.
 - `/indio`: persona con memoria corta por guild + memoria de largo plazo destilada por Gemini.
 - `/parar`: detiene playback y desconecta.
 - `/quit`: desconecta sin limpiar cola.
+
+## 📁 lsyncd (sync local PC → soundpad del server)
+
+El usuario corre **lsyncd** en su PC para mantener `audio_output/` del server espejado con `/home/dilelu/repos/RVC_WebUI/Output/` (donde RVC genera clips de voz). Sin esto, los clips nuevos no llegan al soundpad.
+
+**Config (local, gitignored):** `lsyncd_rvc.lua` en la raíz del repo.
+```lua
+source = "/home/dilelu/repos/RVC_WebUI/Output/"
+host = "ubuntu@141.148.84.55"
+targetdir = "/home/ubuntu/vapls-discord-bot/audio_output/"
+identityFile = "/var/home/dilelu/.ssh/vapls"
+delete = true   -- borra del server lo que se borró en local
+```
+
+**Manejo:** corre como **systemd user services** en la PC del usuario:
+- `lsyncd-rvc.service` (canónico)
+- `lsyncd.service` (duplicado — apunta al mismo lua; pendiente de consolidar)
+
+Comandos útiles:
+```bash
+systemctl --user status lsyncd-rvc.service
+systemctl --user restart lsyncd-rvc.service
+journalctl --user -u lsyncd-rvc.service -f
+```
+
+Si cambia el server / la key SSH, hay que editar `lsyncd_rvc.lua` y `systemctl --user restart lsyncd-rvc.service`.
+
+## ⚠️ Errores conocidos y workarounds
+
+### 1) `Client.__init__() missing 'intents'` en el userbot (provisión fresh)
+`discord-ext-voice-recv` arrastra `discord.py` como dep transitiva y le gana el namespace `discord` a `discord.py-self` después de `pip install -r userbot/requirements.txt`. La versión nueva de `discord.py` requiere `intents=...`, lo cual rompe `discord.Client(chunk_guilds_at_startup=False)` en `userbot/bot.py`.
+
+**Workaround (ya bakeado en `deploy.sh`):**
+```bash
+pip install -r userbot/requirements.txt
+pip uninstall -y discord.py 2>/dev/null || true
+pip install --force-reinstall --no-deps \
+  "discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self"
+```
+Si encontrás el error a futuro: re-correr los 3 comandos en el venv del userbot.
+
+### 2) Modelo `faster-whisper` se descarga en el primer arranque
+La primera vez que `vapls-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado).
+
+### 3) DAVE patch en el userbot
+El userbot monkey-patchea `PacketDecryptor._decrypt_rtp_*` para aplicar `dave.decrypt()` después del AEAD. **No eliminar** salvo cambio claro en la API de Discord (logs: `"DAVE decrypt monkey-patch installed"`). Si Discord cambia el protocolo DAVE, el userbot queda recibiendo audio cifrado que no puede transcribir.
+
+### 4) `audio_output/` no está en el repo
+El soundpad usa `audio_output/` (configurable con `CUSTOM_AUDIO_PATH`). En el server lo poblá lsyncd (ver sección 📁). En clon nuevo, el directorio queda vacío hasta que lsyncd corra desde tu PC.
+
+### 5) FFmpeg estático amd64 vs arm64
+El branch `dnf` de `deploy.sh` baja un binario estático según `uname -m` (`amd64` o `arm64`). En Ubuntu/Debian usa `apt install ffmpeg` directamente. Si agregás soporte para otra arch, actualizá ambos branches.
 
 ## 🧪 Testing
 Los tests viven en `tests/` y corren con **pytest** (+ `pytest-asyncio`). La
