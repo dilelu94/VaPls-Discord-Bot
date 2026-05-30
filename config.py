@@ -49,15 +49,19 @@ INDIO_RELAY_URL = os.getenv("INDIO_RELAY_URL", "")
 INDIO_RELAY_SECRET = os.getenv("INDIO_RELAY_SECRET", "")
 INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 
+# Cuando el indio decide poner musica via [PLAY_MUSIC: ...], los mensajes
+# de estado y el panel de control del GuildPlayer se postean siempre en
+# este text channel. Sin fallback: si no esta, la accion falla.
+INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "451607097432604672"))
+
 # Userbot voice-recording endpoint. After /play-audio finishes playing a
 # Telegram-uploaded clip we ask the userbot to capture the voice channel's
 # reply and POST it back to the Telegram bridge. Leave USERBOT_RECORD_URL
-# empty to disable the feature entirely.
-USERBOT_RECORD_URL = os.getenv("USERBOT_RECORD_URL", "")
-USERBOT_RECORD_SECRET = os.getenv("USERBOT_RECORD_SECRET", INDIO_RELAY_SECRET)
-USERBOT_RECORD_DEFAULT_DURATION = float(
-    os.getenv("USERBOT_RECORD_DEFAULT_DURATION", "20")
-)
-USERBOT_RECORD_TRIGGER_TIMEOUT = float(
-    os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT", "5")
-)
+# empty to disable the feature entirely. USERBOT_RECORD_SECRET typically
+# matches the Telegram bridge's CALLBACK_SECRET so the same secret flows
+# end-to-end; generate a separate one if you prefer to split the trust
+# zones (main bot ↔ userbot vs userbot ↔ Telegram bridge).
+USERBOT_RECORD_URL = os.getenv("USERBOT_RECORD_URL", "").strip()
+USERBOT_RECORD_SECRET = os.getenv("USERBOT_RECORD_SECRET", "").strip()
+USERBOT_RECORD_DEFAULT_DURATION = int(os.getenv("USERBOT_RECORD_DEFAULT_DURATION", "20"))
+USERBOT_RECORD_TRIGGER_TIMEOUT = float(os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT", "5"))

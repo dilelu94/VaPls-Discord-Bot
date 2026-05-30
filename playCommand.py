@@ -862,23 +862,6 @@ def _pick_voice_channel(bot, guild_id: int) -> Optional[discord.VoiceChannel]:
     return candidates[0][0]
 
 
-def _pick_text_channel(bot, guild_id: int, preferred_name: str = "sick-tunes"):
-    """Find the announcement text channel for playback. Prefers a channel
-    named ``preferred_name`` (default "sick-tunes"); falls back to any
-    text channel the bot can write to."""
-    guild = bot.get_guild(guild_id)
-    if guild is None:
-        return None
-    chan = discord.utils.get(guild.text_channels, name=preferred_name)
-    if chan is not None:
-        return chan
-    for ch in guild.text_channels:
-        perms = ch.permissions_for(guild.me) if guild.me else None
-        if perms is None or perms.send_messages:
-            return ch
-    return None
-
-
 async def _yt_dlp_search(query: str) -> list[dict]:
     """Run yt-dlp to resolve the query to song metadata. Returns a list of
     {id, title, duration_string} dicts; empty list on any failure."""
@@ -927,13 +910,13 @@ async def _yt_dlp_search(query: str) -> list[dict]:
 
 
 async def playFromIndio(bot, guild_id: int, query: str,
-                        voice_channel_id: Optional[int] = None,
-                        text_channel_name: str = "sick-tunes") -> tuple[bool, str]:
+                        voice_channel_id: Optional[int] = None) -> tuple[bool, str]:
     """Queue a YouTube search/URL programmatically — no slash ctx required.
 
     Used by the indio when someone asks him to play music. Picks a voice
-    channel automatically, posts status in ``#sick-tunes`` (or any text
-    channel the bot can write to), and reuses GuildPlayer's playback engine.
+    channel automatically, but the text channel for status + GuildPlayer
+    control panel is always ``config.INDIO_PLAY_CHANNEL_ID`` (no fallback);
+    if that channel is missing the action fails.
 
     Returns:
         (ok, message): ``ok=True`` if playback started or song queued;
@@ -956,7 +939,14 @@ async def playFromIndio(bot, guild_id: int, query: str,
     if voice_channel is None:
         return False, "no hay nadie en un canal de voz para reproducir"
 
-    text_channel = _pick_text_channel(bot, guild_id, text_channel_name)
+    text_channel = guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+    if text_channel is None or not hasattr(text_channel, "send"):
+        playLogger.warning(
+            "[PLAY-INDIO] INDIO_PLAY_CHANNEL_ID=%s no encontrado en guild %s",
+            config.INDIO_PLAY_CHANNEL_ID, guild_id,
+        )
+        return False, (f"no encuentro el canal de musica configurado "
+                       f"(id={config.INDIO_PLAY_CHANNEL_ID})")
 
     vc = guild.voice_client
     try:
@@ -982,8 +972,7 @@ async def playFromIndio(bot, guild_id: int, query: str,
 
     player = getGuildPlayer(guild_id, bot)
     player.vc = vc
-    if text_channel is not None:
-        player.textChannel = text_channel
+    player.textChannel = text_channel
 
     isFirst = (not player.currentSong and len(player.queue) == 0)
     player.queue.extend(songs)
@@ -996,11 +985,10 @@ async def playFromIndio(bot, guild_id: int, query: str,
 
     title = songs[0]["title"]
     note = f"🎶 **{title}** {'arrancando' if isFirst else 'a la cola'} (pedido al indio)."
-    if text_channel is not None:
-        try:
-            await text_channel.send(note)
-        except Exception:
-            pass
+    try:
+        await text_channel.send(note)
+    except Exception:
+        playLogger.exception("[PLAY-INDIO] failed to post note in sick-tunes")
 
     if not player.currentSong and player.queue:
         player.currentSong = player.queue.pop(0)
