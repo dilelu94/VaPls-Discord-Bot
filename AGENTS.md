@@ -124,9 +124,8 @@ identityFile = "/var/home/dilelu/.ssh/vapls"
 delete = true   -- borra del server lo que se borró en local
 ```
 
-**Manejo:** corre como **systemd user services** en la PC del usuario:
-- `lsyncd-rvc.service` (canónico)
-- `lsyncd.service` (duplicado — apunta al mismo lua; pendiente de consolidar)
+**Manejo:** corre como **systemd user service** en la PC del usuario:
+- `lsyncd-rvc.service`
 
 Comandos útiles:
 ```bash
