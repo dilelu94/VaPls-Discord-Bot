@@ -19,6 +19,7 @@
 | `API_SECRET` | ⚠️ | empty | Required to authorize API requests; if empty, API returns 503. |
 | `GEMINI_API_KEY` | ⚠️ | empty | Required for `/vapls` and `/indio`. |
 | `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model name. |
+| `VOICE_IDLE_TIMEOUT_SECONDS` | ❌ | `60` | Segundos sin reproducir/pausado tras los cuales el bot se desconecta solo del canal de voz (manejado por `idleWatchdog.py`). |
 
 ## Userbot (.env in userbot/)
 | Variable | Required | Default | Description / implications |

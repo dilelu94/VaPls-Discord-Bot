@@ -21,6 +21,7 @@ import config
 import analytics
 import apiServer
 from apiServer import startApiServer
+from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
@@ -183,6 +184,10 @@ async def on_voice_state_update(member, before, after):
             },
         )
         asyncio.create_task(trigger_soundboard_entry(after.channel))
+        try:
+            start_idle_watchdog(bot, after.channel.guild.id)
+        except Exception:
+            log.exception("failed to start idle watchdog")
     elif before.channel and after.channel and before.channel.id != after.channel.id:
         asyncio.create_task(trigger_soundboard_entry(after.channel))
     elif before.channel and not after.channel:
@@ -195,6 +200,10 @@ async def on_voice_state_update(member, before, after):
                 "trigger": "state_update",
             },
         )
+        try:
+            stop_idle_watchdog(before.channel.guild.id)
+        except Exception:
+            log.exception("failed to stop idle watchdog")
 
 
 def _track_command(ctx, name, extra=None):
@@ -339,6 +348,10 @@ async def quit(ctx):
         channel_name = vc.channel.name
         channel_id = str(vc.channel.id)
         try:
+            try:
+                stop_idle_watchdog(ctx.guild.id)
+            except Exception:
+                pass
             try:
                 await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
             except asyncio.TimeoutError:

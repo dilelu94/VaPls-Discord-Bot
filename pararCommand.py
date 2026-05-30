@@ -19,6 +19,12 @@ async def pararLogic(ctx):
     """
     from bot import safe_respond
     from playCommand import guildPlayers, clearGuildPlayer
+    from idleWatchdog import stop_idle_watchdog
+
+    try:
+        stop_idle_watchdog(ctx.guild.id)
+    except Exception:
+        pass
 
     if ctx.guild.id in guildPlayers:
         try:

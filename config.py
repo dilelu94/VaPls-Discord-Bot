@@ -65,3 +65,7 @@ USERBOT_RECORD_URL = os.getenv("USERBOT_RECORD_URL", "").strip()
 USERBOT_RECORD_SECRET = os.getenv("USERBOT_RECORD_SECRET", "").strip()
 USERBOT_RECORD_DEFAULT_DURATION = int(os.getenv("USERBOT_RECORD_DEFAULT_DURATION", "20"))
 USERBOT_RECORD_TRIGGER_TIMEOUT = float(os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT", "5"))
+
+# Cuántos segundos de inactividad (ni reproduciendo ni pausado) tolera el bot
+# antes de desconectarse solo del canal de voz. Lo maneja idleWatchdog.py.
+VOICE_IDLE_TIMEOUT_SECONDS = float(os.getenv("VOICE_IDLE_TIMEOUT_SECONDS", "60"))
