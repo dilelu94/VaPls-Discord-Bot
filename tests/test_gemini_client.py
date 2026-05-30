@@ -97,3 +97,77 @@ async def test_unparseable_body_is_parse_error(gemini_http):
     with pytest.raises(GeminiError) as exc:
         await _gen()
     assert exc.value.kind == "parse"
+
+
+# ---------------------------------------------------------------------------
+# Function calling: callers can pass tools and Gemini's functionCall parts
+# surface on the reply alongside (or instead of) text. The whole point is to
+# stop relying on the model emitting a magic marker in free-form text.
+# ---------------------------------------------------------------------------
+
+
+async def test_tools_forwarded_in_request_body(gemini_http):
+    spy = gemini_http(status=200, payload={
+        "candidates": [{
+            "finishReason": "STOP",
+            "content": {"parts": [{"text": "ok"}]},
+        }],
+    })
+    tools = [{
+        "name": "play_music",
+        "description": "Reproducir música",
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {"query": {"type": "STRING"}},
+            "required": ["query"],
+        },
+    }]
+    await _gen(tools=tools)
+
+    sent_body = spy.requests[-1]["kwargs"]["json"]
+    declarations = sent_body["tools"][0]["function_declarations"]
+    assert any(d["name"] == "play_music" for d in declarations)
+
+
+async def test_function_call_surfaces_in_reply(gemini_http):
+    gemini_http(status=200, payload={
+        "candidates": [{
+            "finishReason": "STOP",
+            "content": {"parts": [
+                {"text": "dale, va Queen"},
+                {"functionCall": {"name": "play_music",
+                                  "args": {"query": "Queen"}}},
+            ]},
+        }],
+    })
+    reply = await _gen(tools=[{"name": "play_music", "parameters": {}}])
+    assert reply.text == "dale, va Queen"
+    assert reply.function_calls == [
+        {"name": "play_music", "args": {"query": "Queen"}},
+    ]
+
+
+async def test_function_call_without_text_is_not_empty(gemini_http):
+    gemini_http(status=200, payload={
+        "candidates": [{
+            "finishReason": "STOP",
+            "content": {"parts": [
+                {"functionCall": {"name": "play_sound",
+                                  "args": {"name": "milapollo"}}},
+            ]},
+        }],
+    })
+    reply = await _gen(tools=[{"name": "play_sound", "parameters": {}}])
+    # No text but a function call still counts as a valid reply.
+    assert reply.text == ""
+    assert reply.function_calls[0]["name"] == "play_sound"
+    assert reply.function_calls[0]["args"]["name"] == "milapollo"
+
+
+async def test_no_text_no_function_calls_is_empty_error(gemini_http):
+    gemini_http(status=200, payload={
+        "candidates": [{"finishReason": "STOP", "content": {"parts": []}}],
+    })
+    with pytest.raises(GeminiError) as exc:
+        await _gen()
+    assert exc.value.kind == "empty"

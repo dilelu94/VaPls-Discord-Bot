@@ -109,7 +109,8 @@ def patch_generate(monkeypatch):
 
 
 def make_reply(text="hola che", *, finish_reason="STOP",
-               prompt_tokens=10, response_tokens=20, model="gemini-2.5-flash"):
+               prompt_tokens=10, response_tokens=20, model="gemini-2.5-flash",
+               function_calls=None):
     from geminiClient import GeminiReply
     return GeminiReply(
         text=text,
@@ -117,6 +118,7 @@ def make_reply(text="hola che", *, finish_reason="STOP",
         prompt_tokens=prompt_tokens,
         response_tokens=response_tokens,
         model=model,
+        function_calls=list(function_calls or []),
     )
 
 
@@ -150,8 +152,9 @@ class _FakeResp:
 
 
 class _FakeSession:
-    def __init__(self, resp):
+    def __init__(self, resp, captured):
         self._resp = resp
+        self._captured = captured
 
     async def __aenter__(self):
         return self
@@ -160,6 +163,8 @@ class _FakeSession:
         return False
 
     def post(self, *args, **kwargs):
+        # Capture the outgoing request so tests can assert what was sent.
+        self._captured.append({"args": args, "kwargs": kwargs})
         return self._resp
 
 
@@ -169,18 +174,28 @@ def gemini_http(monkeypatch):
 
     Sets a dummy API key by default. Call the returned function with either a
     payload+status, a json_exc (parse failure), or an enter_exc (timeout /
-    client error raised while opening the response).
+    client error raised while opening the response). The returned object's
+    ``requests`` attribute is a list of captured POST calls so tests can
+    inspect the body (e.g. that ``tools`` was forwarded).
     """
     import aiohttp
     import config
     monkeypatch.setattr(config, "GEMINI_API_KEY", "test-key", raising=False)
 
+    class _Spy:
+        requests: list = []
+
+    spy = _Spy()
+    spy.requests = []
+
     def _configure(*, status=200, payload=None, json_exc=None, enter_exc=None):
         resp = _FakeResp(status=status, payload=payload,
                          json_exc=json_exc, enter_exc=enter_exc)
         monkeypatch.setattr(aiohttp, "ClientSession",
-                            lambda *a, **k: _FakeSession(resp))
+                            lambda *a, **k: _FakeSession(resp, spy.requests))
+        return spy
 
+    _configure.requests = spy.requests
     return _configure
 
 

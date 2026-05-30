@@ -6,7 +6,7 @@ https://aistudio.google.com/apikey
 """
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import aiohttp
@@ -31,13 +31,19 @@ class GeminiError(Exception):
 
 @dataclass
 class GeminiReply:
-    """Parsed Gemini response payload."""
+    """Parsed Gemini response payload.
+
+    ``function_calls`` carries any ``functionCall`` parts the model emitted
+    when the caller passed ``tools=`` to :func:`generate`. Each item has
+    shape ``{"name": str, "args": dict}``. Empty for plain text replies.
+    """
 
     text: str
     finish_reason: Optional[str]
     prompt_tokens: Optional[int]
     response_tokens: Optional[int]
     model: str
+    function_calls: list[dict] = field(default_factory=list)
 
 
 async def generate(
@@ -48,6 +54,7 @@ async def generate(
     model: Optional[str] = None,
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     max_output_tokens: int = 1024,
+    tools: Optional[list[dict]] = None,
 ) -> GeminiReply:
     """Generate a single Gemini reply for a user message.
 
@@ -58,6 +65,9 @@ async def generate(
         model: Override model name; defaults to config.GEMINI_MODEL.
         timeout_sec: Total HTTP timeout.
         max_output_tokens: Max tokens for the response.
+        tools: Optional list of FunctionDeclaration dicts. When provided, the
+            model can emit ``functionCall`` parts that surface in
+            ``GeminiReply.function_calls``.
 
     Returns:
         GeminiReply with the rendered text and usage metadata.
@@ -75,7 +85,7 @@ async def generate(
         raise GeminiError("GEMINI_API_KEY not set", kind="config")
 
     mdl = model or config.GEMINI_MODEL
-    body = {
+    body: dict = {
         "system_instruction": {"parts": [{"text": system_instruction}]},
         "contents": (history or []) + [
             {"role": "user", "parts": [{"text": user_message}]},
@@ -87,6 +97,8 @@ async def generate(
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
+    if tools:
+        body["tools"] = [{"function_declarations": tools}]
     url = GEMINI_ENDPOINT.format(model=mdl)
     params = {"key": config.GEMINI_API_KEY}
     headers = {"Content-Type": "application/json"}
@@ -133,9 +145,23 @@ async def generate(
     finish = cand.get("finishReason")
     content = cand.get("content") or {}
     parts = content.get("parts") or []
-    text = "".join(p.get("text", "") for p in parts if isinstance(p, dict)).strip()
+    text_chunks: list[str] = []
+    function_calls: list[dict] = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        if "text" in p and p.get("text"):
+            text_chunks.append(p["text"])
+        fc = p.get("functionCall")
+        if isinstance(fc, dict) and fc.get("name"):
+            args = fc.get("args")
+            function_calls.append({
+                "name": str(fc["name"]),
+                "args": args if isinstance(args, dict) else {},
+            })
+    text = "".join(text_chunks).strip()
 
-    if not text:
+    if not text and not function_calls:
         raise GeminiError(
             f"Empty text (finishReason={finish})",
             kind="empty",
@@ -149,4 +175,5 @@ async def generate(
         prompt_tokens=usage.get("promptTokenCount"),
         response_tokens=usage.get("candidatesTokenCount"),
         model=mdl,
+        function_calls=function_calls,
     )

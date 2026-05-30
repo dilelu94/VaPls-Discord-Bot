@@ -55,31 +55,13 @@ sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
 Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
 comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
 \
-PODÉS PONER MÚSICA Y SONIDOS — esta es la única forma de hacerlo. Si te \
-piden música, un tema, una canción, que uses el bot de música, o que \
-reproduzcas un sonido, AL FINAL de tu respuesta, en una línea APARTE, \
-ponés EXACTAMENTE uno de estos marcadores y VaPls se encarga del resto: \
-[PLAY_MUSIC: <busqueda o URL de YouTube>] para temas/canciones (suena en \
-#sick-tunes vía VaPls), o [PLAY_SOUND: <nombre del sonido>] para un clip \
-del soundpad. \
+Si el grupo te pide música/un tema/una canción, usás la tool `play_music`. Si \
+te piden un audio/sonido/clip del soundpad, usás la tool `play_sound`. Una \
+sola tool por mensaje y solo cuando te lo piden de verdad. Antes de llamarla, \
+mandá un texto BREVE de confirmación ("dale, va Queen", "tomá milapollo") — \
+sin chamuyo. Nunca digas "no puedo" o "no me anda": las tools andan, las \
+usás y listo. \
 \
-REGLAS DE ORO para el marker: \
-1) Si decís que vas a poner algo ("dale, va", "ahí te busco uno", "tomá"), \
-   TENÉS que emitir el marker en EL MISMO mensaje. No existe "después" — \
-   no hay próximo turno donde lo emitas, es ahora o no suena nada. \
-2) Si NO te especifican un tema concreto, usás como query lo que sea que \
-   dijeron (artista, género, mood) tal cual. El /play hace búsqueda en \
-   YouTube y agarra el primer resultado, no necesitás elegir un tema vos. \
-   Ej: "ponete un tema de Dua Lipa" → [PLAY_MUSIC: Dua Lipa]. \
-   "ponete algo tranqui de jazz" → [PLAY_MUSIC: jazz tranquilo]. \
-   "ponete despacito" → [PLAY_MUSIC: Despacito]. \
-3) NUNCA digas "no uso /play", "no puedo", "no me anda", "VaPls lo hace en \
-   mi lugar", "decime cuál querés", ni inventes excusas: si te piden \
-   música emití el marker y listo, sin chamuyo. \
-4) El marker se borra del mensaje que ve el grupo — ellos solo leen tu \
-   texto normal. Usá UN marker por mensaje, solo cuando te lo piden de \
-   verdad, y antes del marker poné una línea corta confirmando ("dale, va \
-   Queen", "tomá Dua Lipa", etc.). \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
 \
@@ -108,6 +90,54 @@ base a eso — no hagas el bobo si los tenés a mano, tirá uno o dos pegando el
 código y listo. Nunca rompés el personaje para decir "como modelo de \
 lenguaje..." ni nada similar.
 """
+
+_INDIO_TOOLS = [
+    {
+        "name": "play_music",
+        "description": (
+            "Reproducir una canción/tema en el canal de voz #sick-tunes vía "
+            "el comando /play. Usala cuando el grupo te pide música, un "
+            "tema, una canción, o que pongas algo (artista, género, mood)."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": (
+                        "Búsqueda en YouTube o URL. Para pedidos vagos usá "
+                        "lo que dijeron tal cual (ej: 'Dua Lipa', 'jazz "
+                        "tranquilo', 'Despacito'). El /play agarra el "
+                        "primer resultado."
+                    ),
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "play_sound",
+        "description": (
+            "Reproducir un clip corto del soundpad (audio meme/efecto) en "
+            "el canal de voz. Usala cuando te piden un audio, sonido, "
+            "clip o meme por nombre."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "name": {
+                    "type": "STRING",
+                    "description": (
+                        "Nombre o palabra clave del clip (fuzzy match). "
+                        "Ej: 'milapollo', 'risas', 'aplausos'."
+                    ),
+                },
+            },
+            "required": ["name"],
+        },
+    },
+]
+
 
 _STORED_MSG_MAX_CHARS = 1500
 _HISTORY_TTL_SEC = 6 * 3600
@@ -702,24 +732,56 @@ async def _maybe_compress(mem_key: str) -> None:
         _indio_compressing.discard(mem_key)
 
 
-_INDIO_ACTION_RE = re.compile(
-    r"\[\s*(PLAY_MUSIC|PLAY_SOUND)\s*:\s*([^\]]+?)\s*\]",
-    re.IGNORECASE,
-)
+_FUNCTION_CALL_TO_ACTION = {
+    "play_music": ("PLAY_MUSIC", "query"),
+    "play_sound": ("PLAY_SOUND", "name"),
+}
+_ACTION_FALLBACK_TEXT = {
+    "PLAY_MUSIC": "🎵 Ahí va",
+    "PLAY_SOUND": "🔊 Tomá",
+}
+_ACTION_ARG_MAX_CHARS = 200
 
 
-def _extract_indio_actions(text: str) -> tuple[str, list[tuple[str, str]]]:
-    """Pull out [PLAY_MUSIC: ...] / [PLAY_SOUND: ...] markers from the indio's
-    reply. Returns (cleaned_text_without_markers, [(action, arg), ...])."""
+def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, str]]:
+    """Translate Gemini function calls into the (action, arg) tuples that
+    ``_dispatch_indio_actions`` understands. Unknown tool names and empty or
+    non-string args are logged and skipped — we don't want a malformed call to
+    fall through and dispatch with garbage."""
     actions: list[tuple[str, str]] = []
-    def _capture(m: "re.Match") -> str:
-        actions.append((m.group(1).upper(), m.group(2).strip()))
-        return ""
-    cleaned = _INDIO_ACTION_RE.sub(_capture, text or "")
-    # Collapse the trailing whitespace left behind when a marker sat on its
-    # own line at the end of the message.
-    cleaned = re.sub(r"\n{2,}\s*$", "", cleaned).rstrip()
-    return cleaned, actions
+    for call in function_calls or []:
+        if not isinstance(call, dict):
+            continue
+        name = str(call.get("name") or "")
+        mapping = _FUNCTION_CALL_TO_ACTION.get(name.lower())
+        if mapping is None:
+            logger.warning("indio: unknown tool call '%s' (args=%r)", name, call.get("args"))
+            continue
+        action, arg_key = mapping
+        args = call.get("args") or {}
+        raw = args.get(arg_key) if isinstance(args, dict) else None
+        if not isinstance(raw, str):
+            logger.warning("indio: tool %s missing string arg '%s' (got %r)",
+                           name, arg_key, raw)
+            continue
+        arg = raw.strip()[:_ACTION_ARG_MAX_CHARS]
+        if not arg:
+            logger.warning("indio: tool %s called with empty '%s'", name, arg_key)
+            continue
+        actions.append((action, arg))
+    return actions
+
+
+def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
+    """The relay flow and Discord both require non-empty content. When the
+    model emits only a function call (no accompanying text), substitute a
+    short stock confirmation so the chat shows something."""
+    if text:
+        return text
+    if not actions:
+        return text
+    fallback = _ACTION_FALLBACK_TEXT.get(actions[0][0], "👍")
+    return fallback
 
 
 async def _dispatch_indio_actions(bot: "discord.Bot",
@@ -1007,6 +1069,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             user_message=tagged_message,
             system_instruction=system_instruction,
             history=history_snapshot,
+            tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "indio")
@@ -1035,8 +1098,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                                     properties={"action": "indio_unexpected"})
         return
 
+    pending_actions = _actions_from_function_calls(reply.function_calls)
     clean_reply = _strip_indio_prefix(reply.text)
-    clean_reply, pending_actions = _extract_indio_actions(clean_reply)
+    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     relayed_via_userbot = False
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
@@ -1154,6 +1218,7 @@ async def indioFromVoice(
             user_message=tagged_message,
             system_instruction=system_instruction,
             history=history_snapshot,
+            tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "indio")
@@ -1177,8 +1242,9 @@ async def indioFromVoice(
                                     properties={"action": "indio_voice_unexpected"})
         return
 
+    pending_actions = _actions_from_function_calls(reply.function_calls)
     clean_reply = _strip_indio_prefix(reply.text)
-    clean_reply, pending_actions = _extract_indio_actions(clean_reply)
+    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     relayed_via_userbot = False
     try:
         if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:

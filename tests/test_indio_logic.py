@@ -3,8 +3,10 @@ stored, fed back on the next call, isolated per guild, reset on `nuevo=True`,
 evicted (short-term) after the TTL while long-term notes survive, and persisted
 to disk. We keep histories below the compression threshold so no background
 distillation task is spawned during these tests."""
+import asyncio
 import os
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,6 +22,18 @@ def history(gc, key=KEY):
 
 def texts(turns):
     return [p["text"] for t in turns for p in t["parts"]]
+
+
+async def _drain_pending_tasks():
+    """``indioLogic`` dispatches PLAY_* actions via ``asyncio.create_task``
+    (fire-and-forget). Tests need to yield long enough for those to run
+    before they can assert on the mocks."""
+    current = asyncio.current_task()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
 
 
 async def test_first_call_stores_exchange_and_replies(indio, ctx_factory, patch_generate, reply_factory):
@@ -120,3 +134,111 @@ async def test_error_path_does_not_store_history(indio, ctx_factory, patch_gener
 
     assert "\n".join(ctx.sent_messages).strip()        # a friendly message shown
     assert KEY not in indio._indio_history             # nothing persisted on failure
+
+
+# ---------------------------------------------------------------------------
+# Function calling: when Gemini emits a play_music / play_sound function call,
+# the corresponding side effect runs. This is the replacement for the old
+# "[PLAY_MUSIC: ...]" / "[PLAY_SOUND: ...]" marker regex.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def disable_relay(monkeypatch):
+    """Force the indio dispatch to bypass the userbot relay and call the
+    fallback paths (playCommand.playFromIndio / soundpadCommand.play_clip_by_query)
+    directly, so tests can intercept them with a single mock."""
+    import config
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+
+
+async def test_play_music_function_call_triggers_playback(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "Queen"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    patch_generate(reply=reply_factory(
+        text="dale, va Queen",
+        function_calls=[{"name": "play_music", "args": {"query": "Queen"}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "ponete un tema de Queen", nuevo=False)
+    await _drain_pending_tasks()
+
+    play_mock.assert_awaited_once()
+    args, _ = play_mock.call_args
+    assert args[1] == 100              # guild_id
+    assert args[2] == "Queen"          # query
+
+
+async def test_play_sound_function_call_triggers_clip(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import soundpadCommand
+    clip_mock = AsyncMock(return_value="/audio_output/milapollo.ogg")
+    monkeypatch.setattr(soundpadCommand, "play_clip_by_query", clip_mock)
+
+    patch_generate(reply=reply_factory(
+        text="tomá milapollo",
+        function_calls=[{"name": "play_sound", "args": {"name": "milapollo"}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "tirate un audio milapollo", nuevo=False)
+    await _drain_pending_tasks()
+
+    clip_mock.assert_awaited_once()
+    _args, kwargs = clip_mock.call_args
+    assert kwargs.get("query") == "milapollo"
+
+
+async def test_function_call_with_empty_text_falls_back(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import soundpadCommand
+    monkeypatch.setattr(
+        soundpadCommand, "play_clip_by_query",
+        AsyncMock(return_value="/audio_output/x.ogg"),
+    )
+
+    # Model emits only a functionCall, no accompanying text. The Indio must
+    # still post something visible to the chat so the interaction isn't blank.
+    patch_generate(reply=reply_factory(
+        text="",
+        function_calls=[{"name": "play_sound", "args": {"name": "milapollo"}}],
+    ))
+
+    ctx = ctx_factory(guild_id=100)
+    await indioLogic(ctx, "tirate milapollo", nuevo=False)
+    await _drain_pending_tasks()
+
+    # Among the messages sent, at least one carries non-empty text content
+    # that isn't just the question header.
+    bodies = [m for m in ctx.sent_messages if m and "preguntó" not in m]
+    assert bodies, "indio should post a fallback reply when text is empty"
+    assert any(b.strip() for b in bodies)
+
+
+async def test_unknown_function_call_is_ignored(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import playCommand
+    import soundpadCommand
+    play_mock = AsyncMock(return_value=(True, "ok"))
+    clip_mock = AsyncMock(return_value="/x.ogg")
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    monkeypatch.setattr(soundpadCommand, "play_clip_by_query", clip_mock)
+
+    # A garbage tool call should never dispatch an action.
+    patch_generate(reply=reply_factory(
+        text="todo bien che",
+        function_calls=[{"name": "send_email", "args": {"to": "x"}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), "qué hacés", nuevo=False)
+    await _drain_pending_tasks()
+
+    play_mock.assert_not_awaited()
+    clip_mock.assert_not_awaited()
