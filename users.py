@@ -122,6 +122,7 @@ USERS: dict[int, dict] = {
         "name": "Caro",
         "traits": [
             "gotica, tatuadora",
+            "amiga del indio (la unica mujer del grupo de mejores amigos)",
         ],
     },
     138430902547120129: {
@@ -165,7 +166,8 @@ GROUP_LORE: dict[str, list[str]] = {
         "juegan Terraria juntos a veces",
         "algunos del grupo juegan WoW, Overwatch o Dota",
         "Fide, Viny y Franko son de Gualeguaychu; Mila de Quilmes; Miles de El Talar (Tigre)",
-        "Tobi, Magote y Miles son los mejores amigos del indio",
+        "Tobi, Magote, Miles y Caro son los mejores amigos del indio (todos hombres menos Caro)",
+        "Bibi es un amigo de toda la vida del indio: ama los muros, a veces llora, el indio tiene fotos con el",
     ],
     "chistes_internos": [
         "los que juegan CS son giles, los que juegan Dota unos capos",
