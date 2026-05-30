@@ -1455,6 +1455,15 @@ Reglas:
 - No agregues información nueva.
 - Mantené la intención (pregunta, exclamación, etc.) y el voseo rioplatense.
 - Si el hablante invoca al "indio" o "che indio", mantené esa parte tal cual.
+- Cuando piden música, mucho ojo con nombres de bandas, canciones y artistas \
+  modernos: pueden sonar en spanglish o tener nombres "raros" (ej. Tussi \
+  Warriors, Bizarrap, Wos, Trueno, Tiago PZK, Duki, Cazzu, Nicki Nicole, \
+  Bandalos Chinos, etc.). NO los castellanices ni los inventes en español \
+  ("tossiborreros", "biza arap"). Si una palabra dentro de un pedido de \
+  música suena a anglicismo o nombre propio raro, dejala lo más cerca posible \
+  del inglés/original (manteniendo la fonética que escuchaste). El que va a \
+  buscar el tema después busca tal cual en YouTube — si lo castellanizás, no \
+  lo encuentra.
 """
 
 
