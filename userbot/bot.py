@@ -735,6 +735,83 @@ def _vc_for_guild(guild: discord.Guild) -> Optional[voice_recv.VoiceRecvClient]:
     return None
 
 
+# Per-guild pending idle-leave tasks. The userbot stays in the channel for
+# IDLE_LEAVE_SECONDS after the guild goes quiet; any human (re)joining a VC
+# of the guild cancels the task before it fires.
+_idle_leave_tasks: dict[int, asyncio.Task] = {}
+
+
+def _guild_has_humans(guild: discord.Guild) -> bool:
+    """Return True if any voice channel of ``guild`` has a non-bot,
+    non-self, non-ignored member currently connected.
+
+    Scans every voice channel — not just the one the userbot sits in —
+    so we can detect "the guild is empty" vs "someone moved to another VC".
+    """
+    self_id = client.user.id if client.user else None
+    for ch in guild.voice_channels:
+        for m in ch.members:
+            if m.bot:
+                continue
+            if self_id is not None and m.id == self_id:
+                continue
+            if m.id in config.IGNORE_USER_IDS:
+                continue
+            return True
+    return False
+
+
+def _cancel_idle_leave(guild_id: int) -> None:
+    """Cancel a pending idle-leave task for the guild (idempotent)."""
+    task = _idle_leave_tasks.pop(guild_id, None)
+    if task and not task.done():
+        task.cancel()
+
+
+async def _idle_leave_after_delay(guild: discord.Guild) -> None:
+    """Sleep IDLE_LEAVE_SECONDS, re-check, disconnect if still empty.
+
+    Re-checking inside the callback (instead of at scheduling time) is the
+    race-safety net: someone may have joined a millisecond before we woke
+    up, in which case the cancellation from ``on_voice_state_update``
+    arrives racey-late and we'd otherwise still disconnect.
+    """
+    try:
+        await asyncio.sleep(config.IDLE_LEAVE_SECONDS)
+    except asyncio.CancelledError:
+        return
+    try:
+        if _guild_has_humans(guild):
+            return
+        vc = _vc_for_guild(guild)
+        if vc is None:
+            return
+        log.info(
+            f"[VOICE] No humans in {guild.name} for "
+            f"{config.IDLE_LEAVE_SECONDS:.0f}s — leaving"
+        )
+        try:
+            if vc.is_listening():
+                vc.stop_listening()
+        except Exception:
+            pass
+        try:
+            await vc.disconnect(force=True)
+        except Exception as e:
+            log.warning(f"[VOICE] Idle disconnect error (ignored): {e}")
+    finally:
+        _idle_leave_tasks.pop(guild.id, None)
+
+
+def _schedule_idle_leave(guild: discord.Guild) -> None:
+    """Schedule a one-shot idle-leave task, replacing any previous one."""
+    _cancel_idle_leave(guild.id)
+    _idle_leave_tasks[guild.id] = asyncio.create_task(
+        _idle_leave_after_delay(guild),
+        name=f"idle-leave-{guild.id}",
+    )
+
+
 async def _start_listening(vc: voice_recv.VoiceRecvClient):
     """Ensure the sink is attached once the voice client is connected.
 
@@ -804,32 +881,24 @@ async def _join_channel(channel: discord.VoiceChannel):
 
 
 async def _leave_if_empty(guild: discord.Guild):
-    """Disconnect from the guild voice channel if no humans remain.
+    """Schedule an idle-leave if no humans remain in any VC of the guild.
 
-    Args:
-        guild: Discord guild instance.
-
-    Async:
-        This function is a coroutine and must be awaited.
+    Instead of disconnecting immediately, give people IDLE_LEAVE_SECONDS to
+    come back or move between channels. If anyone shows up in the meantime,
+    ``on_voice_state_update`` will cancel the pending task.
     """
     vc = _vc_for_guild(guild)
-    if not vc:
+    if vc is None:
+        _cancel_idle_leave(guild.id)
         return
-    humans = [
-        m for m in vc.channel.members
-        if not m.bot and m.id != client.user.id
-    ]
-    if not humans:
-        log.info(f"[VOICE] Channel {vc.channel.name} empty — leaving")
-        try:
-            if vc.is_listening():
-                vc.stop_listening()
-        except Exception:
-            pass
-        try:
-            await vc.disconnect(force=True)
-        except Exception as e:
-            log.warning(f"[VOICE] Disconnect error (ignored): {e}")
+    if _guild_has_humans(guild):
+        _cancel_idle_leave(guild.id)
+        return
+    log.info(
+        f"[VOICE] {guild.name} empty — scheduling leave in "
+        f"{config.IDLE_LEAVE_SECONDS:.0f}s"
+    )
+    _schedule_idle_leave(guild)
 
 
 @client.event
@@ -861,6 +930,7 @@ async def on_voice_state_update(member, before, after):
         return
 
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
+        _cancel_idle_leave(guild.id)
         await _join_channel(after.channel)
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
@@ -1289,6 +1359,56 @@ async def _relay_members(request: web.Request) -> web.Response:
     })
 
 
+async def _relay_invoke_play(request: web.Request) -> web.Response:
+    """Ask the userbot (a real Discord user account) to invoke VaPls's /play
+    slash command in a given text channel, using the query string supplied by
+    the indio persona. Because the call originates from a real user account,
+    Discord shows the full "Indio used /play" interaction flow with VaPls's
+    download-progress message, queue controls, etc."""
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        query = str(data["query"]).strip()
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not query:
+        return web.json_response({"error": "empty query"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not hasattr(channel, "slash_commands"):
+        return web.json_response({"error": "channel has no slash_commands"}, status=400)
+
+    try:
+        cmds = await channel.slash_commands()
+    except Exception as e:
+        log.exception("[RELAY-PLAY] slash_commands() failed")
+        return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
+
+    play_cmd = discord.utils.get(cmds, name="play")
+    if play_cmd is None:
+        log.warning("[RELAY-PLAY] /play command not found in channel %s", channel_id)
+        return web.json_response({"error": "play command not found in channel"}, status=404)
+
+    try:
+        await play_cmd(query=query)
+        log.info(f"[RELAY-PLAY] invoked /play query={query!r} in channel={channel_id}")
+        return web.json_response({"invoked": True, "query": query})
+    except Exception as e:
+        log.exception("[RELAY-PLAY] invocation failed")
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -1297,6 +1417,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/say", _relay_say)
     app.router.add_post("/record", _relay_record)
     app.router.add_get("/members", _relay_members)
+    app.router.add_post("/invoke_play", _relay_invoke_play)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

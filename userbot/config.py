@@ -98,4 +98,10 @@ INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC",
 # (250 RPD shared across /indio slash, voice wake word, and auto-reply).
 INDIO_AUTO_REPLY_GUILD_HOURLY_CAP = int(os.getenv("INDIO_AUTO_REPLY_GUILD_HOURLY_CAP", "30"))
 
+# Seconds without any human present in any voice channel of a guild before
+# the userbot disconnects. The timer is cancelled the moment a human
+# (re)joins any channel of the guild. Set to 0 for the legacy "disconnect
+# immediately" behaviour.
+IDLE_LEAVE_SECONDS = float(os.getenv("IDLE_LEAVE_SECONDS", "60"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

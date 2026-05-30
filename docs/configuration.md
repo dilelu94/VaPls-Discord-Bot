@@ -39,6 +39,7 @@
 | `BOT_API_SECRET` | ❌ | empty | Must match `API_SECRET` when forwarding. |
 | `MAIN_BOT_API_BASE` | ❌ | `http://127.0.0.1:8080` | Main bot API for `/playing` polling and `/indio` invocation. |
 | `MAIN_BOT_API_SECRET` | ❌ | empty | Auth for `MAIN_BOT_API_BASE`; must match main bot's `API_SECRET`. |
+| `IDLE_LEAVE_SECONDS` | ❌ | `60` | Segundos sin humanos en ningún canal de voz del guild antes de que el userbot se desconecte. El timer se cancela apenas alguien (re)entra. `0` = legacy (desconectar al instante). |
 | `LOG_LEVEL` | ❌ | `INFO` | Python logging level for the userbot. |
 
 ## Security notes
