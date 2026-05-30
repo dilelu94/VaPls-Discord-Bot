@@ -810,13 +810,14 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
-                                   reply_channel_id: Optional[int] = None
                                    ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
-    real "/play" / "/soundpad" slash commands in the chat. Falls back to
-    in-process playback if the relay is unavailable. Returns short status
-    strings for logging; the indio's main reply is sent separately."""
+    real "/play" / "/soundpad" slash commands in the chat. Both land in
+    ``config.INDIO_PLAY_CHANNEL_ID`` — that's the dedicated room for
+    playback regardless of where the conversation is happening. Falls back
+    to in-process playback if the relay is unavailable. Returns short
+    status strings for logging; the indio's main reply is sent separately."""
     if not actions or guild_id is None or bot is None:
         return []
     statuses: list[str] = []
@@ -828,8 +829,6 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     for action, arg in actions:
         try:
             if action == "PLAY_MUSIC":
-                # /play always lands in #sick-tunes regardless of where the
-                # conversation is — music has its own dedicated room.
                 ok, msg = await _invoke_slash_via_userbot(
                     "invoke_play",
                     channel_id=config.INDIO_PLAY_CHANNEL_ID,
@@ -844,13 +843,9 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                 statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                 logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
             elif action == "PLAY_SOUND":
-                # /soundpad fires in the same channel where the chat is
-                # happening; falls back to the music channel only if the
-                # caller didn't provide one (voice-trigger edge case).
-                sound_channel_id = reply_channel_id or config.INDIO_PLAY_CHANNEL_ID
                 ok, msg = await _invoke_slash_via_userbot(
                     "invoke_soundpad",
-                    channel_id=sound_channel_id,
+                    channel_id=config.INDIO_PLAY_CHANNEL_ID,
                     query=arg,
                 )
                 if not ok:
@@ -1144,7 +1139,6 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
-            reply_channel_id=channel_id,
         ))
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
@@ -1278,7 +1272,6 @@ async def indioFromVoice(
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             bot, guild_id, pending_actions,
-            reply_channel_id=channel_id,
         ))
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
