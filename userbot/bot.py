@@ -695,10 +695,11 @@ class WakeWordSink(voice_recv.AudioSink):
                 # wake word already fired. Whisper sees the full phrase.
                 return
 
-            # Only buffer voice frames into the prebuffer. Silence frames are
-            # the boundary signal, not content we want to ship to Whisper.
-            if is_voice:
-                self._push_prebuffer(user_id, data_16k, now)
+            # Buffer ALL frames (voice + short silences) so the audio stays
+            # continuous when concatenated. The silence reset above already
+            # guarantees the prebuffer doesn't span a real utterance boundary,
+            # so a few intra-phrase pauses are fine and actually help Whisper.
+            self._push_prebuffer(user_id, data_16k, now)
 
             # Idle: feed VOSK and check for wake word.
             rec = self._recognizer_for(user_id)
