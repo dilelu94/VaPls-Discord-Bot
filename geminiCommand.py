@@ -724,18 +724,41 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     for action, arg in actions:
         try:
             if action == "PLAY_MUSIC":
-                # Cosmetic: post "/play <query>" as the indio user first so it
-                # reads in chat like he ran the slash command himself. Best
-                # effort — falls silently if the relay isn't configured.
-                if (reply_channel_id is not None
-                        and config.INDIO_RELAY_URL
-                        and config.INDIO_RELAY_SECRET):
-                    await _relay_to_userbot(
-                        int(reply_channel_id),
-                        f"/play {arg}",
-                        None,
+                # Ask the userbot to invoke /play as a real Discord slash
+                # command in #sick-tunes. This shows the full interaction
+                # flow: "Indio used /play" + VaPls download-progress message.
+                ok = False
+                msg = "relay not configured"
+                if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                    invoke_url = (
+                        config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/invoke_play"
                     )
-                ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
+                    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+                    payload = {
+                        "channel_id": config.INDIO_PLAY_CHANNEL_ID,
+                        "query": arg,
+                    }
+                    timeout = aiohttp.ClientTimeout(total=10)
+                    try:
+                        async with aiohttp.ClientSession(timeout=timeout) as sess:
+                            async with sess.post(
+                                invoke_url, json=payload, headers=headers
+                            ) as resp:
+                                if resp.status < 400:
+                                    ok, msg = True, arg
+                                else:
+                                    body = await resp.text()
+                                    msg = f"relay HTTP {resp.status}: {body[:100]}"
+                    except Exception as exc:
+                        msg = f"relay error: {exc}"
+                        logger.warning("indio PLAY_MUSIC relay failed: %s", exc)
+                if not ok:
+                    # Fallback: trigger playback directly without slash UI.
+                    logger.warning(
+                        "indio PLAY_MUSIC relay failed (%s); falling back to playFromIndio",
+                        msg,
+                    )
+                    ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
                 statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                 logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
             elif action == "PLAY_SOUND":
