@@ -895,8 +895,12 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
     # Prepare search or URL input
     inputStr = query.strip()
-    if not (inputStr.startswith("http://") or inputStr.startswith("https://") or inputStr.startswith("ytsearch:")):
-        inputStr = f"ytsearch1:{inputStr}"
+    isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://") or inputStr.startswith("ytsearch:"))
+    if isSearch:
+        # ytsearch3 para tener candidatos por si el primer hit es un canal
+        # (ej. "Indio Solari" devuelve el canal UCzq3uuD... que yt-dlp no
+        # puede bajar como video). Despues filtramos al primer video valido.
+        inputStr = f"ytsearch3:{inputStr}"
 
     # 1. Fetch metadata (ID and Title)
     await safeEdit(ctx, "🔍 Buscando y obteniendo metadatos...")
@@ -942,6 +946,13 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
                 "duration_string": durStr if durStr != "NA" else ""
             })
 
+        if isSearch:
+            # YouTube search mezcla videos con canales/playlists; filtramos
+            # los que no son videos (id de canal "UC..." o sin duracion) y
+            # nos quedamos con el primer video.
+            videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
+            songs = videos[:1]
+
         if not songs:
             return await safeEdit(ctx, "❌ No se pudieron obtener los metadatos del video.")
     except FileNotFoundError as e:
@@ -986,9 +997,12 @@ async def _yt_dlp_search(query: str) -> list[dict]:
     """Run yt-dlp to resolve the query to song metadata. Returns a list of
     {id, title, duration_string} dicts; empty list on any failure."""
     inputStr = query.strip()
-    if not (inputStr.startswith("http://") or inputStr.startswith("https://")
-            or inputStr.startswith("ytsearch:")):
-        inputStr = f"ytsearch1:{inputStr}"
+    isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://")
+                    or inputStr.startswith("ytsearch:"))
+    if isSearch:
+        # ytsearch3 + filtro abajo: el primer hit suele ser un canal
+        # (ej. "Indio Solari" → UCzq3uuD...) que no se puede bajar.
+        inputStr = f"ytsearch3:{inputStr}"
     cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
     args = [config.YT_DLP_PATH]
     if os.path.exists(cookiesPath):
@@ -1026,6 +1040,10 @@ async def _yt_dlp_search(query: str) -> list[dict]:
             "title": lines[i + 1],
             "duration_string": dur if dur != "NA" else "",
         })
+    if isSearch:
+        # Filtramos canales/playlists para quedarnos con el primer video real.
+        videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
+        songs = videos[:1]
     return songs
 
 
