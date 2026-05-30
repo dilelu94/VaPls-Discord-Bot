@@ -70,8 +70,17 @@ def test_clamp_excludes_indio_as_user():
 
 
 # ---- _format_long_term ---------------------------------------------------
-def test_format_empty_is_empty_string():
-    assert _format_long_term({}) == ""
+def test_format_with_empty_gemini_input_does_not_crash():
+    """Empty Gemini long-term doesn't crash and returns a string.
+
+    Behavior shifted with the static lore feature (users.py GROUP_LORE +
+    per-user dossiers): empty Gemini data still renders the manual baseline
+    so the indio always has context. We only pin that the function tolerates
+    empty input and does not invent a current_members header on its own.
+    """
+    out = _format_long_term({})
+    assert isinstance(out, str)
+    assert "Mis amigos son:" not in out
 
 
 def test_format_renders_users_events_and_jokes():
