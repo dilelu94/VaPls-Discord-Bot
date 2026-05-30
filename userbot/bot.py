@@ -516,12 +516,25 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
 _vosk_model = None  # type: ignore[assignment]
 _vosk_load_lock = threading.Lock()
 
-# Grammar fed to KaldiRecognizer. Lowercase only; we normalize the JSON output
-# before matching. "[unk]" is VOSK's catch-all for anything outside the grammar.
+# Grammar fed to KaldiRecognizer. Includes "indio" + common rioplatense
+# filler words so VOSK has somewhere to map sounds that aren't actually the
+# wake word. With a very restricted grammar (just ["indio", "[unk]"]), VOSK
+# would force vowel-rich gibberish into "indio" and produce a cascade of
+# false positives that saturated Whisper. The filler words give the
+# recognizer alternatives, so it only emits "indio" when it's reasonably
+# confident. "[unk]" remains the catch-all.
 _VOSK_GRAMMAR = json.dumps([
-    "indio",
-    "che indio",
-    "ey indio",
+    "indio", "che indio", "ey indio", "hola indio",
+    "che", "ey", "hola", "buenas", "dale", "vamos",
+    "que", "qué", "como", "cómo", "cual", "cuál",
+    "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
+    "si", "sí", "no", "ah", "eh", "uh", "oh",
+    "el", "la", "los", "las", "un", "una", "uno",
+    "yo", "vos", "tu", "tú", "el", "ella", "nosotros",
+    "ser", "estar", "tener", "hacer", "decir", "ver",
+    "bien", "mal", "todo", "nada", "algo", "mucho", "poco",
+    "boludo", "loco", "posta", "dale", "ahre", "viste",
+    "mira", "escucha", "tira", "anda", "vení",
     "[unk]",
 ])
 
@@ -572,24 +585,30 @@ def _new_vosk_recognizer():
         return None
 
 
-def _vosk_heard_wake_word(rec) -> bool:
-    """Return True if the recognizer has emitted any "indio" token in either
-    its final-segment or partial-segment buffer. We check both so the wake word
-    fires as soon as VOSK is confident (~100-300ms after the user says it)."""
+def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
+    """Return True if VOSK has emitted "indio" in a stable utterance segment.
+
+    We only check ``Result()`` (the finalized segment) — never
+    ``PartialResult()``. Partials are extremely noisy with a small grammar
+    and were the main source of false positives that saturated Whisper.
+
+    ``accepted`` is the return value of the most recent
+    ``rec.AcceptWaveform(chunk)``: VOSK finalizes a segment when it detects
+    sustained silence, and ``AcceptWaveform`` returns True in that case.
+    Reading ``Result()`` only when accepted=True avoids us pulling state
+    every frame when nothing has finalized.
+    """
+    if not accepted:
+        return False
     try:
-        partial = json.loads(rec.PartialResult() or "{}").get("partial", "")
-        if partial:
-            norm = _normalize(partial)
-            if any(tok in norm for tok in _VOSK_WAKE_TOKENS):
-                return True
-        result = json.loads(rec.Result() or "{}").get("text", "")
-        if result:
-            norm = _normalize(result)
-            if any(tok in norm for tok in _VOSK_WAKE_TOKENS):
-                return True
+        text = json.loads(rec.Result() or "{}").get("text", "")
+        if not text:
+            return False
+        norm = _normalize(text)
+        return any(tok in norm for tok in _VOSK_WAKE_TOKENS)
     except Exception:
         log.exception("[VOSK] failed to read recognizer state")
-    return False
+        return False
 
 
 class WakeWordSink(voice_recv.AudioSink):
@@ -705,8 +724,8 @@ class WakeWordSink(voice_recv.AudioSink):
             rec = self._recognizer_for(user_id)
             if rec is None:
                 return
-            rec.AcceptWaveform(data_16k)
-            if _vosk_heard_wake_word(rec):
+            accepted = rec.AcceptWaveform(data_16k)
+            if _vosk_heard_wake_word(rec, accepted):
                 log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
                          f"starting capture (prebuf_chunks="
                          f"{len(self.prebuffers.get(user_id, ()))})")
