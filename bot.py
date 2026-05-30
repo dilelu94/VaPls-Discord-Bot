@@ -243,12 +243,21 @@ async def parar(ctx):
 
 
 @bot.slash_command(name="play", description="Reproduce una canción o playlist de YouTube")
-async def play(ctx, query: discord.Option(str, description="Nombre de la canción o URL de YouTube")):
+async def play(
+    ctx,
+    query: discord.Option(
+        str,
+        description="Nombre de la canción o URL de YouTube",
+        required=False,
+        default=None,
+    ) = None,
+):
     """Slash command: queue and play a YouTube search or URL.
 
     Args:
         ctx: Discord application context.
-        query: Search text or YouTube URL.
+        query: Search text or YouTube URL. If empty, replies with a hint
+            instead of starting playback.
 
     Side Effects:
         Joins voice and starts the GuildPlayer playback flow.
@@ -258,6 +267,9 @@ async def play(ctx, query: discord.Option(str, description="Nombre de la canció
     """
     await safe_defer(ctx)
     _track_command(ctx, "play", {"query_length": len(query or "")})
+    if not query or not query.strip():
+        await ctx.followup.send("decime qué reproducir la próxima", ephemeral=True)
+        return
     await playLogic(ctx, query)
 
 
