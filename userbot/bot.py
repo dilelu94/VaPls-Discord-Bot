@@ -620,8 +620,17 @@ class WakeWordSink(voice_recv.AudioSink):
         self.recognizers: dict[int, Any] = {}
         self.resample_states: dict[int, object] = {}
         # Circular prebuffer of (timestamp, mono16k_chunk). We trim from the
-        # front whenever the oldest entry exceeds the prebuffer window.
+        # front whenever the oldest entry exceeds the prebuffer window AND we
+        # reset it whenever we detect sustained silence — that way the buffer
+        # only ever contains audio from the CURRENT utterance, not anything
+        # the speaker said in a prior sentence. Without this reset, a wake
+        # word in the middle of a longer conversation would drag unrelated
+        # context into the indio's prompt.
         self.prebuffers: dict[int, deque] = {}
+        # Per-user voice-activity tracking: the last timestamp we saw a frame
+        # above the silence threshold. Used to decide when to reset the
+        # prebuffer and the VOSK recognizer.
+        self.last_voice_ts: dict[int, float] = {}
         # Active captures: user_id -> {"buf": bytearray, "started_at": float,
         #                              "last_voice_ts": float}
         self.captures: dict[int, dict] = {}
@@ -670,7 +679,14 @@ class WakeWordSink(voice_recv.AudioSink):
             rms = audioop.rms(data_16k, 2)
             now = time.time()
 
-            self._push_prebuffer(user_id, data_16k, now)
+            is_voice = rms >= TranscriberSink.SILENCE_RMS_THRESHOLD
+            if is_voice:
+                self.last_voice_ts[user_id] = now
+            else:
+                # If the speaker has been silent long enough, this is a NEW
+                # utterance boundary. Drop prebuffer + reset VOSK so the wake
+                # word doesn't drag the previous sentence into the capture.
+                self._maybe_reset_on_silence(user_id, now)
 
             capture = self.captures.get(user_id)
             if capture is not None:
@@ -679,6 +695,11 @@ class WakeWordSink(voice_recv.AudioSink):
                 # wake word already fired. Whisper sees the full phrase.
                 return
 
+            # Only buffer voice frames into the prebuffer. Silence frames are
+            # the boundary signal, not content we want to ship to Whisper.
+            if is_voice:
+                self._push_prebuffer(user_id, data_16k, now)
+
             # Idle: feed VOSK and check for wake word.
             rec = self._recognizer_for(user_id)
             if rec is None:
@@ -686,16 +707,38 @@ class WakeWordSink(voice_recv.AudioSink):
             rec.AcceptWaveform(data_16k)
             if _vosk_heard_wake_word(rec):
                 log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
-                         f"starting capture")
+                         f"starting capture (prebuf_chunks="
+                         f"{len(self.prebuffers.get(user_id, ()))})")
                 self._start_capture(user_id, now)
-                # Reset the recognizer so leftover state doesn't trigger again
-                # on the next packet.
                 try:
                     rec.Reset()
                 except Exception:
                     pass
         except Exception:
             log.exception("[WAKE] write error")
+
+    def _maybe_reset_on_silence(self, user_id: int, now: float) -> None:
+        """Drop the prebuffer + reset VOSK once the speaker has been silent
+        for ``WAKE_WORD_SILENCE_FINAL_SECONDS``. Without this, the prebuffer
+        accumulates audio across multiple sentences and the wake-word capture
+        ends up containing whatever the speaker said BEFORE the actual
+        question — confusing the indio."""
+        last = self.last_voice_ts.get(user_id)
+        if last is None:
+            return
+        if now - last < config.WAKE_WORD_SILENCE_FINAL_SECONDS:
+            return
+        buf = self.prebuffers.get(user_id)
+        if buf:
+            buf.clear()
+        rec = self.recognizers.get(user_id)
+        if rec is not None:
+            try:
+                rec.Reset()
+            except Exception:
+                pass
+        # Push the marker forward so we don't keep resetting every frame.
+        self.last_voice_ts[user_id] = now
 
     # ---- prebuffer / capture helpers -------------------------------------
 

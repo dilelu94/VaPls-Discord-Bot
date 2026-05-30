@@ -45,8 +45,12 @@ VOSK_MODEL_PATH = os.getenv(
 # Audio kept in a per-user circular buffer BEFORE the wake word fires. When
 # VOSK detects "indio", this pre-roll is prepended to the captured chunk so
 # Whisper sees the full phrase even if the user said "che indio contame…"
-# all in one breath without a pause.
-WAKE_WORD_PREBUFFER_SECONDS = float(os.getenv("WAKE_WORD_PREBUFFER_SECONDS", "2.5"))
+# all in one breath without a pause. The prebuffer is RESET whenever the
+# speaker has been silent for WAKE_WORD_SILENCE_FINAL_SECONDS, so it only
+# ever contains the current utterance — never audio from previous sentences.
+# Keep this small enough that even if the reset misses an edge case, only
+# a brief lead-in slips through.
+WAKE_WORD_PREBUFFER_SECONDS = float(os.getenv("WAKE_WORD_PREBUFFER_SECONDS", "1.5"))
 # Hard upper bound on how long we keep capturing audio after the wake word.
 # Protects against runaway buffers if silence detection misfires.
 WAKE_WORD_MAX_CAPTURE_SECONDS = float(os.getenv("WAKE_WORD_MAX_CAPTURE_SECONDS", "12.0"))
