@@ -83,4 +83,20 @@ RECORD_RMS_THRESHOLD = int(os.getenv("RECORD_RMS_THRESHOLD", "250"))
 # callback so the Telegram bridge doesn't reply with a tiny click.
 RECORD_MIN_SECONDS = float(os.getenv("RECORD_MIN_SECONDS", "0.6"))
 
+# --- Auto-reply when "indio" is mentioned in text channels -----------------
+# The userbot watches every text channel it can read and forwards the message
+# to the main bot's /indio endpoint when the word "indio" appears. Throttled
+# per-channel to avoid burning the Gemini free tier on chatty conversations.
+
+# Master toggle. Defaults to false so the feature is opt-in.
+INDIO_AUTO_REPLY_ENABLED = os.getenv("INDIO_AUTO_REPLY_ENABLED", "false").lower() == "true"
+
+# Per-channel cooldown in seconds: ignore further matches in the same channel
+# for this long after firing once. 180s = 3 min.
+INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC", "180"))
+
+# Per-guild hourly cap to keep us safely under the Gemini free-tier ceiling
+# (250 RPD shared across /indio slash, voice wake word, and auto-reply).
+INDIO_AUTO_REPLY_GUILD_HOURLY_CAP = int(os.getenv("INDIO_AUTO_REPLY_GUILD_HOURLY_CAP", "30"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

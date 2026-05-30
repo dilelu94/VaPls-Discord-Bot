@@ -706,14 +706,16 @@ def _extract_indio_actions(text: str) -> tuple[str, list[tuple[str, str]]]:
 
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
-                                   actions: list[tuple[str, str]]) -> list[str]:
-    """Run any PLAY_* actions the indio emitted. Returns short status strings
-    suitable to append/log; the indio's main reply is sent separately."""
+                                   actions: list[tuple[str, str]],
+                                   reply_channel_id: Optional[int] = None
+                                   ) -> list[str]:
+    """Run any PLAY_* actions the indio emitted. For PLAY_MUSIC we also post
+    "/play <query>" via the userbot relay before triggering playback, so it
+    looks like the indio user actually typed the slash command. Returns short
+    status strings for logging; the indio's main reply is sent separately."""
     if not actions or guild_id is None or bot is None:
         return []
     statuses: list[str] = []
-    # Lazy imports so geminiCommand stays decoupled from play machinery when
-    # those modules aren't available (e.g. during tests).
     try:
         import playCommand
     except Exception:
@@ -722,6 +724,17 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     for action, arg in actions:
         try:
             if action == "PLAY_MUSIC":
+                # Cosmetic: post "/play <query>" as the indio user first so it
+                # reads in chat like he ran the slash command himself. Best
+                # effort — falls silently if the relay isn't configured.
+                if (reply_channel_id is not None
+                        and config.INDIO_RELAY_URL
+                        and config.INDIO_RELAY_SECRET):
+                    await _relay_to_userbot(
+                        int(reply_channel_id),
+                        f"/play {arg}",
+                        None,
+                    )
                 ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
                 statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                 logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
@@ -996,7 +1009,8 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
 
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
-            ctx.bot, getattr(ctx.guild, "id", None), pending_actions
+            ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
+            reply_channel_id=channel_id,
         ))
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
@@ -1127,7 +1141,8 @@ async def indioFromVoice(
 
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
-            bot, guild_id, pending_actions
+            bot, guild_id, pending_actions,
+            reply_channel_id=channel_id,
         ))
 
     user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}

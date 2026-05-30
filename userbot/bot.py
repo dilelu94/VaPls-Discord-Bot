@@ -671,8 +671,12 @@ async def on_transcript(user_id: int, text: str):
 
 
 async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
-                             pregunta: str, speaker_name: Optional[str]) -> None:
-    """POST the raw transcript to the main bot's /indio endpoint."""
+                             pregunta: str, speaker_name: Optional[str],
+                             decifrar: bool = True) -> None:
+    """POST the raw transcript to the main bot's /indio endpoint. Voice wake
+    word callers leave ``decifrar=True`` so Gemini fixes ASR phonetic errors;
+    text-chat callers pass ``decifrar=False`` because the text is already
+    clean and an extra Gemini call would just waste tokens."""
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
         return
@@ -685,7 +689,7 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                 "channel_id": str(channel_id),
                 "pregunta": pregunta,
                 "speaker_name": speaker_name,
-                "decifrar": True,
+                "decifrar": decifrar,
             },
             headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
             timeout=aiohttp.ClientTimeout(total=5),
@@ -859,6 +863,87 @@ async def on_voice_state_update(member, before, after):
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
+
+
+# ---------- Auto-reply when someone says "indio" in chat -------------------
+
+import re as _re
+
+_INDIO_TEXT_WAKE_RE = _re.compile(r"\bindio\b", _re.IGNORECASE)
+_INDIO_AUTO_COOLDOWN: dict[int, float] = {}     # channel_id -> last fired ts
+_INDIO_AUTO_HOURLY: dict[int, list[float]] = {}  # guild_id -> recent fire ts
+
+
+def _autoreply_rate_ok(guild_id: int, channel_id: int) -> bool:
+    """Return True if we may fire an auto-reply for this guild+channel right
+    now. Enforces a per-channel cooldown and a per-guild hourly cap so the
+    Gemini free tier doesn't get hammered by chatty conversations."""
+    now = time.time()
+    last_fired = _INDIO_AUTO_COOLDOWN.get(channel_id, 0.0)
+    if now - last_fired < config.INDIO_AUTO_REPLY_COOLDOWN_SEC:
+        return False
+    window_start = now - 3600
+    hits = _INDIO_AUTO_HOURLY.setdefault(guild_id, [])
+    # GC old entries before checking the cap.
+    while hits and hits[0] < window_start:
+        hits.pop(0)
+    if len(hits) >= config.INDIO_AUTO_REPLY_GUILD_HOURLY_CAP:
+        return False
+    return True
+
+
+def _autoreply_mark_fired(guild_id: int, channel_id: int) -> None:
+    now = time.time()
+    _INDIO_AUTO_COOLDOWN[channel_id] = now
+    _INDIO_AUTO_HOURLY.setdefault(guild_id, []).append(now)
+
+
+@client.event
+async def on_message(message):
+    """Auto-reply trigger: when any human (not the userbot, not other bots,
+    not a slash command typed as text) writes a message that contains the
+    word "indio", forward the full text to the main bot's /indio endpoint
+    so the persona answers in the same channel."""
+    if not config.INDIO_AUTO_REPLY_ENABLED:
+        return
+    if message.author is None:
+        return
+    if message.author.id == client.user.id:
+        return
+    if getattr(message.author, "bot", False):
+        return
+    if message.author.id in config.IGNORE_USER_IDS:
+        return
+    content = (message.content or "").strip()
+    if not content:
+        return
+    # Skip slash-command-shaped messages.
+    if content.startswith("/"):
+        return
+    if not _INDIO_TEXT_WAKE_RE.search(content):
+        return
+    guild = getattr(message, "guild", None)
+    if guild is None:
+        return
+    if not _guild_allowed(guild.id):
+        return
+    channel_id = getattr(message.channel, "id", None)
+    if channel_id is None:
+        return
+    if not _autoreply_rate_ok(guild.id, channel_id):
+        log.info(f"[INDIO-AUTO] rate-limited (channel={channel_id})")
+        return
+    _autoreply_mark_fired(guild.id, channel_id)
+    speaker_name = _name_for(message.author.id, message.author)
+    log.info(f"[INDIO-AUTO] match in #{getattr(message.channel, 'name', '?')}"
+             f" by {speaker_name}: {content[:100]!r}")
+    asyncio.create_task(_dispatch_to_indio(
+        guild_id=guild.id,
+        channel_id=channel_id,
+        pregunta=content,
+        speaker_name=speaker_name,
+        decifrar=False,
+    ))
 
 
 # ---------- Local relay HTTP server ---------------------------------------
