@@ -147,6 +147,45 @@ class GuildPlayer:
         self.activeDownloadProc = None
         self.initialCtx = None
 
+    async def _enqueueAndMaybeStart(self, songs, *, source: Optional[str] = None):
+        """Shared enqueue → analytics → maybe-start-playback core.
+
+        Used by both the /play slash entrypoint (via ``addSongs``) and
+        programmatic entrypoints (``playFromIndio``). The caller is
+        responsible for posting any user-facing status message; this method
+        only manages internal player state.
+
+        Args:
+            songs: List of dicts with id/title metadata.
+            source: Optional tag for analytics (e.g. ``"indio"``).
+
+        Side Effects:
+            Mutates queue/currentSong, fires analytics, kicks off playback
+            or pre-download.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
+        self.queue.extend(songs)
+
+        guild = self.bot.get_guild(self.guildId) if self.bot else None
+        props = {
+            "count": len(songs),
+            "queue_length": len(self.queue),
+            "first_title": songs[0]["title"] if songs else None,
+        }
+        if source:
+            props["source"] = source
+        analytics.capture("play songs queued", user=self.lastRequester,
+                          guild=guild, properties=props)
+
+        if not self.currentSong and self.queue:
+            self.currentSong = self.queue.pop(0)
+            await self.startPlayingCurrent()
+        else:
+            await self.updateControlMessage()
+            self.startPreDownloading()
+
     async def addSongs(self, songs, ctx):
         """Add one or more songs to the queue and start playback if idle.
 
@@ -163,18 +202,17 @@ class GuildPlayer:
         Async:
             This function is a coroutine and must be awaited.
         """
+        from bot import safeEdit
+
         self.textChannel = ctx.channel
         self.lastRequester = ctx.author
-        
+
         isFirst = (not self.currentSong and len(self.queue) == 0)
-        self.queue.extend(songs)
+        if isFirst:
+            # startPlayingCurrent will delete this interaction's original
+            # response once playback actually starts.
+            self.initialCtx = ctx
 
-        analytics.capture("play songs queued", user=ctx.author, guild=ctx.guild,
-                          properties={"count": len(songs),
-                                      "queue_length": len(self.queue),
-                                      "first_title": songs[0]["title"] if songs else None})
-
-        from bot import safeEdit
         estimatedTime = int(time.time() + 30)
         if len(songs) > 1:
             if isFirst:
@@ -189,15 +227,7 @@ class GuildPlayer:
             else:
                 await safeEdit(ctx, f"✅ Se añadió **{songs[0]['title']}** a la cola.")
 
-        # If not playing anything, start playing the first song in queue
-        if not self.currentSong:
-            if self.queue:
-                self.currentSong = self.queue.pop(0)
-                self.initialCtx = ctx
-                await self.startPlayingCurrent()
-        else:
-            await self.updateControlMessage()
-            self.startPreDownloading()
+        await self._enqueueAndMaybeStart(songs)
 
     async def cancelDownload(self, videoId: str, videoTitle: str, interaction: discord.Interaction):
         """Cancel an active download and reset playback state.
@@ -1113,14 +1143,6 @@ async def playFromIndio(bot, guild_id: int, query: str,
     player.textChannel = text_channel
 
     isFirst = (not player.currentSong and len(player.queue) == 0)
-    player.queue.extend(songs)
-    analytics.capture("play songs queued", guild=guild, properties={
-        "count": len(songs),
-        "queue_length": len(player.queue),
-        "first_title": songs[0]["title"],
-        "source": "indio",
-    })
-
     title = songs[0]["title"]
     note = f"🎶 **{title}** {'arrancando' if isFirst else 'a la cola'} (pedido al indio)."
     try:
@@ -1128,19 +1150,11 @@ async def playFromIndio(bot, guild_id: int, query: str,
     except Exception:
         playLogger.exception("[PLAY-INDIO] failed to post note in sick-tunes")
 
-    if not player.currentSong and player.queue:
-        player.currentSong = player.queue.pop(0)
-        try:
-            await player.startPlayingCurrent()
-        except Exception as e:
-            playLogger.exception("[PLAY-INDIO] startPlayingCurrent failed")
-            return False, f"falló el inicio: {e}"
-    else:
-        # If already playing, just trigger pre-download.
-        try:
-            player.startPreDownloading()
-        except Exception:
-            pass
+    try:
+        await player._enqueueAndMaybeStart(songs, source="indio")
+    except Exception as e:
+        playLogger.exception("[PLAY-INDIO] enqueue/start failed")
+        return False, f"falló el inicio: {e}"
 
     return True, title
 
