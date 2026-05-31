@@ -1248,15 +1248,50 @@ def _guild_has_humans(guild: discord.Guild) -> bool:
     """
     self_id = client.user.id if client.user else None
     for ch in guild.voice_channels:
-        for m in ch.members:
-            if m.bot:
-                continue
-            if self_id is not None and m.id == self_id:
-                continue
-            if m.id in config.IGNORE_USER_IDS:
-                continue
+        if _channel_has_humans(ch, self_id=self_id):
             return True
     return False
+
+
+def _channel_has_humans(channel, *, self_id: Optional[int] = None) -> bool:
+    """Return True if ``channel`` has any non-bot, non-self, non-ignored
+    member currently connected."""
+    if channel is None:
+        return False
+    if self_id is None:
+        self_id = client.user.id if client.user else None
+    for m in channel.members:
+        if m.bot:
+            continue
+        if self_id is not None and m.id == self_id:
+            continue
+        if m.id in config.IGNORE_USER_IDS:
+            continue
+        return True
+    return False
+
+
+def _should_follow_user(current_channel, target_channel,
+                       *, self_id: Optional[int] = None) -> bool:
+    """Decide whether the userbot should move to ``target_channel`` when a
+    user just joined/switched there.
+
+    Returns False (stay put) when the userbot is already in a different
+    channel of the same guild and that channel still has at least one human
+    — abandoning the people still there to follow a single mover is wrong.
+
+    Returns True when:
+    - The userbot is not in any channel yet (first join).
+    - The userbot is already in ``target_channel`` (no-op / re-greet).
+    - The userbot's current channel has no other humans (everyone left).
+    """
+    if current_channel is None:
+        return True
+    if target_channel is None:
+        return False
+    if current_channel.id == target_channel.id:
+        return True
+    return not _channel_has_humans(current_channel, self_id=self_id)
 
 
 def _cancel_idle_leave(guild_id: int) -> None:
@@ -1446,17 +1481,29 @@ async def on_voice_state_update(member, before, after):
 
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
         _cancel_idle_leave(guild.id)
-        await _join_channel(after.channel)
-        # After the userbot is in the channel, play the per-user greeting
-        # (only for users with an explicit `greeting` in users.py — no default).
-        try:
-            vc = _vc_for_guild(guild)
-            if vc is not None and vc.channel.id == after.channel.id:
-                asyncio.create_task(greeting.play_user_greeting(
-                    vc, user_id=member.id, channel_id=after.channel.id,
-                ))
-        except Exception:
-            log.exception("[GREETING] schedule failed")
+        # Don't follow the moving user if the userbot is already sitting in a
+        # different channel of this guild that still has humans. Following
+        # would abandon the people still in the original channel.
+        current_vc = _vc_for_guild(guild)
+        current_channel = current_vc.channel if current_vc is not None else None
+        if not _should_follow_user(current_channel, after.channel):
+            log.info(
+                "[VOICE] staying in %s — not following %s to %s "
+                "(current channel still has humans)",
+                current_channel.name, member.display_name, after.channel.name,
+            )
+        else:
+            await _join_channel(after.channel)
+            # After the userbot is in the channel, play the per-user greeting
+            # (only for users with an explicit `greeting` in users.py — no default).
+            try:
+                vc = _vc_for_guild(guild)
+                if vc is not None and vc.channel.id == after.channel.id:
+                    asyncio.create_task(greeting.play_user_greeting(
+                        vc, user_id=member.id, channel_id=after.channel.id,
+                    ))
+            except Exception:
+                log.exception("[GREETING] schedule failed")
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
