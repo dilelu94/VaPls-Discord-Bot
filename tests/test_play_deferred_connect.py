@@ -192,3 +192,91 @@ async def test_cancel_download_clears_pending_channel(fresh_player_state):
     assert player.queue == []
     assert player.pendingVoiceChannel is None
     assert player.pendingTriggerUserId is None
+
+
+async def test_cancel_during_deferred_download_never_joins_voice(
+    fresh_player_state, tmp_path, monkeypatch,
+):
+    """End-to-end pin of the deferred-cancel race: user clicks /play, bot
+    starts downloading (no vc yet because we deferred the connect), user
+    clicks Cancel before the download finishes. The bot must NEVER join the
+    channel afterward — otherwise the user is left with a phantom bot sitting
+    in voice with no music playing.
+    """
+    playCommand = fresh_player_state
+
+    # Empty downloads dir so the file-cache check misses and we enter the
+    # actual yt-dlp download branch (where Cancel lives).
+    real_dirname = os.path.dirname
+    monkeypatch.setattr(
+        playCommand.os.path, "dirname",
+        lambda p: str(tmp_path) if "playCommand" in str(p) else real_dirname(p),
+        raising=True,
+    )
+    (tmp_path / "downloads").mkdir()
+
+    # Fake yt-dlp subprocess that blocks on communicate() until someone calls
+    # kill() — exactly the shape a stuck download has when cancel arrives.
+    class FakeProc:
+        def __init__(self):
+            self.returncode = None
+            self._done = asyncio.Event()
+
+        def kill(self):
+            self.returncode = -9
+            self._done.set()
+
+        async def communicate(self):
+            await self._done.wait()
+            return b"", b""
+
+    fake_proc = FakeProc()
+
+    async def fake_subprocess_exec(*args, **kwargs):
+        return fake_proc
+
+    monkeypatch.setattr(
+        playCommand.asyncio, "create_subprocess_exec", fake_subprocess_exec,
+    )
+
+    player = playCommand.GuildPlayer(100, make_bot())
+    player.currentSong = {"id": "video1", "title": "Some Indio song"}
+    player.textChannel = MagicMock(send=AsyncMock())
+    pending_channel = SimpleNamespace(
+        id=4242,
+        connect=AsyncMock(return_value=FakeVC()),
+    )
+    player.pendingVoiceChannel = pending_channel
+    player.pendingTriggerUserId = 777
+
+    interaction = MagicMock()
+    interaction.edit_original_response = AsyncMock()
+
+    with patch.object(player, "updateControlMessage", new=AsyncMock()), \
+         patch.object(player, "startPreDownloading", new=MagicMock()), \
+         patch("playCommand.set_pending_trigger") as set_trigger:
+        # Kick off the deferred-download flow.
+        play_task = asyncio.create_task(player.startPlayingCurrent())
+        # Give the task a chance to enter proc.communicate().
+        for _ in range(20):
+            await asyncio.sleep(0)
+            if player.activeDownloadProc is fake_proc:
+                break
+        assert player.activeDownloadProc is fake_proc, "download did not start"
+
+        # User clicks Cancel while the download is still pending.
+        await player.cancelDownload("video1", "Some Indio song", interaction)
+
+        # Let startPlayingCurrent finish unwinding now that the proc returned.
+        await asyncio.wait_for(play_task, timeout=1.0)
+
+        # The single, load-bearing assertion: the bot must NOT have joined.
+        pending_channel.connect.assert_not_called()
+        set_trigger.assert_not_called()
+
+    # And the player is left in a clean state for the next /play.
+    assert player.vc is None
+    assert player.pendingVoiceChannel is None
+    assert player.pendingTriggerUserId is None
+    assert player.currentSong is None
+    interaction.edit_original_response.assert_awaited()
