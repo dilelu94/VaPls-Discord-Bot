@@ -1337,12 +1337,18 @@ def _should_follow_user(current_channel, target_channel,
     - The userbot is not in any channel yet (first join).
     - The userbot is already in ``target_channel`` (no-op / re-greet).
     - The userbot's current channel has no other humans (everyone left).
+    - The userbot is sitting in the guild's AFK channel. The AFK channel is
+      a parking spot for idle users; the bot should never anchor there at
+      the cost of ignoring active movers elsewhere.
     """
     if current_channel is None:
         return True
     if target_channel is None:
         return False
     if current_channel.id == target_channel.id:
+        return True
+    afk = getattr(getattr(current_channel, "guild", None), "afk_channel", None)
+    if afk is not None and getattr(afk, "id", None) == current_channel.id:
         return True
     return not _channel_has_humans(current_channel, self_id=self_id)
 

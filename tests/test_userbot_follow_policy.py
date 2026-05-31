@@ -63,10 +63,12 @@ channel_has_humans = _NS["_channel_has_humans"]
 should_follow = _NS["_should_follow_user"]
 
 
-def _channel(*member_ids, channel_id=1, name="ch"):
+def _channel(*member_ids, channel_id=1, name="ch", guild=None):
     """Build a fake voice channel containing humans by id."""
     members = [SimpleNamespace(id=mid, bot=False) for mid in member_ids]
-    return SimpleNamespace(id=channel_id, name=name, members=members)
+    return SimpleNamespace(
+        id=channel_id, name=name, members=members, guild=guild,
+    )
 
 
 def _channel_with(members):
@@ -143,3 +145,36 @@ def test_same_channel_is_a_noop_follow():
 def test_no_target_channel_means_do_not_move():
     current = _channel(111, channel_id=1)
     assert should_follow(current, None) is False
+
+
+def test_follow_out_of_afk_channel_even_if_it_has_humans():
+    """If the userbot is parked in the guild's AFK channel, it should always
+    follow a user moving to a non-AFK channel — even if other (AFK) humans
+    are still there. The AFK channel is for idle users; the bot shouldn't
+    treat it as the room to anchor on."""
+    afk = SimpleNamespace(id=1)
+    guild = SimpleNamespace(afk_channel=afk)
+    current = _channel(111, 222, channel_id=1, name="afk", guild=guild)
+    # Patch the AFK reference to point at the same object we'll use as current.
+    guild.afk_channel = current
+    target = _channel(333, channel_id=2, name="general", guild=guild)
+    assert should_follow(current, target) is True
+
+
+def test_non_afk_channel_with_humans_still_blocks_follow():
+    """Sanity check: the AFK exception only fires when the bot is *in* the
+    AFK channel. A normal channel with other humans still blocks follow."""
+    afk = SimpleNamespace(id=99, members=[])
+    guild = SimpleNamespace(afk_channel=afk)
+    current = _channel(111, 222, channel_id=1, name="general", guild=guild)
+    target = _channel(333, channel_id=2, name="other", guild=guild)
+    assert should_follow(current, target) is False
+
+
+def test_guild_without_afk_channel_does_not_crash():
+    """Guilds may have no AFK channel configured; the helper must handle
+    `guild.afk_channel = None` cleanly."""
+    guild = SimpleNamespace(afk_channel=None)
+    current = _channel(111, 222, channel_id=1, name="general", guild=guild)
+    target = _channel(333, channel_id=2, name="other", guild=guild)
+    assert should_follow(current, target) is False
