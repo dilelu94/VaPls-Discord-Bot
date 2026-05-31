@@ -223,6 +223,7 @@ def indio(tmp_path, monkeypatch):
         gc._indio_long_term.clear()
         gc._indio_locks.clear()
         gc._indio_compressing.clear()
+        gc._indio_pending_choice.clear()
 
     _clear()
     gc._mem_path = str(mem_path)  # convenience for tests
