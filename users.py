@@ -71,6 +71,7 @@ USERS: dict[int, dict] = {
         "greeting": "Audios/Necesito pito.m4a",
         "traits": [
             "nombre real: Juan",
+            "apodos: Viny, Pela (y variantes de pelado)",
             "pelado",
             "no tiene trabajo",
             "de Gualeguaychu",
