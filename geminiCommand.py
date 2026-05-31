@@ -757,6 +757,12 @@ exacta:
 Reglas estrictas:
 - NO inventes datos. Solo guardás lo que aparece textualmente o lo que se \
   deduce directamente de la conversación.
+- Si un usuario repite la misma información varias veces en la conversación \
+  (ej: "soy de X", "te digo que soy de X", "no te olvides que soy de X"), \
+  guardala UNA sola vez. No dupliques ni expandís un rasgo porque fue \
+  repetido. No registres el hecho de que lo repitió como rasgo ni anécdota.
+- Si un dato ya está en la memoria actual, no lo volvás a agregar aunque \
+  aparezca en la conversación nueva, ni en palabras distintas.
 - Mantenés los datos previos a menos que la conversación los contradiga.
 - Cada string ≤120 caracteres.
 - Máx %d rasgos, %d preguntas_tipicas y %d anecdotas por usuario.

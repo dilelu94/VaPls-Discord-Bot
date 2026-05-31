@@ -49,7 +49,7 @@ USERS: dict[int, dict] = {
         "name": "Miles",
         "traits": [
             "nombre real: Leonel",
-            "es hincha de Independiente",
+            "es hincha de Boca",
             "le gusta Queen",
             "programador (no es para mencionarlo todo el tiempo, sabe algo y listo)",
             "tiene novia",
@@ -90,6 +90,7 @@ USERS: dict[int, dict] = {
             "nombre real: Gonzalo",
             "programador jr",
             "le gusta pescar",
+            "es hincha de River",
         ],
         "anecdotas": [
             "roba quesos cremosos",
