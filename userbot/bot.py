@@ -1193,7 +1193,11 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
 
 # ---------- Discord client + auto-join logic -------------------------------
 
-client = discord.Client(chunk_guilds_at_startup=False)
+# discord.py-self >=2.7 makes `intents` a required argument. A self-bot
+# (user token) is not subject to privileged-intent gating, so we request all
+# intents — this matches the implicit default of older discord.py-self and
+# keeps voice-receive + message access working.
+client = discord.Client(chunk_guilds_at_startup=False, intents=discord.Intents.all())
 
 
 def _guild_allowed(guild_id: int) -> bool:
