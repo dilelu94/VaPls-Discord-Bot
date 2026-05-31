@@ -221,11 +221,27 @@ _VOTE_CANDS = [
 ]
 
 
-def _freeze_vote_timer(gc, key="guild-100"):
+def _freeze_vote_timer(gc, guild_id=100):
     """Cancel the auto-close timer so the test closes the vote on its own."""
-    v = gc._indio_pending_vote.get(key)
-    if v and v.get("task"):
-        v["task"].cancel()
+    import playCommand
+    v = playCommand.active_votes.get(guild_id)
+    if v and v._close_task is not None and not v._close_task.done():
+        v._close_task.cancel()
+
+
+def _active_vote(guild_id=100):
+    """Convenience accessor: return the live MusicVote for a guild, or None."""
+    import playCommand
+    return playCommand.active_votes.get(guild_id)
+
+
+async def _close_active_vote(guild_id=100):
+    """Close the guild's active vote synchronously (tests skip the timer and
+    drive resolution explicitly so they're deterministic)."""
+    import playCommand
+    v = playCommand.active_votes.get(guild_id)
+    if v is not None:
+        await v._close()
 
 
 async def _open_music_vote(gc, ctx_factory, monkeypatch, reply_factory,
@@ -257,7 +273,7 @@ async def test_multiple_matches_opens_a_vote(
     shown = "\n".join(m for m in ctx.sent_messages if m)
     assert "Tema A" in shown and "Tema B" in shown      # options listed
     play_mock.assert_not_awaited()                       # nothing played yet
-    assert "guild-100" in indio._indio_pending_vote      # a vote is open
+    assert _active_vote(100) is not None                 # a vote is open
 
 
 async def test_vote_options_reordered_by_fuzzy_match(
@@ -289,7 +305,7 @@ async def test_vote_options_reordered_by_fuzzy_match(
 
     # The query-matching song is now first in the pending vote — that's what
     # the default-pick will fall back to if nobody votes.
-    stored = indio._indio_pending_vote["guild-100"]["candidates"]
+    stored = _active_vote(100).candidates
     assert stored[0]["id"] == "right"
 
     # And the chat message lists it first too (1️⃣ position).
@@ -314,11 +330,11 @@ async def test_vote_winner_is_the_most_voted(
     await indioLogic(ctx_factory(display_name="Viny", user_id=2, guild_id=100), "la dos", nuevo=False)
     await indioLogic(ctx_factory(display_name="Colo", user_id=3, guild_id=100), "la tres", nuevo=False)
 
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
-    assert "guild-100" not in indio._indio_pending_vote   # closed
+    assert _active_vote(100) is None                     # closed
 
 
 async def test_vote_with_no_votes_plays_the_first(
@@ -329,7 +345,7 @@ async def test_vote_with_no_votes_plays_the_first(
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
 
     await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
-    await indio._close_vote("guild-100")          # window closes, nobody voted
+    await _close_active_vote(100)          # window closes, nobody voted
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"   # the first
@@ -348,7 +364,7 @@ async def test_vote_tie_breaks_to_lowest_number(
     await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "la 3", nuevo=False)
     await indioLogic(ctx_factory(display_name="Viny", user_id=2, guild_id=100), "la 1", nuevo=False)
 
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"
@@ -366,7 +382,7 @@ async def test_anyone_can_vote_not_just_requester(
 
     # Someone other than the opener votes, and it counts.
     await indioLogic(ctx_factory(display_name="Otro", user_id=99, guild_id=100), "la dos", nuevo=False)
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
@@ -388,9 +404,9 @@ async def test_unrelated_message_during_vote_is_not_a_vote(
                         AsyncMock(return_value=reply_factory(text="jajaj qué capo")))
     await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "jaja qué capo", nuevo=False)
 
-    assert indio._indio_pending_vote["guild-100"]["votes"] == {}   # nothing counted
+    assert _active_vote(100).votes == {}                # nothing counted
 
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"    # no votes → first
 
@@ -406,7 +422,7 @@ async def test_vote_slides_the_close_window(
     import geminiClient
     play_mock = AsyncMock(return_value=(True, "x"))
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
-    monkeypatch.setattr(indio, "_MUSIC_VOTE_WINDOW_SEC", 0.1)
+    monkeypatch.setattr(playCommand, "_MUSIC_VOTE_WINDOW_SEC", 0.1)
 
     _fake_search(monkeypatch, _VOTE_CANDS)
     monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=reply_factory(
@@ -424,32 +440,35 @@ async def test_vote_slides_the_close_window(
     # Past the original 0.1 s window but only 0.06 s since the vote → still open.
     await asyncio.sleep(0.06)
     assert play_mock.await_count == 0
-    assert "guild-100" in indio._indio_pending_vote
+    assert _active_vote(100) is not None
 
     # Now let the full sliding window elapse from the vote → close fires.
     await asyncio.sleep(0.12)
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"   # the voted one
-    assert "guild-100" not in indio._indio_pending_vote
+    assert _active_vote(100) is None
 
 
 # --- Voto por reacción (emoji) y combinación de canales --------------------
 
 
-def _arm_reactions(gc, channel_id=555, message_id=999, key="guild-100"):
+def _arm_reactions(gc, channel_id=555, message_id=999, guild_id=100):
     """Pretend the options message was posted with id ``message_id`` so emoji
     reactions can be matched to the open vote (in tests the fake followup
     returns no message, so we set these directly)."""
-    gc._indio_pending_vote[key]["channel_id"] = channel_id
-    gc._indio_pending_vote[key]["message_id"] = message_id
+    import playCommand
+    vote = playCommand.active_votes.get(guild_id)
+    if vote is not None:
+        vote.reaction_channel_id = channel_id
+        vote.reaction_message_id = message_id
 
 
 def test_emoji_to_index_maps_keycaps():
-    from geminiCommand import _emoji_to_index
-    assert _emoji_to_index("1️⃣") == 0
-    assert _emoji_to_index("3️⃣") == 2
-    assert _emoji_to_index("❤️") is None
-    assert _emoji_to_index("") is None
+    from playCommand import emoji_to_index
+    assert emoji_to_index("1️⃣") == 0
+    assert emoji_to_index("3️⃣") == 2
+    assert emoji_to_index("❤️") is None
+    assert emoji_to_index("") is None
 
 
 async def test_reaction_counts_as_a_vote(
@@ -468,7 +487,7 @@ async def test_reaction_counts_as_a_vote(
     assert ok is True
 
     _freeze_vote_timer(indio)
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
@@ -483,7 +502,7 @@ async def test_reaction_on_other_message_is_ignored(
     ok = indio.register_reaction_vote(channel_id=555, message_id=12345,
                                       emoji="2️⃣", user_id=7)
     assert ok is False
-    assert indio._indio_pending_vote["guild-100"]["votes"] == {}
+    assert _active_vote(100).votes == {}
 
 
 async def test_votes_combine_spoken_written_and_reaction(
@@ -506,7 +525,7 @@ async def test_votes_combine_spoken_written_and_reaction(
     indio.register_reaction_vote(channel_id=555, message_id=999, emoji="3️⃣", user_id=13)
 
     _freeze_vote_timer(indio)
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idC"
@@ -523,8 +542,8 @@ async def test_reaction_and_text_from_same_user_count_once(
     await indioLogic(ctx_factory(display_name="Mati", user_id=11, guild_id=100),
                      "la tres", nuevo=False)
 
-    votes = indio._indio_pending_vote["guild-100"]["votes"]
-    assert votes == {"uid:11": 2}     # single entry, the later (written) pick
+    votes = _active_vote(100).votes
+    assert votes == {11: 2}           # single entry keyed by uid, the later (written) pick
 
 
 # --- try_register_voice_vote: shortcut used by apiServer before decifrar ---
@@ -548,9 +567,35 @@ async def test_voice_vote_shortcut_registers_from_raw_text(
     )
     assert ok is True
 
-    await indio._close_vote("guild-100")
+    await _close_active_vote(100)
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"   # option 2
+
+
+async def test_voice_vote_closes_immediately(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """Voice votes are decisive: registering one resolves the vote NOW,
+    without waiting for the sliding window. Otherwise the speaker has to wait
+    5+ seconds after saying "ponela 4" before the song starts."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    # Keep the sliding window long enough that anything but immediate close
+    # would clearly miss this test's deadline.
+    monkeypatch.setattr(playCommand, "_MUSIC_VOTE_WINDOW_SEC", 10.0)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+
+    indio.try_register_voice_vote(
+        guild_id=100, user_id=42, speaker_name="Tobi", text="ponela 2",
+    )
+    # The close task was scheduled; let the loop run it.
+    await _drain_pending_tasks()
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
+    assert _active_vote(100) is None        # closed without waiting
 
 
 async def test_voice_vote_shortcut_skips_when_no_open_vote(indio):
@@ -573,28 +618,40 @@ async def test_voice_vote_shortcut_ignores_unrelated_text(
         text="che indio cómo va",
     )
     assert ok is False
-    assert indio._indio_pending_vote["guild-100"]["votes"] == {}
+    assert _active_vote(100).votes == {}
 
 
-# --- _tally_vote_winner pure-function behavior -----------------------------
+# --- MusicVote._tally_winner pure behavior ---------------------------------
+
+
+def _make_vote(candidates, votes):
+    """Build a MusicVote without involving Discord/asyncio for the tally tests."""
+    from unittest.mock import MagicMock
+    import playCommand
+    v = playCommand.MusicVote(
+        bot=MagicMock(), guild_id=0, candidates=candidates,
+        on_resolve=AsyncMock(),
+    )
+    v.votes = dict(votes)
+    return v
 
 
 def test_tally_most_voted_wins():
-    from geminiCommand import _tally_vote_winner
     cands = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
-    assert _tally_vote_winner(cands, {"u1": 1, "u2": 1, "u3": 2}) == 1
+    v = _make_vote(cands, {1: 1, 2: 1, 3: 2})
+    assert v._tally_winner()["id"] == "b"
 
 
 def test_tally_tie_breaks_to_lowest_index():
-    from geminiCommand import _tally_vote_winner
     cands = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
-    assert _tally_vote_winner(cands, {"u1": 2, "u2": 0}) == 0
+    v = _make_vote(cands, {1: 2, 2: 0})
+    assert v._tally_winner()["id"] == "a"
 
 
 def test_tally_no_votes_returns_first():
-    from geminiCommand import _tally_vote_winner
     cands = [{"id": "a"}, {"id": "b"}]
-    assert _tally_vote_winner(cands, {}) == 0
+    v = _make_vote(cands, {})
+    assert v._tally_winner()["id"] == "a"
 
 
 # --- _parse_choice pure-function behavior ----------------------------------

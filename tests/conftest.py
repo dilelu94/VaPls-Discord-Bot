@@ -223,12 +223,13 @@ def indio(tmp_path, monkeypatch):
         gc._indio_long_term.clear()
         gc._indio_locks.clear()
         gc._indio_compressing.clear()
-        # Cancel any open vote timers so they don't leak across tests.
-        for _entry in gc._indio_pending_vote.values():
-            _task = _entry.get("task")
-            if _task is not None and not _task.done():
-                _task.cancel()
-        gc._indio_pending_vote.clear()
+        # Music votes live in playCommand.active_votes now — cancel + clear.
+        import playCommand
+        for _v in list(playCommand.active_votes.values()):
+            _v._closed = True
+            if _v._close_task is not None and not _v._close_task.done():
+                _v._close_task.cancel()
+        playCommand.active_votes.clear()
 
     _clear()
     gc._mem_path = str(mem_path)  # convenience for tests

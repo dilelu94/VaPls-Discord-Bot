@@ -268,16 +268,12 @@ _indio_members_refreshed_at: dict[str, float] = {}
 
 # Music disambiguation via group vote. When the indio is asked for a song and
 # the search returns several candidates, we list them and open a short voting
-# window: anyone in the guild can vote by number; when the window closes the
-# most-voted track plays (ties → lowest number; no votes → the first/most
-# relevant result). One active vote per guild, keyed by the memory bucket.
+# window managed by ``playCommand.MusicVote`` (shared with the /play button
+# picker so there's a single vote per guild regardless of how it was invoked).
+# This module only bridges input surfaces (voice + reactions on the indio's
+# chat message) into that vote.
 # How many candidates to offer. Kept in sync with playCommand's /play picker.
 _MUSIC_CHOICE_COUNT = 5
-# Seconds the vote stays open from the last vote (sliding window).
-_MUSIC_VOTE_WINDOW_SEC = 30.0
-# guild memory key -> {"candidates", "guild_id", "votes": {voter: idx},
-#                      "post": coro_fn, "bot", "task", "opened_at"}
-_indio_pending_vote: dict[str, dict] = {}
 
 
 def _load_indio_state() -> None:
@@ -441,18 +437,8 @@ def _evict_stale_indio() -> None:
         # Lock se libera solo si no quedó nada relevante.
         if key not in _indio_long_term:
             _indio_locks.pop(key, None)
-    # Safety net for music votes: the close timer normally clears these, but if
-    # a task ever got cancelled without closing, drop stale entries so they
-    # don't linger. With the sliding timer, votes can legitimately extend the
-    # window past N seconds — cap at 2 minutes from open so a vote stays
-    # reasonable even with repeated re-voting.
-    for ck in list(_indio_pending_vote.keys()):
-        entry = _indio_pending_vote[ck]
-        if now - entry.get("opened_at", 0.0) > 120:
-            task = entry.get("task")
-            if task is not None and not task.done():
-                task.cancel()
-            del _indio_pending_vote[ck]
+    # Music votes live in playCommand.active_votes now; they own their own
+    # close timer and self-cleanup. Nothing for the indio side to evict here.
 
 
 async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
@@ -1277,75 +1263,36 @@ def _choice_identity(user_id, speaker: str) -> str:
     return f"nm:{speaker or 'alguien'}"
 
 
-def _tally_vote_winner(candidates: list[dict], votes: dict) -> int:
-    """Index of the winning candidate. Most-voted wins; ties break to the
-    lowest number; no votes at all → the first (most relevant) result."""
-    if not votes:
-        return 0
-    counts: dict[int, int] = {}
-    for idx in votes.values():
-        counts[idx] = counts.get(idx, 0) + 1
-    best = max(counts.values())
-    return min(i for i in counts if counts[i] == best)
+def _voter_id_from(user_id, speaker: str) -> int:
+    """Resolve a stable integer "voter id" for MusicVote.register_vote, which
+    keys ``votes`` by int (Discord uid). Falls back to a deterministic hash of
+    the speaker name when no real id is available (older voice messages)."""
+    try:
+        if user_id:
+            return int(user_id)
+    except (TypeError, ValueError):
+        pass
+    # Negative-space "name" voter ids so they never collide with real Discord
+    # uids (which are positive).
+    name = speaker or "alguien"
+    return -(hash(name) & 0xFFFFFFFF) or -1
 
 
-def _open_vote(mem_key: str, candidates: list[dict], guild_id: int,
-               bot, post) -> None:
-    """Open a fresh voting window for this guild, replacing any previous one,
-    and schedule its automatic close."""
-    old = _indio_pending_vote.get(mem_key)
-    if old is not None:
-        task = old.get("task")
-        if task is not None and not task.done():
-            task.cancel()
-    entry = {
-        "candidates": candidates,
-        "guild_id": guild_id,
-        "votes": {},
-        "post": post,
-        "bot": bot,
-        "opened_at": time.time(),
-        # Set once the options message is posted, so emoji reactions on it can
-        # be matched back to this vote (see register_reaction_vote).
-        "channel_id": None,
-        "message_id": None,
-    }
-    _indio_pending_vote[mem_key] = entry
-    entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
-
-
-def _slide_vote_window(mem_key: str) -> None:
-    """Restart the close-timer for an open vote (each vote, by any channel,
-    gives the group another ``_MUSIC_VOTE_WINDOW_SEC`` to weigh in)."""
-    entry = _indio_pending_vote.get(mem_key)
-    if entry is None:
-        return
-    old = entry.get("task")
-    if old is not None and not old.done():
-        old.cancel()
-    entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
-
-
-def _register_vote(mem_key: str, voter: str, pregunta: str) -> bool:
-    """If a vote is open for this guild and ``pregunta`` names one of the
-    options, record this voter's pick (one vote per voter, re-voting replaces)
-    and return True so the caller treats the message as a vote (no Gemini turn).
-    Anything that isn't a recognizable option returns False and flows normally.
-
-    Each accepted vote slides the close-timer forward by another
-    ``_MUSIC_VOTE_WINDOW_SEC``: the window closes after that many seconds of
-    *no new votes*, not a fixed N seconds from the prompt. That way a vote at
-    second 4 still gives others ~5 s to react.
-    """
-    entry = _indio_pending_vote.get(mem_key)
-    if entry is None:
+def _try_register_chat_vote(guild_id: Optional[int], user_id: int,
+                            text: str) -> bool:
+    """Bridge for typed-chat votes ("indio ponela 4" in text). Same idea as
+    ``try_register_voice_vote`` but doesn't close immediately — typing is more
+    deliberate, but we still want to give the group its sliding window."""
+    if not guild_id or not text:
         return False
-    decision = _parse_choice(pregunta, entry["candidates"])
-    if isinstance(decision, int) and 0 <= decision < len(entry["candidates"]):
-        entry["votes"][voter] = decision
-        _slide_vote_window(mem_key)
-        return True
-    return False
+    import playCommand
+    vote = playCommand.get_active_vote(int(guild_id))
+    if vote is None:
+        return False
+    decision = _parse_choice(text, vote.candidates)
+    if not isinstance(decision, int) or not (0 <= decision < len(vote.candidates)):
+        return False
+    return vote.register_vote(int(user_id), decision)
 
 
 def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
@@ -1353,26 +1300,25 @@ def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
     """Try to register a voice utterance as a vote on the guild's open music
     poll. Returns True when ``text`` parses as a choice and a vote is recorded;
     False when there's no open vote, no guild context, or ``text`` doesn't name
-    an option. Called from the apiServer **before** ``decifrarTranscripcion``
-    so the raw transcript's digit ("Indio, tirala 4") survives even if Gemini's
-    cleanup would otherwise drop it."""
+    an option.
+
+    Voice votes are decisive: this is someone literally telling the indio "ponela
+    4", so we close the vote immediately (``close_now=True``) instead of waiting
+    out the sliding window. Called from the apiServer **before**
+    ``decifrarTranscripcion`` so the raw transcript's digit ("Indio, tirala 4")
+    survives even if Gemini's cleanup would otherwise drop it.
+    """
     if not guild_id or not text:
         return False
-    mem_key = f"guild-{int(guild_id)}"
-    voter = _choice_identity(int(user_id or 0), speaker_name or "alguien")
-    return _register_vote(mem_key, voter, text)
-
-
-def _emoji_to_index(emoji: str) -> Optional[int]:
-    """Map a keycap reaction emoji (``1️⃣``…) to a 0-based option index, or
-    None if it isn't one of ours. Tolerates a missing variation selector
-    (some clients send ``1⃣`` without the ``\\ufe0f``)."""
-    e = (emoji or "").strip()
-    e_plain = e.replace("️", "")
-    for i, ne in enumerate(_NUM_EMOJI):
-        if e == ne or e_plain == ne.replace("️", ""):
-            return i
-    return None
+    import playCommand
+    vote = playCommand.get_active_vote(int(guild_id))
+    if vote is None:
+        return False
+    decision = _parse_choice(text, vote.candidates)
+    if not isinstance(decision, int) or not (0 <= decision < len(vote.candidates)):
+        return False
+    voter = _voter_id_from(user_id, speaker_name or "")
+    return vote.register_vote(voter, decision, close_now=True)
 
 
 def register_reaction_vote(*, channel_id: int, message_id: int,
@@ -1381,24 +1327,29 @@ def register_reaction_vote(*, channel_id: int, message_id: int,
 
     Called from the main bot's ``on_raw_reaction_add``. Looks up the open vote
     by its options message, maps the keycap emoji to an option, and records the
-    reactor's pick keyed by user id (so a reaction merges with that person's
-    spoken/written vote instead of double-counting). Returns True if counted.
+    reactor's pick keyed by user id. Reactions slide the timer (no close_now);
+    the assumption is multiple people may be reacting in sequence and we want
+    to give them a window.
     """
-    idx = _emoji_to_index(emoji)
+    import playCommand
+    idx = playCommand.emoji_to_index((emoji or "").strip())
+    if idx is None:
+        # Some clients drop the variation selector — try the bare keycap too.
+        idx = playCommand.emoji_to_index((emoji or "").replace("\ufe0f", ""))
     if idx is None:
         return False
     try:
-        channel_id = int(channel_id)
-        message_id = int(message_id)
+        cid = int(channel_id)
+        mid = int(message_id)
     except (TypeError, ValueError):
         return False
-    for mem_key, entry in _indio_pending_vote.items():
-        if entry.get("message_id") == message_id and entry.get("channel_id") == channel_id:
-            if idx >= len(entry["candidates"]):
+    for vote in playCommand.active_votes.values():
+        if vote.closed:
+            continue
+        if vote.reaction_message_id == mid and vote.reaction_channel_id == cid:
+            if idx >= len(vote.candidates):
                 return False
-            entry["votes"][f"uid:{user_id}"] = idx
-            _slide_vote_window(mem_key)
-            return True
+            return vote.register_vote(int(user_id), idx)
     return False
 
 
@@ -1426,15 +1377,14 @@ async def _relay_say(channel_id: int, content: str) -> Optional[int]:
         return None
 
 
-async def _attach_vote_reactions(bot, mem_key: str, channel_id: int,
+async def _attach_vote_reactions(bot, vote, channel_id: int,
                                  message_id: int, n: int) -> None:
     """Remember which message carries this vote and seed it with the number
     reactions (1️⃣…N) so people can vote by reacting. Best-effort."""
-    entry = _indio_pending_vote.get(mem_key)
-    if entry is None or not channel_id or not message_id:
+    if vote is None or not channel_id or not message_id:
         return
-    entry["channel_id"] = int(channel_id)
-    entry["message_id"] = int(message_id)
+    vote.reaction_channel_id = int(channel_id)
+    vote.reaction_message_id = int(message_id)
     try:
         channel = bot.get_channel(int(channel_id))
         if channel is None:
@@ -1444,33 +1394,6 @@ async def _attach_vote_reactions(bot, mem_key: str, channel_id: int,
             await msg.add_reaction(_num_emoji(i))
     except Exception:
         logger.exception("indio vote: attaching reactions failed")
-
-
-async def _close_vote_after(mem_key: str) -> None:
-    """Sleep the voting window, then close it. Cancelled if a newer vote
-    replaces this one."""
-    try:
-        await asyncio.sleep(_MUSIC_VOTE_WINDOW_SEC)
-    except asyncio.CancelledError:
-        return
-    await _close_vote(mem_key)
-
-
-async def _close_vote(mem_key: str) -> None:
-    """Tally the vote, announce and play the winner. Idempotent: a second call
-    (e.g. timer + manual) finds nothing to do."""
-    entry = _indio_pending_vote.pop(mem_key, None)
-    if entry is None:
-        return
-    candidates = entry["candidates"]
-    winner = candidates[_tally_vote_winner(candidates, entry["votes"])]
-    post = entry.get("post")
-    if post is not None:
-        try:
-            await post(f"dale, va: {winner['title']} 🎵")
-        except Exception:
-            logger.exception("indio vote: announce failed")
-    await _play_chosen_song(entry["bot"], entry["guild_id"], winner)
 
 
 async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
@@ -1530,9 +1453,25 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
         # One clear match: play it directly with the metadata we already have.
         asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
         return [], clean
-    # Several matches: list them and open a vote — anyone can pick by number for
-    # the next few seconds, then the most-voted plays.
-    _open_vote(mem_key, candidates, guild_id, bot, post)
+    # Several matches: open a shared MusicVote (one per guild — same storage
+    # used by the /play picker buttons). The indio's chat surface here lists
+    # the options as text + reactions; voice votes and button clicks all write
+    # into the same vote state.
+    import playCommand
+
+    async def _on_resolve(vote, winner: dict) -> None:
+        # Announce + reproduce. ``post`` was passed in by the caller and knows
+        # how to send via the userbot relay (or fall back to channel.send).
+        try:
+            await post(f"dale, va: {winner['title']} 🎵")
+        except Exception:
+            logger.exception("indio vote: announce failed")
+        await _play_chosen_song(bot, guild_id, winner)
+
+    playCommand.open_music_vote(
+        bot=bot, guild_id=int(guild_id),
+        candidates=candidates, on_resolve=_on_resolve,
+    )
     return [], _format_choices(candidates)
 
 
@@ -1740,7 +1679,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     _choice_identity_val = _choice_identity(
         getattr(getattr(ctx, "author", None), "id", None) or 0, speaker)
     if (not nuevo and _choice_guild_id is not None
-            and _register_vote(mem_key, _choice_identity_val, pregunta or "")):
+            and _try_register_chat_vote(
+                int(_choice_guild_id),
+                int(getattr(getattr(ctx, "author", None), "id", None) or 0),
+                pregunta or "",
+            )):
         return
 
     async with lock:
@@ -1833,7 +1776,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
     )
     relayed_via_userbot = False
-    vote_open = mem_key in _indio_pending_vote
+    import playCommand
+    _active_vote = playCommand.get_active_vote(int(getattr(ctx.guild, "id", 0) or 0))
+    vote_open = _active_vote is not None
     opts_channel_id = None
     opts_msg_id = None
     try:
@@ -1874,10 +1819,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                                     properties={"action": "indio_send"})
         return
 
-    if vote_open and opts_msg_id and opts_channel_id:
-        entry = _indio_pending_vote.get(mem_key)
-        n = len(entry["candidates"]) if entry else 0
-        await _attach_vote_reactions(ctx.bot, mem_key, opts_channel_id, opts_msg_id, n)
+    if vote_open and opts_msg_id and opts_channel_id and _active_vote is not None:
+        n = len(_active_vote.candidates)
+        await _attach_vote_reactions(
+            ctx.bot, _active_vote, opts_channel_id, opts_msg_id, n,
+        )
 
     try:
         await indioArchive.enqueue(
@@ -1979,8 +1925,11 @@ async def indioFromVoice(
                 await channel.send(chunk)
 
     # If a music vote is open and this message names an option, count it as a
-    # vote (anyone can vote) instead of starting a fresh turn.
-    if _register_vote(mem_key, _choice_identity_val, pregunta):
+    # vote (anyone can vote) instead of starting a fresh turn. This is the
+    # voice path — treated as decisive (close_now=True) since the user just
+    # spoke the choice out loud.
+    if try_register_voice_vote(guild_id=guild_id, user_id=user_id,
+                               speaker_name=speaker, text=pregunta):
         return
 
     async with lock:
@@ -2038,7 +1987,9 @@ async def indioFromVoice(
         bot, guild_id, mem_key, pending_actions, reply, _post_choice,
     )
     relayed_via_userbot = False
-    vote_open = mem_key in _indio_pending_vote
+    import playCommand
+    _active_vote = playCommand.get_active_vote(int(guild_id) if guild_id else 0)
+    vote_open = _active_vote is not None
     opts_msg_id = None
     try:
         if vote_open:
@@ -2063,10 +2014,9 @@ async def indioFromVoice(
         logger.exception("indioFromVoice send failed")
         return
 
-    if vote_open and opts_msg_id:
-        entry = _indio_pending_vote.get(mem_key)
-        n = len(entry["candidates"]) if entry else 0
-        await _attach_vote_reactions(bot, mem_key, channel_id, opts_msg_id, n)
+    if vote_open and opts_msg_id and _active_vote is not None:
+        n = len(_active_vote.candidates)
+        await _attach_vote_reactions(bot, _active_vote, channel_id, opts_msg_id, n)
 
     try:
         await indioArchive.enqueue(

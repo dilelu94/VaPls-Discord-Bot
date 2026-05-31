@@ -41,6 +41,21 @@ if os.path.exists(_downloadsDirInit):
 # Global dictionary to track active player states per guild
 guildPlayers = {}
 
+# Single live music vote per guild. Both the /play picker reactions and the
+# indio's chat-message reactions write into the same MusicVote. One at a time —
+# opening a new one cancels the previous (e.g. someone asks for another query
+# while a vote is still open).
+active_votes: "dict[int, 'MusicVote']" = {}
+
+# Sliding window from the most recent vote: a new vote resets it, and when it
+# elapses with no further votes the vote resolves to the most-voted option.
+_MUSIC_VOTE_WINDOW_SEC = 5.0
+
+# Hard cap from the moment the picker is shown. If nobody votes within this
+# window, the vote resolves automatically to candidates[0] (the top fuzzy match
+# against the query).
+_MUSIC_VOTE_MAX_SEC = 60.0
+
 # How many search candidates to offer when /play (or the indio) finds several
 # matches for a free-text query. Keeps the "¿cuál querés?" list readable.
 _PLAY_CHOICE_COUNT = 5
@@ -127,6 +142,171 @@ _NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
 def _num_emoji(i: int) -> str:
     """Return the keycap emoji for a 1-based position (falls back to ``N.``)."""
     return _NUM_EMOJI[i - 1] if 1 <= i <= len(_NUM_EMOJI) else f"{i}."
+
+
+def emoji_to_index(emoji_str: str) -> Optional[int]:
+    """Return 0-based index for a keycap emoji string, or ``None`` if it isn't
+    one of the ones we use to label options. Used by the reaction listener to
+    translate a 1️⃣/2️⃣/3️⃣… reaction into a vote index."""
+    try:
+        return _NUM_EMOJI.index(emoji_str)
+    except ValueError:
+        return None
+
+
+class MusicVote:
+    """Pure voting state. One MusicVote per guild lives in ``active_votes``.
+
+    Reactions on the picker message (from /play and the indio's chat message)
+    write votes into this object via :meth:`register_vote`. The class owns:
+
+    - the candidate list (already fuzzy-reordered upstream so candidates[0]
+      is the default if nobody picks),
+    - the votes (one per user; revoting replaces),
+    - the initial hard cap (``vote_max_sec``) that resolves to candidates[0]
+      if nobody votes,
+    - the sliding close timer (``vote_window_sec``) from the most recent vote,
+    - the callback that resolves the winner — typically ``_play_chosen_song``.
+
+    Closing is idempotent: once it fires, further votes are ignored.
+    """
+
+    def __init__(self, *, bot, guild_id: int, candidates: list[dict],
+                 on_resolve, vote_window_sec: float = _MUSIC_VOTE_WINDOW_SEC,
+                 vote_max_sec: float = _MUSIC_VOTE_MAX_SEC):
+        self.bot = bot
+        self.guild_id = guild_id
+        self.candidates = candidates
+        self.vote_window_sec = vote_window_sec
+        self.vote_max_sec = vote_max_sec
+        self.votes: dict[int, int] = {}        # user_id -> option index (0-based)
+        self._closed = False
+        self._close_task: Optional[asyncio.Task] = None
+        self._on_resolve = on_resolve          # async fn(MusicVote, winner_dict)
+        # The picker message used for the reaction UI. Set by callers after
+        # they post the prompt so the close cleanup can clear the reactions.
+        self.reaction_message_id: Optional[int] = None
+        self.reaction_channel_id: Optional[int] = None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def start_timeout(self) -> None:
+        """Arm the initial hard cap. If nobody votes within ``vote_max_sec`` the
+        vote auto-resolves to candidates[0]. Cancelled and replaced by the
+        sliding window as soon as the first vote arrives."""
+        if self._closed:
+            return
+        if self._close_task is not None and not self._close_task.done():
+            self._close_task.cancel()
+        self._close_task = asyncio.create_task(self._close_after(self.vote_max_sec))
+
+    def register_vote(self, user_id: int, idx: int, *,
+                      close_now: bool = False) -> bool:
+        """Record one user's vote. Returns True if the vote was accepted.
+
+        ``close_now=True`` is the "voice override": the indio gets a verbal
+        "ponela 4" command and we resolve immediately instead of waiting for
+        the sliding window — the user has already committed, no point waiting
+        for others.
+        """
+        if self._closed:
+            return False
+        if not (0 <= idx < len(self.candidates)):
+            return False
+        self.votes[user_id] = idx
+        if close_now:
+            # Cancel any pending sliding close and resolve right now.
+            if self._close_task is not None and not self._close_task.done():
+                self._close_task.cancel()
+            self._close_task = asyncio.create_task(self._close())
+        else:
+            self._schedule_close()
+        return True
+
+    def _schedule_close(self) -> None:
+        """(Re)start the sliding close timer at ``vote_window_sec`` from now."""
+        if self._close_task is not None and not self._close_task.done():
+            self._close_task.cancel()
+        self._close_task = asyncio.create_task(self._close_after(self.vote_window_sec))
+
+    async def _close_after(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        await self._close()
+
+    async def _close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        # Pop from the active registry so a future query opens a fresh vote.
+        if active_votes.get(self.guild_id) is self:
+            active_votes.pop(self.guild_id, None)
+        winner = self._tally_winner()
+        # Best-effort: drop the seeded reactions so the closed picker doesn't
+        # invite latecomers to keep tapping.
+        if self.reaction_message_id and self.reaction_channel_id:
+            try:
+                channel = self.bot.get_channel(int(self.reaction_channel_id))
+                if channel is None:
+                    channel = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                msg = await channel.fetch_message(int(self.reaction_message_id))
+                await msg.clear_reactions()
+            except Exception:
+                pass
+        try:
+            await self._on_resolve(self, winner)
+        except Exception:
+            playLogger.exception("[VOTE] on_resolve failed")
+
+    def _tally_winner(self) -> dict:
+        """Most-voted option wins; ties → lowest index; no votes → first."""
+        if not self.votes:
+            return self.candidates[0]
+        counts: dict[int, int] = {}
+        for idx in self.votes.values():
+            counts[idx] = counts.get(idx, 0) + 1
+        best = max(counts.values())
+        winner_idx = min(i for i in counts if counts[i] == best)
+        return self.candidates[winner_idx]
+
+
+def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
+                    on_resolve,
+                    vote_window_sec: Optional[float] = None,
+                    vote_max_sec: Optional[float] = None) -> MusicVote:
+    """Open a fresh music vote for ``guild_id``. If another vote is currently
+    active in the same guild it's cancelled — only one live picker at a time.
+
+    The ``vote_window_sec`` / ``vote_max_sec`` defaults are looked up at call
+    time so tests can monkeypatch the module-level constants to speed up
+    timing-sensitive scenarios.
+    """
+    prev = active_votes.get(guild_id)
+    if prev is not None and not prev._closed:
+        prev._closed = True
+        if prev._close_task is not None and not prev._close_task.done():
+            prev._close_task.cancel()
+    if vote_window_sec is None:
+        vote_window_sec = _MUSIC_VOTE_WINDOW_SEC
+    if vote_max_sec is None:
+        vote_max_sec = _MUSIC_VOTE_MAX_SEC
+    vote = MusicVote(bot=bot, guild_id=guild_id, candidates=candidates,
+                     on_resolve=on_resolve, vote_window_sec=vote_window_sec,
+                     vote_max_sec=vote_max_sec)
+    active_votes[guild_id] = vote
+    return vote
+
+
+def get_active_vote(guild_id: int) -> Optional[MusicVote]:
+    """Return the live vote for a guild, or ``None`` if none is open."""
+    v = active_votes.get(guild_id)
+    if v is None or v._closed:
+        return None
+    return v
 
 
 def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
@@ -1334,20 +1514,42 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             )
             await player.addSongs([songs[0]], ctx)
             return
-        candidates = songs[:_PLAY_CHOICE_COUNT]
-        view = PlaySearchView(player, ctx, candidates)
+        # Reorder candidates by fuzzy match against the query so the default
+        # pick (candidates[0] when nobody votes) actually matches what was
+        # asked, not just YouTube's first hit.
+        candidates = sorted(
+            songs[:_PLAY_CHOICE_COUNT],
+            key=lambda c: _query_title_ratio(query, c.get("title", "")),
+            reverse=True,
+        )
+
+        async def _resolve(vote: MusicVote, winner: dict) -> None:
+            await player.addSongs([winner], ctx)
+
+        vote = open_music_vote(
+            bot=ctx.bot, guild_id=ctx.guild.id,
+            candidates=candidates, on_resolve=_resolve,
+        )
         prompt = _format_choice_prompt(candidates)
+        msg = None
         try:
-            view.message = await ctx.interaction.edit_original_response(
-                content=prompt, view=view,
+            msg = await ctx.interaction.edit_original_response(
+                content=prompt, view=None,
             )
         except Exception:
-            # Keep the picker usable on the fallback path too — a plain text
-            # prompt would leave the user with options but no way to choose.
             try:
-                view.message = await ctx.followup.send(prompt, view=view)
+                msg = await ctx.followup.send(prompt)
             except Exception:
                 await safeEdit(ctx, prompt)
+        if msg is not None:
+            vote.reaction_message_id = int(msg.id)
+            vote.reaction_channel_id = int(msg.channel.id)
+            for i in range(len(candidates)):
+                try:
+                    await msg.add_reaction(_num_emoji(i + 1))
+                except Exception:
+                    pass
+        vote.start_timeout()
         return
 
     # Single result (or a URL/playlist): queue it directly.
