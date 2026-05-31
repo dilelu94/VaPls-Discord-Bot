@@ -1,4 +1,8 @@
-py-cord[voice] @ git+https://github.com/Pycord-Development/pycord
+# Pinned to the commit currently running in production. py-cord is pulled from
+# git; leaving it unpinned means a deploy could silently install a newer master
+# that breaks the bot (this exact failure mode took the userbot down once). Bump
+# this SHA deliberately, test, then deploy.
+py-cord[voice] @ git+https://github.com/Pycord-Development/pycord@ad08770c247a5510cbe1685cdbc8d2824fc0b0a6
 python-dotenv
 psutil
 posthog>=7.15.0
