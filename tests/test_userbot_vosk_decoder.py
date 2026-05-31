@@ -35,8 +35,12 @@ def _extract_decoder_helpers():
          r"^def _normalize\(.*?" + _TERM),
         ("_WAKE_PATTERNS",
          r"^_WAKE_PATTERNS:.*?^\)\n"),
+        ("_WAKE_ANTI_PATTERNS",
+         r"^_WAKE_ANTI_PATTERNS:.*?^\)\n"),
         ("_text_matches_wake_pattern",
          r"^def _text_matches_wake_pattern\(.*?" + _TERM),
+        ("_text_has_anti_pattern",
+         r"^def _text_has_anti_pattern\(.*?" + _TERM),
         ("_build_vosk_grammar",
          r"^def _build_vosk_grammar\(.*?^_VOSK_GRAMMAR = _build_vosk_grammar\(\)\n"),
         ("_vosk_heard_wake_word",
@@ -117,6 +121,47 @@ def test_alternatives_che_indio_in_top1_fires():
     rec = _FakeRec({"alternatives": [
         {"text": "che indio", "confidence": -8.0},
         {"text": "que indio", "confidence": -9.0},
+    ]})
+    assert heard(rec, accepted=True) is True
+
+
+# ---- anti-pattern: "el indio" should NOT fire ---------------------------
+
+def test_el_indio_top1_does_not_fire():
+    """Speaker said "el indio" (third-person mention). Even with N-best,
+    we must NOT gatillar el wake-word."""
+    rec = _FakeRec({"alternatives": [
+        {"text": "el indio", "confidence": -8.0},
+    ]})
+    assert heard(rec, accepted=True) is False
+
+
+def test_el_indio_as_alternative_vetoes_match():
+    """VOSK top-1 says "che indio" but alt #2 says "el indio" — that's the
+    signal the audio is ambiguous between "che" and "el". Veto the match
+    to avoid the common false-positive."""
+    rec = _FakeRec({"alternatives": [
+        {"text": "che indio", "confidence": -8.0},
+        {"text": "el indio",  "confidence": -8.5},
+    ]})
+    assert heard(rec, accepted=True) is False
+
+
+def test_el_indio_with_accent_is_vetoed():
+    """`_normalize` strips diacritics, so "él indio" reduces to ("el","indio")
+    and hits the anti-pattern."""
+    rec = _FakeRec({"alternatives": [
+        {"text": "él indio", "confidence": -8.0},
+    ]})
+    assert heard(rec, accepted=True) is False
+
+
+def test_che_indio_without_el_indio_still_fires():
+    """Sanity: if N-best does NOT include "el indio", the wake-word fires."""
+    rec = _FakeRec({"alternatives": [
+        {"text": "che indio",  "confidence": -8.0},
+        {"text": "que indio",  "confidence": -9.0},
+        {"text": "indio dale", "confidence": -10.0},
     ]})
     assert heard(rec, accepted=True) is True
 

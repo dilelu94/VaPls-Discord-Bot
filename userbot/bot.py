@@ -545,9 +545,14 @@ def _build_vosk_grammar() -> str:
         "indio tirate", "indio dale",
         "indio por",  # collapsed "indio ponete/poneme"
         "indio tira", # collapsed "indio tirate"
+        # Third-person mentions ("el/él indio") are common false-positive
+        # neighbors of "eh/che indio". Listing them keeps VOSK from
+        # collapsing them into a wake-word — and the matcher vetoes them
+        # explicitly via _WAKE_ANTI_PATTERNS below.
+        "el indio", "él indio",
         # Lone tokens so the matcher still works when VOSK emits unpaired.
         "indio",
-        "che", "que", "eh", "ey", "hola",
+        "che", "que", "eh", "ey", "hola", "el", "él",
         "ponete", "poneme",
         "reproduci", "reproducí", "reproduce",
         "tirate", "tira", "dale", "por",
@@ -577,6 +582,15 @@ _WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("indio", "tirate"),
     ("indio", "tira"),      # VOSK-small drops trailing "te" → "tira"
     ("indio", "dale"),
+)
+
+# Patterns that explicitly VETO a match even if some other alternative would
+# fire. Useful for third-person mentions ("el indio", "él indio") that sound
+# similar to "eh/che indio" — when VOSK's N-best contains the anti-pattern,
+# we trust that the speaker was talking ABOUT the indio, not TO it.
+# Compared against accent-stripped lowercase tokens (so "él" → "el").
+_WAKE_ANTI_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("el", "indio"),
 )
 
 
@@ -641,6 +655,18 @@ def _text_matches_wake_pattern(text: str) -> bool:
     return any(p in pairs for p in _WAKE_PATTERNS)
 
 
+def _text_has_anti_pattern(text: str) -> bool:
+    """True when ``text`` contains a ``_WAKE_ANTI_PATTERNS`` adjacent pair
+    (e.g. ``("el","indio")``). Used to veto a match when VOSK's N-best
+    suggests the speaker said "el indio" (third-person), not "che indio"."""
+    norm = _normalize(text or "")
+    tokens = [t for t in norm.split() if t]
+    if len(tokens) < 2:
+        return False
+    pairs = set(zip(tokens, tokens[1:]))
+    return any(p in pairs for p in _WAKE_ANTI_PATTERNS)
+
+
 def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
     """Return True when VOSK finalized a segment matching one of the explicit
     wake-word phrases (``_WAKE_PATTERNS``).
@@ -665,6 +691,13 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
             candidates = [result["text"]]
         else:
             return False
+        # If ANY alternative suggests an anti-pattern ("el indio"), the
+        # speaker was talking ABOUT the indio, not TO it. Veto the match.
+        for text in candidates:
+            if text and _text_has_anti_pattern(text):
+                log.info(f"[VOSK] vetoed by anti-pattern: {text!r} "
+                         f"(top-1 was {candidates[0]!r})")
+                return False
         for idx, text in enumerate(candidates):
             if text and _text_matches_wake_pattern(text):
                 if idx > 0:
