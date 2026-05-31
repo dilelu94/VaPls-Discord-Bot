@@ -234,7 +234,7 @@ async def test_play_music_multiple_matches_asks_instead_of_playing(
     shown = "\n".join(m for m in ctx.sent_messages if m)
     assert "Estudio" in shown and "En vivo" in shown    # the options were listed
     play_mock.assert_not_awaited()                       # didn't play anything yet
-    assert ("guild-100", "Mati") in indio._indio_pending_choice
+    assert ("guild-100", "uid:1") in indio._indio_pending_choice   # keyed by user id
 
 
 async def test_pending_choice_resolved_by_number_plays_it(
@@ -264,7 +264,7 @@ async def test_pending_choice_resolved_by_number_plays_it(
 
     play_mock.assert_awaited_once()
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "id2"   # the 2nd candidate
-    assert ("guild-100", "Mati") not in indio._indio_pending_choice   # cleared
+    assert ("guild-100", "uid:1") not in indio._indio_pending_choice   # cleared
 
 
 async def test_pending_choice_cancel_does_not_play(
@@ -291,7 +291,7 @@ async def test_pending_choice_cancel_does_not_play(
     await _drain_pending_tasks()
 
     play_mock.assert_not_awaited()
-    assert ("guild-100", "Mati") not in indio._indio_pending_choice
+    assert ("guild-100", "uid:1") not in indio._indio_pending_choice
 
 
 async def test_pending_choice_only_requester_resolves(
@@ -314,17 +314,51 @@ async def test_pending_choice_only_requester_resolves(
     )
     import geminiClient
     monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=ask_gen))
-    await indioLogic(ctx_factory(display_name="Mati", guild_id=100), "poné algo", nuevo=False)
+    await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "poné algo", nuevo=False)
     await _drain_pending_tasks()
 
-    # Viny says "la dos" — but the pending choice is Mati's, not his.
+    # Viny (a different user id) says "la dos" — but the pending choice is
+    # Mati's, keyed by Mati's user id, so it must NOT resolve for Viny.
     monkeypatch.setattr(geminiClient, "generate",
                         AsyncMock(return_value=reply_factory(text="qué onda")))
-    await indioLogic(ctx_factory(display_name="Viny", guild_id=100), "la dos", nuevo=False)
+    await indioLogic(ctx_factory(display_name="Viny", user_id=2, guild_id=100), "la dos", nuevo=False)
     await _drain_pending_tasks()
 
     play_mock.assert_not_awaited()
-    assert ("guild-100", "Mati") in indio._indio_pending_choice   # still waiting for Mati
+    assert ("guild-100", "uid:1") in indio._indio_pending_choice   # still waiting for Mati
+
+
+async def test_pending_choice_survives_unrelated_message(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """An unrecognised follow-up must NOT discard the options — a later valid
+    answer still works while the choice is within its TTL."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    _fake_search(monkeypatch, [
+        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
+        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
+    ])
+    patch_generate(replies=[
+        reply_factory(text="dale",
+                      function_calls=[{"name": "play_music", "args": {"query": "algo"}}]),
+        reply_factory(text="jajaj"),   # the unrelated turn's normal reply
+    ])
+
+    ctx = ctx_factory(display_name="Mati", user_id=1, guild_id=100)
+    await indioLogic(ctx, "poné algo", nuevo=False)        # indio asks
+    await _drain_pending_tasks()
+
+    await indioLogic(ctx, "jaja qué capo", nuevo=False)    # unrelated chatter
+    await _drain_pending_tasks()
+    assert ("guild-100", "uid:1") in indio._indio_pending_choice   # still there
+    play_mock.assert_not_awaited()
+
+    await indioLogic(ctx, "la dos", nuevo=False)           # real answer still works
+    await _drain_pending_tasks()
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "id2"
 
 
 # --- _parse_choice pure-function behavior ----------------------------------

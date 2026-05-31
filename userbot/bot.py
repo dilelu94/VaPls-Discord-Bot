@@ -1142,6 +1142,7 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
             channel_id=posted_channel_id,
             pregunta=text,
             speaker_name=speaker_name,
+            user_id=user_id,
         ))
 
     if config.ENABLE_HTTP_FORWARD:
@@ -1162,11 +1163,14 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
 
 async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                              pregunta: str, speaker_name: Optional[str],
-                             decifrar: bool = True) -> None:
+                             decifrar: bool = True, user_id: int = 0) -> None:
     """POST the raw transcript to the main bot's /indio endpoint. Voice wake
     word callers leave ``decifrar=True`` so Gemini fixes ASR phonetic errors;
     text-chat callers pass ``decifrar=False`` because the text is already
-    clean and an extra Gemini call would just waste tokens."""
+    clean and an extra Gemini call would just waste tokens.
+
+    ``user_id`` is the speaker's Discord id; the main bot uses it to key
+    pending music choices so only the requester can resolve them."""
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
         return
@@ -1180,6 +1184,7 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                 "pregunta": pregunta,
                 "speaker_name": speaker_name,
                 "decifrar": decifrar,
+                "user_id": str(user_id),
             },
             headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
             timeout=aiohttp.ClientTimeout(total=5),
@@ -1598,6 +1603,7 @@ async def on_message(message):
         pregunta=content,
         speaker_name=speaker_name,
         decifrar=False,
+        user_id=message.author.id,
     ))
 
 

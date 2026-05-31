@@ -568,6 +568,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         channel_id = int(data["channel_id"]) if data.get("channel_id") else None
         channel_name = data.get("channel_name")
         decifrar = bool(data.get("decifrar", True))
+        user_id = int(data["user_id"]) if data.get("user_id") else 0
 
         async def _run() -> None:
             text = pregunta
@@ -586,6 +587,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 guild_id=guild_id,
                 channel_id=channel_id,
                 channel_name=channel_name,
+                user_id=user_id,
             )
 
         asyncio.create_task(_run())

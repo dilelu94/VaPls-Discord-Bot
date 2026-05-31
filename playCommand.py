@@ -891,13 +891,15 @@ class PlaySearchView(discord.ui.View):
     """Pick-one menu shown when /play finds several matches for a search.
 
     Only the user who ran /play may choose. Selecting an option queues that
-    single song through the player's shared enqueue path and disables the menu.
+    single song through the SAME path as a normal /play (``addSongs``), so the
+    download-progress message, cancel button and per-song error reporting all
+    work exactly as if the user had typed that title directly.
     """
-    def __init__(self, player: "GuildPlayer", requester, candidates: list[dict]):
+    def __init__(self, player: "GuildPlayer", ctx, candidates: list[dict]):
         super().__init__(timeout=120)
         self.player = player
-        self.requester_id = getattr(requester, "id", None)
-        self.requester = requester
+        self.ctx = ctx
+        self.requester_id = getattr(getattr(ctx, "author", None), "id", None)
         self.candidates = candidates
         self.message = None
 
@@ -931,17 +933,14 @@ class PlaySearchView(discord.ui.View):
             await interaction.response.defer()
             return
         song = self.candidates[idx]
-        for item in self.children:
-            item.disabled = True
+        # Ack the component interaction without editing; addSongs drives the
+        # original /play response from here (replacing this menu with the
+        # download-progress message + cancel button).
         try:
-            await interaction.response.edit_message(
-                content=f"✅ Dale: **{song['title']}**", view=self,
-            )
+            await interaction.response.defer()
         except Exception:
             pass
-        self.player.lastRequester = self.requester
-        self.player.textChannel = interaction.channel or self.player.textChannel
-        await self.player._enqueueAndMaybeStart([song])
+        await self.player.addSongs([song], self.ctx)
 
 
 async def playLogic(ctx: discord.ApplicationContext, query: str):
@@ -1070,14 +1069,19 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     # version). A direct URL/playlist skips this and queues straight away.
     if isSearch and len(songs) > 1:
         candidates = songs[:_PLAY_CHOICE_COUNT]
-        view = PlaySearchView(player, ctx.author, candidates)
+        view = PlaySearchView(player, ctx, candidates)
         prompt = _format_choice_prompt(candidates)
         try:
             view.message = await ctx.interaction.edit_original_response(
                 content=prompt, view=view,
             )
         except Exception:
-            await safeEdit(ctx, prompt)
+            # Keep the picker usable on the fallback path too — a plain text
+            # prompt would leave the user with options but no way to choose.
+            try:
+                view.message = await ctx.followup.send(prompt, view=view)
+            except Exception:
+                await safeEdit(ctx, prompt)
         return
 
     # Single result (or a URL/playlist): queue it directly.

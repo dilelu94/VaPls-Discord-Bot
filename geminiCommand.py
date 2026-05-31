@@ -384,6 +384,12 @@ def _evict_stale_indio() -> None:
         # Lock se libera solo si no quedó nada relevante.
         if key not in _indio_long_term:
             _indio_locks.pop(key, None)
+    # Sweep abandoned pending music choices so they don't pile up: an entry
+    # only ever gets touched again if that same requester speaks, so without
+    # this a forgotten "¿cuál querés?" would live forever despite the TTL.
+    for ck in list(_indio_pending_choice.keys()):
+        if now - _indio_pending_choice[ck].get("ts", 0.0) > _PENDING_CHOICE_TTL_SEC:
+            del _indio_pending_choice[ck]
 
 
 async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
@@ -1073,23 +1079,45 @@ def _format_choices(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _store_pending_choice(mem_key: str, speaker: str,
+def _choice_identity(user_id, speaker: str) -> str:
+    """Stable identity for a requester's pending choice.
+
+    Prefers the Discord user id (numeric, globally unique) so two members
+    sharing a display name can't resolve each other's choice. Falls back to the
+    display name only when no id is available. The ``uid:``/``nm:`` prefixes
+    keep a numeric display name from ever colliding with a real id.
+    """
+    if user_id:
+        return f"uid:{user_id}"
+    return f"nm:{speaker or 'alguien'}"
+
+
+def _store_pending_choice(mem_key: str, identity: str,
                           candidates: list[dict], guild_id: int) -> None:
-    _indio_pending_choice[(mem_key, speaker)] = {
+    _indio_pending_choice[(mem_key, identity)] = {
         "candidates": candidates,
         "guild_id": guild_id,
         "ts": time.time(),
     }
 
 
-def _take_pending_choice(mem_key: str, speaker: str) -> Optional[dict]:
-    """Pop the pending choice for this speaker, honouring the TTL."""
-    entry = _indio_pending_choice.pop((mem_key, speaker), None)
+def _peek_pending_choice(mem_key: str, identity: str) -> Optional[dict]:
+    """Return this requester's pending choice without removing it, honouring
+    the TTL (an expired entry is dropped and treated as absent). We peek rather
+    than pop so an unrecognised follow-up doesn't throw away a still-valid
+    choice — only an actual selection or cancel clears it."""
+    key = (mem_key, identity)
+    entry = _indio_pending_choice.get(key)
     if entry is None:
         return None
     if time.time() - entry.get("ts", 0.0) > _PENDING_CHOICE_TTL_SEC:
+        del _indio_pending_choice[key]
         return None
     return entry
+
+
+def _clear_pending_choice(mem_key: str, identity: str) -> None:
+    _indio_pending_choice.pop((mem_key, identity), None)
 
 
 async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
@@ -1105,15 +1133,15 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
         logger.exception("indio: play chosen song failed")
 
 
-async def _maybe_disambiguate_music(bot, guild_id, mem_key, speaker,
+async def _maybe_disambiguate_music(bot, guild_id, mem_key, identity,
                                     pending_actions, reply):
     """Intercept a single free-text ``play_music`` so the indio lists the
     matches and lets the requester pick, instead of playing the first hit.
 
     The search reuses yt-dlp exactly like before (no extra Gemini). With a
     single clear hit we play it directly; with several we ask and remember the
-    options for this speaker. A direct URL, several actions at once, or a
-    non-music turn pass through untouched.
+    options under the requester's stable ``identity``. A direct URL, several
+    actions at once, or a non-music turn pass through untouched.
 
     Returns ``(actions_to_dispatch, reply_text)``.
     """
@@ -1138,36 +1166,42 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key, speaker,
         # One clear match: play it directly with the metadata we already have.
         asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
         return [], clean
-    # Several matches: list them and remember this speaker's pending choice.
-    _store_pending_choice(mem_key, speaker, candidates, guild_id)
+    # Several matches: list them and remember this requester's pending choice.
+    _store_pending_choice(mem_key, identity, candidates, guild_id)
     return [], _format_choices(candidates)
 
 
-async def _resolve_pending_music(bot, mem_key, speaker, guild_id, pregunta,
+async def _resolve_pending_music(bot, mem_key, identity, guild_id, pregunta,
                                  post) -> bool:
-    """If this speaker has a pending "¿cuál querés?", treat ``pregunta`` as the
-    answer. Resolution is pure code (no Gemini); the chosen candidate plays
+    """If this requester has a pending "¿cuál querés?", treat ``pregunta`` as
+    the answer. Resolution is pure code (no Gemini); the chosen candidate plays
     directly from the metadata we already have. ``post`` is an async callable
     that delivers a line of text the way the caller normally would.
+
+    We only clear the pending choice on an actual selection or cancel — an
+    unrecognised message leaves it in place so a later valid answer still
+    works (the TTL/sweep handle abandonment).
 
     Returns True when the message was consumed as a selection (caller should
     stop and not run a normal Gemini turn), False otherwise.
     """
-    entry = _take_pending_choice(mem_key, speaker)
+    entry = _peek_pending_choice(mem_key, identity)
     if entry is None:
         return False
     candidates = entry["candidates"]
     decision = _parse_choice(pregunta, candidates)
     if decision == "cancel":
+        _clear_pending_choice(mem_key, identity)
         await post("dale, lo dejo 👍")
         return True
     if isinstance(decision, int) and 0 <= decision < len(candidates):
+        _clear_pending_choice(mem_key, identity)
         chosen = candidates[decision]
         await post(f"dale, va: {chosen['title']} 🎵")
         asyncio.create_task(_play_chosen_song(bot, guild_id, chosen))
         return True
-    # Not a recognizable selection: the pending choice was already popped, so we
-    # just fall through and let the caller process this as a fresh message.
+    # Not a recognizable selection: leave the choice in place and let the caller
+    # process this as a fresh message.
     return False
 
 
@@ -1356,9 +1390,12 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
     tagged_message = f"[{speaker}]: {pregunta or ''}"
 
-    # If this speaker has a pending "¿cuál querés?" music choice, interpret the
-    # message as the selection instead of a brand-new turn.
+    # If this requester has a pending "¿cuál querés?" music choice, interpret
+    # the message as the selection instead of a brand-new turn. We key by the
+    # Discord user id (unique) so a shared display name can't cross wires.
     _choice_guild_id = getattr(getattr(ctx, "guild", None), "id", None)
+    _choice_identity_val = _choice_identity(
+        getattr(getattr(ctx, "author", None), "id", None) or 0, speaker)
     if not nuevo and _choice_guild_id is not None:
         async def _post_choice(text):
             channel_id = getattr(ctx, "channel_id", None) or getattr(
@@ -1371,7 +1408,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 await _send_reply(ctx, text)
 
         if await _resolve_pending_music(
-                ctx.bot, mem_key, speaker, _choice_guild_id,
+                ctx.bot, mem_key, _choice_identity_val, _choice_guild_id,
                 pregunta or "", _post_choice):
             return
 
@@ -1461,7 +1498,8 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
-        ctx.bot, _choice_guild_id, mem_key, speaker, pending_actions, reply,
+        ctx.bot, _choice_guild_id, mem_key, _choice_identity_val,
+        pending_actions, reply,
     )
     relayed_via_userbot = False
     try:
@@ -1561,8 +1599,11 @@ async def indioFromVoice(
     mem_key = f"guild-{guild_id}"
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
     tagged_message = f"[{speaker}]: {pregunta}"
+    # Key the pending choice by the Discord user id (propagated from the
+    # userbot), falling back to the name only when no id is available.
+    _choice_identity_val = _choice_identity(user_id, speaker)
 
-    # Pending "¿cuál querés?" music choice for this speaker → resolve it here
+    # Pending "¿cuál querés?" music choice for this requester → resolve it here
     # instead of starting a fresh turn.
     async def _post_choice(text):
         relayed = False
@@ -1573,7 +1614,7 @@ async def indioFromVoice(
                 await channel.send(chunk)
 
     if await _resolve_pending_music(
-            bot, mem_key, speaker, guild_id, pregunta, _post_choice):
+            bot, mem_key, _choice_identity_val, guild_id, pregunta, _post_choice):
         return
 
     async with lock:
@@ -1627,7 +1668,7 @@ async def indioFromVoice(
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
-        bot, guild_id, mem_key, speaker, pending_actions, reply,
+        bot, guild_id, mem_key, _choice_identity_val, pending_actions, reply,
     )
     relayed_via_userbot = False
     try:
@@ -1777,7 +1818,8 @@ async def askIndio(bot: "discord.Bot",
                    *,
                    guild_id: Optional[int] = None,
                    channel_id: Optional[int] = None,
-                   channel_name: Optional[str] = None) -> bool:
+                   channel_name: Optional[str] = None,
+                   user_id: int = 0) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -1790,6 +1832,8 @@ async def askIndio(bot: "discord.Bot",
             has the resolved channel.
         channel_id: Optional explicit channel ID. Wins over channel_name.
         channel_name: Channel name to resolve. Defaults to "bot-testing".
+        user_id: Discord user id of the speaker (0 if unknown). Used to key
+            pending music choices so only the requester can resolve them.
 
     Behavior:
         The reply is posted via the userbot relay (the cuenta-real "Indio")
@@ -1824,7 +1868,7 @@ async def askIndio(bot: "discord.Bot",
         return False
     await indioFromVoice(
         bot,
-        user_id=0,
+        user_id=user_id,
         guild_id=target_guild_id,
         channel_id=target_channel_id,
         pregunta=text,
