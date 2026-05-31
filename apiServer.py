@@ -465,6 +465,14 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     pass
                 return web.json_response({"error": f"failed to join: {e}"}, status=500)
 
+        # "Request received" blip during the connect gap. Skipped if audio is
+        # already playing; the stop below cleanly cuts it before the real clip.
+        try:
+            import soundpadCommand
+            soundpadCommand.play_ack_clip(vc)
+        except Exception:
+            logger.exception("ack blip failed (ignored)")
+
         try:
             if vc.is_playing():
                 vc.stop()
