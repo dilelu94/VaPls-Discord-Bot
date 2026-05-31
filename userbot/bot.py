@@ -275,9 +275,9 @@ def _normalize(s: str) -> str:
     return "".join(c for c in n if unicodedata.category(c) != "Mn")
 
 
-# Phonetic variants of "indio" that Whisper tends to produce. Order doesn't
-# matter; any substring match in the normalized transcript triggers the wake
-# word. Extend this list when logs surface new variants.
+# Phonetic variants of "indio" that Whisper tends to produce. Used by
+# ``_has_text_beyond_wake_word`` to strip the wake-word out of the
+# transcript when deciding whether anything substantive is left to dispatch.
 _WAKE_WORD_TOKENS = (
     "indio", "indyo",
     "endio", "endyo",
@@ -287,14 +287,6 @@ _WAKE_WORD_TOKENS = (
     "cendio", "ceindio",
     "sendio", "sendyo",
 )
-
-
-def _contains_wake_word(text: str) -> bool:
-    """Return True if ``text`` contains a known "indio" phonetic variant."""
-    if not text:
-        return False
-    norm = _normalize(text)
-    return any(tok in norm for tok in _WAKE_WORD_TOKENS)
 
 
 # ---------- Sink: Whisper transcription per speaking user ----------------
@@ -931,16 +923,14 @@ class WakeWordSink(voice_recv.AudioSink):
                 return
             log.info(f"[WAKE][es] user_id={user_id} "
                      f"({duration:.1f}s audio, {dt*1000:.0f}ms): {text}")
-            # Drop false positives: VOSK thought it heard "indio" but Whisper
-            # didn't transcribe any variant — caller asked us not to act.
-            if not _contains_wake_word(text):
-                log.info(f"[WAKE] user={user_id} Whisper text has no wake "
-                         f"word, dropping (likely VOSK false positive)")
-                return
-            # If the only content is the wake word itself with nothing else,
-            # caller asked us NOT to invoke the indio.
+            # VOSK already matched a restrictive _WAKE_PATTERNS pair before we
+            # got here, so we trust the trigger and forward whatever Whisper
+            # transcribed — typically the verb + object ("ponete un tema de
+            # Queen"), since the "indio" itself often lands outside the
+            # prebuffer window. Only drop when Whisper produced nothing
+            # substantive (empty or pure filler).
             if not _has_text_beyond_wake_word(text):
-                log.info(f"[WAKE] user={user_id} only wake word, no question; "
+                log.info(f"[WAKE] user={user_id} only wake word / no question; "
                          f"skip")
                 return
             await on_transcript(user_id, text, via_wake_word=True)
@@ -1166,11 +1156,11 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                 posted_guild_id = guild.id
                 break
 
-    # Wake word: if the transcript contains an "indio"-like token, hand the
-    # entire raw transcript to the main bot's /indio endpoint. The server runs
-    # it through Gemini (decifrar=True) to fix ASR errors before the indio
-    # actually responds.
-    if (_contains_wake_word(text or "")
+    # Wake word: when this transcript came from the WakeWordSink (VOSK already
+    # matched a restrictive _WAKE_PATTERNS pair upstream), hand the entire raw
+    # transcript to the main bot's /indio endpoint. The server runs it through
+    # Gemini (decifrar=True) to fix ASR errors before the indio responds.
+    if (via_wake_word
             and posted_channel_id is not None
             and posted_guild_id is not None):
         log.info(f"[INDIO-WAKE] user_id={user_id} raw={text!r}")
