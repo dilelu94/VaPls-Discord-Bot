@@ -1462,7 +1462,7 @@ _INDIO_AUTO_HOURLY: dict[int, list[float]] = {}  # guild_id -> recent fire ts
 
 def _autoreply_rate_ok(guild_id: int, channel_id: int) -> bool:
     """Return True if we may fire an auto-reply for this guild+channel right
-    now. Enforces a per-channel cooldown and a per-guild hourly cap so the
+    now. Enforces a short per-channel cooldown and a per-guild hourly cap so the
     Gemini free tier doesn't get hammered by chatty conversations."""
     now = time.time()
     last_fired = _INDIO_AUTO_COOLDOWN.get(channel_id, 0.0)

@@ -132,8 +132,8 @@ RECORD_MIN_SECONDS = float(os.getenv("RECORD_MIN_SECONDS", "0.6"))
 INDIO_AUTO_REPLY_ENABLED = os.getenv("INDIO_AUTO_REPLY_ENABLED", "false").lower() == "true"
 
 # Per-channel cooldown in seconds: ignore further matches in the same channel
-# for this long after firing once. 180s = 3 min.
-INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC", "180"))
+# for this long after firing once.
+INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC", "3"))
 
 # Per-guild hourly cap to keep us safely under the Gemini free-tier ceiling
 # (250 RPD shared across /indio slash, voice wake word, and auto-reply).

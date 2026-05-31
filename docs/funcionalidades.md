@@ -194,7 +194,7 @@ El proceso más técnico. Funciones clave:
   `decifrar=True`).
 
 **Auto-reply en chat de texto:** si alguien escribe "indio" en un canal, reenvía
-el mensaje al `/indio` (con cooldown por canal y tope horario por guild).
+el mensaje al `/indio` (cooldown de 3 s por canal y tope horario por guild).
 
 **DMs con keys:** reenvía keys de Gemini al endpoint `/gemini-key` del main bot.
 
