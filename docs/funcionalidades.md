@@ -66,7 +66,7 @@ dict global `guildPlayers`).
   en lugar de reproducir el primero a ciegas se ofrecen las opciones (numeradas
   con emojis). En `/play` es un menú desplegable que resuelve **quien corrió el
   comando** al instante. Con el **Indio** se abre una **votación que cierra
-  cuando pasan 5 s sin votos nuevos** (cada voto reinicia la cuenta): cualquiera
+  cuando pasan 10 s sin votos nuevos** (cada voto reinicia la cuenta): cualquiera
   del canal vota y gana la más votada (empate → número más bajo; sin votos → la
   primera). Se puede votar de **tres formas que se combinan**: hablando,
   escribiendo el número, o **reaccionando** con el emoji (el bot pone las
@@ -115,9 +115,9 @@ concisas.
   chat aparezca como "El Indio usó /play".
 - **Pide música con votación**: cuando le piden un tema (voz o chat) y hay varios
   resultados, el Indio lista las opciones (con emojis) y abre una **votación que
-  cierra cuando pasan `_MUSIC_VOTE_WINDOW_SEC` (5 s por defecto) sin votos
+  cierra cuando pasan `_MUSIC_VOTE_WINDOW_SEC` (10 s por defecto) sin votos
   nuevos** — cada voto registrado reinicia la cuenta regresiva, así un voto al
-  segundo 4 le da otros 5 s a quien quiera votar. **Cualquiera** del canal vota,
+  segundo 9 le da otros 10 s a quien quiera votar. **Cualquiera** del canal vota,
   y se puede votar de **tres formas combinadas en el mismo conteo**: hablando,
   escribiendo el número ("la dos", "la 3"), o **reaccionando** con el emoji del
   número (el bot siembra las reacciones 1️⃣2️⃣3️⃣). Un voto por persona (reacción
