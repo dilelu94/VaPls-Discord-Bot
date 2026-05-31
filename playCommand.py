@@ -408,6 +408,9 @@ class GuildPlayer:
             def afterCallback(error):
                 asyncio.run_coroutine_threadsafe(self.onSongFinished(error), self.bot.loop)
 
+            # Cut off the "request received" blip (if still playing) before the song.
+            if self.vc.is_playing():
+                self.vc.stop()
             self.vc.play(audioSource, after=afterCallback)
             analytics.capture("play song started", user=self.lastRequester, guild=guild,
                                properties={"video_id": videoId, "title": videoTitle,
@@ -1133,6 +1136,13 @@ async def playFromIndio(bot, guild_id: int, query: str,
     except Exception as e:
         playLogger.warning(f"[PLAY-INDIO] voice connect failed: {e}")
         return False, f"no pude conectarme a voz: {e}"
+
+    # Blip de "te escuché" mientras yt-dlp busca/descarga (gap silencioso).
+    import soundpadCommand
+    try:
+        soundpadCommand.play_ack_clip(vc)
+    except Exception:
+        playLogger.exception("[PLAY-INDIO] ack blip failed (ignored)")
 
     songs = await _yt_dlp_search(query)
     if not songs:
