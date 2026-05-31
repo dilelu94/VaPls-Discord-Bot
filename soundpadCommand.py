@@ -90,11 +90,11 @@ def play_ack_clip(vc) -> bool:
     query = (getattr(config, "ACK_SOUND_QUERY", "") or "").strip()
     if not query:
         return False
-    output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
-    path = find_best_match(query, output_dir)
-    if path is None:
-        return False
     try:
+        output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
+        path = find_best_match(query, output_dir)
+        if path is None:
+            return False
         vc.play(discord.FFmpegOpusAudio(path, options='-af "dynaudnorm=p=0.95:f=200"'))
     except Exception:
         return False
