@@ -15,6 +15,10 @@ MODEL_PATH_ES = os.getenv("MODEL_PATH_ES", "models/vosk-model-small-es-0.42")
 MODEL_PATH_EN = os.getenv("MODEL_PATH_EN", "models/vosk-model-small-en-us-0.15")
 AUDIO_DIR = os.getenv("AUDIO_DIR", "/var/home/dilelu/Desktop/Output")
 CUSTOM_AUDIO_PATH = os.getenv("CUSTOM_AUDIO_PATH", "/var/home/dilelu/Desktop/Output")
+# Soundpad clip (fuzzy query, matched against CUSTOM_AUDIO_PATH) played as a
+# short "request received" blip when the bot gets a music/audio request while
+# idle. Empty (default) disables the feature entirely — silent no-op.
+ACK_SOUND_QUERY = os.getenv("ACK_SOUND_QUERY", "")
 YT_DLP_PATH = os.getenv("YT_DLP_PATH", "yt-dlp")
 YT_DLP_POT_BASE_URL = os.getenv("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416")
 

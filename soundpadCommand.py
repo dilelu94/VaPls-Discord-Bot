@@ -69,6 +69,38 @@ def find_best_match(query: str, output_dir: str, cutoff: float = 0.4):
     return None
 
 
+def play_ack_clip(vc) -> bool:
+    """Play the configured "request received" blip on an already-connected vc.
+
+    Fire-and-forget: starts the clip and returns immediately; the caller's real
+    audio cuts it off when ready. Idle-only and silent: returns ``False``
+    (no-op) when ``vc`` is None, ``vc`` is already playing, ``ACK_SOUND_QUERY``
+    is empty, no clip matches, or playback fails. Never raises.
+
+    Returns:
+        True if a clip was handed to ``vc`` to play; False otherwise.
+    """
+    if vc is None:
+        return False
+    try:
+        if vc.is_playing():
+            return False
+    except Exception:
+        return False
+    query = (getattr(config, "ACK_SOUND_QUERY", "") or "").strip()
+    if not query:
+        return False
+    output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
+    path = find_best_match(query, output_dir)
+    if path is None:
+        return False
+    try:
+        vc.play(discord.FFmpegOpusAudio(path, options='-af "dynaudnorm=p=0.95:f=200"'))
+    except Exception:
+        return False
+    return True
+
+
 def _pick_populated_voice_channel(guild: discord.Guild):
     """Return the voice channel in ``guild`` with the most non-bot members, or None."""
     candidates = [
