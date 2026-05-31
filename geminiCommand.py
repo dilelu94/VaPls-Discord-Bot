@@ -86,14 +86,23 @@ trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
 hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
 lo pide naturalmente. \
 \
-Si el grupo te pide música/un tema/una canción, usás la tool `play_music`. Si \
-te piden un audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te \
-piden controlar la música que está sonando, usás `skip_music` (saltear/cambiar), \
-`pause_music` (pausar/frenar), `resume_music` (despausar/seguir) o `stop_music` \
-(parar y limpiar la cola). Una sola tool por mensaje y solo cuando te lo piden \
-de verdad. Antes de llamarla, mandá un texto BREVE de confirmación ("dale, va \
-Queen", "tomá milapollo", "dale, salteo") — sin chamuyo. Nunca digas "no puedo" \
-o "no me anda": las tools andan, las usás y listo. \
+Si el grupo te pide música/un tema/una canción NOMBRANDO qué quieren oír \
+(artista, canción, género, mood), usás la tool `play_music`. Si te piden un \
+audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te piden \
+controlar la música que ya está sonando, usás `skip_music` (saltear/cambiar), \
+`pause_music` (pausar/frenar), `resume_music` (retomar lo pausado) o \
+`stop_music` (parar y limpiar la cola). \
+\
+DISAMBIGUACIÓN CLAVE: si decís "pone play" / "dale play" / "metele play" / \
+"continuá" / "resumí" / "play" SIN nombrar artista o canción, eso NUNCA es \
+play_music — es resume_music cuando hay algo pausado (mirá el [Estado del \
+reproductor] del prompt). play_music solo cuando hay un nombre/género que \
+buscar. \
+\
+Una sola tool por mensaje y solo cuando te lo piden de verdad. Antes de \
+llamarla, mandá un texto BREVE de confirmación ("dale, va Queen", "tomá \
+milapollo", "dale, salteo", "va, retomo") — sin chamuyo. Nunca digas "no \
+puedo" o "no me anda": las tools andan, las usás y listo. \
 \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
@@ -128,9 +137,16 @@ _INDIO_TOOLS = [
     {
         "name": "play_music",
         "description": (
-            "Reproducir una canción/tema en el canal de voz #sick-tunes vía "
-            "el comando /play. Usala cuando el grupo te pide música, un "
-            "tema, una canción, o que pongas algo (artista, género, mood)."
+            "Reproducir una canción/tema NUEVO en el canal de voz #sick-tunes vía "
+            "el comando /play. Usala SOLO cuando el grupo nombra explícitamente "
+            "qué quieren escuchar — un artista, una canción, un género o un mood "
+            "(ej. 'pone Queen', 'pone Despacito', 'pone algo de los redondos', "
+            "'pone jazz tranquilo'). "
+            "IMPORTANTE: si solo dicen 'play' / 'pone play' / 'dale play' / "
+            "'metele play' / 'continuá' / 'resumí' SIN nombrar artista o "
+            "canción, NO uses esta tool — eso es resume_music (despausar lo "
+            "que estaba sonando). Mirá el [Estado del reproductor] del prompt "
+            "para saber si hay algo pausado."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -190,8 +206,13 @@ _INDIO_TOOLS = [
     {
         "name": "resume_music",
         "description": (
-            "Despausar / retomar la música que estaba pausada. Usala "
-            "cuando piden 'seguí', 'dale', 'reanudá', 'volvé a poner'."
+            "Despausar / retomar la música que estaba pausada. Usala cuando "
+            "piden 'resumí', 'resume', 'continuá' / 'continua', 'dale play', "
+            "'pone play', 'metele play', 'reanudá'. "
+            "REGLA CLAVE: si el [Estado del reproductor] dice que hay música "
+            "pausada y el usuario pide 'play' / 'pone play' / 'continuá' / "
+            "'resumí' sin nombrar artista o canción, ES ESTA TOOL — no "
+            "play_music. play_music es solo cuando dicen qué quieren oír."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -459,6 +480,50 @@ def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
 
 
 _GUILD_EMOJI_LIMIT = 40
+
+
+def _format_player_state(bot, guild_id) -> str:
+    """Render the current music player state as a prompt block.
+
+    The indio needs to know whether something is paused so ambiguous requests
+    like "play" / "continuá" / "metele play" route to ``resume_music`` instead
+    of ``play_music`` with a junk query. Returns "" when there is no active
+    player, no voice client, or the player is fully idle.
+    """
+    if not guild_id:
+        return ""
+    try:
+        import playCommand
+        player = playCommand.guildPlayers.get(int(guild_id))
+    except Exception:
+        return ""
+    if player is None:
+        return ""
+    vc = getattr(player, "vc", None)
+    if vc is None:
+        return ""
+    title = ""
+    cur = getattr(player, "currentSong", None)
+    if isinstance(cur, dict):
+        title = str(cur.get("title") or "").strip()
+    try:
+        if vc.is_paused():
+            head = f'música PAUSADA — "{title}"' if title else "música pausada"
+            return (
+                f"[Estado del reproductor]: {head}. Si piden 'play' / "
+                f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
+                f"'resumí' SIN nombrar artista o canción, usá resume_music "
+                f"(NO play_music)."
+            )
+    except Exception:
+        pass
+    try:
+        if vc.is_playing():
+            head = f'sonando — "{title}"' if title else "hay música sonando"
+            return f"[Estado del reproductor]: {head}."
+    except Exception:
+        pass
+    return ""
 
 
 def _format_guild_emojis(guild) -> str:
@@ -1487,11 +1552,12 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
     emoji_block = _format_guild_emojis(guild_for_extras)
+    player_block = _format_player_state(getattr(ctx, "bot", None), guild_id)
     logger.info("indio: roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
                 len(current_members),
                 len((long_term_snapshot.get("users") or {})),
                 emoji_count, mem_key)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    extras = "\n\n".join(b for b in (lt_block, emoji_block, player_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
@@ -1676,7 +1742,8 @@ async def indioFromVoice(
     current_members = list(_indio_current_members.get(mem_key, []))
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    player_block = _format_player_state(bot, guild_id)
+    extras = "\n\n".join(b for b in (lt_block, emoji_block, player_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
