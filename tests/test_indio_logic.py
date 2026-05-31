@@ -433,6 +433,100 @@ async def test_vote_slides_the_close_window(
     assert "guild-100" not in indio._indio_pending_vote
 
 
+# --- Voto por reacción (emoji) y combinación de canales --------------------
+
+
+def _arm_reactions(gc, channel_id=555, message_id=999, key="guild-100"):
+    """Pretend the options message was posted with id ``message_id`` so emoji
+    reactions can be matched to the open vote (in tests the fake followup
+    returns no message, so we set these directly)."""
+    gc._indio_pending_vote[key]["channel_id"] = channel_id
+    gc._indio_pending_vote[key]["message_id"] = message_id
+
+
+def test_emoji_to_index_maps_keycaps():
+    from geminiCommand import _emoji_to_index
+    assert _emoji_to_index("1️⃣") == 0
+    assert _emoji_to_index("3️⃣") == 2
+    assert _emoji_to_index("❤️") is None
+    assert _emoji_to_index("") is None
+
+
+async def test_reaction_counts_as_a_vote(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    _arm_reactions(indio)
+
+    # Someone reacts with 2️⃣ → option B.
+    ok = indio.register_reaction_vote(channel_id=555, message_id=999,
+                                      emoji="2️⃣", user_id=7)
+    assert ok is True
+
+    _freeze_vote_timer(indio)
+    await indio._close_vote("guild-100")
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
+
+
+async def test_reaction_on_other_message_is_ignored(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    _arm_reactions(indio, message_id=999)
+
+    ok = indio.register_reaction_vote(channel_id=555, message_id=12345,
+                                      emoji="2️⃣", user_id=7)
+    assert ok is False
+    assert indio._indio_pending_vote["guild-100"]["votes"] == {}
+
+
+async def test_votes_combine_spoken_written_and_reaction(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """The tally merges all three input channels. Two votes for C (one written,
+    one reaction) beat one for B → C wins."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    _arm_reactions(indio)
+
+    # Written/spoken vote for B (option 2) from one user.
+    await indioLogic(ctx_factory(display_name="Mati", user_id=11, guild_id=100),
+                     "la dos", nuevo=False)
+    # Reaction votes for C (3️⃣) from two other users.
+    indio.register_reaction_vote(channel_id=555, message_id=999, emoji="3️⃣", user_id=12)
+    indio.register_reaction_vote(channel_id=555, message_id=999, emoji="3️⃣", user_id=13)
+
+    _freeze_vote_timer(indio)
+    await indio._close_vote("guild-100")
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idC"
+
+
+async def test_reaction_and_text_from_same_user_count_once(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """A user reacting AND typing is one vote (keyed by user id; last wins)."""
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    _arm_reactions(indio)
+
+    indio.register_reaction_vote(channel_id=555, message_id=999, emoji="2️⃣", user_id=11)
+    await indioLogic(ctx_factory(display_name="Mati", user_id=11, guild_id=100),
+                     "la tres", nuevo=False)
+
+    votes = indio._indio_pending_vote["guild-100"]["votes"]
+    assert votes == {"uid:11": 2}     # single entry, the later (written) pick
+
+
 # --- _tally_vote_winner pure-function behavior -----------------------------
 
 

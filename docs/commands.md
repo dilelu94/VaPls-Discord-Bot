@@ -20,6 +20,11 @@ Notas:
   - **El Indio (voz/chat):** abre una **votación** que cierra cuando pasan
     `_MUSIC_VOTE_WINDOW_SEC` (5 s por defecto) **sin votos nuevos** — cada voto
     reinicia la cuenta regresiva, así un voto al segundo 4 le da otros 5 s a
-    quien quiera reaccionar. **Cualquiera** del canal vota diciendo/escribiendo
-    el número; al cerrarse gana la **más votada** (empate → número más bajo; si
-    nadie votó → la primera/más relevante).
+    quien quiera votar. **Cualquiera** del canal vota, y se puede votar de
+    **tres formas, que se combinan en el mismo conteo**: hablando, escribiendo
+    el número, o **reaccionando** con el emoji del número (el bot siembra las
+    reacciones 1️⃣2️⃣3️⃣ en el mensaje de opciones). Un voto por persona
+    (la reacción y el texto del mismo usuario cuentan una sola vez). Al cerrarse
+    gana la **más votada** (empate → número más bajo; si nadie votó → la
+    primera/más relevante). El conteo de reacciones requiere que el bot
+    principal tenga el intent de reacciones (incluido en `Intents.default()`).

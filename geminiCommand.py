@@ -1292,8 +1292,24 @@ def _open_vote(mem_key: str, candidates: list[dict], guild_id: int,
         "post": post,
         "bot": bot,
         "opened_at": time.time(),
+        # Set once the options message is posted, so emoji reactions on it can
+        # be matched back to this vote (see register_reaction_vote).
+        "channel_id": None,
+        "message_id": None,
     }
     _indio_pending_vote[mem_key] = entry
+    entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
+
+
+def _slide_vote_window(mem_key: str) -> None:
+    """Restart the close-timer for an open vote (each vote, by any channel,
+    gives the group another ``_MUSIC_VOTE_WINDOW_SEC`` to weigh in)."""
+    entry = _indio_pending_vote.get(mem_key)
+    if entry is None:
+        return
+    old = entry.get("task")
+    if old is not None and not old.done():
+        old.cancel()
     entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
 
 
@@ -1314,12 +1330,92 @@ def _register_vote(mem_key: str, voter: str, pregunta: str) -> bool:
     decision = _parse_choice(pregunta, entry["candidates"])
     if isinstance(decision, int) and 0 <= decision < len(entry["candidates"]):
         entry["votes"][voter] = decision
-        old_task = entry.get("task")
-        if old_task is not None and not old_task.done():
-            old_task.cancel()
-        entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
+        _slide_vote_window(mem_key)
         return True
     return False
+
+
+def _emoji_to_index(emoji: str) -> Optional[int]:
+    """Map a keycap reaction emoji (``1️⃣``…) to a 0-based option index, or
+    None if it isn't one of ours. Tolerates a missing variation selector
+    (some clients send ``1⃣`` without the ``\\ufe0f``)."""
+    e = (emoji or "").strip()
+    e_plain = e.replace("️", "")
+    for i, ne in enumerate(_NUM_EMOJI):
+        if e == ne or e_plain == ne.replace("️", ""):
+            return i
+    return None
+
+
+def register_reaction_vote(*, channel_id: int, message_id: int,
+                           emoji: str, user_id: int) -> bool:
+    """Count an emoji reaction on a vote's options message as a vote.
+
+    Called from the main bot's ``on_raw_reaction_add``. Looks up the open vote
+    by its options message, maps the keycap emoji to an option, and records the
+    reactor's pick keyed by user id (so a reaction merges with that person's
+    spoken/written vote instead of double-counting). Returns True if counted.
+    """
+    idx = _emoji_to_index(emoji)
+    if idx is None:
+        return False
+    try:
+        channel_id = int(channel_id)
+        message_id = int(message_id)
+    except (TypeError, ValueError):
+        return False
+    for mem_key, entry in _indio_pending_vote.items():
+        if entry.get("message_id") == message_id and entry.get("channel_id") == channel_id:
+            if idx >= len(entry["candidates"]):
+                return False
+            entry["votes"][f"uid:{user_id}"] = idx
+            _slide_vote_window(mem_key)
+            return True
+    return False
+
+
+async def _relay_say(channel_id: int, content: str) -> Optional[int]:
+    """Post ``content`` via the userbot relay and return the first message id
+    (so the main bot can react to it), or None if the relay is off/failed.
+    Mirrors _relay_to_userbot but surfaces the message id."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return None
+    payload = {"channel_id": int(channel_id), "content": content}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    return None
+                data = await resp.json(content_type=None)
+        ids = (data or {}).get("message_ids") or []
+        return int(ids[0]) if ids else None
+    except Exception:
+        logger.exception("indio relay say (with id) failed")
+        return None
+
+
+async def _attach_vote_reactions(bot, mem_key: str, channel_id: int,
+                                 message_id: int, n: int) -> None:
+    """Remember which message carries this vote and seed it with the number
+    reactions (1️⃣…N) so people can vote by reacting. Best-effort."""
+    entry = _indio_pending_vote.get(mem_key)
+    if entry is None or not channel_id or not message_id:
+        return
+    entry["channel_id"] = int(channel_id)
+    entry["message_id"] = int(message_id)
+    try:
+        channel = bot.get_channel(int(channel_id))
+        if channel is None:
+            channel = await bot.fetch_channel(int(channel_id))
+        msg = await channel.fetch_message(int(message_id))
+        for i in range(1, min(n, len(_NUM_EMOJI)) + 1):
+            await msg.add_reaction(_num_emoji(i))
+    except Exception:
+        logger.exception("indio vote: attaching reactions failed")
 
 
 async def _close_vote_after(mem_key: str) -> None:
@@ -1709,6 +1805,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
     )
     relayed_via_userbot = False
+    vote_open = mem_key in _indio_pending_vote
+    opts_channel_id = None
+    opts_msg_id = None
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
         question_msg = await ctx.followup.send(question_header)
@@ -1716,12 +1815,28 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         channel_id = getattr(ctx, "channel_id", None) or getattr(
             getattr(ctx, "channel", None), "id", None
         )
-        if channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+        opts_channel_id = channel_id
+        if vote_open and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET and channel_id is not None:
+            # Vote options: post via relay but capture the message id so we can
+            # add the number reactions to it.
+            opts_msg_id = await _relay_say(channel_id, clean_reply)
+            relayed_via_userbot = opts_msg_id is not None
+            n_chunks = 1 if relayed_via_userbot else 0
+            if not relayed_via_userbot:
+                sent = await ctx.followup.send(clean_reply)
+                opts_msg_id = getattr(sent, "id", None)
+                opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
+                n_chunks = 1
+        elif vote_open:
+            sent = await ctx.followup.send(clean_reply)
+            opts_msg_id = getattr(sent, "id", None)
+            opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
+            n_chunks = 1
+        elif channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
             relayed_via_userbot = await _relay_to_userbot(
                 channel_id, clean_reply, question_msg_id
             )
-        if relayed_via_userbot:
-            n_chunks = 1
+            n_chunks = 1 if relayed_via_userbot else await _send_reply(ctx, clean_reply)
         else:
             # Fallback: post the reply via vapls if relay is disabled or failed.
             n_chunks = await _send_reply(ctx, clean_reply)
@@ -1730,6 +1845,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
                                     properties={"action": "indio_send"})
         return
+
+    if vote_open and opts_msg_id and opts_channel_id:
+        entry = _indio_pending_vote.get(mem_key)
+        n = len(entry["candidates"]) if entry else 0
+        await _attach_vote_reactions(ctx.bot, mem_key, opts_channel_id, opts_msg_id, n)
 
     try:
         await indioArchive.enqueue(
@@ -1890,17 +2010,35 @@ async def indioFromVoice(
         bot, guild_id, mem_key, pending_actions, reply, _post_choice,
     )
     relayed_via_userbot = False
+    vote_open = mem_key in _indio_pending_vote
+    opts_msg_id = None
     try:
-        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-            relayed_via_userbot = await _relay_to_userbot(
-                channel_id, clean_reply, None
-            )
-        if not relayed_via_userbot:
-            for chunk in _split_for_discord(clean_reply):
-                await channel.send(chunk)
+        if vote_open:
+            # Vote options: capture the message id so we can react on it.
+            if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                opts_msg_id = await _relay_say(channel_id, clean_reply)
+                relayed_via_userbot = opts_msg_id is not None
+            if not relayed_via_userbot:
+                sent = None
+                for chunk in _split_for_discord(clean_reply):
+                    sent = await channel.send(chunk)
+                opts_msg_id = getattr(sent, "id", None)
+        else:
+            if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                relayed_via_userbot = await _relay_to_userbot(
+                    channel_id, clean_reply, None
+                )
+            if not relayed_via_userbot:
+                for chunk in _split_for_discord(clean_reply):
+                    await channel.send(chunk)
     except Exception:
         logger.exception("indioFromVoice send failed")
         return
+
+    if vote_open and opts_msg_id:
+        entry = _indio_pending_vote.get(mem_key)
+        n = len(entry["candidates"]) if entry else 0
+        await _attach_vote_reactions(bot, mem_key, channel_id, opts_msg_id, n)
 
     try:
         await indioArchive.enqueue(
