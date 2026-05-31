@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# pre-push hook — blocks the push if the test suite is red.
+#
+# Activate once per clone:
+#   git config core.hooksPath .githooks
+#
+# The hook runs from the repo root (git sets the working directory there
+# before invoking any hook), so `make check` picks up the repo Makefile.
+set -euo pipefail
+
+echo "▶ Running test suite before push…"
+if make check; then
+    echo "✔ Tests passed — push proceeding."
+else
+    echo ""
+    echo "✘ Push blocked: test suite is RED."
+    echo "  Fix the failing tests and try again."
+    exit 1
+fi
