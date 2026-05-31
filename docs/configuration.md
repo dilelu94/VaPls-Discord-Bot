@@ -21,6 +21,14 @@
 | `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model name para `/indio` y `/vapls`. |
 | `GEMINI_DECIFRAR_MODEL` | ❌ | `gemini-2.5-flash-lite` | Modelo para `decifrarTranscripcion` (limpieza ASR). Lite tiene 1000 RPD vs 250 de flash, libera cupo del modelo grande. |
 | `VOICE_IDLE_TIMEOUT_SECONDS` | ❌ | `60` | Segundos sin reproducir/pausado tras los cuales el bot se desconecta solo del canal de voz (manejado por `idleWatchdog.py`). |
+| `DECIFRAR_VOTE_ENABLED` | ❌ | `false` | Master toggle del flujo de votación del decifrado. Cuando está activo, cada decifrado se loggea a JSONL y una muestra se postea para votar 👍/👎. |
+| `DECIFRAR_VOTE_CHANNEL_ID` | ❌ | `0` | ID del canal de Discord donde se postean los pares (raw, decifrado) para votación. `0` = feature inactiva aunque `DECIFRAR_VOTE_ENABLED=true`. |
+| `DECIFRAR_VOTE_SAMPLE_RATE` | ❌ | `20` | 1 de cada N decifrados se postea (probabilístico). Subir para postear menos. |
+| `DECIFRAR_VOTE_THRESHOLD` | ❌ | `2` | Votos netos (👍 - 👎 o viceversa) necesarios para resolver una votación. |
+| `DECIFRAR_VOTE_TIMEOUT_HOURS` | ❌ | `48` | Horas que una votación pendiente vive antes de auto-borrarse. |
+| `DECIFRAR_LOG_MAX_LINES` | ❌ | `10000` | Cap del JSONL; al superarlo se descartan las pendientes más viejas (las approved se preservan). |
+| `DECIFRAR_LOG_PATH` | ❌ | `data/decifrar_log.jsonl` | Path al JSONL persistente (gitignored). |
+| `DECIFRAR_CACHE_SEED_MAX` | ❌ | `128` | Cuántas entradas approved se cargan al cache in-memory al startup (las más recientes). |
 
 ## Userbot (.env in userbot/)
 | Variable | Required | Default | Description / implications |

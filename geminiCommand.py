@@ -1820,6 +1820,19 @@ def _decifrar_cache_put(key: str, value: str) -> None:
         _decifrar_cache.popitem(last=False)
 
 
+def seed_decifrar_cache(items: "list[tuple[str, str]]") -> None:
+    """Bulk-insert pre-normalized (key, value) pairs into the in-memory
+    decifrar cache. Used by ``decifrarVoting`` to hydrate the cache at
+    startup (from approved JSONL entries) and to promote freshly-approved
+    entries at runtime. Items go through ``_decifrar_cache_put`` so they
+    obey the LRU cap and get marked as "recent" on insertion.
+    """
+    for key, value in items:
+        if not key:
+            continue
+        _decifrar_cache_put(key, value)
+
+
 async def decifrarTranscripcion(texto: str) -> str:
     """Run an ASR transcript through Gemini to clean phonetic errors.
 
@@ -1860,6 +1873,14 @@ async def decifrarTranscripcion(texto: str) -> str:
     else:
         logger.info("decifrar: passthrough %r", texto[:200])
     _decifrar_cache_put(cache_key, final)
+    # Fire-and-forget: log the pair for the human-in-the-loop curation flow.
+    # Late import keeps this module standalone if decifrarVoting isn't wired
+    # (e.g. tests of geminiCommand alone).
+    try:
+        import decifrarVoting
+        asyncio.create_task(decifrarVoting.record(texto, final))
+    except Exception:
+        logger.exception("decifrar: failed to schedule voting record")
     return final
 
 
