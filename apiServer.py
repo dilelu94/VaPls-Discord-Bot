@@ -595,6 +595,19 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         async def _run() -> None:
             text = pregunta
+            # Vote shortcut: if there's an open music poll for this guild and
+            # the *raw* transcript names an option, register the vote and stop.
+            # Done before decifrar so Gemini's cleanup can't drop the digit
+            # (e.g. "Indio, tirala 4" → "Che indio, tirala") and so the vote
+            # doesn't burn a Gemini turn.
+            if guild_id is not None and geminiCommand.try_register_voice_vote(
+                guild_id=guild_id,
+                user_id=user_id,
+                speaker_name=speaker_name,
+                text=text,
+            ):
+                logger.info("indio voice: registered vote from raw %r", text[:200])
+                return
             if decifrar:
                 cleaned = await geminiCommand.decifrarTranscripcion(text)
                 if not cleaned:

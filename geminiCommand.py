@@ -1348,6 +1348,21 @@ def _register_vote(mem_key: str, voter: str, pregunta: str) -> bool:
     return False
 
 
+def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
+                            speaker_name: str, text: str) -> bool:
+    """Try to register a voice utterance as a vote on the guild's open music
+    poll. Returns True when ``text`` parses as a choice and a vote is recorded;
+    False when there's no open vote, no guild context, or ``text`` doesn't name
+    an option. Called from the apiServer **before** ``decifrarTranscripcion``
+    so the raw transcript's digit ("Indio, tirala 4") survives even if Gemini's
+    cleanup would otherwise drop it."""
+    if not guild_id or not text:
+        return False
+    mem_key = f"guild-{int(guild_id)}"
+    voter = _choice_identity(int(user_id or 0), speaker_name or "alguien")
+    return _register_vote(mem_key, voter, text)
+
+
 def _emoji_to_index(emoji: str) -> Optional[int]:
     """Map a keycap reaction emoji (``1️⃣``…) to a 0-based option index, or
     None if it isn't one of ours. Tolerates a missing variation selector

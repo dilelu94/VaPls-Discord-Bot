@@ -527,6 +527,55 @@ async def test_reaction_and_text_from_same_user_count_once(
     assert votes == {"uid:11": 2}     # single entry, the later (written) pick
 
 
+# --- try_register_voice_vote: shortcut used by apiServer before decifrar ---
+
+
+async def test_voice_vote_shortcut_registers_from_raw_text(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """The apiServer pre-decifrar shortcut: a raw voice transcript that names
+    an option must register as a vote without going through Gemini's cleanup
+    (which sometimes drops the digit, e.g. "Indio, tirala 4" → "tirala")."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+
+    ok = indio.try_register_voice_vote(
+        guild_id=100, user_id=42, speaker_name="Tobi",
+        text="Indio, tiradela 2",
+    )
+    assert ok is True
+
+    await indio._close_vote("guild-100")
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"   # option 2
+
+
+async def test_voice_vote_shortcut_skips_when_no_open_vote(indio):
+    """Without an open vote, the shortcut returns False so the caller falls
+    through to the normal decifrar + askIndio path."""
+    ok = indio.try_register_voice_vote(
+        guild_id=999, user_id=42, speaker_name="Tobi", text="la 2")
+    assert ok is False
+
+
+async def test_voice_vote_shortcut_ignores_unrelated_text(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """A non-option utterance during an open vote returns False so it can be
+    decifrado and fed to Gemini as a normal turn."""
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+
+    ok = indio.try_register_voice_vote(
+        guild_id=100, user_id=42, speaker_name="Tobi",
+        text="che indio cómo va",
+    )
+    assert ok is False
+    assert indio._indio_pending_vote["guild-100"]["votes"] == {}
+
+
 # --- _tally_vote_winner pure-function behavior -----------------------------
 
 
