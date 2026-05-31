@@ -500,13 +500,26 @@ def _format_player_state(bot, guild_id) -> str:
         return ""
     if player is None:
         return ""
-    vc = getattr(player, "vc", None)
-    if vc is None:
-        return ""
     title = ""
     cur = getattr(player, "currentSong", None)
     if isinstance(cur, dict):
         title = str(cur.get("title") or "").strip()
+    # Interrupted state lives without a vc — the bot got kicked or dropped,
+    # but we kept the song and queue in memory. The indio should steer
+    # ambiguous play requests to resume_music here too.
+    if getattr(player, "interrupted", False) and cur is not None:
+        head = (f'música INTERRUMPIDA por desconexión — "{title}"'
+                if title else "música interrumpida por desconexión")
+        return (
+            f"[Estado del reproductor]: {head}. Si piden 'play' / "
+            f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
+            f"'resumí' / 'retomá' SIN nombrar artista o canción, usá "
+            f"resume_music (NO play_music) — el bot va a reconectarse y "
+            f"retomar desde donde quedó."
+        )
+    vc = getattr(player, "vc", None)
+    if vc is None:
+        return ""
     try:
         if vc.is_paused():
             head = f'música PAUSADA — "{title}"' if title else "música pausada"
@@ -1091,6 +1104,30 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                         await player.togglePausePlay()
                         statuses.append("resume: ok")
                         control_ok = True
+                    elif getattr(player, "interrupted", False) and player.currentSong:
+                        # Bot was kicked / lost connection while a song was
+                        # playing. Reconnect to the most-populated voice
+                        # channel and pick up where we left off.
+                        try:
+                            voice_channel = playCommand._pick_voice_channel(
+                                bot, int(guild_id),
+                            )
+                        except Exception:
+                            voice_channel = None
+                        if voice_channel is None:
+                            statuses.append("resume: no voice channel to rejoin")
+                        else:
+                            try:
+                                new_vc = await voice_channel.connect(reconnect=True)
+                                resumed = await player.resumeFromInterruption(new_vc)
+                                if resumed:
+                                    statuses.append("resume: reconnected & resumed")
+                                    control_ok = True
+                                else:
+                                    statuses.append("resume: nothing to resume")
+                            except Exception as e:
+                                logger.exception("indio RESUME_MUSIC reconnect failed")
+                                statuses.append(f"resume: reconnect failed ({e})")
                     else:
                         statuses.append("resume: not paused")
                 logger.info("indio %s → %s", action, statuses[-1])

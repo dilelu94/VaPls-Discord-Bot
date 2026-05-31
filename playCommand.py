@@ -150,6 +150,14 @@ class GuildPlayer:
         self.preDownloadTask = None
         self.activeDownloadProc = None
         self.initialCtx = None
+        # Playback-position tracking + interruption state. Used so the bot can
+        # resume the current song from where it was after an involuntary
+        # disconnect (kick, network drop, /quit) without losing the queue.
+        self.playStartedAt: Optional[float] = None   # monotonic when current playback started/resumed
+        self.pausedAt: Optional[float] = None        # monotonic when current pause started
+        self.pausedAccumSecs: float = 0.0            # accumulated paused seconds across pauses
+        self.interrupted: bool = False               # True between disconnect and next resume
+        self.interruptedAtSeconds: float = 0.0       # snapshot of elapsed at interruption time
 
     def _resolveMusicChannel(self, fallback=None):
         """Return the configured music text channel for this guild.
@@ -166,6 +174,65 @@ class GuildPlayer:
                 if ch is not None and hasattr(ch, "send"):
                     return ch
         return fallback
+
+    def _currentElapsedSeconds(self) -> float:
+        """Return how many seconds of the current song have actually played.
+
+        Compensates for time spent paused via ``pausedAccumSecs`` so it stays
+        accurate across multiple pause/resume cycles. Returns 0 when no
+        playback has started yet for the current song.
+        """
+        if self.playStartedAt is None:
+            return 0.0
+        ref = self.pausedAt if self.pausedAt is not None else time.monotonic()
+        elapsed = ref - self.playStartedAt - self.pausedAccumSecs
+        return max(0.0, elapsed)
+
+    def mark_interrupted(self) -> None:
+        """Mark the player as interrupted by an involuntary disconnect.
+
+        Idempotent. Snapshots the current elapsed position so the next call
+        to :meth:`resumeFromInterruption` can seek back. Does **not** clear
+        ``currentSong`` or ``queue`` — that's the whole point: preserve them
+        in memory for resume. Does null out ``self.vc`` because the voice
+        client is dead at this point.
+        """
+        if self.interrupted or not self.currentSong:
+            return
+        try:
+            self.interruptedAtSeconds = self._currentElapsedSeconds()
+        except Exception:
+            self.interruptedAtSeconds = 0.0
+        self.interrupted = True
+        self.vc = None
+        playLogger.info(
+            "[PLAYBACK INTERRUPTED] '%s' at %.1fs (queue=%d)",
+            self.currentSong.get("title", "?"),
+            self.interruptedAtSeconds,
+            len(self.queue),
+        )
+
+    async def resumeFromInterruption(self, vc) -> bool:
+        """Re-attach to a freshly-connected voice client and restart playback
+        from the saved interruption position.
+
+        Returns:
+            True if the player had an interrupted song and resume kicked off.
+            False if there was nothing to resume.
+        """
+        if not self.interrupted or not self.currentSong:
+            return False
+        self.vc = vc
+        self.interrupted = False
+        seek = max(0.0, self.interruptedAtSeconds)
+        self.interruptedAtSeconds = 0.0
+        playLogger.info(
+            "[PLAYBACK RESUME-AFTER-INTERRUPTION] '%s' seeking to %.1fs",
+            self.currentSong.get("title", "?"),
+            seek,
+        )
+        await self.startPlayingCurrent(seek_seconds=seek)
+        return True
 
     async def _enqueueAndMaybeStart(self, songs, *, source: Optional[str] = None):
         """Shared enqueue → analytics → maybe-start-playback core.
@@ -285,8 +352,14 @@ class GuildPlayer:
                 pass
             self.vc = None
 
-    async def startPlayingCurrent(self):
+    async def startPlayingCurrent(self, *, seek_seconds: float = 0.0):
         """Ensure the current song is downloaded and start playback.
+
+        Args:
+            seek_seconds: Position (in seconds) to seek to when launching
+                FFmpeg. Used by :meth:`resumeFromInterruption` to pick up
+                where playback was cut off. ``0`` (the default) plays from
+                the start of the file.
 
         Returns:
             None.
@@ -423,17 +496,31 @@ class GuildPlayer:
                     playLogger.warning(f"[PLAYBACK START] Could not delete original response: {e}")
                 self.initialCtx = None
 
-            audioSource = discord.FFmpegOpusAudio(filepath)
+            if seek_seconds and seek_seconds > 0:
+                audioSource = discord.FFmpegOpusAudio(
+                    filepath, before_options=f"-ss {seek_seconds:.2f}",
+                )
+            else:
+                audioSource = discord.FFmpegOpusAudio(filepath)
 
             def afterCallback(error):
                 asyncio.run_coroutine_threadsafe(self.onSongFinished(error), self.bot.loop)
 
             self.vc.play(audioSource, after=afterCallback)
+            # Reset elapsed-time tracking. When resuming from a seek the
+            # virtual start is shifted back so ``_currentElapsedSeconds``
+            # continues to report the real position within the song.
+            self.playStartedAt = time.monotonic() - (seek_seconds or 0.0)
+            self.pausedAt = None
+            self.pausedAccumSecs = 0.0
+            self.interrupted = False
+            self.interruptedAtSeconds = 0.0
             analytics.capture("play song started", user=self.lastRequester, guild=guild,
                                properties={"video_id": videoId, "title": videoTitle,
-                                           "queue_length": len(self.queue)})
+                                           "queue_length": len(self.queue),
+                                           "seek_seconds": seek_seconds or 0.0})
             await self.updateControlMessage()
-            playLogger.info(f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId})")
+            playLogger.info(f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId}) seek={seek_seconds:.1f}s")
             
             # Start background pre-downloading of the queue
             self.startPreDownloading()
@@ -465,6 +552,34 @@ class GuildPlayer:
         if error:
             print(f"[PLAYER] Playback error: {error}")
             playLogger.error(f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}")
+
+        # Defensive: if the voice client died (kick / network drop) and the
+        # caller didn't already flag the interruption via mark_interrupted,
+        # detect it here so we don't lose the current song to the cleanup
+        # below. ``isStopping`` / ``isPrevious`` are explicit user actions
+        # and must continue past this gate.
+        if (not self.interrupted
+                and not self.isStopping
+                and not self.isPrevious
+                and self.currentSong is not None
+                and self.vc is not None):
+            try:
+                connected = bool(self.vc.is_connected())
+            except Exception:
+                connected = True
+            if not connected:
+                self.mark_interrupted()
+
+        if self.interrupted:
+            try:
+                title = self.currentSong["title"] if self.currentSong else "?"
+                await self.updateControlMessage(
+                    f"⚠️ Conexión perdida — **{title}** quedó en "
+                    f"{int(self.interruptedAtSeconds)}s. Pedile que retome con /play."
+                )
+            except Exception:
+                pass
+            return
 
         # Delete the file of the finished song
         if self.currentSong:
@@ -648,7 +763,9 @@ class GuildPlayer:
         """Pause or resume playback based on current state.
 
         Side Effects:
-            Calls pause/resume on the voice client and updates UI.
+            Calls pause/resume on the voice client and updates UI. Maintains
+            elapsed-time accounting so the position stays accurate across
+            multiple pause/resume cycles.
 
         Async:
             This function is a coroutine and must be awaited.
@@ -656,8 +773,12 @@ class GuildPlayer:
         if self.vc:
             if self.vc.is_playing():
                 self.vc.pause()
+                self.pausedAt = time.monotonic()
                 await self.updateControlMessage()
             elif self.vc.is_paused():
+                if self.pausedAt is not None:
+                    self.pausedAccumSecs += time.monotonic() - self.pausedAt
+                    self.pausedAt = None
                 self.vc.resume()
                 await self.updateControlMessage()
 
@@ -1007,8 +1128,20 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             await vc.move_to(channel)
 
     player = getGuildPlayer(ctx.guild.id, ctx.bot)
-    player.vc = vc
     player.textChannel = player._resolveMusicChannel(fallback=ctx.channel)
+
+    # If the player was left in "interrupted" state by a previous involuntary
+    # disconnect (kick, network drop, /quit), restart the saved current song
+    # from the position it was at before anything new gets queued.
+    if player.interrupted and player.currentSong:
+        try:
+            await player.resumeFromInterruption(vc)
+        except Exception:
+            playLogger.exception("[PLAY] resumeFromInterruption failed; falling back to fresh play")
+            player.interrupted = False
+            player.currentSong = None
+    else:
+        player.vc = vc
 
     # Prepare search or URL input
     inputStr = query.strip()

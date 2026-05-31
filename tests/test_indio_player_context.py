@@ -108,3 +108,38 @@ def test_fully_idle_player_returns_empty():
     import playCommand
     playCommand.guildPlayers[42] = _player()
     assert geminiCommand._format_player_state(MagicMock(), 42) == ""
+
+
+def test_interrupted_state_steers_to_resume_music():
+    """When the bot was kicked / dropped mid-song, vc is None but the player
+    still holds the song. The indio must be told this is a resume scenario,
+    not a play_music one, so 'che indio dale play' reconnects and seeks back
+    instead of queueing a new search."""
+    import geminiCommand
+    import playCommand
+    # No vc — that's the whole point of the interrupted state.
+    player = SimpleNamespace(
+        vc=None,
+        currentSong={"id": "x", "title": "Spinetta - Cantata de Puentes Amarillos"},
+        interrupted=True,
+    )
+    playCommand.guildPlayers[42] = player
+
+    out = geminiCommand._format_player_state(MagicMock(), 42)
+    assert out, "interrupted state must produce a prompt block"
+    low = out.lower()
+    assert "interrumpid" in low  # mentions the situation
+    assert "spinetta" in low      # mentions the title
+    assert "resume_music" in low  # steers to the right tool
+    assert "play_music" in low    # exclusion clause for the model
+
+
+def test_interrupted_without_current_song_returns_empty():
+    """Interrupted flag without a song is nonsense state — drop it silently
+    rather than emit a misleading block."""
+    import geminiCommand
+    import playCommand
+    playCommand.guildPlayers[42] = SimpleNamespace(
+        vc=None, currentSong=None, interrupted=True,
+    )
+    assert geminiCommand._format_player_state(MagicMock(), 42) == ""

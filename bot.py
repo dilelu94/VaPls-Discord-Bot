@@ -234,6 +234,18 @@ async def on_voice_state_update(member, before, after):
             stop_idle_watchdog(before.channel.guild.id)
         except Exception:
             log.exception("failed to stop idle watchdog")
+        # If a GuildPlayer still has a currentSong, this disconnect was
+        # involuntary (kick, network drop, /quit) — /parar would have removed
+        # the entry from guildPlayers via clearGuildPlayer. Snapshot the
+        # elapsed position so the next /play (or indio resume_music) can
+        # restart from where we left off.
+        try:
+            from playCommand import guildPlayers
+            _player = guildPlayers.get(before.channel.guild.id)
+            if _player is not None and _player.currentSong is not None:
+                _player.mark_interrupted()
+        except Exception:
+            log.exception("failed to mark player as interrupted")
 
 
 @bot.event
