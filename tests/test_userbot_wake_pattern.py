@@ -72,6 +72,10 @@ matches = _extract_pattern_matcher()
     "indio dale",
     "indio dale play",
     "indio dale algo de los redondos",
+    # Relaxed patterns that compensate for vosk-model-small-es-0.42 collapses.
+    "que indio",                  # VOSK hears "che indio" as "que indio"
+    "indio por",                  # VOSK collapses "ponete"/"poneme" to "por"
+    "indio tira un chiste",       # VOSK drops trailing "te" → "tira"
 ])
 def test_pattern_fires(text):
     assert matches(text) is True

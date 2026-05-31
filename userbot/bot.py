@@ -521,8 +521,9 @@ _VOSK_GRAMMAR = json.dumps([
     "indio ponete", "indio poneme",
     "indio reproduci", "indio reproducí", "indio reproduce",
     "indio tirate", "indio dale",
+    "indio por",  # how VOSK-small collapses "indio ponete"/"indio poneme"
     "ponete", "poneme", "reproduci", "reproducí", "reproduce",
-    "tirate",
+    "tirate", "por",
     "che", "ey", "hola", "buenas", "dale", "vamos",
     "que", "qué", "como", "cómo", "cual", "cuál",
     "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
@@ -544,11 +545,14 @@ _VOSK_GRAMMAR = json.dumps([
 # Compared against accent-stripped lowercase tokens (see ``_normalize``).
 _WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("che", "indio"),
+    ("que", "indio"),       # VOSK-small often hears "che" as "que"
     ("indio", "ponete"),
     ("indio", "poneme"),
+    ("indio", "por"),       # VOSK-small collapses "ponete"/"poneme" → "por"
     ("indio", "reproduci"),
     ("indio", "reproduce"),
     ("indio", "tirate"),
+    ("indio", "tira"),      # VOSK-small drops trailing "te" → "tira"
     ("indio", "dale"),
 )
 
@@ -683,6 +687,13 @@ class WakeWordSink(voice_recv.AudioSink):
         self._active_lock = threading.Lock()
         self._active_count = 0
         self._idle_loop_started = False
+        # While a wake-word is in flight (capture open OR Whisper still
+        # transcribing), pause VOSK feed for every OTHER user. The triggerer
+        # keeps feeding into its capture buffer; everyone else is dropped on
+        # the floor so we don't burn CPU running per-user recognizers we're
+        # not going to act on anyway. Cleared in _transcribe_and_dispatch().
+        self._wake_in_progress = False
+        self._wake_triggerer_id: Optional[int] = None
 
     def wants_opus(self) -> bool:
         return False
@@ -704,6 +715,11 @@ class WakeWordSink(voice_recv.AudioSink):
             return
         pcm_data = data.pcm
         if not pcm_data:
+            return
+        # Pause processing for everyone except the user that fired the wake
+        # word while we're still capturing + transcribing. Saves CPU on the
+        # 4-vCPU ARM box when 4-5 people happen to talk simultaneously.
+        if self._wake_in_progress and user_id != self._wake_triggerer_id:
             return
 
         self.packet_count += 1
@@ -756,6 +772,8 @@ class WakeWordSink(voice_recv.AudioSink):
                 log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
                          f"starting capture (prebuf_chunks="
                          f"{len(self.prebuffers.get(user_id, ()))})")
+                self._wake_triggerer_id = user_id
+                self._wake_in_progress = True
                 self._start_capture(user_id, now)
                 self._schedule_wake_sound(user_id)
                 try:
@@ -854,9 +872,13 @@ class WakeWordSink(voice_recv.AudioSink):
     def _finalize_capture(self, user_id: int) -> None:
         capture = self.captures.pop(user_id, None)
         if not capture:
+            self._wake_in_progress = False
+            self._wake_triggerer_id = None
             return
         pcm = bytes(capture["buf"])
         if not pcm:
+            self._wake_in_progress = False
+            self._wake_triggerer_id = None
             return
         secs = len(pcm) / (16000 * 2)
         with self._active_lock:
@@ -866,6 +888,8 @@ class WakeWordSink(voice_recv.AudioSink):
             if self._active_count >= limit:
                 log.info(f"[WAKE] capacity full ({self._active_count}/"
                          f"{limit}); dropping {secs:.1f}s from user {user_id}")
+                self._wake_in_progress = False
+                self._wake_triggerer_id = None
                 return
             self._active_count += 1
         asyncio.run_coroutine_threadsafe(
@@ -939,6 +963,9 @@ class WakeWordSink(voice_recv.AudioSink):
         finally:
             with self._active_lock:
                 self._active_count -= 1
+            # Re-arm: other users (and this one) can fire the wake word again.
+            self._wake_in_progress = False
+            self._wake_triggerer_id = None
 
 
 def _has_text_beyond_wake_word(text: str) -> bool:
