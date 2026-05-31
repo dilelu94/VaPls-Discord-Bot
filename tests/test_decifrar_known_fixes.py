@@ -92,3 +92,94 @@ async def test_unrelated_text_passes_through_unchanged(monkeypatch):
 
     assert seen_input["text"] == raw   # no preprocessing applied
     assert out == raw
+
+
+def test_prompt_teaches_command_verb_few_shot():
+    """Whisper rompe los verbos imperativos del indio cuando se pegan al
+    wake-word ("Indio de tener a música" en vez de "che indio, detené la
+    música"). Sin ejemplos few-shot, Gemini pasaba el verbo roto a las tools
+    y elegía la equivocada. El system prompt ahora le enseña los patrones
+    canónicos de cada comando."""
+    from geminiCommand import DECIFRAR_SYSTEM
+    low = DECIFRAR_SYSTEM.lower()
+    # Caso testigo del bug original (stop_music con verbo partido por Whisper).
+    assert "de tener" in low
+    assert "detené" in low
+
+
+async def test_de_tener_witness_case_reaches_gemini_unmangled(monkeypatch):
+    """El caso testigo concreto: 'Indio de tener a música' (Whisper) tiene que
+    llegar a Gemini sin mutilar por _apply_known_fixes — la decisión es
+    enseñarle a Gemini con few-shot, no agregar substring fixes que romperían
+    'dejar de tener' en castellano natural. Si alguien agrega 'de tener' a
+    la tabla en el futuro, este test se pone rojo."""
+    import geminiCommand
+    import geminiClient
+
+    seen_input = {}
+
+    async def fake_generate(*, user_message, system_instruction, **kwargs):
+        seen_input["text"] = user_message
+        seen_input["system"] = system_instruction
+        reply = MagicMock()
+        reply.text = "che indio, detené la música"
+        return reply
+
+    monkeypatch.setattr(geminiClient, "generate", AsyncMock(side_effect=fake_generate))
+
+    out = await geminiCommand.decifrarTranscripcion("Indio de tener a música")
+
+    # El input llega a Gemini con "de tener" intacto (no fue reescrito por la tabla).
+    assert "de tener" in seen_input["text"].lower()
+    # El system prompt incluye la lección que le permite a Gemini resolverlo.
+    assert "de tener" in seen_input["system"].lower()
+    assert "detené" in seen_input["system"].lower()
+    # Y la respuesta canónica del modelo pasa intacta al caller.
+    assert "detené" in out.lower()
+
+
+async def test_legitimate_de_tener_phrase_is_not_mutilated(monkeypatch):
+    """'de tener' es una construcción legítima del castellano ("dejar de
+    tener razón"). decifrar corre sobre TODA transcripción del userbot, no
+    solo comandos — un substring fix la rompería en charla libre. Por eso la
+    corrección vive en el prompt (few-shot, decide caso a caso), no en la
+    tabla. Este test blinda esa decisión."""
+    import geminiCommand
+    import geminiClient
+
+    seen_input = {}
+
+    async def fake_generate(*, user_message, **kwargs):
+        seen_input["text"] = user_message
+        reply = MagicMock()
+        reply.text = user_message  # echo
+        return reply
+
+    monkeypatch.setattr(geminiClient, "generate", AsyncMock(side_effect=fake_generate))
+
+    raw = "el indio nunca va a dejar de tener razón"
+    await geminiCommand.decifrarTranscripcion(raw)
+
+    # Lo que llega a Gemini es exactamente lo que vino del Whisper.
+    assert seen_input["text"] == raw
+
+
+@pytest.mark.parametrize("canonical_verb", [
+    "pará",
+    "poné",
+    "pausá",
+    "seguí",
+    "pasá",
+    "saltá",
+    "tirate",
+])
+def test_prompt_teaches_each_command_verb(canonical_verb):
+    """Cobertura por verbo de tool del indio. Si alguien borra un ejemplo del
+    few-shot, este test indica exactamente cuál falta. No verificamos conteo
+    de ejemplos ni estructura del prompt — solo que cada verbo imperativo
+    canónico está enseñado en algún lugar del system prompt."""
+    from geminiCommand import DECIFRAR_SYSTEM
+    assert canonical_verb in DECIFRAR_SYSTEM.lower(), (
+        f"DECIFRAR_SYSTEM no enseña la forma imperativa {canonical_verb!r}; "
+        f"sin ese ejemplo, Gemini no sabe reconstruir comandos rotos por Whisper."
+    )

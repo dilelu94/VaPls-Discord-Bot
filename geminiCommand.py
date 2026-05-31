@@ -2307,6 +2307,20 @@ Reglas:
   del inglés/original (manteniendo la fonética que escuchaste). El que va a \
   buscar el tema después busca tal cual en YouTube — si lo castellanizás, no \
   lo encuentra.
+
+Ejemplos (raw → corregido). Whisper parte verbos imperativos rioplatenses \
+en pedazos cuando vienen pegados al wake-word; reconstruí el verbo canónico \
+del comando que pidió el hablante:
+- "Indio de tener a música" → "che indio, detené la música"
+- "indio para la música" → "che indio, pará la música"
+- "che indio corta la" → "che indio, cortala"
+- "indio pone Bizarrap" → "che indio, poné Bizarrap"
+- "indio tirate algo de Wos" → "che indio, tirate algo de Wos"
+- "indio passa al siguiente" → "che indio, pasá al siguiente"
+- "indio saltea esta" → "che indio, saltá esta"
+- "indio pausa un toque" → "che indio, pausá un toque"
+- "indio segui con la música" → "che indio, seguí con la música"
+- "indio dale continua" → "che indio, dale, continuá"
 """
 
 
