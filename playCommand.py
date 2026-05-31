@@ -43,6 +43,17 @@ guildPlayers = {}
 # matches for a free-text query. Keeps the "¿cuál querés?" list readable.
 _PLAY_CHOICE_COUNT = 5
 
+# Keycap number emojis used to label the options (display only; the user still
+# picks the same way). Index is 1-based via _num_emoji.
+_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
+              "5️⃣", "6️⃣", "7️⃣", "8️⃣",
+              "9️⃣", "\U0001f51f"]
+
+
+def _num_emoji(i: int) -> str:
+    """Return the keycap emoji for a 1-based position (falls back to ``N.``)."""
+    return _NUM_EMOJI[i - 1] if 1 <= i <= len(_NUM_EMOJI) else f"{i}."
+
 
 def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
     """Mapea stderr de yt-dlp (o exception) a un mensaje accionable para el usuario.
@@ -970,7 +981,7 @@ def _format_choice_prompt(candidates: list[dict]) -> str:
     for i, c in enumerate(candidates, 1):
         dur = c.get("duration_string") or ""
         durSuffix = f" `[{dur}]`" if dur else ""
-        lines.append(f"**{i}.** {c['title']}{durSuffix}")
+        lines.append(f"{_num_emoji(i)} {c['title']}{durSuffix}")
     return "\n".join(lines)
 
 
@@ -995,7 +1006,8 @@ class PlaySearchView(discord.ui.View):
             dur = c.get("duration_string") or ""
             label = c["title"][:100]
             desc = f"[{dur}]" if dur else None
-            options.append(discord.SelectOption(label=label, value=str(i), description=desc))
+            options.append(discord.SelectOption(
+                label=label, value=str(i), description=desc, emoji=_num_emoji(i + 1)))
         select = discord.ui.Select(
             placeholder="Elegí el tema...",
             options=options,

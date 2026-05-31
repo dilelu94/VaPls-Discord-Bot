@@ -261,16 +261,18 @@ _indio_compressing: set[str] = set()
 _indio_current_members: dict[str, list[str]] = {}
 _indio_members_refreshed_at: dict[str, float] = {}
 
-# Pending music disambiguation. When the indio is asked for a song and the
-# search returns several candidates, we DON'T play one blindly — we list them
-# and remember the options, keyed by (memory bucket, speaker name) so only the
-# person who asked resolves their own choice. The next message from that speaker
-# is interpreted as the selection. Entries expire after the TTL so a forgotten
-# question doesn't hijack a later, unrelated message.
-_PENDING_CHOICE_TTL_SEC = 120
+# Music disambiguation via group vote. When the indio is asked for a song and
+# the search returns several candidates, we list them and open a short voting
+# window: anyone in the guild can vote by number; when the window closes the
+# most-voted track plays (ties → lowest number; no votes → the first/most
+# relevant result). One active vote per guild, keyed by the memory bucket.
 # How many candidates to offer. Kept in sync with playCommand's /play picker.
 _MUSIC_CHOICE_COUNT = 5
-_indio_pending_choice: dict[tuple[str, str], dict] = {}
+# Seconds the vote stays open from the moment the options are posted.
+_MUSIC_VOTE_WINDOW_SEC = 5.0
+# guild memory key -> {"candidates", "guild_id", "votes": {voter: idx},
+#                      "post": coro_fn, "bot", "task", "opened_at"}
+_indio_pending_vote: dict[str, dict] = {}
 
 
 def _load_indio_state() -> None:
@@ -434,12 +436,16 @@ def _evict_stale_indio() -> None:
         # Lock se libera solo si no quedó nada relevante.
         if key not in _indio_long_term:
             _indio_locks.pop(key, None)
-    # Sweep abandoned pending music choices so they don't pile up: an entry
-    # only ever gets touched again if that same requester speaks, so without
-    # this a forgotten "¿cuál querés?" would live forever despite the TTL.
-    for ck in list(_indio_pending_choice.keys()):
-        if now - _indio_pending_choice[ck].get("ts", 0.0) > _PENDING_CHOICE_TTL_SEC:
-            del _indio_pending_choice[ck]
+    # Safety net for music votes: the close timer normally clears these, but if
+    # a task ever got cancelled without closing, drop stale entries so they
+    # don't linger.
+    for ck in list(_indio_pending_vote.keys()):
+        entry = _indio_pending_vote[ck]
+        if now - entry.get("opened_at", 0.0) > _MUSIC_VOTE_WINDOW_SEC + 30:
+            task = entry.get("task")
+            if task is not None and not task.done():
+                task.cancel()
+            del _indio_pending_vote[ck]
 
 
 async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
@@ -1222,13 +1228,23 @@ def _parse_choice(text: str, candidates: list[dict]):
     return None
 
 
+_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
+              "5️⃣", "6️⃣", "7️⃣", "8️⃣",
+              "9️⃣", "\U0001f51f"]
+
+
+def _num_emoji(i: int) -> str:
+    """Keycap emoji for a 1-based position (display only)."""
+    return _NUM_EMOJI[i - 1] if 1 <= i <= len(_NUM_EMOJI) else f"{i})"
+
+
 def _format_choices(candidates: list[dict]) -> str:
     """Render the "¿cuál querés?" list the indio posts in chat."""
     lines = ["che, ¿cuál de estas querés?"]
     for i, c in enumerate(candidates, 1):
         dur = c.get("duration_string") or ""
         durs = f" [{dur}]" if dur else ""
-        lines.append(f"{i}) {c['title']}{durs}")
+        lines.append(f"{_num_emoji(i)} {c['title']}{durs}")
     lines.append('(decime el número, o "ninguna")')
     return "\n".join(lines)
 
@@ -1246,32 +1262,80 @@ def _choice_identity(user_id, speaker: str) -> str:
     return f"nm:{speaker or 'alguien'}"
 
 
-def _store_pending_choice(mem_key: str, identity: str,
-                          candidates: list[dict], guild_id: int) -> None:
-    _indio_pending_choice[(mem_key, identity)] = {
+def _tally_vote_winner(candidates: list[dict], votes: dict) -> int:
+    """Index of the winning candidate. Most-voted wins; ties break to the
+    lowest number; no votes at all → the first (most relevant) result."""
+    if not votes:
+        return 0
+    counts: dict[int, int] = {}
+    for idx in votes.values():
+        counts[idx] = counts.get(idx, 0) + 1
+    best = max(counts.values())
+    return min(i for i in counts if counts[i] == best)
+
+
+def _open_vote(mem_key: str, candidates: list[dict], guild_id: int,
+               bot, post) -> None:
+    """Open a fresh voting window for this guild, replacing any previous one,
+    and schedule its automatic close."""
+    old = _indio_pending_vote.get(mem_key)
+    if old is not None:
+        task = old.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+    entry = {
         "candidates": candidates,
         "guild_id": guild_id,
-        "ts": time.time(),
+        "votes": {},
+        "post": post,
+        "bot": bot,
+        "opened_at": time.time(),
     }
+    _indio_pending_vote[mem_key] = entry
+    entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
 
 
-def _peek_pending_choice(mem_key: str, identity: str) -> Optional[dict]:
-    """Return this requester's pending choice without removing it, honouring
-    the TTL (an expired entry is dropped and treated as absent). We peek rather
-    than pop so an unrecognised follow-up doesn't throw away a still-valid
-    choice — only an actual selection or cancel clears it."""
-    key = (mem_key, identity)
-    entry = _indio_pending_choice.get(key)
+def _register_vote(mem_key: str, voter: str, pregunta: str) -> bool:
+    """If a vote is open for this guild and ``pregunta`` names one of the
+    options, record this voter's pick (one vote per voter, re-voting replaces)
+    and return True so the caller treats the message as a vote (no Gemini turn).
+    Anything that isn't a recognizable option returns False and flows normally.
+    """
+    entry = _indio_pending_vote.get(mem_key)
     if entry is None:
-        return None
-    if time.time() - entry.get("ts", 0.0) > _PENDING_CHOICE_TTL_SEC:
-        del _indio_pending_choice[key]
-        return None
-    return entry
+        return False
+    decision = _parse_choice(pregunta, entry["candidates"])
+    if isinstance(decision, int) and 0 <= decision < len(entry["candidates"]):
+        entry["votes"][voter] = decision
+        return True
+    return False
 
 
-def _clear_pending_choice(mem_key: str, identity: str) -> None:
-    _indio_pending_choice.pop((mem_key, identity), None)
+async def _close_vote_after(mem_key: str) -> None:
+    """Sleep the voting window, then close it. Cancelled if a newer vote
+    replaces this one."""
+    try:
+        await asyncio.sleep(_MUSIC_VOTE_WINDOW_SEC)
+    except asyncio.CancelledError:
+        return
+    await _close_vote(mem_key)
+
+
+async def _close_vote(mem_key: str) -> None:
+    """Tally the vote, announce and play the winner. Idempotent: a second call
+    (e.g. timer + manual) finds nothing to do."""
+    entry = _indio_pending_vote.pop(mem_key, None)
+    if entry is None:
+        return
+    candidates = entry["candidates"]
+    winner = candidates[_tally_vote_winner(candidates, entry["votes"])]
+    post = entry.get("post")
+    if post is not None:
+        try:
+            await post(f"dale, va: {winner['title']} 🎵")
+        except Exception:
+            logger.exception("indio vote: announce failed")
+    await _play_chosen_song(entry["bot"], entry["guild_id"], winner)
 
 
 async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
@@ -1287,15 +1351,16 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
         logger.exception("indio: play chosen song failed")
 
 
-async def _maybe_disambiguate_music(bot, guild_id, mem_key, identity,
-                                    pending_actions, reply):
+async def _maybe_disambiguate_music(bot, guild_id, mem_key,
+                                    pending_actions, reply, post):
     """Intercept a single free-text ``play_music`` so the indio lists the
-    matches and lets the requester pick, instead of playing the first hit.
+    matches and opens a group vote, instead of playing the first hit.
 
     The search reuses yt-dlp exactly like before (no extra Gemini). With a
-    single clear hit we play it directly; with several we ask and remember the
-    options under the requester's stable ``identity``. A direct URL, several
-    actions at once, or a non-music turn pass through untouched.
+    single clear hit we play it directly; with several we list them and open a
+    voting window (``post`` is how the winner gets announced when it closes). A
+    direct URL, several actions at once, or a non-music turn pass through
+    untouched.
 
     Returns ``(actions_to_dispatch, reply_text)``.
     """
@@ -1320,43 +1385,10 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key, identity,
         # One clear match: play it directly with the metadata we already have.
         asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
         return [], clean
-    # Several matches: list them and remember this requester's pending choice.
-    _store_pending_choice(mem_key, identity, candidates, guild_id)
+    # Several matches: list them and open a vote — anyone can pick by number for
+    # the next few seconds, then the most-voted plays.
+    _open_vote(mem_key, candidates, guild_id, bot, post)
     return [], _format_choices(candidates)
-
-
-async def _resolve_pending_music(bot, mem_key, identity, guild_id, pregunta,
-                                 post) -> bool:
-    """If this requester has a pending "¿cuál querés?", treat ``pregunta`` as
-    the answer. Resolution is pure code (no Gemini); the chosen candidate plays
-    directly from the metadata we already have. ``post`` is an async callable
-    that delivers a line of text the way the caller normally would.
-
-    We only clear the pending choice on an actual selection or cancel — an
-    unrecognised message leaves it in place so a later valid answer still
-    works (the TTL/sweep handle abandonment).
-
-    Returns True when the message was consumed as a selection (caller should
-    stop and not run a normal Gemini turn), False otherwise.
-    """
-    entry = _peek_pending_choice(mem_key, identity)
-    if entry is None:
-        return False
-    candidates = entry["candidates"]
-    decision = _parse_choice(pregunta, candidates)
-    if decision == "cancel":
-        _clear_pending_choice(mem_key, identity)
-        await post("dale, lo dejo 👍")
-        return True
-    if isinstance(decision, int) and 0 <= decision < len(candidates):
-        _clear_pending_choice(mem_key, identity)
-        chosen = candidates[decision]
-        await post(f"dale, va: {chosen['title']} 🎵")
-        asyncio.create_task(_play_chosen_song(bot, guild_id, chosen))
-        return True
-    # Not a recognizable selection: leave the choice in place and let the caller
-    # process this as a fresh message.
-    return False
 
 
 _INDIO_PREFIX_RE = re.compile(
@@ -1544,27 +1576,27 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
     tagged_message = f"[{speaker}]: {pregunta or ''}"
 
-    # If this requester has a pending "¿cuál querés?" music choice, interpret
-    # the message as the selection instead of a brand-new turn. We key by the
-    # Discord user id (unique) so a shared display name can't cross wires.
+    # How the winner gets announced when the vote closes (relay as the real
+    # indio when configured, else via this command's response).
+    async def _post_choice(text):
+        channel_id = getattr(ctx, "channel_id", None) or getattr(
+            getattr(ctx, "channel", None), "id", None)
+        relayed = False
+        if (channel_id is not None
+                and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+            relayed = await _relay_to_userbot(channel_id, text, None)
+        if not relayed:
+            await _send_reply(ctx, text)
+
+    # If a music vote is open for this guild and the message names an option,
+    # count it as a vote (anyone can vote) instead of a brand-new turn. Keyed by
+    # the Discord user id so each person gets one vote.
     _choice_guild_id = getattr(getattr(ctx, "guild", None), "id", None)
     _choice_identity_val = _choice_identity(
         getattr(getattr(ctx, "author", None), "id", None) or 0, speaker)
-    if not nuevo and _choice_guild_id is not None:
-        async def _post_choice(text):
-            channel_id = getattr(ctx, "channel_id", None) or getattr(
-                getattr(ctx, "channel", None), "id", None)
-            relayed = False
-            if (channel_id is not None
-                    and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
-                relayed = await _relay_to_userbot(channel_id, text, None)
-            if not relayed:
-                await _send_reply(ctx, text)
-
-        if await _resolve_pending_music(
-                ctx.bot, mem_key, _choice_identity_val, _choice_guild_id,
-                pregunta or "", _post_choice):
-            return
+    if (not nuevo and _choice_guild_id is not None
+            and _register_vote(mem_key, _choice_identity_val, pregunta or "")):
+        return
 
     async with lock:
         history_reset = False
@@ -1653,8 +1685,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
-        ctx.bot, _choice_guild_id, mem_key, _choice_identity_val,
-        pending_actions, reply,
+        ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
     )
     relayed_via_userbot = False
     try:
@@ -1769,8 +1800,7 @@ async def indioFromVoice(
     # userbot), falling back to the name only when no id is available.
     _choice_identity_val = _choice_identity(user_id, speaker)
 
-    # Pending "¿cuál querés?" music choice for this requester → resolve it here
-    # instead of starting a fresh turn.
+    # How the winner gets announced when the vote closes.
     async def _post_choice(text):
         relayed = False
         if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
@@ -1779,8 +1809,9 @@ async def indioFromVoice(
             for chunk in _split_for_discord(text):
                 await channel.send(chunk)
 
-    if await _resolve_pending_music(
-            bot, mem_key, _choice_identity_val, guild_id, pregunta, _post_choice):
+    # If a music vote is open and this message names an option, count it as a
+    # vote (anyone can vote) instead of starting a fresh turn.
+    if _register_vote(mem_key, _choice_identity_val, pregunta):
         return
 
     async with lock:
@@ -1835,7 +1866,7 @@ async def indioFromVoice(
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
-        bot, guild_id, mem_key, _choice_identity_val, pending_actions, reply,
+        bot, guild_id, mem_key, pending_actions, reply, _post_choice,
     )
     relayed_via_userbot = False
     try:

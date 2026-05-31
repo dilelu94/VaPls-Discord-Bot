@@ -13,8 +13,10 @@
 Notas:
 - Los comandos de reproducción disparan saludos cuando el bot entra a voz.
 - Si `GEMINI_API_KEY` no está configurado, `/vapls` y `/indio` fallarán con un mensaje de error.
-- **Desambiguación de música:** cuando se pide un tema (por `/play`, o al indio por voz/chat)
-  y la búsqueda en YouTube devuelve varios resultados, en vez de reproducir el primero a ciegas
-  se ofrecen las opciones y reproduce la que elija **quien lo pidió**. En `/play` la elección
-  es un menú; con el indio se responde por voz/chat (número, "la del vivo", "ninguna", etc.).
-  Una URL directa siempre se reproduce sin preguntar. La elección pendiente expira a los 120 s.
+- **Desambiguación de música:** cuando se pide un tema y la búsqueda en YouTube devuelve
+  varios resultados, en vez de reproducir el primero a ciegas se ofrecen las opciones
+  (numeradas con emojis 1️⃣2️⃣3️⃣). Una URL directa siempre se reproduce sin preguntar.
+  - **`/play`:** menú desplegable; elige al instante **quien corrió el comando**.
+  - **El Indio (voz/chat):** abre una **votación de unos segundos** (`_MUSIC_VOTE_WINDOW_SEC`,
+    5 s por defecto). **Cualquiera** del canal vota diciendo/escribiendo el número; al cerrarse
+    gana la **más votada** (empate → número más bajo; si nadie votó → la primera/más relevante).
