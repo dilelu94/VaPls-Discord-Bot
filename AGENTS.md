@@ -62,7 +62,13 @@ que un cambio roto llegue siquiera al servidor remoto.
 
 **Migrado desde** `ubuntu@129.80.59.99` (Oracle Linux amd64, instancia E2.1.Micro) el 2026-05-30. El server viejo quedó wipe-eado del bot pero sigue prendido para otros usos.
 
-**Deploy workflow:**
+**Deploy workflow (automático):** push a `master` → CI (matriz 3.10–3.14) →
+job `deploy` que SSHea al server y corre `scripts/deploy.sh` (`git reset --hard
+origin/master`, reinstala deps si cambiaron, reinicia ambos servicios y verifica
+que queden `active`). El server es un **pure deploy target**: no editar archivos
+a mano ahí. Detalle completo en [docs/operations.md](docs/operations.md#cicd-pipeline).
+
+**Deploy manual (fallback):**
 ```bash
 rsync -avz -e "ssh -i /var/home/dilelu/.ssh/vapls" \
   <archivos cambiados> ubuntu@141.148.84.55:/home/ubuntu/vapls-discord-bot/
@@ -210,7 +216,9 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-CI: `.github/workflows/ci.yml` corre `pytest` en cada push/PR.
+CI: `.github/workflows/ci.yml` corre `pytest` sobre una matriz Python 3.10–3.14
+en cada push/PR, y deploya a producción al pasar (ver sección de servidor +
+[docs/operations.md](docs/operations.md#cicd-pipeline)).
 Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
 `soundpadCommand`.
 

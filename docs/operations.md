@@ -5,9 +5,40 @@
 - **Stack**: Ubuntu 22.04+ aarch64. `faster-whisper` (CTranslate2 con wheels aarch64), `py-cord`, `discord.py-self`, `ffmpeg`.
 - **Razón del upgrade desde E2.1.Micro (1 GB)**: faster-whisper `base` saturaba la CPU (~27s para 1.4s de audio); el modelo `small` ahora corre real-time con concurrencia 5 y deja headroom para `/play` simultáneo.
 
-## Deployment scripts
+## CI/CD pipeline
+El deploy normal es **automático**: hacer push a `master` dispara
+`.github/workflows/ci.yml`.
+
+```
+push a master ─► job test (matriz Python 3.10–3.14) ─► job deploy (SSH al server)
+                     │ falla ⇒ no deploya          │ corre scripts/deploy.sh
+```
+
+- **`deploy` corre solo** tras pasar toda la matriz de tests, solo en pushes a
+  `master`, y **se saltea sin fallar** si el secret `SSH_HOST` no está seteado.
+- El runner de GitHub se conecta por SSH (secrets `SSH_HOST` / `SSH_USER` /
+  `SSH_KEY`, opcional `SSH_PORT`) y **pipea `scripts/deploy.sh` por stdin**
+  (`bash -s`), así corre la versión del repo aunque el checkout del server esté
+  viejo o roto.
+- **`scripts/deploy.sh`** (idempotente, corre en el server): `git fetch` +
+  `git reset --hard origin/master` (el server es un *pure deploy target* — no
+  editar archivos a mano ahí), reinstala deps solo si cambiaron
+  `requirements.txt` / `userbot/requirements.txt`, reinicia ambos servicios y
+  **verifica que queden `active`** (si no, sale con error y el deploy figura rojo).
+- **Las git-deps están pinneadas a propósito** (`py-cord`, `discord.py-self`,
+  `discord-ext-voice-recv`). Un dep de git sin pin tumbó el userbot una vez al
+  reinstalar un master roto. Bumpeá los SHAs deliberadamente + testeá, nunca auto.
+
+Deploy manual (fallback, p. ej. para tocar solo un archivo sin pasar por CI):
+```bash
+rsync -avz -e "ssh -i <key>" <archivos> ubuntu@<host>:/home/ubuntu/vapls-discord-bot/
+ssh -i <key> ubuntu@<host> 'sudo systemctl restart discord-bot vapls-userbot'
+```
+
+## Provisioning scripts (primer arranque / clon nuevo)
 - `deploy.sh`: Instala dependencias, crea venv, copia `.env`, y registra
-  `discord-bot.service` para systemd.
+  `discord-bot.service` para systemd. (Provisión inicial — el deploy continuo
+  usa `scripts/deploy.sh`, ver arriba.)
 - `run.sh`: Ejecuta `python3 bot.py` en primer plano.
 - `runMonitored.sh`: Redirige logs a `botOutput.log`.
 - `autoRestart.sh`: Bucle de reinicio con logs en `botOutput.log` y
@@ -37,3 +68,8 @@ Userbot service example:
 - **Gemini no responde**: revisa `GEMINI_API_KEY` y límites de cuota.
 - **API devuelve 401**: el `X-API-Secret` no coincide con `API_SECRET`.
 - **Userbot no transcribe**: revisa `MODEL_PATH_ES` y permisos del user token.
+- **Deploy falla en GitHub Actions**: si el job `deploy` queda rojo tras un push
+  a `master`, casi siempre es que `scripts/deploy.sh` reinició un servicio que no
+  quedó `active` (mirá `journalctl -u <svc>` en el server). Una git-dep
+  reinstalada a un master roto es el sospechoso clásico — verificá que sigan
+  pinneadas.
