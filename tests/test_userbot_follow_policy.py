@@ -101,6 +101,45 @@ def test_ignored_users_do_not_count(monkeypatch):
     assert channel_has_humans(_channel_with([ignored])) is False
 
 
+def test_self_muted_users_do_not_count():
+    """A user who muted themselves isn't actively participating, so the bot
+    shouldn't anchor on them when deciding whether to follow active movers."""
+    muted = SimpleNamespace(
+        id=5, bot=False,
+        voice=SimpleNamespace(self_mute=True, mute=False),
+    )
+    assert channel_has_humans(_channel_with([muted])) is False
+
+
+def test_server_muted_users_do_not_count():
+    muted = SimpleNamespace(
+        id=5, bot=False,
+        voice=SimpleNamespace(self_mute=False, mute=True),
+    )
+    assert channel_has_humans(_channel_with([muted])) is False
+
+
+def test_unmuted_user_alongside_muted_user_still_counts():
+    """If at least one human in the channel is unmuted, the channel still
+    has a participating human; the bot should stay."""
+    muted = SimpleNamespace(
+        id=5, bot=False,
+        voice=SimpleNamespace(self_mute=True, mute=False),
+    )
+    active = SimpleNamespace(
+        id=6, bot=False,
+        voice=SimpleNamespace(self_mute=False, mute=False),
+    )
+    assert channel_has_humans(_channel_with([muted, active])) is True
+
+
+def test_user_without_voice_state_still_counts():
+    """Defensive: a member entry without `.voice` (cache quirks) shouldn't
+    silently disappear. Treat them as present."""
+    member = SimpleNamespace(id=5, bot=False)  # no `voice` attribute
+    assert channel_has_humans(_channel_with([member])) is True
+
+
 def test_none_channel_has_no_humans():
     assert channel_has_humans(None) is False
 
