@@ -260,6 +260,46 @@ async def test_multiple_matches_opens_a_vote(
     assert "guild-100" in indio._indio_pending_vote      # a vote is open
 
 
+async def test_vote_options_reordered_by_fuzzy_match(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """Options are listed (and stored) in fuzzy-match order against the query,
+    not in yt-dlp's relevance order. That way the "no votes → first" fallback
+    plays the candidate that best matches what was actually asked."""
+    import geminiClient
+    # yt-dlp returns the right song second; an unrelated hit lands first
+    # (mimicking a noisy ASR/relevance pairing). The reorder must push the
+    # query-match to the top.
+    candidates_in = [
+        {"id": "junk", "title": "Linyeras Cru - Bailan", "duration_string": "6:00"},
+        {"id": "right", "title": "Queen - Bohemian Rhapsody (Official Video)",
+         "duration_string": "5:55"},
+        {"id": "other", "title": "Random Rock Mix 2024", "duration_string": "1:00:00"},
+    ]
+    _fake_search(monkeypatch, candidates_in)
+    monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music",
+                         "args": {"query": "queen bohemian rhapsody"}}],
+    )))
+
+    ctx = ctx_factory(display_name="Opener", user_id=1, guild_id=100)
+    await indioLogic(ctx, "poné queen bohemian rhapsody", nuevo=False)
+    _freeze_vote_timer(indio)
+
+    # The query-matching song is now first in the pending vote — that's what
+    # the default-pick will fall back to if nobody votes.
+    stored = indio._indio_pending_vote["guild-100"]["candidates"]
+    assert stored[0]["id"] == "right"
+
+    # And the chat message lists it first too (1️⃣ position).
+    shown = "\n".join(m for m in ctx.sent_messages if m)
+    queen_pos = shown.find("Bohemian Rhapsody")
+    junk_pos = shown.find("Linyeras Cru")
+    assert queen_pos != -1 and junk_pos != -1
+    assert queen_pos < junk_pos
+
+
 async def test_vote_winner_is_the_most_voted(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):

@@ -1392,6 +1392,16 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
     candidates = await playCommand._yt_dlp_search(query, max_results=_MUSIC_CHOICE_COUNT)
     if not candidates:
         return [], "no encontré nada en YouTube con eso, decímelo de otra forma"
+    # Re-rank by fuzzy similarity against the user's query so the option the
+    # vote falls back to when nobody picks (candidates[0] in _tally_vote_winner)
+    # is the one that actually best matches what was asked, not just YouTube's
+    # top relevance hit. Stable for ties (Python's sort) so ratio ties keep
+    # YouTube's relative order. Helper lives in playCommand alongside the /play
+    # autoplay logic — single source of truth for "what matches the query".
+    candidates.sort(
+        key=lambda c: playCommand._query_title_ratio(query, c.get("title", "")),
+        reverse=True,
+    )
     if len(candidates) == 1:
         # One clear match: play it directly with the metadata we already have.
         asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
