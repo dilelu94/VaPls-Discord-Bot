@@ -23,23 +23,26 @@ def test_specific_query_autoplays_top_hit():
     )
 
 
-def test_vague_query_shows_picker():
-    """If the query doesn't pin a specific song, the top title won't overlap
-    enough — bot should fall back to the picker so the user chooses."""
-    import playCommand
-    assert not playCommand._should_autoplay_top(
-        "algo de rock",
-        "Greatest Rock Hits 2024 - Best Rock Songs Playlist",
-    )
-
-
-def test_short_ambiguous_query_shows_picker():
-    """'el infierno' could be the Redondos song, an audiobook, a movie clip…
-    No single title dominates; the picker must remain."""
+def test_short_query_shows_picker():
+    """Two-token queries don't pass the min-tokens guard, regardless of how
+    much they overlap the top title. The picker has to remain so the user
+    chooses among the matches."""
     import playCommand
     assert not playCommand._should_autoplay_top(
         "el infierno",
         "El infierno de Dante - audiolibro completo en español narrado",
+    )
+
+
+def test_unrelated_query_shows_picker():
+    """3+ token query (passes the min-tokens guard) but no real overlap with
+    the top hit's title — fuzzy ratio stays below the threshold so the picker
+    still appears. This is the case where 'suave' shouldn't turn into
+    'autoplay anything'."""
+    import playCommand
+    assert not playCommand._should_autoplay_top(
+        "ponete jazz suave tranqui",
+        "Top 100 Death Metal Headbangers Compilation",
     )
 
 

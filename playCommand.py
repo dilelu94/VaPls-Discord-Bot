@@ -49,13 +49,13 @@ _PLAY_CHOICE_COUNT = 5
 # yt-dlp hit, we skip the "¿cuál querés?" picker and just queue the top
 # result. The threshold is a behavioural knob: lower = more autoplay (less
 # friction, more risk of playing the wrong song); higher = more picker prompts.
-_PLAY_AUTOPLAY_RATIO = 0.7
+_PLAY_AUTOPLAY_RATIO = 0.55
 
 # Minimum tokens in the user query before we even consider autoplay. Short
 # queries ("el infierno", "rock") are inherently ambiguous — even if the top
 # hit contains them verbatim, the user is usually browsing, not asking for
 # a specific track. The picker handles that case better.
-_PLAY_AUTOPLAY_MIN_TOKENS = 4
+_PLAY_AUTOPLAY_MIN_TOKENS = 3
 
 
 def _normalize_for_match(s: str) -> str:

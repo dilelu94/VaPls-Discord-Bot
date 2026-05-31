@@ -1999,6 +1999,48 @@ def _decifrar_cache_put(key: str, value: str) -> None:
         _decifrar_cache.popitem(last=False)
 
 
+# Conocidas-y-recurrentes phonetic confusions that Whisper hace en castellano
+# rioplatense. Aplicado como substring substitution case-insensitive ANTES de
+# pasar el texto a Gemini, así pedidos tipo "ponete un tema de líneas horarias"
+# se corrigen a "ponete un tema de indio solari" sin necesidad de votación
+# previa. Cualquier match curado por el voting (👍) termina acá también, pero
+# este set es la "memoria base" que no se aprende sola — la armamos a mano
+# cuando vemos un error recurrente.
+#
+# Convención: claves todas en lower-case (la sustitución es case-insensitive).
+# Si el target es un nombre propio que YouTube necesita con caps, el valor lo
+# lleva en su forma canónica.
+_KNOWN_PHONETIC_FIXES: "list[tuple[str, str]]" = [
+    # Indio Solari — Whisper se la come y la pasa a "líneas horarias" /
+    # "lineas orarias" / similares. Ver caso 2026-05-31 en logs.
+    ("líneas horarias", "Indio Solari"),
+    ("lineas horarias", "Indio Solari"),
+    ("líneas orarias", "Indio Solari"),
+    ("lineas orarias", "Indio Solari"),
+    ("indio sorari", "Indio Solari"),
+    ("indio sorare", "Indio Solari"),
+    ("indio solare", "Indio Solari"),
+]
+
+
+def _apply_known_fixes(texto: str) -> str:
+    """Apply the manually-curated phonetic-confusion table to a transcript.
+
+    Case-insensitive substring substitution; order matters when one fix is a
+    prefix of another so we apply them in declaration order. Returns the input
+    unchanged if no fix matches.
+    """
+    if not texto:
+        return texto
+    out = texto
+    for bad, good in _KNOWN_PHONETIC_FIXES:
+        if not bad:
+            continue
+        # Case-insensitive replace via regex with re.escape.
+        out = re.sub(re.escape(bad), good, out, flags=re.IGNORECASE)
+    return out
+
+
 def seed_decifrar_cache(items: "list[tuple[str, str]]") -> None:
     """Bulk-insert pre-normalized (key, value) pairs into the in-memory
     decifrar cache. Used by ``decifrarVoting`` to hydrate the cache at
@@ -2025,6 +2067,10 @@ async def decifrarTranscripcion(texto: str) -> str:
     texto = (texto or "").strip()
     if not texto:
         return ""
+    # Aplicar correcciones manuales (substring) ANTES del cache lookup: así
+    # el caché guarda directamente la versión ya corregida, y un mismo error
+    # recurrente comparte hit aun cuando venga con variantes de mayúsculas.
+    texto = _apply_known_fixes(texto)
     cache_key = _decifrar_cache_key(texto)
     cached = _decifrar_cache_get(cache_key)
     if cached is not None:
