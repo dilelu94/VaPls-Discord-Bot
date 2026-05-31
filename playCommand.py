@@ -243,6 +243,12 @@ class GuildPlayer:
         self.pausedAccumSecs: float = 0.0            # accumulated paused seconds across pauses
         self.interrupted: bool = False               # True between disconnect and next resume
         self.interruptedAtSeconds: float = 0.0       # snapshot of elapsed at interruption time
+        # Deferred-connect state: when /play is invoked while the bot is NOT in
+        # voice, we postpone joining the channel until the first song finishes
+        # downloading. Joining immediately and sitting silent while yt-dlp runs
+        # would let the idle watchdog disconnect us before we ever play a note.
+        self.pendingVoiceChannel = None              # discord.VoiceChannel | None
+        self.pendingTriggerUserId: Optional[int] = None  # for greeting trigger
 
     def _resolveMusicChannel(self, fallback=None):
         """Return the configured music text channel for this guild.
@@ -426,6 +432,10 @@ class GuildPlayer:
         self.isDownloading = False
         self.downloadingIds.discard(videoId)
         self.initialCtx = None
+        # If we deferred the voice connect, drop the pending target so a later
+        # /play starts from a clean slate.
+        self.pendingVoiceChannel = None
+        self.pendingTriggerUserId = None
         try:
             await interaction.edit_original_response(content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None)
         except Exception:
@@ -455,7 +465,7 @@ class GuildPlayer:
         Async:
             This function is a coroutine and must be awaited.
         """
-        if not self.currentSong or not self.vc:
+        if not self.currentSong:
             return
 
         videoId = self.currentSong["id"]
@@ -465,7 +475,9 @@ class GuildPlayer:
         os.makedirs(downloadsDir, exist_ok=True)
         filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
 
-        guild = getattr(self.vc, "guild", None)
+        # Guild is sourced from the bot (not self.vc) because we may not be
+        # connected yet — the connect is deferred until after the download.
+        guild = self.bot.get_guild(self.guildId) if self.bot else None
 
         # Wait if currently downloading in background
         if videoId in self.downloadingIds:
@@ -570,6 +582,49 @@ class GuildPlayer:
                 self.isDownloading = False
                 self.downloadingIds.discard(videoId)
                 self.activeDownloadProc = None
+
+        # Lazy voice-connect: when /play was issued without an existing voice
+        # client we deferred joining until now. Joining at this point (file
+        # ready on disk → ffmpeg starts immediately) keeps the silent-in-channel
+        # window at ~0, so the idle watchdog can't disconnect us mid-download.
+        if self.vc is None and self.pendingVoiceChannel is not None:
+            target = self.pendingVoiceChannel
+            trigger_user = self.pendingTriggerUserId or 0
+            self.pendingVoiceChannel = None
+            self.pendingTriggerUserId = None
+            try:
+                set_pending_trigger(target.id, trigger_user)
+                self.vc = await target.connect(reconnect=True)
+            except Exception as e:
+                playLogger.exception("[PLAY] deferred voice connect failed")
+                analytics.capture_exception(
+                    e, user=self.lastRequester, guild=guild,
+                    properties={"stage": "deferred_connect",
+                                "video_id": videoId, "title": videoTitle},
+                )
+                if self.initialCtx:
+                    try:
+                        await self.initialCtx.interaction.edit_original_response(
+                            content=f"❌ No pude conectarme a voz: {e}",
+                            view=None,
+                        )
+                    except Exception:
+                        pass
+                    self.initialCtx = None
+                if self.controlMessage is not None:
+                    await self.updateControlMessage(
+                        f"❌ No pude conectarme a voz para reproducir **{videoTitle}**: {e}"
+                    )
+                self.currentSong = None
+                return
+
+        if not self.vc:
+            playLogger.error(
+                "[PLAYBACK ERROR] vc=None and no pending channel; aborting '%s'",
+                videoTitle,
+            )
+            self.currentSong = None
+            return
 
         # Start playback
         try:
@@ -1143,17 +1198,21 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
     channel = ctx.author.voice.channel
 
-    # Connect or move bot to the channel
-    if ctx.voice_client is None:
-        try:
-            set_pending_trigger(channel.id, ctx.author.id)
-            vc = await channel.connect(reconnect=True)
-        except Exception as e:
-            return await safe_respond(ctx, f"❌ Error al conectar al canal: {e}")
-    else:
+    player = getGuildPlayer(ctx.guild.id, ctx.bot)
+    player.textChannel = player._resolveMusicChannel(fallback=ctx.channel)
+
+    # Voice-connect strategy:
+    # - If we already have a voice client, reuse / move it as before. Resume
+    #   any interrupted playback from the snapshotted position.
+    # - If the player is in the "interrupted" state we MUST reconnect now so
+    #   the saved song can keep playing from where it was cut off.
+    # - Otherwise, defer the connect until the first song finishes downloading
+    #   (see startPlayingCurrent). Joining the channel immediately and sitting
+    #   silent during yt-dlp is what lets the idle watchdog kick us out before
+    #   we ever play a note.
+    if ctx.voice_client is not None:
         vc = ctx.voice_client
         if vc.channel.id != channel.id:
-            # Stop recording if active
             if getattr(vc, "recording", False):
                 try:
                     vc.stop_recording()
@@ -1162,22 +1221,33 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
                 setattr(vc, "recording", False)
             set_pending_trigger(channel.id, ctx.author.id)
             await vc.move_to(channel)
-
-    player = getGuildPlayer(ctx.guild.id, ctx.bot)
-    player.textChannel = player._resolveMusicChannel(fallback=ctx.channel)
-
-    # If the player was left in "interrupted" state by a previous involuntary
-    # disconnect (kick, network drop, /quit), restart the saved current song
-    # from the position it was at before anything new gets queued.
-    if player.interrupted and player.currentSong:
+        if player.interrupted and player.currentSong:
+            try:
+                await player.resumeFromInterruption(vc)
+            except Exception:
+                playLogger.exception("[PLAY] resumeFromInterruption failed; falling back to fresh play")
+                player.interrupted = False
+                player.currentSong = None
+        else:
+            player.vc = vc
+    elif player.interrupted and player.currentSong:
+        # Saved song to resume but no live vc — reconnect now (file is still
+        # cached because onSongFinished short-circuits when interrupted).
         try:
+            set_pending_trigger(channel.id, ctx.author.id)
+            vc = await channel.connect(reconnect=True)
             await player.resumeFromInterruption(vc)
         except Exception:
-            playLogger.exception("[PLAY] resumeFromInterruption failed; falling back to fresh play")
+            playLogger.exception("[PLAY] reconnect-to-resume failed; falling back to fresh play")
             player.interrupted = False
             player.currentSong = None
+            player.pendingVoiceChannel = channel
+            player.pendingTriggerUserId = ctx.author.id
     else:
-        player.vc = vc
+        # Defer the connect — startPlayingCurrent will join after the download
+        # completes so the bot never sits silent in the channel.
+        player.pendingVoiceChannel = channel
+        player.pendingTriggerUserId = ctx.author.id
 
     # Prepare search or URL input
     inputStr = query.strip()
@@ -1418,11 +1488,17 @@ async def playFromIndio(bot, guild_id: int, query: str,
         return False, (f"no encuentro el canal de musica configurado "
                        f"(id={config.INDIO_PLAY_CHANNEL_ID})")
 
+    # Voice-connect strategy mirrors playLogic: if already connected reuse/move
+    # the vc; otherwise defer the join until the first song finishes downloading
+    # (startPlayingCurrent handles the lazy connect). Joining first and sitting
+    # silent during yt-dlp would let the idle watchdog kick us out before we
+    # play a note.
     vc = guild.voice_client
+    deferred = False
     try:
         if vc is None or not vc.is_connected():
-            set_pending_trigger(voice_channel.id, bot.user.id if bot.user else 0)
-            vc = await voice_channel.connect(reconnect=True)
+            vc = None
+            deferred = True
         elif vc.channel.id != voice_channel.id:
             if getattr(vc, "recording", False):
                 try:
@@ -1442,8 +1518,12 @@ async def playFromIndio(bot, guild_id: int, query: str,
         return False, "no encontre nada en YouTube con esa busqueda"
 
     player = getGuildPlayer(guild_id, bot)
-    player.vc = vc
     player.textChannel = text_channel
+    if deferred:
+        player.pendingVoiceChannel = voice_channel
+        player.pendingTriggerUserId = bot.user.id if bot.user else 0
+    else:
+        player.vc = vc
 
     isFirst = (not player.currentSong and len(player.queue) == 0)
     title = songs[0]["title"]
