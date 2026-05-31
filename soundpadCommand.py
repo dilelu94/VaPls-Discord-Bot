@@ -1,4 +1,5 @@
 """Soundpad slash command and UI for playing custom audio clips."""
+import logging
 import os
 import asyncio
 import difflib
@@ -7,6 +8,8 @@ import config
 import analytics
 import geminiKeys
 from greeting import set_pending_trigger
+
+logger = logging.getLogger(__name__)
 
 _AUDIO_EXTS = {".opus", ".mp3", ".wav", ".ogg", ".m4a"}
 
@@ -97,6 +100,7 @@ def play_ack_clip(vc) -> bool:
             return False
         vc.play(discord.FFmpegOpusAudio(path, options='-af "dynaudnorm=p=0.95:f=200"'))
     except Exception:
+        logger.debug("play_ack_clip failed (ignored)", exc_info=True)
         return False
     return True
 

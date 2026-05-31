@@ -409,7 +409,7 @@ class GuildPlayer:
                 asyncio.run_coroutine_threadsafe(self.onSongFinished(error), self.bot.loop)
 
             # Cut off the "request received" blip (if still playing) before the song.
-            if self.vc.is_playing():
+            if self.vc.is_playing() or self.vc.is_paused():
                 self.vc.stop()
             self.vc.play(audioSource, after=afterCallback)
             analytics.capture("play song started", user=self.lastRequester, guild=guild,
