@@ -132,6 +132,9 @@ intents.voice_states = True
 intents.messages = True
 intents.dm_messages = True
 intents.message_content = True
+# Necesario para contar votos por reacción en la votación de música del indio
+# (on_raw_reaction_add). Está en Intents.default() pero lo dejamos explícito.
+intents.reactions = True
 # Sin esto, member.status siempre es "offline" y member.activities siempre
 # vacío en /user/<id>. Requiere activar "PRESENCE INTENT" en el Developer Portal.
 intents.presences = True
@@ -301,6 +304,28 @@ async def on_message(message):
         "gemini key DM from %s (%s): added=%d dupes=%d failed=%d",
         owner_name, owner_id, len(added), len(dupes), len(failed),
     )
+
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    """Count emoji reactions on the indio's music-vote options message as votes.
+
+    Fires for any reaction the bot can see (guild reactions intent). We ignore
+    the bot's own seeding reactions and hand the rest to geminiCommand, which
+    only acts when the reaction lands on an open vote's options message.
+    """
+    try:
+        if bot.user is not None and payload.user_id == bot.user.id:
+            return
+        import geminiCommand
+        geminiCommand.register_reaction_vote(
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            emoji=str(payload.emoji),
+            user_id=payload.user_id,
+        )
+    except Exception:
+        log.exception("on_raw_reaction_add failed")
 
 
 def _track_command(ctx, name, extra=None):

@@ -67,8 +67,11 @@ dict global `guildPlayers`).
   con emojis). En `/play` es un menú desplegable que resuelve **quien corrió el
   comando** al instante. Con el **Indio** se abre una **votación que cierra
   cuando pasan 5 s sin votos nuevos** (cada voto reinicia la cuenta): cualquiera
-  del canal vota por número y gana la más votada (empate → número más bajo; sin
-  votos → la primera). Una URL directa se reproduce sin preguntar.
+  del canal vota y gana la más votada (empate → número más bajo; sin votos → la
+  primera). Se puede votar de **tres formas que se combinan**: hablando,
+  escribiendo el número, o **reaccionando** con el emoji (el bot pone las
+  reacciones 1️⃣2️⃣3️⃣). Un voto por persona. Una URL directa se reproduce sin
+  preguntar.
 
 ---
 
@@ -114,11 +117,14 @@ concisas.
   resultados, el Indio lista las opciones (con emojis) y abre una **votación que
   cierra cuando pasan `_MUSIC_VOTE_WINDOW_SEC` (5 s por defecto) sin votos
   nuevos** — cada voto registrado reinicia la cuenta regresiva, así un voto al
-  segundo 4 le da otros 5 s a quien quiera reaccionar. **Cualquiera** del canal
-  vota por número ("la dos", "la 3"); al cerrarse gana la más votada (empate →
-  número más bajo; sin votos → la primera). Una URL la reproduce directo. (El
-  voto por voz necesita la wake word "indio", p. ej. "indio, la dos", hasta que
-  exista un modo conversación.)
+  segundo 4 le da otros 5 s a quien quiera votar. **Cualquiera** del canal vota,
+  y se puede votar de **tres formas combinadas en el mismo conteo**: hablando,
+  escribiendo el número ("la dos", "la 3"), o **reaccionando** con el emoji del
+  número (el bot siembra las reacciones 1️⃣2️⃣3️⃣). Un voto por persona (reacción
+  y texto del mismo usuario cuentan una sola vez). Al cerrarse gana la más votada
+  (empate → número más bajo; sin votos → la primera). Una URL la reproduce
+  directo. (El voto hablado/escrito por voz necesita la wake word "indio", p. ej.
+  "indio, la dos"; el voto por reacción no.)
 
 **`geminiClient.py`** — cliente HTTP async con:
 - **Pool de keys con failover**: rota entre varias keys, marca en cooldown (60 s)
