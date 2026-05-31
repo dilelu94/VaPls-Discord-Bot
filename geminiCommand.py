@@ -438,10 +438,12 @@ def _evict_stale_indio() -> None:
             _indio_locks.pop(key, None)
     # Safety net for music votes: the close timer normally clears these, but if
     # a task ever got cancelled without closing, drop stale entries so they
-    # don't linger.
+    # don't linger. With the sliding timer, votes can legitimately extend the
+    # window past N seconds — cap at 2 minutes from open so a vote stays
+    # reasonable even with repeated re-voting.
     for ck in list(_indio_pending_vote.keys()):
         entry = _indio_pending_vote[ck]
-        if now - entry.get("opened_at", 0.0) > _MUSIC_VOTE_WINDOW_SEC + 30:
+        if now - entry.get("opened_at", 0.0) > 120:
             task = entry.get("task")
             if task is not None and not task.done():
                 task.cancel()
@@ -1300,6 +1302,11 @@ def _register_vote(mem_key: str, voter: str, pregunta: str) -> bool:
     options, record this voter's pick (one vote per voter, re-voting replaces)
     and return True so the caller treats the message as a vote (no Gemini turn).
     Anything that isn't a recognizable option returns False and flows normally.
+
+    Each accepted vote slides the close-timer forward by another
+    ``_MUSIC_VOTE_WINDOW_SEC``: the window closes after that many seconds of
+    *no new votes*, not a fixed N seconds from the prompt. That way a vote at
+    second 4 still gives others ~5 s to react.
     """
     entry = _indio_pending_vote.get(mem_key)
     if entry is None:
@@ -1307,6 +1314,10 @@ def _register_vote(mem_key: str, voter: str, pregunta: str) -> bool:
     decision = _parse_choice(pregunta, entry["candidates"])
     if isinstance(decision, int) and 0 <= decision < len(entry["candidates"]):
         entry["votes"][voter] = decision
+        old_task = entry.get("task")
+        if old_task is not None and not old_task.done():
+            old_task.cancel()
+        entry["task"] = asyncio.create_task(_close_vote_after(mem_key))
         return True
     return False
 

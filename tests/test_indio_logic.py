@@ -355,6 +355,44 @@ async def test_unrelated_message_during_vote_is_not_a_vote(
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"    # no votes → first
 
 
+async def test_vote_slides_the_close_window(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """A vote inside the window postpones the close — the timer runs from the
+    last vote, not from when the options were posted. With WINDOW=0.1 s and a
+    vote at ~0.06 s, the close should NOT have fired by 0.12 s (past the
+    original window) and should fire only after another full window passes."""
+    import playCommand
+    import geminiClient
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    monkeypatch.setattr(indio, "_MUSIC_VOTE_WINDOW_SEC", 0.1)
+
+    _fake_search(monkeypatch, _VOTE_CANDS)
+    monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
+    )))
+    await indioLogic(ctx_factory(display_name="Opener", user_id=1, guild_id=100),
+                     "poné algo", nuevo=False)
+    # DON'T freeze the timer: we want it to run for real.
+
+    await asyncio.sleep(0.06)   # mid-window: vote arrives, must reset the timer
+    await indioLogic(ctx_factory(display_name="Mati", user_id=2, guild_id=100),
+                     "la dos", nuevo=False)
+
+    # Past the original 0.1 s window but only 0.06 s since the vote → still open.
+    await asyncio.sleep(0.06)
+    assert play_mock.await_count == 0
+    assert "guild-100" in indio._indio_pending_vote
+
+    # Now let the full sliding window elapse from the vote → close fires.
+    await asyncio.sleep(0.12)
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"   # the voted one
+    assert "guild-100" not in indio._indio_pending_vote
+
+
 # --- _tally_vote_winner pure-function behavior -----------------------------
 
 

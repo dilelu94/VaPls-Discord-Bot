@@ -17,6 +17,9 @@ Notas:
   varios resultados, en vez de reproducir el primero a ciegas se ofrecen las opciones
   (numeradas con emojis 1️⃣2️⃣3️⃣). Una URL directa siempre se reproduce sin preguntar.
   - **`/play`:** menú desplegable; elige al instante **quien corrió el comando**.
-  - **El Indio (voz/chat):** abre una **votación de unos segundos** (`_MUSIC_VOTE_WINDOW_SEC`,
-    5 s por defecto). **Cualquiera** del canal vota diciendo/escribiendo el número; al cerrarse
-    gana la **más votada** (empate → número más bajo; si nadie votó → la primera/más relevante).
+  - **El Indio (voz/chat):** abre una **votación** que cierra cuando pasan
+    `_MUSIC_VOTE_WINDOW_SEC` (5 s por defecto) **sin votos nuevos** — cada voto
+    reinicia la cuenta regresiva, así un voto al segundo 4 le da otros 5 s a
+    quien quiera reaccionar. **Cualquiera** del canal vota diciendo/escribiendo
+    el número; al cerrarse gana la **más votada** (empate → número más bajo; si
+    nadie votó → la primera/más relevante).
