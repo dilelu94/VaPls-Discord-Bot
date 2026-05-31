@@ -58,25 +58,23 @@ matches = _extract_pattern_matcher()
 # ---- positive cases -------------------------------------------------------
 
 @pytest.mark.parametrize("text", [
+    # Wake-word alone (the only token combination VOSK actually emits, since
+    # Whisper handles the rest of the utterance after the trigger).
     "che indio",
-    "Che indio",
-    "che indio venir",  # extra words around are fine
-    "bueno che indio escuchá esto",
-    "indio ponete a reproducir algo",
-    "indio reproduci una de los redondos",
-    "indio reproducí algo",  # with accent
-    "indio reproduce algo",
-    "indio poneme musica",
+    "Che indio",                  # casing-insensitive
+    "indio ponete",
+    "indio poneme",
+    "indio reproduci",
+    "indio reproducí",            # accent normalized via NFD
+    "indio reproduce",
     "indio tirate",
-    "indio tirate un chiste",
     "indio dale",
-    "indio dale play",
-    "indio dale algo de los redondos",
+    "indio dale play",            # one realistic combined-command sample
     # Relaxed patterns that compensate for vosk-model-small-es-0.42 collapses.
     "que indio",                  # VOSK hears "che indio" as "que indio"
     "eh indio",                   # other speakers come out as "eh indio"
     "indio por",                  # VOSK collapses "ponete"/"poneme" to "por"
-    "indio tira un chiste",       # VOSK drops trailing "te" → "tira"
+    "indio tira",                 # VOSK drops trailing "te" → "tira"
 ])
 def test_pattern_fires(text):
     assert matches(text) is True
