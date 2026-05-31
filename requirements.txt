@@ -3,3 +3,7 @@ python-dotenv
 psutil
 posthog>=7.15.0
 aiohttp>=3.9
+# audioop was removed from the stdlib in Python 3.13. This backport re-adds it
+# so userbot/recording.py can import it if the server's Python is ever upgraded.
+# The marker is a no-op on <=3.12 where the stdlib module still exists.
+audioop-lts; python_version >= "3.13"
