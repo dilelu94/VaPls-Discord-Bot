@@ -144,15 +144,27 @@ _INDIO_TOOLS = [
         "name": "play_music",
         "description": (
             "Reproducir una canción/tema NUEVO en el canal de voz #sick-tunes vía "
-            "el comando /play. Usala SOLO cuando el grupo nombra explícitamente "
-            "qué quieren escuchar — un artista, una canción, un género o un mood "
-            "(ej. 'pone Queen', 'pone Despacito', 'pone algo de los redondos', "
-            "'pone jazz tranquilo'). "
-            "IMPORTANTE: si solo dicen 'play' / 'pone play' / 'dale play' / "
-            "'metele play' / 'continuá' / 'resumí' SIN nombrar artista o "
-            "canción, NO uses esta tool — eso es resume_music (despausar lo "
-            "que estaba sonando). Mirá el [Estado del reproductor] del prompt "
-            "para saber si hay algo pausado."
+            "el comando /play. \n"
+            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
+            "explícito de orden — ponete, poneme, ponela, pone, metele, "
+            "mete, tirá, tirate, tirame, reproduci, reproducí, dale, dale "
+            "play, pone play, metele play, dale con, dejá, dejame, traete, "
+            "queremos escuchar — Y (2) un nombre/género/mood concreto que "
+            "diga QUÉ poner (artista, canción, género, palabra clave como "
+            "'tema'). \n"
+            "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
+            "un artista (mencionar a 'Queen' en una conversación NO significa "
+            "que quieran escucharlo). Si falta el nombre concreto, tampoco "
+            "(decir 'pone algo' solo, sin más, NO sirve). \n"
+            "Ejemplos VÁLIDOS: 'pone Queen', 'tirate un tema de los redondos', "
+            "'metele algo de jazz', 'reproduci Despacito', 'ponete un tema'. \n"
+            "Ejemplos INVÁLIDOS (NO llamar play_music): 'che indio cómo va', "
+            "'me encanta Queen', 'sacá esta música' (eso es stop_music), "
+            "'la música está fuerte', 'qué buen tema este'. \n"
+            "Si solo dicen 'play' / 'pone play' / 'dale play' / 'metele play' / "
+            "'continuá' / 'resumí' SIN nombrar artista o canción, NO uses esta "
+            "tool — eso es resume_music. Mirá el [Estado del reproductor] del "
+            "prompt para saber si hay algo pausado."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -1332,6 +1344,24 @@ def _looks_like_url(query: str) -> bool:
             or q.startswith("ytsearch:"))
 
 
+# Words that, when adjacent to an ordinal/number token, signal "this is a
+# selection". Required for ordinal-word matching so bare "uno" / "dos" in
+# normal speech doesn't get parsed as a vote. Includes the selection article
+# ("la 4"), imperatives ("ponela 2", "elegí la tres", "votá la una"), and the
+# explicit "opción"/"número" framing.
+# Stored without accents — _parse_choice normalizes input the same way via
+# _normalize_choice, so the lookup just needs the accent-stripped form.
+_SELECTION_CONTEXT_WORDS = {
+    "la", "el", "los", "las",
+    "ponela", "ponelo", "poneme", "ponete", "pone",
+    "metele", "mete", "tirate", "tira", "tirame",
+    "dame", "dale", "elegi", "elegime", "elige",
+    "vota", "voto", "votala", "votalo",
+    "quiero", "ese", "esa", "este", "esta",
+    "opcion", "numero", "n",
+}
+
+
 def _parse_choice(text: str, candidates: list[dict]):
     """Interpret a selection utterance against the offered candidates.
 
@@ -1340,7 +1370,12 @@ def _parse_choice(text: str, candidates: list[dict]):
     selection at all (caller should treat it as a normal new message).
 
     Resolution order: explicit cancel > digit (1..N) > ordinal word
-    (primera/segunda/…) > a distinctive word that matches exactly one title.
+    (primera/segunda/…) **only when preceded by a selection context word** >
+    a distinctive word that matches exactly one title.
+
+    The selection-context requirement on ordinals is what stops normal speech
+    ("Uno lava todo") from being parsed as a vote — there's no leading "la" /
+    "ponela" / etc., so bare "uno" is ignored.
     """
     if not text or not candidates:
         return None
@@ -1354,9 +1389,15 @@ def _parse_choice(text: str, candidates: list[dict]):
         if 1 <= v <= n:
             return v - 1
     tokens = re.findall(r"[a-z]+", norm)
-    for tok in tokens:
+    for i, tok in enumerate(tokens):
         for stem, idx in _ORDINAL_STEMS.items():
-            if tok.startswith(stem) and idx < n:
+            if not tok.startswith(stem) or idx >= n:
+                continue
+            # Only accept the ordinal if the previous token signals selection
+            # intent. Falls through to None if it doesn't — the caller treats
+            # this as a normal message (chat / Gemini turn), not a vote.
+            prev = tokens[i - 1] if i > 0 else ""
+            if prev in _SELECTION_CONTEXT_WORDS:
                 return idx
     # Distinctive-word match against the titles (e.g. "la del vivo",
     # "la de Calamaro"). Only commit when exactly one title wins.
