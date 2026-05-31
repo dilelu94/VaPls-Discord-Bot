@@ -274,7 +274,7 @@ _indio_members_refreshed_at: dict[str, float] = {}
 # How many candidates to offer. Kept in sync with playCommand's /play picker.
 _MUSIC_CHOICE_COUNT = 5
 # Seconds the vote stays open from the last vote (sliding window).
-_MUSIC_VOTE_WINDOW_SEC = 10.0
+_MUSIC_VOTE_WINDOW_SEC = 30.0
 # guild memory key -> {"candidates", "guild_id", "votes": {voter: idx},
 #                      "post": coro_fn, "bot", "task", "opened_at"}
 _indio_pending_vote: dict[str, dict] = {}

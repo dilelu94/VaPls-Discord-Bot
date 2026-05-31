@@ -115,9 +115,9 @@ concisas.
   chat aparezca como "El Indio usó /play".
 - **Pide música con votación**: cuando le piden un tema (voz o chat) y hay varios
   resultados, el Indio lista las opciones (con emojis) y abre una **votación que
-  cierra cuando pasan `_MUSIC_VOTE_WINDOW_SEC` (10 s por defecto) sin votos
+  cierra cuando pasan `_MUSIC_VOTE_WINDOW_SEC` (30 s por defecto) sin votos
   nuevos** — cada voto registrado reinicia la cuenta regresiva, así un voto al
-  segundo 9 le da otros 10 s a quien quiera votar. **Cualquiera** del canal vota,
+  segundo 29 le da otros 30 s a quien quiera votar. **Cualquiera** del canal vota,
   y se puede votar de **tres formas combinadas en el mismo conteo**: hablando,
   escribiendo el número ("la dos", "la 3"), o **reaccionando** con el emoji del
   número (el bot siembra las reacciones 1️⃣2️⃣3️⃣). Un voto por persona (reacción
