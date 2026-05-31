@@ -60,3 +60,16 @@ def test_warns_against_fuzzy_matching_conversation():
     # Either explicit "no significa que quieran" wording or general
     # "hablando del tema" framing.
     assert "no significa" in desc or "hablando del tema" in desc
+
+
+def test_dale_alone_is_called_out_as_ambiguous():
+    """'Dale' suelto es muletilla rioplatense que puede significar cualquier
+    cosa (asentir, animar, pedir). Si Gemini la cuenta como verbo de orden,
+    cada vez que alguien diga 'dale, qué onda' o 'dale, contame' arranca a
+    tirar clips. La descripción tiene que distinguir 'dale' standalone (no
+    cuenta) de 'dale + otro verbo' (válido)."""
+    desc = _play_sound_description()
+    # The disambiguation must be present in some form.
+    assert "muletilla" in desc or "ambigua" in desc or "ambigua" in desc
+    # And the rule about chained 'dale + verb' should be there too.
+    assert "dale" in desc

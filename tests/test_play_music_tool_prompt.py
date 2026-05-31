@@ -55,3 +55,13 @@ def test_mentions_resume_music_disambiguation():
     resume_music, not play_music. Keep this in the description."""
     desc = _play_music_description()
     assert "resume_music" in desc
+
+
+def test_dale_alone_is_called_out_as_ambiguous():
+    """'Dale' suelto es muletilla rioplatense que puede significar cualquier
+    cosa (asentir, animar, pedir). Si Gemini la cuenta como verbo de orden,
+    cada vez que alguien diga 'dale, escuchame' arranca a tirar temas. La
+    descripción tiene que distinguir 'dale' standalone (no cuenta) de
+    'dale + otro verbo' (válido, donde el verbo real es el segundo)."""
+    desc = _play_music_description()
+    assert "muletilla" in desc or "ambigua" in desc
