@@ -633,6 +633,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
             "results": results,
         })
 
+    async def textChannels(request: web.Request) -> web.Response:
+        """List text channels of the guild."""
+        try:
+            guildId = int(request.query["guild_id"])
+        except (KeyError, ValueError):
+            return web.json_response({"error": "missing or invalid guild_id"}, status=400)
+
+        guild = _resolveGuild(bot, guildId)
+        if guild is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+
+        channels = [
+            {"id": ch.id, "name": ch.name}
+            for ch in guild.text_channels
+        ]
+        return web.json_response({"text_channels": channels})
+
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
@@ -642,6 +659,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/indio", indioVoice)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
+    app.router.add_get("/channels", textChannels)
     return app
 
 

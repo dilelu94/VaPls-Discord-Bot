@@ -1,0 +1,10 @@
+# CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-collaborators-and-permissions-in-your-repository/about-code-owners
+
+# Este archivo define los propietarios de los archivos del repositorio para solicitar revisiones automáticas.
+# IMPORTANTE: CODEOWNERS por sí solo no impide que un usuario haga push o merge.
+# Para configurar las restricciones de toobiiasp, lee las instrucciones del archivo o la respuesta del bot.
+
+# Asignar a @dilelu94 y @MattFerzz como propietarios de todo el repositorio.
+# Cualquier Pull Request requerirá su aprobación si se activa "Require review from Code Owners".
+*       @dilelu94 @MattFerzz

@@ -91,3 +91,8 @@ USERBOT_RECORD_TRIGGER_TIMEOUT = float(os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT
 # Cuántos segundos de inactividad (ni reproduciendo ni pausado) tolera el bot
 # antes de desconectarse solo del canal de voz. Lo maneja idleWatchdog.py.
 VOICE_IDLE_TIMEOUT_SECONDS = float(os.getenv("VOICE_IDLE_TIMEOUT_SECONDS", "60"))
+
+# /sugerencias: archivo JSON donde se guardan las ideas/feature-requests de los
+# usuarios. Gemini Flash-Lite agrupa ideas similares para no duplicar entradas.
+SUGGESTIONS_PATH = os.getenv("SUGGESTIONS_PATH", "data/suggestions.json")
+SUGGESTIONS_MODEL = os.getenv("SUGGESTIONS_MODEL", "gemini-2.5-flash-lite")

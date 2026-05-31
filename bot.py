@@ -16,6 +16,7 @@ from playCommand import playLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic
 from geminiCommand import vaplsLogic, indioLogic
+from suggestionsCommand import sugerenciasLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics
@@ -404,6 +405,33 @@ async def indio(
     await safe_defer(ctx)
     _track_command(ctx, "indio", {"prompt_length": len(charla or "")})
     await indioLogic(ctx, charla, False)
+
+
+@bot.slash_command(name="sugerencias", description="Sugerile algo al bot — se agrupa con ideas similares")
+async def sugerencias(
+    ctx,
+    idea: discord.Option(str, description="Tu idea, cambio o feature deseado"),
+):
+    """Slash command: submit a free-form suggestion to the bot.
+
+    Args:
+        ctx: Discord application context.
+        idea: User-provided suggestion text.
+
+    Side Effects:
+        Persists the suggestion to disk (grouped with similar prior ideas via
+        Gemini Flash-Lite) and replies ephemerally to the user.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception:
+        pass
+    _track_command(ctx, "sugerencias", {"idea_length": len(idea or "")})
+    await sugerenciasLogic(ctx, idea)
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")

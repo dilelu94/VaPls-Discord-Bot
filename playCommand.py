@@ -147,6 +147,22 @@ class GuildPlayer:
         self.activeDownloadProc = None
         self.initialCtx = None
 
+    def _resolveMusicChannel(self, fallback=None):
+        """Return the configured music text channel for this guild.
+
+        Falls back to ``fallback`` (typically ``ctx.channel``) if the
+        configured channel is missing or not sendable. Used so that the
+        control panel and status messages always land in the music channel
+        regardless of where ``/play`` was invoked.
+        """
+        if self.bot is not None:
+            guild = self.bot.get_guild(self.guildId)
+            if guild is not None:
+                ch = guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+                if ch is not None and hasattr(ch, "send"):
+                    return ch
+        return fallback
+
     async def _enqueueAndMaybeStart(self, songs, *, source: Optional[str] = None):
         """Shared enqueue → analytics → maybe-start-playback core.
 
@@ -204,7 +220,7 @@ class GuildPlayer:
         """
         from bot import safeEdit
 
-        self.textChannel = ctx.channel
+        self.textChannel = self._resolveMusicChannel(fallback=ctx.channel)
         self.lastRequester = ctx.author
 
         isFirst = (not self.currentSong and len(self.queue) == 0)
@@ -921,7 +937,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
     player = getGuildPlayer(ctx.guild.id, ctx.bot)
     player.vc = vc
-    player.textChannel = ctx.channel
+    player.textChannel = player._resolveMusicChannel(fallback=ctx.channel)
 
     # Prepare search or URL input
     inputStr = query.strip()
