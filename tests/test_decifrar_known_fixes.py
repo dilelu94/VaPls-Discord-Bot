@@ -52,6 +52,24 @@ async def test_lineas_horarias_is_rewritten_to_indio_solari(monkeypatch):
     assert "indio solari" in out.lower()
 
 
+def test_decifrar_prompt_pins_number_and_imperative_preservation():
+    """The system prompt explicitly instructs the model to keep literal
+    digits and imperative verbs. Without this, transcripts like "Indio,
+    tirala 4" got rewritten to "tirala" (digit lost) — which made vote
+    bridging impossible because there was no number left to parse."""
+    from geminiCommand import DECIFRAR_SYSTEM
+    low = DECIFRAR_SYSTEM.lower()
+    # Numbers
+    assert ("número" in low or "numero" in low or "dígito" in low
+            or "digito" in low)
+    assert "tirala" in low or "ponela" in low      # examples in the prompt
+    # Imperative mood
+    assert "imperativ" in low
+    assert ("tirate" in low or "ponete" in low)
+    # Examples calling out the inverted-tense failure mode.
+    assert "tiraste" in low or "puse" in low
+
+
 async def test_unrelated_text_passes_through_unchanged(monkeypatch):
     """Text that doesn't contain any known confusion is not modified by the
     fix table — Gemini sees it verbatim and the function returns whatever

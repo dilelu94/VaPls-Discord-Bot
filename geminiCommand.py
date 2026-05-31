@@ -256,6 +256,65 @@ _LT_JOKES = 10
 
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
+
+# How old a turn has to be (in seconds) before we tag it with a "[hace X]"
+# prefix when feeding it back to Gemini. Without this, the model has no temporal
+# cue and confuses last week's "te pasé esta lista" with the current convo.
+_HISTORY_AGE_TAG_THRESHOLD_SEC = 15 * 60   # 15 minutes
+
+
+def _humanize_age(seconds: float) -> str:
+    """Render an age-in-seconds as a Spanish short tag for the prompt.
+
+    Used to prefix old history turns with ``[hace X]`` so Gemini knows the
+    line is not part of the current exchange. Buckets are coarse on purpose —
+    the model only needs to tell "now" from "ago"."""
+    if seconds < 60:
+        return "hace instantes"
+    if seconds < 3600:
+        return f"hace {int(seconds // 60)} min"
+    if seconds < 86400:
+        return f"hace {int(seconds // 3600)} h"
+    if seconds < 86400 * 30:
+        return f"hace {int(seconds // 86400)} días"
+    if seconds < 86400 * 365:
+        return f"hace {int(seconds // (86400 * 30))} meses"
+    return "hace más de un año"
+
+
+def _stamp_history_for_prompt(history: list[dict], now: float) -> list[dict]:
+    """Return a copy of ``history`` where each turn old enough gets a
+    ``[hace X]`` tag prepended to its text, so the model treats those lines
+    as past context, not present.
+
+    Recent turns (≤ ``_HISTORY_AGE_TAG_THRESHOLD_SEC``) pass through unchanged
+    so the current exchange reads naturally. Turns without a ``ts`` field
+    (legacy entries from before this feature) are treated as old.
+    """
+    out: list[dict] = []
+    for turn in history or []:
+        ts = turn.get("ts")
+        if ts is None:
+            age = None
+        else:
+            try:
+                age = max(0.0, now - float(ts))
+            except (TypeError, ValueError):
+                age = None
+        if age is not None and age < _HISTORY_AGE_TAG_THRESHOLD_SEC:
+            # Recent — leave it alone.
+            out.append({k: v for k, v in turn.items() if k != "ts"})
+            continue
+        tag = f"[{_humanize_age(age)}] " if age is not None else "[hace tiempo] "
+        new_parts = []
+        for part in turn.get("parts", []):
+            if isinstance(part, dict) and "text" in part:
+                new_parts.append({"text": tag + str(part["text"])})
+            else:
+                new_parts.append(part)
+        out.append({"role": turn.get("role"),
+                    "parts": new_parts or turn.get("parts", [])})
+    return out
 _indio_long_term: dict[str, dict] = {}
 _indio_locks: dict[str, asyncio.Lock] = {}
 _persist_lock = asyncio.Lock()
@@ -1016,17 +1075,93 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
         return False, f"relay error: {exc}"
 
 
+_ACTION_FAILURE_MESSAGES = {
+    # Status code (set by _dispatch_indio_actions) → user-facing message. The
+    # indio already promised "dale, va" optimistically *before* the tool ran;
+    # these messages get posted **after** the tool fails so the user finds out
+    # instead of waiting forever for music that's not coming.
+    "resume: not paused":
+        "uh, no había nada pausado para reanudar",
+    "resume: no voice channel to rejoin":
+        "no hay nadie en voz al que pueda conectarme",
+    "resume: nothing to resume":
+        "no me acuerdo qué estaba sonando, decime qué pongo",
+    "pause: not playing":
+        "no estaba sonando nada, no tengo qué pausar",
+}
+
+
+def _failure_feedback(status: str) -> Optional[str]:
+    """Translate a status string emitted by ``_dispatch_indio_actions`` into a
+    user-facing apology, or ``None`` if the status was a success (no feedback
+    needed). Used to surface tool failures the indio promised optimistically."""
+    if not status:
+        return None
+    if status in _ACTION_FAILURE_MESSAGES:
+        return _ACTION_FAILURE_MESSAGES[status]
+    if status.endswith(": no active player"):
+        return "no había reproductor activo, no estaba sonando nada"
+    if status.startswith("music: fail"):
+        # Extract the inner reason after " — " when present.
+        _, _, reason = status.partition(" — ")
+        return (f"no pude poner la música ({reason})"
+                if reason else "no pude poner la música")
+    if status.startswith("sound: fail"):
+        _, _, reason = status.partition(" — ")
+        return (f"no encontré el sonido ({reason})"
+                if reason else "no encontré ese sonido")
+    if status.startswith("resume: reconnect failed"):
+        return "no pude reconectarme al canal para retomar la música"
+    return None
+
+
+async def _post_action_failures(channel_id: Optional[int], channel,
+                                statuses: list[str]) -> None:
+    """Post one user-facing message per failed action status. Best-effort:
+    relays via the userbot (so the indio "owns" the apology) and falls back to
+    ``channel.send`` when the relay is off. ``channel`` may be ``None`` —
+    in that case we only attempt the relay path."""
+    seen: set[str] = set()
+    for status in statuses or []:
+        msg = _failure_feedback(status)
+        if not msg or msg in seen:
+            continue
+        seen.add(msg)
+        logger.info("indio action feedback: %r → %r", status, msg)
+        relayed = False
+        if channel_id and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            try:
+                relayed = await _relay_to_userbot(int(channel_id), msg, None)
+            except Exception:
+                logger.exception("indio action feedback relay failed")
+                relayed = False
+        if not relayed and channel is not None:
+            try:
+                await channel.send(msg)
+            except Exception:
+                logger.exception("indio action feedback channel.send failed")
+
+
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
+                                   feedback_channel_id: Optional[int] = None,
+                                   feedback_channel=None,
                                    ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
     real "/play" / "/soundpad" slash commands in the chat. Both land in
     ``config.INDIO_PLAY_CHANNEL_ID`` — that's the dedicated room for
     playback regardless of where the conversation is happening. Falls back
-    to in-process playback if the relay is unavailable. Returns short
-    status strings for logging; the indio's main reply is sent separately."""
+    to in-process playback if the relay is unavailable.
+
+    When ``feedback_channel_id`` / ``feedback_channel`` are provided, any
+    action that fails triggers a corrective message in that channel so the
+    user finds out (the indio already promised "dale, va" optimistically
+    before the tool ran).
+
+    Returns short status strings for logging; the indio's main reply is sent
+    separately."""
     if not actions or guild_id is None or bot is None:
         return []
     statuses: list[str] = []
@@ -1149,6 +1284,14 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     )
         except Exception:
             logger.exception("indio action %s failed", action)
+            statuses.append(f"{action.lower()}: fail — exception")
+    # After all actions ran, push corrective messages for any failures so the
+    # user gets actual feedback instead of being left waiting on the optimistic
+    # "dale, va" the indio already posted.
+    try:
+        await _post_action_failures(feedback_channel_id, feedback_channel, statuses)
+    except Exception:
+        logger.exception("indio action feedback dispatch failed")
     return statuses
 
 
@@ -1723,7 +1866,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         reply = await geminiClient.generate(
             user_message=tagged_message,
             system_instruction=system_instruction,
-            history=history_snapshot,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
@@ -1837,12 +1980,18 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         logger.exception("indio archive enqueue failed")
 
     if pending_actions:
+        _fb_channel_id = getattr(ctx, "channel_id", None) or getattr(
+            getattr(ctx, "channel", None), "id", None
+        )
         asyncio.create_task(_dispatch_indio_actions(
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
+            feedback_channel_id=_fb_channel_id,
+            feedback_channel=getattr(ctx, "channel", None),
         ))
 
-    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
-    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
+    _turn_ts = time.time()
+    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
+    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -1949,7 +2098,7 @@ async def indioFromVoice(
         reply = await geminiClient.generate(
             user_message=tagged_message,
             system_instruction=system_instruction,
-            history=history_snapshot,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
@@ -2032,10 +2181,13 @@ async def indioFromVoice(
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             bot, guild_id, pending_actions,
+            feedback_channel_id=channel_id,
+            feedback_channel=channel,
         ))
 
-    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
-    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
+    _turn_ts = time.time()
+    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
+    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -2076,6 +2228,16 @@ Reglas:
 - No agregues información nueva.
 - Mantené la intención (pregunta, exclamación, etc.) y el voseo rioplatense.
 - Si el hablante invoca al "indio" o "che indio", mantené esa parte tal cual.
+- **PRESERVÁ NÚMEROS LITERALES**: si el ASR transcribió un dígito ("4", "2"), \
+  ese dígito DEBE aparecer en la corrección. Nunca lo borres ni lo reemplaces \
+  por palabras. Ej.: "Indio, tiradela 4" → "che indio, tiradela 4" (NO \
+  "che indio, tirala"). "Indio ponela 3" → "che indio, ponela 3". El número \
+  es la respuesta a una votación abierta — si lo perdés, el voto no cuenta.
+- **PRESERVÁ EL MODO IMPERATIVO**: si el hablante da una orden ("tirate", \
+  "ponete", "ponela", "dale play", "tirá"), DEBE seguir siendo imperativo en \
+  la salida. Nunca lo conjugues en pasado ni en otro modo. Ej.: "Tírate la 4" \
+  → "tirate la 4" (NO "tiraste la 4"). "Pone música" → "poné música" (NO \
+  "puse música"). El indio recibe órdenes, no narraciones.
 - Cuando piden música, mucho ojo con nombres de bandas, canciones y artistas \
   modernos: pueden sonar en spanglish o tener nombres "raros" (ej. Tussi \
   Warriors, Bizarrap, Wos, Trueno, Tiago PZK, Duki, Cazzu, Nicki Nicole, \
