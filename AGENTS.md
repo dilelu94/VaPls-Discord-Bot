@@ -13,6 +13,29 @@ proyecto. Es la **fuente canónica** de instrucciones para asistentes de IA.
 - [`behavioral-testing`](.agents/skills/behavioral-testing/SKILL.md): cómo escribir
   tests en este repo. **Usala siempre que escribas o modifiques tests.**
 
+## ✅ Definition of Done
+
+Antes de dar por terminado **cualquier cambio**, todo agente (Claude, Gemini,
+Codex, Copilot, u otro) DEBE cumplir esta checklist sin excepciones:
+
+- [ ] Ejecutar `make check` (o `python -m pytest -q`) en el entorno local.
+- [ ] El resultado debe ser **100 % verde** — cero errores, cero fallos.
+- [ ] Los tests deben pasar sobre el Python local del agente antes de declarar
+      el trabajo completo.
+- [ ] No marcar una tarea como terminada si hay tests rojos, aunque el cambio
+      parezca trivial.
+
+**Hook de git (pre-push):** el repositorio incluye `.githooks/pre-push`, que
+bloquea el `git push` automáticamente si la suite está roja. Activalo una sola
+vez por clon:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Sin esto el hook no corre. CI es la última barrera, pero el hook local evita
+que un cambio roto llegue siquiera al servidor remoto.
+
 ## 📚 Documentación
 - [Arquitectura](docs/architecture.md)
 - [Configuración](docs/configuration.md)
