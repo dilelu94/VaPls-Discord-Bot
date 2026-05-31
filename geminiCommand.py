@@ -1564,8 +1564,18 @@ async def _relay_say(channel_id: int, content: str) -> Optional[int]:
 async def _attach_vote_reactions(bot, vote, channel_id: int,
                                  message_id: int, n: int) -> None:
     """Remember which message carries this vote and seed it with the number
-    reactions (1️⃣…N) so people can vote by reacting. Best-effort."""
+    reactions (1️⃣…N) so people can vote by reacting. Best-effort.
+
+    Refuses to overwrite an existing binding: once a vote has been attached
+    to a message, **a later turn's unrelated reply must not steal it**. That
+    was the 2026-05-31 bug — a chat reply ("¡pará, Enrique!…") got 1-5
+    reactions slapped on it because a music vote from an earlier turn was
+    still open in the guild.
+    """
     if vote is None or not channel_id or not message_id:
+        return
+    if vote.reaction_message_id is not None:
+        # Already bound to a real options message. Don't repoint.
         return
     vote.reaction_channel_id = int(channel_id)
     vote.reaction_message_id = int(message_id)
@@ -1962,7 +1972,12 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     relayed_via_userbot = False
     import playCommand
     _active_vote = playCommand.get_active_vote(int(getattr(ctx.guild, "id", 0) or 0))
-    vote_open = _active_vote is not None
+    # "vote_open" here means "this turn just opened a vote and the reply IS
+    # the options listing". A vote that already has a reaction_message_id
+    # belongs to a previous turn — don't treat the current reply as its
+    # surface (otherwise unrelated chat replies get 1-5 reactions slapped on).
+    vote_open = (_active_vote is not None
+                 and _active_vote.reaction_message_id is None)
     opts_channel_id = None
     opts_msg_id = None
     try:
@@ -2179,7 +2194,11 @@ async def indioFromVoice(
     relayed_via_userbot = False
     import playCommand
     _active_vote = playCommand.get_active_vote(int(guild_id) if guild_id else 0)
-    vote_open = _active_vote is not None
+    # Same gate as indioLogic: only treat this turn's reply as the options
+    # surface when the live vote is the one we just opened (no message bound
+    # yet). Avoids the "unrelated chat reply gets 1-5 reactions" bug.
+    vote_open = (_active_vote is not None
+                 and _active_vote.reaction_message_id is None)
     opts_msg_id = None
     try:
         if vote_open:
