@@ -29,6 +29,10 @@
 | `DECIFRAR_LOG_MAX_LINES` | ❌ | `10000` | Cap del JSONL; al superarlo se descartan las pendientes más viejas (las approved se preservan). |
 | `DECIFRAR_LOG_PATH` | ❌ | `data/decifrar_log.jsonl` | Path al JSONL persistente (gitignored). |
 | `DECIFRAR_CACHE_SEED_MAX` | ❌ | `128` | Cuántas entradas approved se cargan al cache in-memory al startup (las más recientes). |
+| `INDIO_ARCHIVE_THREAD_ID` | ❌ | `0` | ID del thread donde se archivan los Q+A del Indio. `0` desactiva el archivado por completo. Las entradas se postean via el relay del userbot, así conservan la identidad del Indio para búsqueda de mensajes. |
+| `INDIO_ARCHIVE_DELAY_SECONDS` | ❌ | `7200` | Segundos que un Q+A vive en el queue antes de archivarse al thread. Default 2h. |
+| `INDIO_ARCHIVE_QUEUE_PATH` | ❌ | `data/indio_archive_queue.jsonl` | Path al JSONL persistente que guarda los Q+A pendientes de archivar. Sobrevive restarts. |
+| `INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS` | ❌ | `60` | Cada cuánto corre el sweeper que detecta entradas vencidas y las postea al thread. |
 
 ## Userbot (.env in userbot/)
 | Variable | Required | Default | Description / implications |
