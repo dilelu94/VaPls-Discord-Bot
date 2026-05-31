@@ -44,6 +44,11 @@ try:
     from users import USERS as _USERS
 except Exception:
     _USERS = {}
+import webhookLogger  # parent dir; falls back to no-op if env vars unset
+
+# Forward userbot logs to a Discord thread via webhook (LOG_WEBHOOK_URL).
+# Disabled when env var is empty.
+_webhook_log_handler = webhookLogger.install_from_env("userbot")
 
 
 def _name_for(user_id: int, member=None) -> str:
@@ -1521,6 +1526,8 @@ async def _leave_if_empty(guild: discord.Guild):
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
+    if _webhook_log_handler is not None:
+        _webhook_log_handler.start(asyncio.get_running_loop())
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):
