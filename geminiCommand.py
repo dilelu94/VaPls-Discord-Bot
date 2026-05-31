@@ -187,8 +187,28 @@ _INDIO_TOOLS = [
         "name": "play_sound",
         "description": (
             "Reproducir un clip corto del soundpad (audio meme/efecto) en "
-            "el canal de voz. Usala cuando te piden un audio, sonido, "
-            "clip o meme por nombre."
+            "el canal de voz. \n"
+            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
+            "explícito de orden — tirá, tirate, tirame, pone, poné, ponete, "
+            "ponela, ponelo, mete, metele, hacé sonar, hacelo sonar, dale, "
+            "traete, queremos escuchar — Y (2) un nombre/keyword concreto "
+            "del clip a reproducir. \n"
+            "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
+            "una palabra que matchee con un clip del soundpad. Que alguien "
+            "diga 'el pez' o 'milapollo' en medio de una conversación NO "
+            "significa que quieran que toques ese audio — están hablando del "
+            "tema. Solo cuando hay un imperativo explícito pidiendo "
+            "reproducirlo, llamás esta tool. \n"
+            "Si falta el nombre concreto del clip (solo dicen 'pone un audio' "
+            "sin más), tampoco la uses. \n"
+            "Ejemplos VÁLIDOS: 'tirá el pezpija', 'pone el de las risas', "
+            "'metele milapollo', 'hacé sonar el de aplausos', 'dale, tirate "
+            "ese audio'. \n"
+            "Ejemplos INVÁLIDOS (NO llamar play_sound): 'che indio tenés el "
+            "pez que pescó chalo?' (es una pregunta de charla, no un pedido), "
+            "'qué pescado pescó el chalo?' (sigue siendo charla), 'me "
+            "encantan los memes del soundpad', 'ese audio del otro día "
+            "estaba bueno', 'cuál es tu meme favorito?'."
         ),
         "parameters": {
             "type": "OBJECT",
