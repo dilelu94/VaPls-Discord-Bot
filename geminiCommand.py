@@ -58,6 +58,20 @@ sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
 Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
 comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
 \
+Sos bastante más grande que el grupo: tenés más de 30 años más que cualquiera \
+de tus amigos, sos el viejo veterano de la barra. Eso lo podés referenciar \
+con onda cuando viene al caso (sin restregarlo en cada mensaje). \
+\
+Cada usuario del grupo tiene un APODO (lo ves entre corchetes en cada mensaje, \
+ej. "[Miles]: ...") y, para varios, un NOMBRE REAL distinto (aparece en sus \
+rasgos como "nombre real: X"). Usá el nombre real SOLO para inferir si es \
+hombre o mujer y hablarle con la concordancia correcta. Llamalos SIEMPRE por \
+el apodo, NUNCA por el nombre real (queda raro y los conocés por el apodo). \
+\
+Algunos rasgos vienen prefijados con "(privado, no mencionar)": son contexto \
+para vos, te ayudan a responder coherente, pero NO los digas explícitamente \
+en el chat. \
+\
 Si el grupo te pide música/un tema/una canción, usás la tool `play_music`. Si \
 te piden un audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te \
 piden controlar la música que está sonando, usás `skip_music` (saltear/cambiar), \
@@ -520,24 +534,47 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
     return out
 
 
+def _block_lists_by_name() -> dict[str, list[str]]:
+    """Mapa apodo -> lista de substrings (lowercase) que hay que filtrar de
+    la memoria dinámica. Usado para scrubear facts viejos/incorrectos sin
+    tener que limpiar a mano el indio_memory.json del server."""
+    out: dict[str, list[str]] = {}
+    for info in _USERS.values():
+        if not isinstance(info, dict):
+            continue
+        name = info.get("name")
+        blocks = info.get("block_dynamic_substrings") or []
+        if not name or not blocks:
+            continue
+        out[str(name)] = [str(b).lower() for b in blocks if b]
+    return out
+
+
 def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
     """Combine the static per-user traits from users.py with whatever Gemini
     has distilled in long-term memory. Static entries provide a baseline; the
-    distilled additions are appended without duplicates."""
+    distilled additions are appended without duplicates. Items in dynamic
+    memory matching a user's ``block_dynamic_substrings`` are filtered out."""
     merged = _static_user_traits()
+    blocks_by_name = _block_lists_by_name()
     if isinstance(lt_users, dict):
         for name, data in lt_users.items():
             if not isinstance(data, dict):
                 continue
-            bucket = merged.setdefault(str(name), {
+            name_str = str(name)
+            blocks = blocks_by_name.get(name_str, [])
+            bucket = merged.setdefault(name_str, {
                 "traits": [], "preguntas_tipicas": [], "anecdotas": [],
             })
             for key in ("traits", "preguntas_tipicas", "anecdotas"):
                 existing = bucket.setdefault(key, [])
                 for item in (data.get(key) or []):
                     s = str(item)
-                    if s and s not in existing:
-                        existing.append(s)
+                    if not s or s in existing:
+                        continue
+                    if blocks and any(b in s.lower() for b in blocks):
+                        continue
+                    existing.append(s)
     return merged
 
 
