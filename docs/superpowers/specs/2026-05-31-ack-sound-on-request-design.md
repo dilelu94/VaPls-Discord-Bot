@@ -100,4 +100,4 @@ voice client), siguiendo la skill `behavioral-testing`:
 ## Config / docs
 
 - Documentar `ACK_SOUND_QUERY` en `docs/configuration.md`.
-- No hay `.env.example` en el repo, así que no se agrega ahí.
+- Agregar `ACK_SOUND_QUERY` a `.env.example`.
