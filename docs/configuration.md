@@ -8,6 +8,7 @@
 | `MODEL_PATH_EN` | ❌ | `models/vosk-model-small-en-us-0.15` | Legacy/unused by main bot. |
 | `AUDIO_DIR` | ❌ | `audio/` | Legacy path (used in tests). |
 | `CUSTOM_AUDIO_PATH` | ❌ | `/var/home/dilelu/Desktop/Output` | Base directory for soundpad clips and greeting audio. |
+| `ACK_SOUND_QUERY` | ❌ | _(empty)_ | Fuzzy query matched against `CUSTOM_AUDIO_PATH`; the matched clip plays as a short "request received" blip when the bot gets an Indio music or Telegram audio request while idle. Empty disables it. |
 | `YT_DLP_PATH` | ❌ | `yt-dlp` | Path to yt-dlp binary used by `/play`. |
 | `DEBUG_GUILD_IDS` | ❌ | empty | Comma-separated guild IDs for instant command registration. |
 | `RAM_THRESHOLD_MB` | ❌ | `300` | Currently unused; reserved for resource monitoring. |
