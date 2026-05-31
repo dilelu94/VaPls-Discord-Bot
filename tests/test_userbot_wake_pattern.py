@@ -67,6 +67,11 @@ matches = _extract_pattern_matcher()
     "indio reproducí algo",  # with accent
     "indio reproduce algo",
     "indio poneme musica",
+    "indio tirate",
+    "indio tirate un chiste",
+    "indio dale",
+    "indio dale play",
+    "indio dale algo de los redondos",
 ])
 def test_pattern_fires(text):
     assert matches(text) is True
@@ -79,12 +84,13 @@ def test_pattern_fires(text):
     "indio",
     "el indio",
     "indio loco",            # historical false-positive: "indio + any word"
-    "indio dale",
     "como andas",
     "che boludo",            # "che" alone, no "indio"
     "che indio ",             # trailing whitespace — still fires? actually yes
     "reproducí algo",        # missing "indio"
     "ponete a reproducir",    # missing "indio"
+    "tirate de un puente",   # "tirate" alone without "indio" should not fire
+    "dale que va",            # "dale" alone without "indio" should not fire
 ])
 def test_pattern_does_not_fire_on_bare_or_unrelated(text):
     # The trailing-whitespace case is actually a valid hit; filter it out

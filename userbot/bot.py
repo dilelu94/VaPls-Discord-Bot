@@ -528,7 +528,9 @@ _VOSK_GRAMMAR = json.dumps([
     "indio", "che indio", "ey indio", "hola indio",
     "indio ponete", "indio poneme",
     "indio reproduci", "indio reproducí", "indio reproduce",
+    "indio tirate", "indio dale",
     "ponete", "poneme", "reproduci", "reproducí", "reproduce",
+    "tirate",
     "che", "ey", "hola", "buenas", "dale", "vamos",
     "que", "qué", "como", "cómo", "cual", "cuál",
     "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
@@ -554,6 +556,8 @@ _WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("indio", "poneme"),
     ("indio", "reproduci"),
     ("indio", "reproduce"),
+    ("indio", "tirate"),
+    ("indio", "dale"),
 )
 
 
