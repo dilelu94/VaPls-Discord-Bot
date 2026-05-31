@@ -41,6 +41,7 @@ def _read_queue() -> list[dict]:
     if not p.exists():
         return []
     out: list[dict] = []
+    malformed = 0
     try:
         with p.open("r", encoding="utf-8") as f:
             for line in f:
@@ -50,10 +51,16 @@ def _read_queue() -> list[dict]:
                 try:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
-                    continue
+                    malformed += 1
     except OSError:
         logger.exception("indio_archive: read failed")
         return []
+    if malformed:
+        logger.warning(
+            "indio_archive: skipped %d malformed line(s) in %s — "
+            "check the queue file by hand",
+            malformed, p,
+        )
     return out
 
 
@@ -117,6 +124,33 @@ def format_archive_message(entry: dict) -> str:
     return f"**{speaker}** preguntó:\n{quoted}\n\n{reply}"
 
 
+_DISCORD_CHUNK_LIMIT = 1990
+
+
+def chunk_for_discord(text: str) -> list[str]:
+    """Split a message into Discord-sized chunks (under 2000 chars). Splits
+    on line boundaries when possible; falls back to hard character splits
+    for very long single lines. Returns at least one chunk for any input."""
+    if not text:
+        return [""]
+    if len(text) <= _DISCORD_CHUNK_LIMIT:
+        return [text]
+    chunks: list[str] = []
+    buf = ""
+    for line in text.splitlines(keepends=True):
+        if len(buf) + len(line) > _DISCORD_CHUNK_LIMIT:
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            while len(line) > _DISCORD_CHUNK_LIMIT:
+                chunks.append(line[:_DISCORD_CHUNK_LIMIT])
+                line = line[_DISCORD_CHUNK_LIMIT:]
+        buf += line
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
 # ---------- Posting + sweeping ---------------------------------------------
 
 
@@ -174,8 +208,18 @@ async def sweep_once(now: Optional[float] = None) -> int:
         return 0
     archived_ids: set[str] = set()
     for entry in ready:
-        content = format_archive_message(entry)
-        if await _post_archive(content):
+        full = format_archive_message(entry)
+        chunks = chunk_for_discord(full)
+        # All chunks must post for us to call the entry archived. If any
+        # chunk fails, leave the entry in the queue so the whole thing
+        # retries next sweep (callers tolerate duplicated chunks since
+        # archive is best-effort and failures are rare).
+        all_ok = True
+        for chunk in chunks:
+            if not await _post_archive(chunk):
+                all_ok = False
+                break
+        if all_ok:
             archived_ids.add(entry.get("id") or "")
     if not archived_ids:
         return 0

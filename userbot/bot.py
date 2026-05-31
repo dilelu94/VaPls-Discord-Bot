@@ -1314,9 +1314,10 @@ def _guild_has_humans(guild: discord.Guild) -> bool:
 
 def _channel_has_humans(channel, *, self_id: Optional[int] = None) -> bool:
     """Return True if ``channel`` has any non-bot, non-self, non-ignored,
-    non-muted member currently connected. Muted members (self-mute or
-    server-mute) are treated as not-really-present — the bot shouldn't
-    anchor in a channel where the only humans left are silent."""
+    non-muted, non-deafened member currently connected. Muted or deafened
+    members (self- or server-imposed) are treated as not-really-present —
+    the bot shouldn't anchor in a channel where the only humans left are
+    silent or can't hear anything."""
     if channel is None:
         return False
     if self_id is None:
@@ -1332,6 +1333,8 @@ def _channel_has_humans(channel, *, self_id: Optional[int] = None) -> bool:
         if voice is not None and (
             getattr(voice, "self_mute", False)
             or getattr(voice, "mute", False)
+            or getattr(voice, "self_deaf", False)
+            or getattr(voice, "deaf", False)
         ):
             continue
         return True

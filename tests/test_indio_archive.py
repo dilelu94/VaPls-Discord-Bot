@@ -211,3 +211,65 @@ async def test_sweep_uses_archive_thread_as_destination(fake_relay):
     )
     await indioArchive.sweep_once()
     assert fake_relay[0]["thread_id"] == config.INDIO_ARCHIVE_THREAD_ID
+
+
+# ---------- robustness: malformed JSONL, oversize replies ------------------
+
+
+async def test_malformed_jsonl_line_is_skipped_and_warned(caplog):
+    """If the queue file got corrupted (partial write, manual edit), bad
+    lines must be skipped — but the operator should see a warning so they
+    know to fix the file by hand."""
+    queue_path = Path(config.INDIO_ARCHIVE_QUEUE_PATH)
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    queue_path.write_text(
+        '{"id":"a","ts":1,"speaker":"X","question":"q","reply":"r"}\n'
+        "this is not json\n"
+        '{"id":"b","ts":2,"speaker":"Y","question":"q","reply":"r"}\n',
+        encoding="utf-8",
+    )
+    with caplog.at_level("WARNING", logger="indioArchive"):
+        # Trigger a read via sweep_once; nothing meets the threshold so
+        # nothing posts, but the read still runs.
+        await indioArchive.sweep_once()
+    # The two valid entries must still be on disk after the read.
+    remaining = queue_path.read_text(encoding="utf-8")
+    assert '"id":"a"' in remaining or '"id": "a"' in remaining
+    assert '"id":"b"' in remaining or '"id": "b"' in remaining
+    # And the operator got a warning about the malformed line.
+    assert any("malformed" in r.message.lower() for r in caplog.records)
+
+
+async def test_long_reply_is_chunked_under_discord_limit(fake_relay):
+    """Discord rejects messages >2000 chars. A long Indio reply must come
+    out as multiple posts to the thread, none exceeding the limit."""
+    long_reply = "x" * 5000
+    old_ts = time.time() - 8000
+    await indioArchive.enqueue(
+        guild_id=1, channel_id=2, speaker="Miles",
+        question="q", reply=long_reply, ts=old_ts,
+    )
+    archived = await indioArchive.sweep_once()
+    assert archived == 1
+    # More than one chunk posted, none over the limit.
+    assert len(fake_relay) > 1
+    for post in fake_relay:
+        assert len(post["content"]) < 2000
+    # And the full reply content still made it across (sum of chunks).
+    joined = "".join(p["content"] for p in fake_relay)
+    assert long_reply in joined
+
+
+async def test_chunk_helper_returns_single_chunk_for_short_text():
+    out = indioArchive.chunk_for_discord("hola mundo")
+    assert out == ["hola mundo"]
+
+
+async def test_chunk_helper_splits_on_line_boundaries_when_possible():
+    text = "linea1\n" * 500  # well over 1990
+    chunks = indioArchive.chunk_for_discord(text)
+    assert len(chunks) > 1
+    for c in chunks:
+        assert len(c) < 2000
+    # Reassembly preserves the original text.
+    assert "".join(chunks) == text

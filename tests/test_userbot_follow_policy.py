@@ -133,6 +133,28 @@ def test_unmuted_user_alongside_muted_user_still_counts():
     assert channel_has_humans(_channel_with([muted, active])) is True
 
 
+def test_self_deafened_users_do_not_count():
+    """A deafened user can't hear the bot or anyone else — for follow
+    purposes they're as good as not in the channel."""
+    deafened = SimpleNamespace(
+        id=5, bot=False,
+        voice=SimpleNamespace(
+            self_mute=False, mute=False, self_deaf=True, deaf=False,
+        ),
+    )
+    assert channel_has_humans(_channel_with([deafened])) is False
+
+
+def test_server_deafened_users_do_not_count():
+    deafened = SimpleNamespace(
+        id=5, bot=False,
+        voice=SimpleNamespace(
+            self_mute=False, mute=False, self_deaf=False, deaf=True,
+        ),
+    )
+    assert channel_has_humans(_channel_with([deafened])) is False
+
+
 def test_user_without_voice_state_still_counts():
     """Defensive: a member entry without `.voice` (cache quirks) shouldn't
     silently disappear. Treat them as present."""
