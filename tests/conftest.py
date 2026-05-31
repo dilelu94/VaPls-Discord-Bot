@@ -223,7 +223,12 @@ def indio(tmp_path, monkeypatch):
         gc._indio_long_term.clear()
         gc._indio_locks.clear()
         gc._indio_compressing.clear()
-        gc._indio_pending_choice.clear()
+        # Cancel any open vote timers so they don't leak across tests.
+        for _entry in gc._indio_pending_vote.values():
+            _task = _entry.get("task")
+            if _task is not None and not _task.done():
+                _task.cancel()
+        gc._indio_pending_vote.clear()
 
     _clear()
     gc._mem_path = str(mem_path)  # convenience for tests
