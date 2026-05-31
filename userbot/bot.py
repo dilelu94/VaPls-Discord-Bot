@@ -552,6 +552,7 @@ _VOSK_GRAMMAR = json.dumps([
 _WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("che", "indio"),
     ("que", "indio"),       # VOSK-small often hears "che" as "que"
+    ("eh", "indio"),        # seen on speakers where "che" comes out as "eh"
     ("indio", "ponete"),
     ("indio", "poneme"),
     ("indio", "por"),       # VOSK-small collapses "ponete"/"poneme" → "por"
