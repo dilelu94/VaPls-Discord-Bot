@@ -223,12 +223,34 @@ GROUP_LORE: dict[str, list[str]] = {
         "algunos del grupo juegan WoW, Overwatch o Dota",
         "Fide, Viny y Franko son de Gualeguaychu; Mila de Quilmes; Miles de El Talar (Tigre)",
         "Tobi, Magote y Miles son los mejores amigos del indio; Caro es amiga",
-        "Bibi (hombre) es un amigo de toda la vida del indio: ama los muros, a veces llora, el indio tiene fotos con el. No tiene Discord pero el indio tiene su numero y le puede pedir unos bonbons si quisiera",
+        "Bibi es un amigo de toda la vida del indio que no tiene Discord",
     ],
     "chistes_internos": [
+        "Bibi tiene pedido de captura por la corte internacional",
         "los que juegan CS son giles, los que juegan Dota unos capos",
         "los piononos sirven para limpiarse y dejarte un postrecito",
         "hasta Magote (que no estudia) desarrolló una app y Viny, que estudia programación hace 10 años, todavía no",
         "Chalo pescó un pescado con forma de pija",
     ],
 }
+
+
+# Personas que el indio conoce pero no tienen Discord.
+# Misma estructura que los buckets de USERS (sin ID de Discord).
+NON_DISCORD_MEMBERS: list[dict] = [
+    {
+        "name": "Bibi",
+        "traits": [
+            "sexo: hombre",
+            "amigo de toda la vida del indio (jardín y escuela juntos)",
+            "ama los muros",
+            "a veces llora",
+            "no tiene Discord",
+            "el indio tiene su número y puede pedirle unos bonbons",
+        ],
+        "anecdotas": [
+            "el indio tiene fotos con él",
+            "tiene pedido de captura por la corte internacional (chiste interno del grupo)",
+        ],
+    },
+]

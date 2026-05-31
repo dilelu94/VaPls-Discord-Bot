@@ -39,6 +39,11 @@ try:
 except Exception:
     _GROUP_LORE: dict[str, list[str]] = {}
 
+try:
+    from users import NON_DISCORD_MEMBERS as _NON_DISCORD_MEMBERS
+except Exception:
+    _NON_DISCORD_MEMBERS: list[dict] = []
+
 logger = logging.getLogger("bot.gemini")
 
 VAPLS_SYSTEM = """\
@@ -621,7 +626,8 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
     lists; these are merged into the long-term render every time the indio
     answers and are never overwritten by Gemini's compression cycle."""
     out: dict[str, dict[str, list[str]]] = {}
-    for info in _USERS.values():
+    sources = list(_USERS.values()) + list(_NON_DISCORD_MEMBERS)
+    for info in sources:
         if not isinstance(info, dict):
             continue
         name = info.get("name")
@@ -640,7 +646,8 @@ def _block_lists_by_name() -> dict[str, list[str]]:
     la memoria dinámica. Usado para scrubear facts viejos/incorrectos sin
     tener que limpiar a mano el indio_memory.json del server."""
     out: dict[str, list[str]] = {}
-    for info in _USERS.values():
+    sources = list(_USERS.values()) + list(_NON_DISCORD_MEMBERS)
+    for info in sources:
         if not isinstance(info, dict):
             continue
         name = info.get("name")
