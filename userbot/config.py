@@ -170,8 +170,9 @@ WAKE_SOUND_ENABLED = os.getenv("WAKE_SOUND_ENABLED", "true").lower() == "true"
 # Path al audio. Si es relativo se resuelve contra CUSTOM_AUDIO_PATH. Vacío
 # = feature inactivo aunque WAKE_SOUND_ENABLED esté en true.
 WAKE_SOUND_PATH = os.getenv("WAKE_SOUND_PATH", "")
-# Mínimo de segundos entre dos sonidos en el mismo canal — evita un chorro
-# de sonidos cuando VOSK genera varios hits seguidos.
-WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "2.0"))
+# Mínimo de segundos entre dos sonidos en el mismo canal. Default 0 = sin
+# throttle (cada detección suena), útil mientras se calibra la wake word.
+# Subir si en producción molesta el spam.
+WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "0.0"))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
