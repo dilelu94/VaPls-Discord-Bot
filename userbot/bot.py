@@ -2197,6 +2197,47 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
+async def _relay_join(request: web.Request) -> web.Response:
+    """Make the userbot join (or move to) a specific voice channel.
+
+    Body: ``{"channel_id": <int>}``. Reuses :func:`_join_channel`, which
+    handles reconnects, guild allowlist, and listening sink setup.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not isinstance(channel, discord.VoiceChannel):
+        return web.json_response({"error": "channel is not a voice channel"}, status=400)
+    if not _guild_allowed(channel.guild.id):
+        return web.json_response({"error": "guild not allowed"}, status=403)
+
+    try:
+        await _join_channel(channel)
+    except Exception as e:
+        log.exception("[RELAY-JOIN] join failed")
+        return web.json_response({"error": f"join failed: {e}"}, status=500)
+    return web.json_response({
+        "joined": True,
+        "channel_id": channel_id,
+        "channel_name": channel.name,
+    })
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -2207,6 +2248,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
+    app.router.add_post("/join", _relay_join)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)
