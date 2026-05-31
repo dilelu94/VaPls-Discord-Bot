@@ -78,13 +78,6 @@ async def _disconnect_idle(bot, guild_id: int) -> None:
     channel_name = getattr(channel, "name", "") if channel else ""
 
     player = guildPlayers.get(guild_id)
-    text_channel = getattr(player, "textChannel", None) if player is not None else None
-    if text_channel is not None:
-        try:
-            await text_channel.send("👋 Desconectado por inactividad.")
-        except Exception:
-            logger.exception("idle watchdog: failed to post notice")
-
     if player is not None:
         try:
             clearGuildPlayer(guild_id)

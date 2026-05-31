@@ -190,15 +190,15 @@ async def test_exits_when_vc_disappears():
     assert task.done()
 
 
-async def test_disconnect_clears_guild_player_and_posts_notice():
-    """End-to-end: when the watchdog drops the bot, downstream state is cleaned."""
+async def test_disconnect_clears_guild_player_silently():
+    """End-to-end: when the watchdog drops the bot, downstream state is cleaned
+    and no chatter is posted to the text channel."""
     import idleWatchdog
     from playCommand import guildPlayers, GuildPlayer
 
     vc = FakeVC(guild_id=100)
     bot = make_bot(vc)
 
-    # Seed a player with a text channel so the goodbye notice has somewhere to land.
     player = GuildPlayer(100, bot)
     player.vc = vc
     text_channel = MagicMock()
@@ -211,10 +211,10 @@ async def test_disconnect_clears_guild_player_and_posts_notice():
     )
     await _wait_done(task)
 
-    # Observable: disconnected, GuildPlayer removed, notice sent.
+    # Observable: disconnected, GuildPlayer removed, no notice posted.
     assert vc.disconnect.await_count >= 1
     assert 100 not in guildPlayers
-    assert text_channel.send.await_count >= 1
+    assert text_channel.send.await_count == 0
 
 
 async def test_disconnect_without_player_still_disconnects():
