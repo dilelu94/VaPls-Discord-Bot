@@ -349,6 +349,44 @@ async def test_currentElapsedSeconds_zero_before_playback(fresh_player_state):
     assert player._currentElapsedSeconds() == 0.0
 
 
+async def test_queue_finished_naturally_disconnects_immediately(fresh_player_state):
+    """When the last song in the queue finishes on its own, the bot has to
+    leave voice right away — not wait for the idle watchdog. This is the
+    "go home when the playlist is over" promise."""
+    playCommand = fresh_player_state
+    player = playCommand.GuildPlayer(100, make_bot())
+    player.vc = FakeVC(playing=True, paused=False, connected=True)
+    player.currentSong = {"id": "lastsong", "title": "Bye"}
+    player.queue = []
+    player.textChannel = MagicMock(send=AsyncMock())
+    # File on disk so the cleanup branch in onSongFinished can run.
+    with patch.object(player, "updateControlMessage", new=AsyncMock()):
+        # Simulate ffmpeg finishing naturally (error=None, vc still connected).
+        await player.onSongFinished(error=None)
+
+    # The auto-leave fired: vc was disconnected and player.vc is cleared.
+    assert player.vc is None, "queue end must disconnect the voice client"
+    assert player.currentSong is None, "currentSong must be cleared at queue end"
+
+
+async def test_stop_button_disconnects_immediately(fresh_player_state):
+    """The Stop control on the player UI is an explicit "I'm done" — it must
+    drop the connection in the same heartbeat, not lean on the watchdog."""
+    playCommand = fresh_player_state
+    player = playCommand.GuildPlayer(100, make_bot())
+    player.vc = FakeVC(playing=True, paused=False, connected=True)
+    player.currentSong = {"id": "v1", "title": "A"}
+    player.queue = []
+    player.isStopping = True  # what stopPlayback() sets before calling onSongFinished
+    player.textChannel = MagicMock(send=AsyncMock())
+
+    with patch.object(player, "updateControlMessage", new=AsyncMock()):
+        await player.onSongFinished(error=None)
+
+    assert player.vc is None, "stop must disconnect"
+    assert player.currentSong is None
+
+
 async def test_currentElapsedSeconds_freezes_during_pause(fresh_player_state):
     """While paused the elapsed clock must NOT advance — it's frozen at the
     moment pause was entered."""
