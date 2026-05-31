@@ -1016,10 +1016,6 @@ def _normalize_choice(s: str) -> str:
     return "".join(c for c in n if unicodedata.category(c) != "Mn")
 
 
-def _watch_url(video_id: str) -> str:
-    return f"https://www.youtube.com/watch?v={video_id}"
-
-
 def _looks_like_url(query: str) -> bool:
     q = (query or "").strip()
     return (q.startswith("http://") or q.startswith("https://")
@@ -1096,35 +1092,30 @@ def _take_pending_choice(mem_key: str, speaker: str) -> Optional[dict]:
     return entry
 
 
-async def _prepare_music_action(guild_id: int, mem_key: str, speaker: str,
-                                query: str):
-    """Resolve a free-text music request into the next step.
-
-    Returns one of:
-      - ``("play", url, title)``  — a single clear match; play it directly.
-      - ``("ask", text)``         — several matches; ``text`` is the list to
-        post, and the candidates are stored as this speaker's pending choice.
-      - ``("none", text)``        — nothing found; ``text`` is what to say.
-    """
+async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
+    """Play an already-resolved candidate (id + title in hand). We reuse the
+    yt-dlp result we got when building the options list, so there is no second
+    search and no Gemini call — we just hand the song to the player."""
     import playCommand
-    candidates = await playCommand._yt_dlp_search(query, max_results=_MUSIC_CHOICE_COUNT)
-    if not candidates:
-        return ("none", "no encontré nada en YouTube con eso, decímelo de otra forma")
-    if len(candidates) == 1:
-        c = candidates[0]
-        return ("play", _watch_url(c["id"]), c["title"])
-    _store_pending_choice(mem_key, speaker, candidates, guild_id)
-    return ("ask", _format_choices(candidates))
+    try:
+        await playCommand.playFromIndio(
+            bot, guild_id, song.get("title") or "tema", songs=[song],
+        )
+    except Exception:
+        logger.exception("indio: play chosen song failed")
 
 
 async def _maybe_disambiguate_music(bot, guild_id, mem_key, speaker,
                                     pending_actions, reply):
-    """Intercept a single free-text ``play_music`` so the indio asks which
-    track the requester wants instead of guessing.
+    """Intercept a single free-text ``play_music`` so the indio lists the
+    matches and lets the requester pick, instead of playing the first hit.
 
-    Returns ``(actions_to_dispatch, reply_text)``. A direct URL, several
-    actions at once, or a non-music turn pass through untouched (the indio's
-    own text is used and the original actions dispatch normally).
+    The search reuses yt-dlp exactly like before (no extra Gemini). With a
+    single clear hit we play it directly; with several we ask and remember the
+    options for this speaker. A direct URL, several actions at once, or a
+    non-music turn pass through untouched.
+
+    Returns ``(actions_to_dispatch, reply_text)``.
     """
     clean = _strip_indio_prefix(reply.text)
     clean = _ensure_reply_text(clean, pending_actions)
@@ -1136,22 +1127,28 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key, speaker,
         return pending_actions, clean
     query = music[0][1]
     if _looks_like_url(query):
+        # An explicit URL has nothing to disambiguate — let it play directly.
         return pending_actions, clean
-    result = await _prepare_music_action(guild_id, mem_key, speaker, query)
-    kind = result[0]
-    if kind == "ask" or kind == "none":
-        return [], result[1]
-    if kind == "play":
-        _url, _title = result[1], result[2]
-        return [("PLAY_MUSIC", _url)], clean
-    return pending_actions, clean
+
+    import playCommand
+    candidates = await playCommand._yt_dlp_search(query, max_results=_MUSIC_CHOICE_COUNT)
+    if not candidates:
+        return [], "no encontré nada en YouTube con eso, decímelo de otra forma"
+    if len(candidates) == 1:
+        # One clear match: play it directly with the metadata we already have.
+        asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
+        return [], clean
+    # Several matches: list them and remember this speaker's pending choice.
+    _store_pending_choice(mem_key, speaker, candidates, guild_id)
+    return [], _format_choices(candidates)
 
 
 async def _resolve_pending_music(bot, mem_key, speaker, guild_id, pregunta,
                                  post) -> bool:
     """If this speaker has a pending "¿cuál querés?", treat ``pregunta`` as the
-    answer. ``post`` is an async callable that delivers a line of text the way
-    the caller normally would (relay or direct send).
+    answer. Resolution is pure code (no Gemini); the chosen candidate plays
+    directly from the metadata we already have. ``post`` is an async callable
+    that delivers a line of text the way the caller normally would.
 
     Returns True when the message was consumed as a selection (caller should
     stop and not run a normal Gemini turn), False otherwise.
@@ -1167,9 +1164,7 @@ async def _resolve_pending_music(bot, mem_key, speaker, guild_id, pregunta,
     if isinstance(decision, int) and 0 <= decision < len(candidates):
         chosen = candidates[decision]
         await post(f"dale, va: {chosen['title']} 🎵")
-        asyncio.create_task(_dispatch_indio_actions(
-            bot, guild_id, [("PLAY_MUSIC", _watch_url(chosen["id"]))],
-        ))
+        asyncio.create_task(_play_chosen_song(bot, guild_id, chosen))
         return True
     # Not a recognizable selection: the pending choice was already popped, so we
     # just fall through and let the caller process this as a fresh message.

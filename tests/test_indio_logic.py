@@ -180,9 +180,9 @@ async def test_play_music_single_match_plays_directly(
     await _drain_pending_tasks()
 
     play_mock.assert_awaited_once()
-    args, _ = play_mock.call_args
-    assert args[1] == 100                 # guild_id
-    assert "abc123" in args[2]            # resolved to the candidate's URL
+    args, kwargs = play_mock.call_args
+    assert args[1] == 100                          # guild_id
+    assert kwargs["songs"][0]["id"] == "abc123"   # played directly, no re-search
 
 
 async def test_play_music_url_plays_directly(
@@ -263,7 +263,7 @@ async def test_pending_choice_resolved_by_number_plays_it(
     await _drain_pending_tasks()
 
     play_mock.assert_awaited_once()
-    assert "id2" in play_mock.call_args[0][2]              # the 2nd candidate's URL
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "id2"   # the 2nd candidate
     assert ("guild-100", "Mati") not in indio._indio_pending_choice   # cleared
 
 

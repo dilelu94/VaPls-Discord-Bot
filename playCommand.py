@@ -1174,13 +1174,19 @@ async def _yt_dlp_search(query: str, *, max_results: int = 1) -> list[dict]:
 
 
 async def playFromIndio(bot, guild_id: int, query: str,
-                        voice_channel_id: Optional[int] = None) -> tuple[bool, str]:
+                        voice_channel_id: Optional[int] = None,
+                        *, songs: Optional[list[dict]] = None) -> tuple[bool, str]:
     """Queue a YouTube search/URL programmatically — no slash ctx required.
 
     Used by the indio when someone asks him to play music. Picks a voice
     channel automatically, but the text channel for status + GuildPlayer
     control panel is always ``config.INDIO_PLAY_CHANNEL_ID`` (no fallback);
     if that channel is missing the action fails.
+
+    ``songs`` lets a caller pass an already-resolved list of
+    ``{id, title, duration_string}`` dicts (e.g. the candidate the user picked
+    from a disambiguation menu) so we skip the yt-dlp search entirely. When it
+    is ``None`` we search using ``query`` as before.
 
     Returns:
         (ok, message): ``ok=True`` if playback started or song queued;
@@ -1230,7 +1236,8 @@ async def playFromIndio(bot, guild_id: int, query: str,
         playLogger.warning(f"[PLAY-INDIO] voice connect failed: {e}")
         return False, f"no pude conectarme a voz: {e}"
 
-    songs = await _yt_dlp_search(query)
+    if songs is None:
+        songs = await _yt_dlp_search(query)
     if not songs:
         return False, "no encontre nada en YouTube con esa busqueda"
 
