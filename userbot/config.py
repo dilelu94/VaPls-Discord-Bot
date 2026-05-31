@@ -145,4 +145,19 @@ INDIO_AUTO_REPLY_GUILD_HOURLY_CAP = int(os.getenv("INDIO_AUTO_REPLY_GUILD_HOURLY
 # immediately" behaviour.
 IDLE_LEAVE_SECONDS = float(os.getenv("IDLE_LEAVE_SECONDS", "60"))
 
+# --- Greetings (sound on user join) ---------------------------------------
+# Cuando un humano entra a un canal de voz donde el userbot esta presente,
+# si tiene un audio especifico definido en users.py (campo "greeting") lo
+# reproducimos. NO hay default: usuarios sin "greeting" no gatillan nada.
+# Path absoluto (o relativo al working dir) donde viven los audios; tipicamente
+# coincide con el CUSTOM_AUDIO_PATH del main bot (lo populan lsyncd + el repo).
+CUSTOM_AUDIO_PATH = os.getenv(
+    "CUSTOM_AUDIO_PATH",
+    "/home/ubuntu/vapls-discord-bot/audio_output",
+)
+# Toggle maestro — false desactiva el greeting completo.
+GREETING_ENABLED = os.getenv("GREETING_ENABLED", "true").lower() == "true"
+# Throttle por canal: minimo de segundos entre dos greetings en el mismo VC.
+GREETING_THROTTLE_SECONDS = float(os.getenv("GREETING_THROTTLE_SECONDS", "15"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

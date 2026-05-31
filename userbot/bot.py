@@ -28,6 +28,7 @@ import discord  # discord.py-self
 from discord.ext import voice_recv
 
 import config
+import greeting
 from recording import (
     INPUT_SAMPLE_RATE as _REC_INPUT_SAMPLE_RATE,
     INPUT_WIDTH as _REC_INPUT_WIDTH,
@@ -1446,6 +1447,16 @@ async def on_voice_state_update(member, before, after):
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
         _cancel_idle_leave(guild.id)
         await _join_channel(after.channel)
+        # After the userbot is in the channel, play the per-user greeting
+        # (only for users with an explicit `greeting` in users.py — no default).
+        try:
+            vc = _vc_for_guild(guild)
+            if vc is not None and vc.channel.id == after.channel.id:
+                asyncio.create_task(greeting.play_user_greeting(
+                    vc, user_id=member.id, channel_id=after.channel.id,
+                ))
+        except Exception:
+            log.exception("[GREETING] schedule failed")
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
