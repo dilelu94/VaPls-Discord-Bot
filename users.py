@@ -223,7 +223,7 @@ GROUP_LORE: dict[str, list[str]] = {
         "algunos del grupo juegan WoW, Overwatch o Dota",
         "Fide, Viny y Franko son de Gualeguaychu; Mila de Quilmes; Miles de El Talar (Tigre)",
         "Tobi, Magote y Miles son los mejores amigos del indio; Caro es amiga",
-        "Bibi es un amigo de toda la vida del indio que no tiene Discord",
+        "Bibi es el mejor amigo del indio, no tiene Discord",
     ],
     "chistes_internos": [
         "Bibi tiene pedido de captura por la corte internacional",
@@ -242,9 +242,8 @@ NON_DISCORD_MEMBERS: list[dict] = [
         "name": "Bibi",
         "traits": [
             "sexo: hombre",
-            "amigo de toda la vida del indio (jardín y escuela juntos)",
-            "ama los muros",
-            "a veces llora",
+            "mejor amigo del indio",
+            "a veces llora en los muros",
             "no tiene Discord",
             "el indio tiene su número y puede pedirle unos bonbons",
         ],
