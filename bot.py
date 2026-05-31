@@ -22,6 +22,7 @@ import config
 import analytics
 import apiServer
 from apiServer import startApiServer
+import decifrarVoting
 import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 
@@ -168,6 +169,10 @@ async def on_ready():
             _api_runner = await startApiServer(bot)
         except Exception as e:
             log.warning(f"Failed to start HTTP API: {e}")
+    try:
+        await decifrarVoting.start(bot)
+    except Exception:
+        log.exception("decifrar voting startup failed")
 
 
 @bot.event
@@ -501,6 +506,89 @@ async def quit(ctx):
             await ctx.followup.send("❌ No estoy conectado a voz en este servidor.")
         except Exception:
             pass
+
+
+@bot.slash_command(name="help", description="Lista los comandos del bot y cómo funciona")
+async def help_cmd(ctx):
+    """Slash command: list available commands and bot/userbot info.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Sends an ephemeral embed with the command list and contributors.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception:
+        pass
+    _track_command(ctx, "help")
+
+    embed = discord.Embed(
+        title="🎙️ VaPls — ayuda",
+        description=(
+            "Bot de voz/música + persona Gemini con memoria. "
+            "Corre en **dos procesos**:\n"
+            "• **Main bot** (este) — slash commands, música, soundpad, Gemini.\n"
+            "• **Userbot (Indio)** — escucha voz en canales E2EE, transcribe "
+            "con faster-whisper y responde al wake-word *indio*."
+        ),
+        color=0x5865F2,
+    )
+    embed.add_field(
+        name="🎵 Música y voz",
+        value=(
+            "**/play** `query` — busca o pega una URL de YouTube y la "
+            "reproduce. Con varios resultados muestra menú.\n"
+            "**/soundpad** `[query]` — abre el panel de clips locales, o "
+            "reproduce el que más se parezca a `query`.\n"
+            "**/parar** — corta la reproducción, limpia la cola y se "
+            "desconecta.\n"
+            "**/quit** — sale del canal de voz sin tocar la cola."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 Gemini",
+        value=(
+            "**/vapls** `pregunta` — respuesta puntual, sin memoria.\n"
+            "**/indio** `charla` — persona con memoria corta por guild y "
+            "memoria larga destilada (rasgos, anécdotas, chistes internos). "
+            "También responde por voz cuando lo nombrás en un canal donde "
+            "está el userbot."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="💡 Otros",
+        value=(
+            "**/sugerencias** `idea` — mandá una sugerencia o feature; se "
+            "agrupa con ideas parecidas.\n"
+            "**/help** — esto."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🔑 API keys de Gemini",
+        value=(
+            "El pool de keys está bancado por la comunidad. Si querés "
+            "sumar la tuya, mandámela por **DM al bot** "
+            "(formato `AIzaSy…` o `AQ.Ab8RN6…`). Se suma en caliente, sin "
+            "reinicio, y queda asociada a tu user para darte crédito."
+        ),
+        inline=False,
+    )
+    contributors = geminiKeys.format_contributors_line()
+    if contributors:
+        embed.set_footer(text=contributors)
+    try:
+        await ctx.followup.send(embed=embed, ephemeral=True)
+    except Exception:
+        await safe_respond(ctx, "No pude mandar el help — fijate los logs.")
 
 
 @bot.slash_command(name="restart", description="devtool - no usar")
