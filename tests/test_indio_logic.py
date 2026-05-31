@@ -153,12 +153,23 @@ def disable_relay(monkeypatch):
     monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
 
 
-async def test_play_music_function_call_triggers_playback(
+def _fake_search(monkeypatch, candidates):
+    """Stub the yt-dlp search boundary so music tests never spawn a subprocess."""
+    import playCommand
+    monkeypatch.setattr(playCommand, "_yt_dlp_search",
+                        AsyncMock(return_value=list(candidates)))
+
+
+async def test_play_music_single_match_plays_directly(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
+    """One clear search hit → no question, the indio just plays it."""
     import playCommand
     play_mock = AsyncMock(return_value=(True, "Queen"))
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    _fake_search(monkeypatch, [
+        {"id": "abc123", "title": "Queen - Bohemian Rhapsody", "duration_string": "5:55"},
+    ])
 
     patch_generate(reply=reply_factory(
         text="dale, va Queen",
@@ -170,8 +181,189 @@ async def test_play_music_function_call_triggers_playback(
 
     play_mock.assert_awaited_once()
     args, _ = play_mock.call_args
-    assert args[1] == 100              # guild_id
-    assert args[2] == "Queen"          # query
+    assert args[1] == 100                 # guild_id
+    assert "abc123" in args[2]            # resolved to the candidate's URL
+
+
+async def test_play_music_url_plays_directly(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """A direct URL never triggers the picker — it plays straight away."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "ok"))
+    search_mock = AsyncMock(return_value=[])
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    monkeypatch.setattr(playCommand, "_yt_dlp_search", search_mock)
+
+    url = "https://www.youtube.com/watch?v=zzz999"
+    patch_generate(reply=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": url}}],
+    ))
+
+    await indioLogic(ctx_factory(guild_id=100), f"poné {url}", nuevo=False)
+    await _drain_pending_tasks()
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args[0][2] == url
+    search_mock.assert_not_awaited()      # no disambiguation search for a URL
+
+
+async def test_play_music_multiple_matches_asks_instead_of_playing(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """Several hits → the indio lists them and waits; nothing plays yet."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    _fake_search(monkeypatch, [
+        {"id": "id1", "title": "Crímenes Perfectos (Estudio)", "duration_string": "3:54"},
+        {"id": "id2", "title": "Crímenes Perfectos (En vivo)", "duration_string": "4:20"},
+        {"id": "id3", "title": "Crímenes Perfectos (cover)", "duration_string": "3:40"},
+    ])
+
+    patch_generate(reply=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": "Crímenes Perfectos"}}],
+    ))
+
+    ctx = ctx_factory(display_name="Mati", guild_id=100)
+    await indioLogic(ctx, "poné Crímenes Perfectos", nuevo=False)
+    await _drain_pending_tasks()
+
+    shown = "\n".join(m for m in ctx.sent_messages if m)
+    assert "Estudio" in shown and "En vivo" in shown    # the options were listed
+    play_mock.assert_not_awaited()                       # didn't play anything yet
+    assert ("guild-100", "Mati") in indio._indio_pending_choice
+
+
+async def test_pending_choice_resolved_by_number_plays_it(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """After the indio asks, the requester's "la dos" plays the 2nd option."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    _fake_search(monkeypatch, [
+        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
+        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
+        {"id": "id3", "title": "Tema C", "duration_string": "5:00"},
+    ])
+
+    patch_generate(reply=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
+    ))
+
+    ctx = ctx_factory(display_name="Mati", guild_id=100)
+    await indioLogic(ctx, "poné algo", nuevo=False)        # indio asks
+    await _drain_pending_tasks()
+
+    await indioLogic(ctx, "la dos", nuevo=False)           # requester chooses
+    await _drain_pending_tasks()
+
+    play_mock.assert_awaited_once()
+    assert "id2" in play_mock.call_args[0][2]              # the 2nd candidate's URL
+    assert ("guild-100", "Mati") not in indio._indio_pending_choice   # cleared
+
+
+async def test_pending_choice_cancel_does_not_play(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    _fake_search(monkeypatch, [
+        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
+        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
+    ])
+
+    patch_generate(reply=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
+    ))
+
+    ctx = ctx_factory(display_name="Mati", guild_id=100)
+    await indioLogic(ctx, "poné algo", nuevo=False)
+    await _drain_pending_tasks()
+
+    await indioLogic(ctx, "ninguna, dejá", nuevo=False)
+    await _drain_pending_tasks()
+
+    play_mock.assert_not_awaited()
+    assert ("guild-100", "Mati") not in indio._indio_pending_choice
+
+
+async def test_pending_choice_only_requester_resolves(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """Someone else answering does not consume the requester's pending choice."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+    _fake_search(monkeypatch, [
+        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
+        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
+    ])
+    patch_generate(reply=reply_factory(text="dale"))   # any normal reply for Viny
+
+    # Mati asks → choice pending for Mati.
+    ask_gen = reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
+    )
+    import geminiClient
+    monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=ask_gen))
+    await indioLogic(ctx_factory(display_name="Mati", guild_id=100), "poné algo", nuevo=False)
+    await _drain_pending_tasks()
+
+    # Viny says "la dos" — but the pending choice is Mati's, not his.
+    monkeypatch.setattr(geminiClient, "generate",
+                        AsyncMock(return_value=reply_factory(text="qué onda")))
+    await indioLogic(ctx_factory(display_name="Viny", guild_id=100), "la dos", nuevo=False)
+    await _drain_pending_tasks()
+
+    play_mock.assert_not_awaited()
+    assert ("guild-100", "Mati") in indio._indio_pending_choice   # still waiting for Mati
+
+
+# --- _parse_choice pure-function behavior ----------------------------------
+
+_CANDS = [
+    {"id": "id1", "title": "Crímenes Perfectos (Estudio)", "duration_string": "3:54"},
+    {"id": "id2", "title": "Crímenes Perfectos (En vivo Vélez)", "duration_string": "4:20"},
+    {"id": "id3", "title": "Crímenes Perfectos (cover acústico)", "duration_string": "3:40"},
+]
+
+
+def test_parse_choice_by_number():
+    from geminiCommand import _parse_choice
+    assert _parse_choice("la 2", _CANDS) == 1
+    assert _parse_choice("dale la 3", _CANDS) == 2
+
+
+def test_parse_choice_by_ordinal():
+    from geminiCommand import _parse_choice
+    assert _parse_choice("la primera", _CANDS) == 0
+    assert _parse_choice("poné la segunda", _CANDS) == 1
+
+
+def test_parse_choice_by_keyword():
+    from geminiCommand import _parse_choice
+    assert _parse_choice("la del vivo", _CANDS) == 1
+    assert _parse_choice("el cover", _CANDS) == 2
+
+
+def test_parse_choice_cancel():
+    from geminiCommand import _parse_choice
+    assert _parse_choice("ninguna", _CANDS) == "cancel"
+    assert _parse_choice("no, dejá", _CANDS) == "cancel"
+
+
+def test_parse_choice_unrelated_returns_none():
+    from geminiCommand import _parse_choice
+    assert _parse_choice("contame un chiste", _CANDS) is None
+    assert _parse_choice("", _CANDS) is None
 
 
 async def test_play_sound_function_call_triggers_clip(

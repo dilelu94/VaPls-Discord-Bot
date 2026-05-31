@@ -17,6 +17,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 from typing import Optional
 
 import aiohttp
@@ -109,10 +110,11 @@ _INDIO_TOOLS = [
                 "query": {
                     "type": "STRING",
                     "description": (
-                        "Búsqueda en YouTube o URL. Para pedidos vagos usá "
-                        "lo que dijeron tal cual (ej: 'Dua Lipa', 'jazz "
-                        "tranquilo', 'Despacito'). El /play agarra el "
-                        "primer resultado."
+                        "Búsqueda en YouTube o URL. Usá lo que dijeron tal "
+                        "cual (ej: 'Dua Lipa', 'jazz tranquilo', "
+                        "'Despacito'). Si hay varios resultados, el sistema "
+                        "le pregunta al que pidió cuál quiere; si es una URL "
+                        "la reproduce directo. No elijas vos el tema."
                     ),
                 },
             },
@@ -208,6 +210,17 @@ _indio_compressing: set[str] = set()
 # at most once per ``_ROSTER_REFRESH_INTERVAL_SEC``; see _maybe_refresh_current_members.
 _indio_current_members: dict[str, list[str]] = {}
 _indio_members_refreshed_at: dict[str, float] = {}
+
+# Pending music disambiguation. When the indio is asked for a song and the
+# search returns several candidates, we DON'T play one blindly — we list them
+# and remember the options, keyed by (memory bucket, speaker name) so only the
+# person who asked resolves their own choice. The next message from that speaker
+# is interpreted as the selection. Entries expire after the TTL so a forgotten
+# question doesn't hijack a later, unrelated message.
+_PENDING_CHOICE_TTL_SEC = 120
+# How many candidates to offer. Kept in sync with playCommand's /play picker.
+_MUSIC_CHOICE_COUNT = 5
+_indio_pending_choice: dict[tuple[str, str], dict] = {}
 
 
 def _load_indio_state() -> None:
@@ -972,6 +985,197 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     return statuses
 
 
+# ---------------------------------------------------------------------------
+# Music disambiguation: "che, ¿cuál de estas querés?"
+# ---------------------------------------------------------------------------
+
+_CHOICE_CANCEL_WORDS = (
+    "ninguna", "ninguno", "ningun", "nada", "deja", "dejalo", "dejala",
+    "cancela", "cancelar", "olvidate", "olvidalo", "no quiero", "ni una",
+)
+# Ordinal/number words → 0-based index. Matched by prefix against each token so
+# "primera"/"primero"/"primer" all resolve, etc.
+_ORDINAL_STEMS = {
+    "primer": 0, "uno": 0,
+    "segund": 1, "dos": 1,
+    "tercer": 2, "tres": 2,
+    "cuart": 3, "cuatro": 3,
+    "quint": 4, "cinco": 4,
+}
+_CHOICE_STOPWORDS = {
+    "la", "el", "los", "las", "un", "una", "de", "del", "version", "tema",
+    "cancion", "quiero", "poneme", "pone", "poné", "dale", "esa", "ese",
+    "esta", "este", "che", "indio", "opcion", "numero", "que", "me", "y", "o",
+    "a", "porfa", "porfavor", "mejor",
+}
+
+
+def _normalize_choice(s: str) -> str:
+    """Lowercase + strip accents for matching selection utterances."""
+    n = unicodedata.normalize("NFD", (s or "").lower())
+    return "".join(c for c in n if unicodedata.category(c) != "Mn")
+
+
+def _watch_url(video_id: str) -> str:
+    return f"https://www.youtube.com/watch?v={video_id}"
+
+
+def _looks_like_url(query: str) -> bool:
+    q = (query or "").strip()
+    return (q.startswith("http://") or q.startswith("https://")
+            or q.startswith("ytsearch:"))
+
+
+def _parse_choice(text: str, candidates: list[dict]):
+    """Interpret a selection utterance against the offered candidates.
+
+    Returns the 0-based index of the chosen candidate, the string ``"cancel"``
+    when the speaker declined, or ``None`` when the message doesn't look like a
+    selection at all (caller should treat it as a normal new message).
+
+    Resolution order: explicit cancel > digit (1..N) > ordinal word
+    (primera/segunda/…) > a distinctive word that matches exactly one title.
+    """
+    if not text or not candidates:
+        return None
+    norm = _normalize_choice(text)
+    for w in _CHOICE_CANCEL_WORDS:
+        if w in norm:
+            return "cancel"
+    n = len(candidates)
+    for m in re.finditer(r"\d+", norm):
+        v = int(m.group())
+        if 1 <= v <= n:
+            return v - 1
+    tokens = re.findall(r"[a-z]+", norm)
+    for tok in tokens:
+        for stem, idx in _ORDINAL_STEMS.items():
+            if tok.startswith(stem) and idx < n:
+                return idx
+    # Distinctive-word match against the titles (e.g. "la del vivo",
+    # "la de Calamaro"). Only commit when exactly one title wins.
+    sig = [t for t in tokens if len(t) >= 3 and t not in _CHOICE_STOPWORDS]
+    if sig:
+        scores = []
+        for c in candidates:
+            title = _normalize_choice(c.get("title", ""))
+            scores.append(sum(1 for w in sig if w in title))
+        best = max(scores)
+        if best > 0 and scores.count(best) == 1:
+            return scores.index(best)
+    return None
+
+
+def _format_choices(candidates: list[dict]) -> str:
+    """Render the "¿cuál querés?" list the indio posts in chat."""
+    lines = ["che, ¿cuál de estas querés?"]
+    for i, c in enumerate(candidates, 1):
+        dur = c.get("duration_string") or ""
+        durs = f" [{dur}]" if dur else ""
+        lines.append(f"{i}) {c['title']}{durs}")
+    lines.append('(decime el número, o "ninguna")')
+    return "\n".join(lines)
+
+
+def _store_pending_choice(mem_key: str, speaker: str,
+                          candidates: list[dict], guild_id: int) -> None:
+    _indio_pending_choice[(mem_key, speaker)] = {
+        "candidates": candidates,
+        "guild_id": guild_id,
+        "ts": time.time(),
+    }
+
+
+def _take_pending_choice(mem_key: str, speaker: str) -> Optional[dict]:
+    """Pop the pending choice for this speaker, honouring the TTL."""
+    entry = _indio_pending_choice.pop((mem_key, speaker), None)
+    if entry is None:
+        return None
+    if time.time() - entry.get("ts", 0.0) > _PENDING_CHOICE_TTL_SEC:
+        return None
+    return entry
+
+
+async def _prepare_music_action(guild_id: int, mem_key: str, speaker: str,
+                                query: str):
+    """Resolve a free-text music request into the next step.
+
+    Returns one of:
+      - ``("play", url, title)``  — a single clear match; play it directly.
+      - ``("ask", text)``         — several matches; ``text`` is the list to
+        post, and the candidates are stored as this speaker's pending choice.
+      - ``("none", text)``        — nothing found; ``text`` is what to say.
+    """
+    import playCommand
+    candidates = await playCommand._yt_dlp_search(query, max_results=_MUSIC_CHOICE_COUNT)
+    if not candidates:
+        return ("none", "no encontré nada en YouTube con eso, decímelo de otra forma")
+    if len(candidates) == 1:
+        c = candidates[0]
+        return ("play", _watch_url(c["id"]), c["title"])
+    _store_pending_choice(mem_key, speaker, candidates, guild_id)
+    return ("ask", _format_choices(candidates))
+
+
+async def _maybe_disambiguate_music(bot, guild_id, mem_key, speaker,
+                                    pending_actions, reply):
+    """Intercept a single free-text ``play_music`` so the indio asks which
+    track the requester wants instead of guessing.
+
+    Returns ``(actions_to_dispatch, reply_text)``. A direct URL, several
+    actions at once, or a non-music turn pass through untouched (the indio's
+    own text is used and the original actions dispatch normally).
+    """
+    clean = _strip_indio_prefix(reply.text)
+    clean = _ensure_reply_text(clean, pending_actions)
+    if guild_id is None:
+        return pending_actions, clean
+    music = [a for a in pending_actions if a[0] == "PLAY_MUSIC"]
+    others = [a for a in pending_actions if a[0] != "PLAY_MUSIC"]
+    if len(music) != 1 or others:
+        return pending_actions, clean
+    query = music[0][1]
+    if _looks_like_url(query):
+        return pending_actions, clean
+    result = await _prepare_music_action(guild_id, mem_key, speaker, query)
+    kind = result[0]
+    if kind == "ask" or kind == "none":
+        return [], result[1]
+    if kind == "play":
+        _url, _title = result[1], result[2]
+        return [("PLAY_MUSIC", _url)], clean
+    return pending_actions, clean
+
+
+async def _resolve_pending_music(bot, mem_key, speaker, guild_id, pregunta,
+                                 post) -> bool:
+    """If this speaker has a pending "¿cuál querés?", treat ``pregunta`` as the
+    answer. ``post`` is an async callable that delivers a line of text the way
+    the caller normally would (relay or direct send).
+
+    Returns True when the message was consumed as a selection (caller should
+    stop and not run a normal Gemini turn), False otherwise.
+    """
+    entry = _take_pending_choice(mem_key, speaker)
+    if entry is None:
+        return False
+    candidates = entry["candidates"]
+    decision = _parse_choice(pregunta, candidates)
+    if decision == "cancel":
+        await post("dale, lo dejo 👍")
+        return True
+    if isinstance(decision, int) and 0 <= decision < len(candidates):
+        chosen = candidates[decision]
+        await post(f"dale, va: {chosen['title']} 🎵")
+        asyncio.create_task(_dispatch_indio_actions(
+            bot, guild_id, [("PLAY_MUSIC", _watch_url(chosen["id"]))],
+        ))
+        return True
+    # Not a recognizable selection: the pending choice was already popped, so we
+    # just fall through and let the caller process this as a fresh message.
+    return False
+
+
 _INDIO_PREFIX_RE = re.compile(
     r"^\s*[\[\(]?\s*(el\s+)?indio\s*[\]\)]?\s*[:\-—]\s*",
     re.IGNORECASE,
@@ -1157,6 +1361,25 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
     tagged_message = f"[{speaker}]: {pregunta or ''}"
 
+    # If this speaker has a pending "¿cuál querés?" music choice, interpret the
+    # message as the selection instead of a brand-new turn.
+    _choice_guild_id = getattr(getattr(ctx, "guild", None), "id", None)
+    if not nuevo and _choice_guild_id is not None:
+        async def _post_choice(text):
+            channel_id = getattr(ctx, "channel_id", None) or getattr(
+                getattr(ctx, "channel", None), "id", None)
+            relayed = False
+            if (channel_id is not None
+                    and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+                relayed = await _relay_to_userbot(channel_id, text, None)
+            if not relayed:
+                await _send_reply(ctx, text)
+
+        if await _resolve_pending_music(
+                ctx.bot, mem_key, speaker, _choice_guild_id,
+                pregunta or "", _post_choice):
+            return
+
     async with lock:
         history_reset = False
         if nuevo:
@@ -1242,8 +1465,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
-    clean_reply = _strip_indio_prefix(reply.text)
-    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
+    pending_actions, clean_reply = await _maybe_disambiguate_music(
+        ctx.bot, _choice_guild_id, mem_key, speaker, pending_actions, reply,
+    )
     relayed_via_userbot = False
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
@@ -1343,6 +1567,20 @@ async def indioFromVoice(
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
     tagged_message = f"[{speaker}]: {pregunta}"
 
+    # Pending "¿cuál querés?" music choice for this speaker → resolve it here
+    # instead of starting a fresh turn.
+    async def _post_choice(text):
+        relayed = False
+        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            relayed = await _relay_to_userbot(channel_id, text, None)
+        if not relayed:
+            for chunk in _split_for_discord(text):
+                await channel.send(chunk)
+
+    if await _resolve_pending_music(
+            bot, mem_key, speaker, guild_id, pregunta, _post_choice):
+        return
+
     async with lock:
         history_snapshot = list(_indio_history.get(mem_key, []))
         long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
@@ -1393,8 +1631,9 @@ async def indioFromVoice(
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
-    clean_reply = _strip_indio_prefix(reply.text)
-    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
+    pending_actions, clean_reply = await _maybe_disambiguate_music(
+        bot, guild_id, mem_key, speaker, pending_actions, reply,
+    )
     relayed_via_userbot = False
     try:
         if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:

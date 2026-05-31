@@ -39,6 +39,10 @@ if os.path.exists(_downloadsDirInit):
 # Global dictionary to track active player states per guild
 guildPlayers = {}
 
+# How many search candidates to offer when /play (or the indio) finds several
+# matches for a free-text query. Keeps the "¿cuál querés?" list readable.
+_PLAY_CHOICE_COUNT = 5
+
 
 def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
     """Mapea stderr de yt-dlp (o exception) a un mensaje accionable para el usuario.
@@ -872,6 +876,74 @@ def clearGuildPlayer(guildId: int):
         player.isDownloading = False
         del guildPlayers[guildId]
 
+def _format_choice_prompt(candidates: list[dict]) -> str:
+    """Render a numbered list of search candidates for the "¿cuál querés?"
+    prompt. Shared shape used by the /play picker message."""
+    lines = ["🎵 Encontré varias, ¿cuál querés?"]
+    for i, c in enumerate(candidates, 1):
+        dur = c.get("duration_string") or ""
+        durSuffix = f" `[{dur}]`" if dur else ""
+        lines.append(f"**{i}.** {c['title']}{durSuffix}")
+    return "\n".join(lines)
+
+
+class PlaySearchView(discord.ui.View):
+    """Pick-one menu shown when /play finds several matches for a search.
+
+    Only the user who ran /play may choose. Selecting an option queues that
+    single song through the player's shared enqueue path and disables the menu.
+    """
+    def __init__(self, player: "GuildPlayer", requester, candidates: list[dict]):
+        super().__init__(timeout=120)
+        self.player = player
+        self.requester_id = getattr(requester, "id", None)
+        self.requester = requester
+        self.candidates = candidates
+        self.message = None
+
+        options = []
+        for i, c in enumerate(candidates):
+            dur = c.get("duration_string") or ""
+            label = c["title"][:100]
+            desc = f"[{dur}]" if dur else None
+            options.append(discord.SelectOption(label=label, value=str(i), description=desc))
+        select = discord.ui.Select(
+            placeholder="Elegí el tema...",
+            options=options,
+            custom_id="play_choice_select",
+        )
+        select.callback = self._on_select
+        self.add_item(select)
+
+    async def _on_select(self, interaction: discord.Interaction):
+        """Queue the chosen candidate (requester-only)."""
+        if self.requester_id is not None and interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Esta elección es de quien pidió el tema 😉", ephemeral=True,
+            )
+            return
+        try:
+            idx = int(interaction.data["values"][0])
+        except (KeyError, ValueError, IndexError):
+            await interaction.response.defer()
+            return
+        if idx < 0 or idx >= len(self.candidates):
+            await interaction.response.defer()
+            return
+        song = self.candidates[idx]
+        for item in self.children:
+            item.disabled = True
+        try:
+            await interaction.response.edit_message(
+                content=f"✅ Dale: **{song['title']}**", view=self,
+            )
+        except Exception:
+            pass
+        self.player.lastRequester = self.requester
+        self.player.textChannel = interaction.channel or self.player.textChannel
+        await self.player._enqueueAndMaybeStart([song])
+
+
 async def playLogic(ctx: discord.ApplicationContext, query: str):
     """Handle the /play slash command.
 
@@ -927,10 +999,11 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     inputStr = query.strip()
     isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://") or inputStr.startswith("ytsearch:"))
     if isSearch:
-        # ytsearch3 para tener candidatos por si el primer hit es un canal
+        # ytsearchN para tener candidatos: los primeros hits suelen ser canales
         # (ej. "Indio Solari" devuelve el canal UCzq3uuD... que yt-dlp no
-        # puede bajar como video). Despues filtramos al primer video valido.
-        inputStr = f"ytsearch3:{inputStr}"
+        # puede bajar como video). Despues filtramos a videos validos y, si hay
+        # mas de uno, le ofrecemos al usuario que elija cual quiere.
+        inputStr = f"ytsearch{_PLAY_CHOICE_COUNT + 2}:{inputStr}"
 
     # 1. Fetch metadata (ID and Title)
     await safeEdit(ctx, "🔍 Buscando y obteniendo metadatos...")
@@ -978,10 +1051,8 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
         if isSearch:
             # YouTube search mezcla videos con canales/playlists; filtramos
-            # los que no son videos (id de canal "UC..." o sin duracion) y
-            # nos quedamos con el primer video.
-            videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
-            songs = videos[:1]
+            # los que no son videos (id de canal "UC..." o sin duracion).
+            songs = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
 
         if not songs:
             return await safeEdit(ctx, "❌ No se pudieron obtener los metadatos del video.")
@@ -994,7 +1065,22 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         print(f"[PLAY ERROR] Exception during metadata fetch: {e}")
         return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
-    # Add songs to player queue
+    # Free-text search with several candidates → let the requester pick which
+    # one instead of silently grabbing the first hit (which often was the wrong
+    # version). A direct URL/playlist skips this and queues straight away.
+    if isSearch and len(songs) > 1:
+        candidates = songs[:_PLAY_CHOICE_COUNT]
+        view = PlaySearchView(player, ctx.author, candidates)
+        prompt = _format_choice_prompt(candidates)
+        try:
+            view.message = await ctx.interaction.edit_original_response(
+                content=prompt, view=view,
+            )
+        except Exception:
+            await safeEdit(ctx, prompt)
+        return
+
+    # Single result (or a URL/playlist): queue it directly.
     await player.addSongs(songs, ctx)
 
 
@@ -1023,16 +1109,26 @@ def _pick_voice_channel(bot, guild_id: int) -> Optional[discord.VoiceChannel]:
     return candidates[0][0]
 
 
-async def _yt_dlp_search(query: str) -> list[dict]:
+async def _yt_dlp_search(query: str, *, max_results: int = 1) -> list[dict]:
     """Run yt-dlp to resolve the query to song metadata. Returns a list of
-    {id, title, duration_string} dicts; empty list on any failure."""
+    {id, title, duration_string} dicts; empty list on any failure.
+
+    ``max_results`` caps how many *search* hits to return (defaults to 1, the
+    legacy single-pick behaviour). It only applies to free-text searches; a
+    direct URL/playlist always returns every entry yt-dlp reports so playlists
+    keep queueing in full. We fetch a couple extra candidates beyond
+    ``max_results`` because the first hits are often channels/playlists that get
+    filtered out below.
+    """
     inputStr = query.strip()
     isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://")
                     or inputStr.startswith("ytsearch:"))
     if isSearch:
-        # ytsearch3 + filtro abajo: el primer hit suele ser un canal
-        # (ej. "Indio Solari" → UCzq3uuD...) que no se puede bajar.
-        inputStr = f"ytsearch3:{inputStr}"
+        # ytsearchN + filtro abajo: los primeros hits suelen ser canales
+        # (ej. "Indio Solari" → UCzq3uuD...) que no se pueden bajar, así que
+        # pedimos algunos de más para tener candidatos válidos suficientes.
+        fetch_n = max(max_results + 2, 3)
+        inputStr = f"ytsearch{fetch_n}:{inputStr}"
     cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
     args = [config.YT_DLP_PATH]
     if os.path.exists(cookiesPath):
@@ -1071,9 +1167,9 @@ async def _yt_dlp_search(query: str) -> list[dict]:
             "duration_string": dur if dur != "NA" else "",
         })
     if isSearch:
-        # Filtramos canales/playlists para quedarnos con el primer video real.
+        # Filtramos canales/playlists para quedarnos con videos reales.
         videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
-        songs = videos[:1]
+        songs = videos[:max_results]
     return songs
 
 
