@@ -44,11 +44,7 @@ try:
     from users import USERS as _USERS
 except Exception:
     _USERS = {}
-import webhookLogger  # parent dir; falls back to no-op if env vars unset
-
-# Forward userbot logs to a Discord thread via webhook (LOG_WEBHOOK_URL).
-# Disabled when env var is empty.
-_webhook_log_handler = webhookLogger.install_from_env("userbot")
+import webhookLogger  # parent dir; wired after basicConfig() below
 
 
 def _name_for(user_id: int, member=None) -> str:
@@ -214,6 +210,11 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("userbot")
+
+# Webhook forwarding (LOG_WEBHOOK_URL). Installed *after* basicConfig so the
+# stdout StreamHandler still gets added — otherwise basicConfig sees our
+# handler already attached and skips its own setup, killing journalctl logs.
+_webhook_log_handler = webhookLogger.install_from_env("userbot")
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 logging.getLogger("discord.voice_client").setLevel(logging.INFO)
