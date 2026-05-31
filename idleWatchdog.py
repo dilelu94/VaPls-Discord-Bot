@@ -22,7 +22,7 @@ import config
 
 logger = logging.getLogger("bot.idle_watchdog")
 
-_DEFAULT_POLL_INTERVAL = 5.0
+_DEFAULT_POLL_INTERVAL = 0.5
 
 # guild_id -> running watchdog task
 _watchdogs: dict[int, asyncio.Task] = {}
@@ -38,7 +38,14 @@ def _find_voice_client(bot, guild_id: int) -> Optional[discord.VoiceClient]:
 
 
 def _is_active(vc) -> bool:
-    """Return True when the bot is producing audio or intentionally paused."""
+    """Return True when the bot has a reason to stay in this voice channel.
+
+    Reasons:
+    * Currently producing audio (``is_playing``).
+    * Intentionally paused (``is_paused``).
+    * There's a live soundpad panel in the guild — the user can still click
+      a button to play a clip, so leaving voice would orphan the panel.
+    """
     try:
         if vc.is_playing():
             return True
@@ -48,6 +55,15 @@ def _is_active(vc) -> bool:
         if vc.is_paused():
             return True
     except Exception:
+        pass
+    try:
+        from soundpadCommand import has_active_panel
+        guild = getattr(vc, "guild", None)
+        guild_id = getattr(guild, "id", None)
+        if guild_id is not None and has_active_panel(guild_id):
+            return True
+    except Exception:
+        # Soundpad module may be unavailable in some test setups — fail open.
         pass
     return False
 

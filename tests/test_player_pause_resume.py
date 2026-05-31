@@ -110,10 +110,12 @@ def downloaded_file(tmp_path, monkeypatch):
     import playCommand
     downloads = tmp_path / "downloads"
     downloads.mkdir()
-    # Make startPlayingCurrent look for downloads inside tmp_path.
+    # Make startPlayingCurrent look for downloads inside tmp_path. Capture
+    # the real dirname BEFORE patching so the fallback doesn't recurse.
+    real_dirname = os.path.dirname
     monkeypatch.setattr(
         playCommand.os.path, "dirname",
-        lambda p: str(tmp_path) if "playCommand" in str(p) else os.path.dirname(p),
+        lambda p: str(tmp_path) if "playCommand" in str(p) else real_dirname(p),
         raising=True,
     )
     fpath = downloads / "video1.mp3"
@@ -188,9 +190,10 @@ async def test_parar_clears_everything(fresh_player_state, tmp_path, monkeypatch
     """
     playCommand = fresh_player_state
     # Point the cleanup at our tmp dir so we can prove files get removed.
+    real_dirname = os.path.dirname
     monkeypatch.setattr(
         "playCommand.os.path.dirname",
-        lambda p: str(tmp_path) if str(p).endswith("playCommand.py") else os.path.dirname(p),
+        lambda p: str(tmp_path) if str(p).endswith("playCommand.py") else real_dirname(p),
         raising=True,
     )
     downloads = tmp_path / "downloads"
@@ -274,22 +277,25 @@ async def test_on_song_finished_detects_disconnect_and_preserves_state(
     playCommand = fresh_player_state
     player = playCommand.GuildPlayer(100, make_bot())
     # vc reports disconnected — this is the race we're guarding against.
-    player.vc = FakeVC(playing=False, paused=False, connected=False)
+    dead_vc = FakeVC(playing=False, paused=False, connected=False)
+    player.vc = dead_vc
     player.currentSong = {"id": "video1", "title": "Queen - A"}
     player.queue = [{"id": "video2", "title": "B"}]
     player.textChannel = MagicMock(send=AsyncMock())
     player.playStartedAt = asyncio.get_event_loop().time() - 4.0
 
-    with patch.object(player, "updateControlMessage", new=AsyncMock()), \
-         patch.object(player, "_leaveVoice", new=AsyncMock()) as leave_mock:
+    with patch.object(player, "updateControlMessage", new=AsyncMock()):
         await player.onSongFinished(error=None)
 
-    # Queue + currentSong preserved, no advance to "video2".
+    # Queue + currentSong preserved, no advance to "video2". The disconnect
+    # detection short-circuits before any cleanup runs.
     assert player.interrupted is True
     assert player.currentSong == {"id": "video1", "title": "Queen - A"}
     assert player.queue == [{"id": "video2", "title": "B"}]
-    # The auto-leave hook (queue_finished) must NOT have fired.
-    assert leave_mock.await_count == 0
+    # The vc was already dead; mark_interrupted nulled the reference and the
+    # player did NOT try to disconnect it again.
+    assert player.vc is None
+    assert dead_vc.disconnect.await_count == 0
 
 
 async def test_resume_from_interruption_seeks_back(
@@ -306,9 +312,10 @@ async def test_resume_from_interruption_seeks_back(
     player.textChannel = MagicMock(send=AsyncMock())
 
     # downloads dir resolution: point it at our tmp dir.
+    real_dirname = os.path.dirname
     monkeypatch.setattr(
         "playCommand.os.path.dirname",
-        lambda p: str(downloaded_file["dir"].parent) if str(p).endswith("playCommand.py") else os.path.dirname(p),
+        lambda p: str(downloaded_file["dir"].parent) if str(p).endswith("playCommand.py") else real_dirname(p),
         raising=True,
     )
 
@@ -349,42 +356,49 @@ async def test_currentElapsedSeconds_zero_before_playback(fresh_player_state):
     assert player._currentElapsedSeconds() == 0.0
 
 
-async def test_queue_finished_naturally_disconnects_immediately(fresh_player_state):
-    """When the last song in the queue finishes on its own, the bot has to
-    leave voice right away — not wait for the idle watchdog. This is the
-    "go home when the playlist is over" promise."""
+async def test_queue_finished_leaves_voice_idle_for_the_watchdog(fresh_player_state):
+    """When the last song finishes, the player itself no longer disconnects —
+    that's now the idle watchdog's job (single source of truth for leaving
+    voice). The contract here is just: currentSong cleared, vc reference
+    left intact so the watchdog can act on it on its next poll."""
     playCommand = fresh_player_state
+    vc = FakeVC(playing=True, paused=False, connected=True)
     player = playCommand.GuildPlayer(100, make_bot())
-    player.vc = FakeVC(playing=True, paused=False, connected=True)
+    player.vc = vc
     player.currentSong = {"id": "lastsong", "title": "Bye"}
     player.queue = []
     player.textChannel = MagicMock(send=AsyncMock())
-    # File on disk so the cleanup branch in onSongFinished can run.
+
     with patch.object(player, "updateControlMessage", new=AsyncMock()):
-        # Simulate ffmpeg finishing naturally (error=None, vc still connected).
         await player.onSongFinished(error=None)
 
-    # The auto-leave fired: vc was disconnected and player.vc is cleared.
-    assert player.vc is None, "queue end must disconnect the voice client"
-    assert player.currentSong is None, "currentSong must be cleared at queue end"
+    # The song is gone but the player did NOT yank the connection — that's
+    # the watchdog's job in the new design.
+    assert player.currentSong is None
+    assert vc.disconnect.await_count == 0
+    # Player still owns the vc reference so the watchdog can find it.
+    assert player.vc is vc
 
 
-async def test_stop_button_disconnects_immediately(fresh_player_state):
-    """The Stop control on the player UI is an explicit "I'm done" — it must
-    drop the connection in the same heartbeat, not lean on the watchdog."""
+async def test_stop_button_leaves_voice_idle_for_the_watchdog(fresh_player_state):
+    """Stop sets isStopping=True before stopping the vc. After onSongFinished
+    the player is idle and the watchdog takes over. No more dual-disconnect
+    paths from inside the player."""
     playCommand = fresh_player_state
+    vc = FakeVC(playing=True, paused=False, connected=True)
     player = playCommand.GuildPlayer(100, make_bot())
-    player.vc = FakeVC(playing=True, paused=False, connected=True)
+    player.vc = vc
     player.currentSong = {"id": "v1", "title": "A"}
     player.queue = []
-    player.isStopping = True  # what stopPlayback() sets before calling onSongFinished
+    player.isStopping = True
     player.textChannel = MagicMock(send=AsyncMock())
 
     with patch.object(player, "updateControlMessage", new=AsyncMock()):
         await player.onSongFinished(error=None)
 
-    assert player.vc is None, "stop must disconnect"
     assert player.currentSong is None
+    # vc was not disconnected by the player — the watchdog owns that step now.
+    assert vc.disconnect.await_count == 0
 
 
 async def test_currentElapsedSeconds_freezes_during_pause(fresh_player_state):
