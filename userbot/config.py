@@ -57,6 +57,11 @@ WAKE_WORD_MAX_CAPTURE_SECONDS = float(os.getenv("WAKE_WORD_MAX_CAPTURE_SECONDS",
 # Sustained silence inside a capture that closes it. Keep it close to the
 # regular VAD final-silence threshold (~0.8s) so users feel a natural cutoff.
 WAKE_WORD_SILENCE_FINAL_SECONDS = float(os.getenv("WAKE_WORD_SILENCE_FINAL_SECONDS", "0.8"))
+# Number of alternative transcriptions VOSK returns for each finalized
+# segment (N-best decoding). Higher = better recall on borderline pronunciations
+# — if the speaker says "indio dale" but VOSK ranks "indio" #1 and "indio dale"
+# #2, we accept either. 0 = single-best (legacy behavior).
+VOSK_MAX_ALTERNATIVES = int(os.getenv("VOSK_MAX_ALTERNATIVES", "5"))
 # Debug switch: when true the userbot falls back to the legacy TranscriberSink
 # (transcribes EVERY utterance, posts every line to the transcript channel).
 # Useful for visualizing what Whisper hears in the channel while debugging.

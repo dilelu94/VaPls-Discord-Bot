@@ -522,26 +522,42 @@ _vosk_load_lock = threading.Lock()
 # into "indio" and floods Whisper with false positives). The command
 # verbs need to be in here too, otherwise VOSK collapses them to [unk]
 # and the matcher never sees "indio ponete".
-_VOSK_GRAMMAR = json.dumps([
-    "indio", "che indio", "ey indio", "hola indio",
-    "indio ponete", "indio poneme",
-    "indio reproduci", "indio reproducí", "indio reproduce",
-    "indio tirate", "indio dale",
-    "indio por",  # how VOSK-small collapses "indio ponete"/"indio poneme"
-    "ponete", "poneme", "reproduci", "reproducí", "reproduce",
-    "tirate", "por",
-    "che", "ey", "hola", "buenas", "dale", "vamos",
-    "que", "qué", "como", "cómo", "cual", "cuál",
-    "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
-    "si", "sí", "no", "ah", "eh", "uh", "oh",
-    "el", "la", "los", "las", "un", "una", "uno",
-    "yo", "vos", "tu", "tú", "el", "ella", "nosotros",
-    "ser", "estar", "tener", "hacer", "decir", "ver",
-    "bien", "mal", "todo", "nada", "algo", "mucho", "poco",
-    "boludo", "loco", "posta", "dale", "ahre", "viste",
-    "mira", "escucha", "tira", "anda", "vení",
-    "[unk]",
-])
+def _build_vosk_grammar() -> str:
+    """Build the restricted JSON grammar VOSK uses for wake-word detection.
+
+    Only includes:
+      - Multi-token wake-word phrases (lets VOSK lock onto them directly).
+      - The leading particles that pair with "indio" ("che","que","eh","ey","hola").
+      - The verbs / collapsed-verb tokens that follow "indio".
+      - "[unk]" so anything outside the list still lands somewhere (otherwise
+        VOSK forces noise into a wake-word and we get false positives).
+
+    Everything else (filler like "boludo", interrogatives, articles, generic
+    verbs) was removed: it bloated the language model without contributing to
+    any _WAKE_PATTERNS pair. Smaller grammar → VOSK is more decisive on the
+    tokens we actually care about.
+    """
+    return json.dumps([
+        # Multi-token wake-word phrases (canonical + collapsed forms).
+        "che indio", "que indio", "eh indio", "ey indio", "hola indio",
+        "indio ponete", "indio poneme",
+        "indio reproduci", "indio reproducí", "indio reproduce",
+        "indio tirate", "indio dale",
+        "indio por",  # collapsed "indio ponete/poneme"
+        "indio tira", # collapsed "indio tirate"
+        # Lone tokens so the matcher still works when VOSK emits unpaired.
+        "indio",
+        "che", "que", "eh", "ey", "hola",
+        "ponete", "poneme",
+        "reproduci", "reproducí", "reproduce",
+        "tirate", "tira", "dale", "por",
+        # Catch-all bucket — without it VOSK collapses unknown audio into
+        # the closest grammar entry, producing false positives.
+        "[unk]",
+    ])
+
+
+_VOSK_GRAMMAR = _build_vosk_grammar()
 
 # Adjacent token pairs that count as a wake-word hit. We only fire when one
 # of these specific patterns appears in the VOSK output — "che indio" for
@@ -601,7 +617,13 @@ def _new_vosk_recognizer():
         return None
     try:
         import vosk
-        return vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
+        rec = vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
+        if config.VOSK_MAX_ALTERNATIVES > 0:
+            try:
+                rec.SetMaxAlternatives(config.VOSK_MAX_ALTERNATIVES)
+            except Exception:
+                log.exception("[VOSK] SetMaxAlternatives failed")
+        return rec
     except Exception:
         log.exception("[VOSK] failed to create recognizer")
         return None
@@ -621,28 +643,40 @@ def _text_matches_wake_pattern(text: str) -> bool:
 
 def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
     """Return True when VOSK finalized a segment matching one of the explicit
-    wake-word phrases (``_WAKE_PATTERNS``: "che indio", "indio ponete",
-    "indio reproducí").
+    wake-word phrases (``_WAKE_PATTERNS``).
 
-    ``accepted`` is the return value of the latest ``rec.AcceptWaveform(...)``
-    — VOSK finalizes a segment on sustained silence. Reading ``Result()`` only
-    when accepted=True avoids pulling state every frame when nothing finalized.
+    With ``VOSK_MAX_ALTERNATIVES > 0`` the recognizer emits N-best hypotheses
+    (``{"alternatives": [{"text": ..., "confidence": ...}, ...]}``) and we
+    gatillamos si **cualquiera** matchea un pattern — covers the case where
+    VOSK ranks "indio" #1 but "indio dale" #2. When single-best (legacy),
+    only ``{"text": "..."}`` comes in.
 
-    Logs "near-miss" segments (those containing "indio" but no full pattern)
-    so we can see whether the issue is VOSK collapsing the command verb or the
-    user phrasing differently than expected.
+    Logs "near-miss" segments (top-1 contains "indio" but no pattern matches)
+    so we can see whether VOSK is collapsing the verb or the user phrased
+    something unexpected.
     """
     if not accepted:
         return False
     try:
-        text = json.loads(rec.Result() or "{}").get("text", "")
-        if not text:
+        result = json.loads(rec.Result() or "{}")
+        if "alternatives" in result:
+            candidates = [alt.get("text", "") for alt in result["alternatives"]]
+        elif "text" in result:
+            candidates = [result["text"]]
+        else:
             return False
-        if _text_matches_wake_pattern(text):
-            return True
-        norm_tokens = _normalize(text).split()
-        if "indio" in norm_tokens:
-            log.info(f"[VOSK] near-miss, no pattern matched (text={text!r})")
+        for idx, text in enumerate(candidates):
+            if text and _text_matches_wake_pattern(text):
+                if idx > 0:
+                    log.info(f"[VOSK] matched via alternative #{idx+1}: "
+                             f"{text!r} (top-1 was {candidates[0]!r})")
+                return True
+        top1 = candidates[0] if candidates else ""
+        if top1 and "indio" in _normalize(top1).split():
+            extra = ""
+            if len(candidates) > 1:
+                extra = f", alts={candidates[1:]!r}"
+            log.info(f"[VOSK] near-miss, no pattern matched (text={top1!r}{extra})")
         return False
     except Exception:
         log.exception("[VOSK] failed to read recognizer state")
