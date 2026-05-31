@@ -125,6 +125,9 @@ intents.voice_states = True
 intents.messages = True
 intents.dm_messages = True
 intents.message_content = True
+# Sin esto, member.status siempre es "offline" y member.activities siempre
+# vacío en /user/<id>. Requiere activar "PRESENCE INTENT" en el Developer Portal.
+intents.presences = True
 try:
     asyncio.get_event_loop()
 except RuntimeError:

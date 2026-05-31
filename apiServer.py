@@ -297,10 +297,30 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 "self_mute": vs.self_mute,
                 "self_deaf": vs.self_deaf,
             }
+        else:
+            # Fallback: member.voice can be None even when the user *is*
+            # in a voice channel (cache race / partial state). Scan the
+            # guild's voice channels and rebuild a minimal voice dict.
+            for ch in guild.voice_channels:
+                if any(m.id == userId for m in ch.members):
+                    voice = {
+                        "channel_id": ch.id,
+                        "channel_name": ch.name,
+                        "self_mute": False,
+                        "self_deaf": False,
+                    }
+                    break
         activity = None
         acts = getattr(member, "activities", None) or []
         if acts:
             activity = str(acts[0].name) if hasattr(acts[0], "name") else str(acts[0])
+
+        top = getattr(member, "top_role", None)
+        top_role = (
+            {"name": top.name, "color": f"#{top.color.value:06x}"}
+            if top and top.name != "@everyone"
+            else None
+        )
 
         return web.json_response({
             "id": member.id,
@@ -310,6 +330,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
             "activity": activity,
             "voice": voice,
             "roles": [r.name for r in member.roles],
+            "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+            "created_at": member.created_at.isoformat(),
+            "top_role": top_role,
         })
 
     async def sendMessage(request: web.Request) -> web.Response:
