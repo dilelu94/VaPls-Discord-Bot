@@ -160,4 +160,18 @@ GREETING_ENABLED = os.getenv("GREETING_ENABLED", "true").lower() == "true"
 # Throttle por canal: minimo de segundos entre dos greetings en el mismo VC.
 GREETING_THROTTLE_SECONDS = float(os.getenv("GREETING_THROTTLE_SECONDS", "15"))
 
+# --- Wake sound (confirmation cue on wake-word detection) ------------------
+# Cuando VOSK detecta la palabra clave ("indio"), el userbot reproduce un
+# sonidito corto en el canal de voz como feedback inmediato para que el
+# usuario sepa que se lo escuchó. Se dispara en el momento de la detección
+# (antes de validar con Whisper), así que falsos positivos también suenan;
+# el throttle limita la cantidad.
+WAKE_SOUND_ENABLED = os.getenv("WAKE_SOUND_ENABLED", "true").lower() == "true"
+# Path al audio. Si es relativo se resuelve contra CUSTOM_AUDIO_PATH. Vacío
+# = feature inactivo aunque WAKE_SOUND_ENABLED esté en true.
+WAKE_SOUND_PATH = os.getenv("WAKE_SOUND_PATH", "")
+# Mínimo de segundos entre dos sonidos en el mismo canal — evita un chorro
+# de sonidos cuando VOSK genera varios hits seguidos.
+WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "2.0"))
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

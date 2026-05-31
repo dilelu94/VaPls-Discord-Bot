@@ -742,6 +742,7 @@ class WakeWordSink(voice_recv.AudioSink):
                          f"starting capture (prebuf_chunks="
                          f"{len(self.prebuffers.get(user_id, ()))})")
                 self._start_capture(user_id, now)
+                self._schedule_wake_sound(user_id)
                 try:
                     rec.Reset()
                 except Exception:
@@ -822,6 +823,18 @@ class WakeWordSink(voice_recv.AudioSink):
             log.info(f"[WAKE] user={user_id} closing capture on timeout "
                      f"({duration:.2f}s)")
             self._finalize_capture(user_id)
+
+    def _schedule_wake_sound(self, user_id: int) -> None:
+        """Hand off wake-sound playback to the main loop. Sink runs in a
+        background thread; play_wake_sound() needs to interact with the
+        VoiceClient via the event loop."""
+        try:
+            asyncio.run_coroutine_threadsafe(
+                greeting.play_wake_sound(self._client_ref, user_id=user_id),
+                self._client_ref.loop,
+            )
+        except Exception:
+            log.exception("[WAKE] failed to schedule wake sound")
 
     def _finalize_capture(self, user_id: int) -> None:
         capture = self.captures.pop(user_id, None)

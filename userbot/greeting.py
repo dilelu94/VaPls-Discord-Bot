@@ -27,6 +27,7 @@ logger = logging.getLogger("userbot.greeting")
 FFMPEG_NORMALIZE_OPTS = '-af "dynaudnorm=p=0.95:f=200"'
 
 _last_greeting: dict[int, float] = {}
+_last_wake_sound: dict[int, float] = {}
 
 
 def _users_map() -> dict:
@@ -111,4 +112,79 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
         return True
     except Exception:
         logger.exception("[GREETING] play failed (channel=%s)", channel_id)
+        return False
+
+
+def resolve_wake_sound_path() -> Optional[str]:
+    """Return the absolute wake-sound path, or ``None`` when unconfigured."""
+    rel = getattr(config, "WAKE_SOUND_PATH", "") or ""
+    if not rel:
+        return None
+    if os.path.isabs(rel):
+        return rel
+    return os.path.join(config.CUSTOM_AUDIO_PATH, rel)
+
+
+def _find_vc_with_user(client, user_id: int):
+    """Return the first connected voice client whose channel contains ``user_id``."""
+    for vc in getattr(client, "voice_clients", ()) or ():
+        try:
+            channel = getattr(vc, "channel", None)
+            if channel is None:
+                continue
+            if any(getattr(m, "id", None) == user_id for m in channel.members):
+                return vc
+        except Exception:
+            continue
+    return None
+
+
+async def play_wake_sound(client, *, user_id: int) -> bool:
+    """Play the configured wake sound on the VC where ``user_id`` is currently
+    sitting. Returns ``True`` when audio was scheduled, ``False`` when skipped
+    (feature disabled, no path configured, user not in a connected VC, vc busy,
+    file missing, or throttled). Errors are logged and swallowed.
+    """
+    if not getattr(config, "WAKE_SOUND_ENABLED", True):
+        return False
+    path = resolve_wake_sound_path()
+    if path is None:
+        return False
+    vc = _find_vc_with_user(client, user_id)
+    if vc is None:
+        return False
+    try:
+        if not vc.is_connected():
+            return False
+    except Exception:
+        return False
+    channel_id = getattr(getattr(vc, "channel", None), "id", None)
+    if channel_id is None:
+        return False
+    now = time.time()
+    last = _last_wake_sound.get(channel_id, 0.0)
+    if now - last < config.WAKE_SOUND_THROTTLE_SECONDS:
+        logger.info(
+            "[WAKE-SOUND] throttled (channel=%s, %.1fs since last)",
+            channel_id, now - last,
+        )
+        return False
+    try:
+        if vc.is_playing():
+            logger.info("[WAKE-SOUND] vc already playing (channel=%s)", channel_id)
+            return False
+    except Exception:
+        return False
+    if not os.path.exists(path):
+        logger.warning("[WAKE-SOUND] file missing: %s", path)
+        return False
+    _last_wake_sound[channel_id] = now
+    try:
+        source = discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS)
+        vc.play(source)
+        logger.info("[WAKE-SOUND] playing %s (user=%s, channel=%s)",
+                    path, user_id, channel_id)
+        return True
+    except Exception:
+        logger.exception("[WAKE-SOUND] play failed (channel=%s)", channel_id)
         return False

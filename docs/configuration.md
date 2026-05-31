@@ -41,6 +41,9 @@
 | `MAIN_BOT_API_BASE` | ❌ | `http://127.0.0.1:8080` | Main bot API for `/playing` polling and `/indio` invocation. |
 | `MAIN_BOT_API_SECRET` | ❌ | empty | Auth for `MAIN_BOT_API_BASE`; must match main bot's `API_SECRET`. |
 | `IDLE_LEAVE_SECONDS` | ❌ | `60` | Segundos sin humanos en ningún canal de voz del guild antes de que el userbot se desconecte. El timer se cancela apenas alguien (re)entra. `0` = legacy (desconectar al instante). |
+| `WAKE_SOUND_ENABLED` | ❌ | `true` | Master toggle del sonidito de confirmación que se reproduce cuando VOSK detecta la wake word. `false` desactiva la feature. |
+| `WAKE_SOUND_PATH` | ❌ | empty | Path al audio. Si es relativo se resuelve contra `CUSTOM_AUDIO_PATH`. Vacío = feature inactiva aunque `WAKE_SOUND_ENABLED=true`. |
+| `WAKE_SOUND_THROTTLE_SECONDS` | ❌ | `2.0` | Mínimo de segundos entre dos sonidos en el mismo canal. Evita un chorro de sonidos cuando VOSK genera varios hits consecutivos. |
 | `LOG_LEVEL` | ❌ | `INFO` | Python logging level for the userbot. |
 
 ## Security notes
