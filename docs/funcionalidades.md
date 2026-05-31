@@ -113,6 +113,15 @@ concisas.
 
   Estas acciones se ejecutan, idealmente, **a través del userbot** para que en el
   chat aparezca como "El Indio usó /play".
+- **Actúa primero, después confirma**: el Indio postea su confirmación breve en
+  el momento ("dale, va Queen"), corre la acción, y **edita ese mismo mensaje en
+  el lugar** con el resultado real: éxito → sufijo corto ("— listo 🔊/🎵/✅");
+  falla → el motivo concreto ("— uh, no pude poner la música (no hay nadie en
+  un canal de voz)"). Así un error sale a la luz en vez de dejar al usuario
+  esperando música que no viene. La edición se hace vía el endpoint `POST /edit`
+  del userbot (o directo sobre el mensaje cuando el relay está apagado). Los logs
+  de debug por acción (`ok=/fail=`) se mantienen intactos; al usuario sólo le
+  llega la línea corta.
 - **Pide música con votación**: cuando le piden un tema (voz o chat) y hay varios
   resultados, el Indio lista las opciones (con emojis) y abre una **votación que
   cierra cuando pasan `_MUSIC_VOTE_WINDOW_SEC` (30 s por defecto) sin votos
@@ -219,6 +228,7 @@ y lo POSTea a un callback (típicamente el bridge de Telegram).
 | Endpoint | Qué hace |
 |---|---|
 | `POST /say` | Postea un mensaje como el usuario real (así las respuestas del Indio salen con su identidad) |
+| `POST /edit` | Edita en el lugar un mensaje ya posteado por el userbot (el Indio actúa primero y después edita su respuesta con el resultado real) |
 | `POST /record` | Dispara una grabación de voz |
 | `GET /members` | Lista miembros del guild (sin necesitar el intent privilegiado en el bot) |
 | `POST /invoke_play` | Invoca el `/play` de VaPls como el usuario real |

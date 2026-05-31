@@ -2348,6 +2348,51 @@ async def _relay_join(request: web.Request) -> web.Response:
     })
 
 
+async def _relay_edit(request: web.Request) -> web.Response:
+    """Edit a message that the userbot previously posted in a text channel.
+
+    Used by the main bot to update an Indio reply in-place after an action
+    has completed (e.g. replacing "thinking…" with the final answer).
+
+    Body: ``{"channel_id": <int>, "message_id": <int>, "content": <str>}``.
+    Auth: ``X-API-Secret`` header must equal ``config.RELAY_SECRET``.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        message_id = int(data["message_id"])
+        content = str(data["content"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+
+    try:
+        msg = await channel.fetch_message(message_id)
+    except Exception as e:
+        return web.json_response({"error": f"message not found: {e}"}, status=404)
+
+    try:
+        await msg.edit(content=content)
+    except Exception as e:
+        log.exception("[RELAY] edit failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response({"ok": True, "message_id": msg.id})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -2359,6 +2404,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
     app.router.add_post("/join", _relay_join)
+    app.router.add_post("/edit", _relay_edit)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

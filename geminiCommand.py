@@ -1159,38 +1159,21 @@ def _failure_feedback(status: str) -> Optional[str]:
     return None
 
 
-async def _post_action_failures(channel_id: Optional[int], channel,
-                                statuses: list[str]) -> None:
-    """Post one user-facing message per failed action status. Best-effort:
-    relays via the userbot (so the indio "owns" the apology) and falls back to
-    ``channel.send`` when the relay is off. ``channel`` may be ``None`` —
-    in that case we only attempt the relay path."""
-    seen: set[str] = set()
-    for status in statuses or []:
-        msg = _failure_feedback(status)
-        if not msg or msg in seen:
-            continue
-        seen.add(msg)
-        logger.info("indio action feedback: %r → %r", status, msg)
-        relayed = False
-        if channel_id and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-            try:
-                relayed = await _relay_to_userbot(int(channel_id), msg, None)
-            except Exception:
-                logger.exception("indio action feedback relay failed")
-                relayed = False
-        if not relayed and channel is not None:
-            try:
-                await channel.send(msg)
-            except Exception:
-                logger.exception("indio action feedback channel.send failed")
+_ACTION_SUCCESS_SUFFIX = {
+    "PLAY_MUSIC": " — listo 🎵",
+    "PLAY_SOUND": " — listo 🔊",
+    "SKIP_MUSIC": " — listo ✅",
+    "PAUSE_MUSIC": " — listo ✅",
+    "RESUME_MUSIC": " — listo ✅",
+    "STOP_MUSIC": " — listo ✅",
+}
 
 
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
-                                   feedback_channel_id: Optional[int] = None,
-                                   feedback_channel=None,
+                                   reply_handle=None,
+                                   reply_text: str = "",
                                    ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
@@ -1199,10 +1182,19 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     playback regardless of where the conversation is happening. Falls back
     to in-process playback if the relay is unavailable.
 
-    When ``feedback_channel_id`` / ``feedback_channel`` are provided, any
-    action that fails triggers a corrective message in that channel so the
-    user finds out (the indio already promised "dale, va" optimistically
-    before the tool ran).
+    After the action runs the original reply message is **edited in place**
+    to append a short result indicator (success suffix or failure reason),
+    so the user sees the outcome without a separate message.
+
+    ``reply_handle`` is a ``types.SimpleNamespace`` with:
+      - ``via_relay: bool`` — True when the initial reply went via userbot.
+      - ``channel_id: Optional[int]`` — channel where the reply was posted.
+      - ``message_id: Optional[int]`` — id of the relay-posted message (valid
+        when ``via_relay=True``).
+      - ``message`` — Discord Message object (valid when ``via_relay=False``).
+
+    ``reply_text`` is the clean persona text that was originally sent; the
+    suffix is appended to it before editing.
 
     Returns short status strings for logging; the indio's main reply is sent
     separately."""
@@ -1329,13 +1321,37 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
         except Exception:
             logger.exception("indio action %s failed", action)
             statuses.append(f"{action.lower()}: fail — exception")
-    # After all actions ran, push corrective messages for any failures so the
-    # user gets actual feedback instead of being left waiting on the optimistic
-    # "dale, va" the indio already posted.
-    try:
-        await _post_action_failures(feedback_channel_id, feedback_channel, statuses)
-    except Exception:
-        logger.exception("indio action feedback dispatch failed")
+
+    # After all actions ran, EDIT the original reply in place to append a
+    # short result indicator.  Best-effort: log on failure, never crash.
+    if reply_handle is not None and statuses:
+        try:
+            # Determine the primary action type for the success suffix.
+            primary_action = actions[0][0] if actions else ""
+            # Find the first failing status (if any).
+            first_failure = next(
+                (s for s in statuses if _failure_feedback(s) is not None), None
+            )
+            if first_failure is not None:
+                failure_msg = _failure_feedback(first_failure)
+                suffix = f"\n— {failure_msg}" if failure_msg else ""
+            else:
+                suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, " — listo ✅")
+            new_content = reply_text + suffix
+            logger.info("indio dispatch edit: suffix=%r via_relay=%s",
+                        suffix, getattr(reply_handle, "via_relay", None))
+            if getattr(reply_handle, "via_relay", False):
+                ch_id = getattr(reply_handle, "channel_id", None)
+                msg_id = getattr(reply_handle, "message_id", None)
+                if ch_id and msg_id:
+                    await _edit_via_userbot(ch_id, msg_id, new_content)
+            else:
+                msg = getattr(reply_handle, "message", None)
+                if msg is not None:
+                    await msg.edit(content=new_content)
+        except Exception:
+            logger.exception("indio dispatch in-place edit failed")
+
     return statuses
 
 
@@ -1717,14 +1733,20 @@ def _strip_indio_prefix(text: str) -> str:
 
 
 async def _relay_to_userbot(channel_id: int, content: str,
-                            reply_to_id: Optional[int]) -> bool:
+                            reply_to_id: Optional[int]) -> Optional[list[int]]:
     """POST the indio reply to the userbot's local /say endpoint so it gets
-    posted by the real user account. Returns True on success, False on any
-    failure (caller should fall back to posting via vapls)."""
+    posted by the real user account.
+
+    Returns a list of message ids (from the userbot's JSON response
+    ``{"sent": N, "message_ids": [...]}``) on success, or ``None`` on any
+    failure / when the relay is not configured.  Callers that only care about
+    success/failure can test the result via truthiness — a non-empty list is
+    truthy and ``None`` is falsy, so ``if relayed:`` / ``if not relayed:``
+    patterns keep working unchanged."""
     url = config.INDIO_RELAY_URL
     secret = config.INDIO_RELAY_SECRET
     if not url or not secret:
-        return False
+        return None
     payload = {"channel_id": int(channel_id), "content": content}
     if reply_to_id is not None:
         payload["reply_to_message_id"] = int(reply_to_id)
@@ -1736,13 +1758,54 @@ async def _relay_to_userbot(channel_id: int, content: str,
                 if resp.status >= 400:
                     body = await resp.text()
                     logger.warning("indio relay HTTP %d: %s", resp.status, body[:200])
+                    return None
+                data = await resp.json(content_type=None)
+        ids = (data or {}).get("message_ids") or []
+        return [int(i) for i in ids] if ids else [0]
+    except asyncio.TimeoutError:
+        logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
+        return None
+    except Exception:
+        logger.exception("indio relay failed")
+        return None
+
+
+async def _edit_via_userbot(channel_id: int, message_id: int,
+                             content: str) -> bool:
+    """Ask the userbot to edit a previously-posted message in place.
+
+    Mirrors ``_relay_to_userbot`` but POSTs to the ``/edit`` endpoint.
+    Body: ``{"channel_id": int, "message_id": int, "content": str}``.
+    Header: ``X-API-Secret: config.INDIO_RELAY_SECRET``.
+
+    Returns True when the userbot responds with HTTP < 400, False otherwise
+    (including when the relay is not configured).  Never raises."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+    edit_url = url.rsplit("/", 1)[0] + "/edit"
+    payload = {"channel_id": int(channel_id), "message_id": int(message_id),
+               "content": content}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(edit_url, json=payload,
+                                    headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("indio relay edit HTTP %d: %s",
+                                   resp.status, body[:200])
                     return False
                 return True
     except asyncio.TimeoutError:
-        logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
+        logger.warning("indio relay edit timeout after %.1fs",
+                       config.INDIO_RELAY_TIMEOUT)
         return False
     except Exception:
-        logger.exception("indio relay failed")
+        logger.warning("indio relay edit failed: %s", "see traceback",
+                       exc_info=True)
         return False
 
 
@@ -2012,6 +2075,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                  and _active_vote.reaction_message_id is None)
     opts_channel_id = None
     opts_msg_id = None
+    reply_handle = None
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
         question_msg = await ctx.followup.send(question_header)
@@ -2037,13 +2101,46 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
             n_chunks = 1
         elif channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-            relayed_via_userbot = await _relay_to_userbot(
+            import types as _types
+            relay_ids = await _relay_to_userbot(
                 channel_id, clean_reply, question_msg_id
             )
-            n_chunks = 1 if relayed_via_userbot else await _send_reply(ctx, clean_reply)
+            relayed_via_userbot = bool(relay_ids)
+            if relayed_via_userbot:
+                relay_msg_id = relay_ids[0] if relay_ids else None
+                reply_handle = _types.SimpleNamespace(
+                    via_relay=True,
+                    channel_id=channel_id,
+                    message_id=relay_msg_id,
+                    message=None,
+                )
+                n_chunks = 1
+            else:
+                chunks = _split_for_discord(clean_reply)
+                sent_msg = None
+                for c in chunks:
+                    sent_msg = await ctx.followup.send(c)
+                reply_handle = _types.SimpleNamespace(
+                    via_relay=False,
+                    channel_id=channel_id,
+                    message_id=None,
+                    message=sent_msg,
+                )
+                n_chunks = len(chunks)
         else:
             # Fallback: post the reply via vapls if relay is disabled or failed.
-            n_chunks = await _send_reply(ctx, clean_reply)
+            import types as _types
+            chunks = _split_for_discord(clean_reply)
+            sent_msg = None
+            for c in chunks:
+                sent_msg = await ctx.followup.send(c)
+            reply_handle = _types.SimpleNamespace(
+                via_relay=False,
+                channel_id=channel_id,
+                message_id=None,
+                message=sent_msg,
+            )
+            n_chunks = len(chunks)
     except Exception as e:
         logger.exception("indio send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -2068,13 +2165,10 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         logger.exception("indio archive enqueue failed")
 
     if pending_actions:
-        _fb_channel_id = getattr(ctx, "channel_id", None) or getattr(
-            getattr(ctx, "channel", None), "id", None
-        )
         asyncio.create_task(_dispatch_indio_actions(
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
-            feedback_channel_id=_fb_channel_id,
-            feedback_channel=getattr(ctx, "channel", None),
+            reply_handle=reply_handle,
+            reply_text=clean_reply,
         ))
 
     _turn_ts = time.time()
@@ -2232,6 +2326,7 @@ async def indioFromVoice(
     vote_open = (_active_vote is not None
                  and _active_vote.reaction_message_id is None)
     opts_msg_id = None
+    reply_handle = None
     try:
         if vote_open:
             # Vote options: capture the message id so we can react on it.
@@ -2244,13 +2339,30 @@ async def indioFromVoice(
                     sent = await channel.send(chunk)
                 opts_msg_id = getattr(sent, "id", None)
         else:
+            import types as _types
             if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-                relayed_via_userbot = await _relay_to_userbot(
+                relay_ids = await _relay_to_userbot(
                     channel_id, clean_reply, None
                 )
+                relayed_via_userbot = bool(relay_ids)
+                if relayed_via_userbot:
+                    relay_msg_id = relay_ids[0] if relay_ids else None
+                    reply_handle = _types.SimpleNamespace(
+                        via_relay=True,
+                        channel_id=channel_id,
+                        message_id=relay_msg_id,
+                        message=None,
+                    )
             if not relayed_via_userbot:
+                sent_msg = None
                 for chunk in _split_for_discord(clean_reply):
-                    await channel.send(chunk)
+                    sent_msg = await channel.send(chunk)
+                reply_handle = _types.SimpleNamespace(
+                    via_relay=False,
+                    channel_id=channel_id,
+                    message_id=None,
+                    message=sent_msg,
+                )
     except Exception:
         logger.exception("indioFromVoice send failed")
         return
@@ -2273,8 +2385,8 @@ async def indioFromVoice(
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             bot, guild_id, pending_actions,
-            feedback_channel_id=channel_id,
-            feedback_channel=channel,
+            reply_handle=reply_handle,
+            reply_text=clean_reply,
         ))
 
     _turn_ts = time.time()

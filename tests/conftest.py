@@ -56,9 +56,30 @@ def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100):
         ctx.guild = types.SimpleNamespace(id=guild_id)
 
     sent: list[str] = []
+    _msg_id_counter = [1000]
+
+    def _make_fake_message(content, sent_list):
+        """Return a fake Discord Message with id, channel.id, and async edit()."""
+        msg_id = _msg_id_counter[0]
+        _msg_id_counter[0] += 1
+        idx = len(sent_list)  # index into sent_list for this message
+
+        class _FakeMessage:
+            id = msg_id
+            channel = types.SimpleNamespace(id=42)
+
+            async def edit(self, *, content=None, **kwargs):
+                # Update the recorded message text in-place so sent_text()
+                # reflects the edited content.
+                if content is not None and idx < len(sent_list):
+                    sent_list[idx] = content
+
+        return _FakeMessage()
 
     async def _send(content=None, **kwargs):
+        msg = _make_fake_message(content, sent)
         sent.append(content)
+        return msg
 
     ctx.followup = MagicMock()
     ctx.followup.send = AsyncMock(side_effect=_send)
