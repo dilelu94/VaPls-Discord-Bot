@@ -1294,63 +1294,6 @@ def _format_choice_prompt(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-class PlaySearchView(discord.ui.View):
-    """Pick-one menu shown when /play finds several matches for a search.
-
-    Only the user who ran /play may choose. Selecting an option queues that
-    single song through the SAME path as a normal /play (``addSongs``), so the
-    download-progress message, cancel button and per-song error reporting all
-    work exactly as if the user had typed that title directly.
-    """
-    def __init__(self, player: "GuildPlayer", ctx, candidates: list[dict]):
-        super().__init__(timeout=120)
-        self.player = player
-        self.ctx = ctx
-        self.requester_id = getattr(getattr(ctx, "author", None), "id", None)
-        self.candidates = candidates
-        self.message = None
-
-        options = []
-        for i, c in enumerate(candidates):
-            dur = c.get("duration_string") or ""
-            label = c["title"][:100]
-            desc = f"[{dur}]" if dur else None
-            options.append(discord.SelectOption(
-                label=label, value=str(i), description=desc, emoji=_num_emoji(i + 1)))
-        select = discord.ui.Select(
-            placeholder="Elegí el tema...",
-            options=options,
-            custom_id="play_choice_select",
-        )
-        select.callback = self._on_select
-        self.add_item(select)
-
-    async def _on_select(self, interaction: discord.Interaction):
-        """Queue the chosen candidate (requester-only)."""
-        if self.requester_id is not None and interaction.user.id != self.requester_id:
-            await interaction.response.send_message(
-                "Esta elección es de quien pidió el tema 😉", ephemeral=True,
-            )
-            return
-        try:
-            idx = int(interaction.data["values"][0])
-        except (KeyError, ValueError, IndexError):
-            await interaction.response.defer()
-            return
-        if idx < 0 or idx >= len(self.candidates):
-            await interaction.response.defer()
-            return
-        song = self.candidates[idx]
-        # Ack the component interaction without editing; addSongs drives the
-        # original /play response from here (replacing this menu with the
-        # download-progress message + cancel button).
-        try:
-            await interaction.response.defer()
-        except Exception:
-            pass
-        await self.player.addSongs([song], self.ctx)
-
-
 async def playLogic(ctx: discord.ApplicationContext, query: str):
     """Handle the /play slash command.
 
