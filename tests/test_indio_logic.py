@@ -209,156 +209,171 @@ async def test_play_music_url_plays_directly(
     search_mock.assert_not_awaited()      # no disambiguation search for a URL
 
 
-async def test_play_music_multiple_matches_asks_instead_of_playing(
+# --- Group-vote disambiguation (indio) -------------------------------------
+# Several matches open a 5s vote: anyone can pick by number, then the most-voted
+# plays (ties → lowest number; no votes → the first result). Tests cancel the
+# auto-close timer and call _close_vote() directly so timing is deterministic.
+
+_VOTE_CANDS = [
+    {"id": "idA", "title": "Tema A", "duration_string": "3:00"},
+    {"id": "idB", "title": "Tema B", "duration_string": "4:00"},
+    {"id": "idC", "title": "Tema C", "duration_string": "5:00"},
+]
+
+
+def _freeze_vote_timer(gc, key="guild-100"):
+    """Cancel the auto-close timer so the test closes the vote on its own."""
+    v = gc._indio_pending_vote.get(key)
+    if v and v.get("task"):
+        v["task"].cancel()
+
+
+async def _open_music_vote(gc, ctx_factory, monkeypatch, reply_factory,
+                           opener_uid=1, candidates=None):
+    """Drive an indio music request that finds several matches, opening a vote.
+    Returns the opener's ctx. Freezes the auto-close timer."""
+    import geminiClient
+    _fake_search(monkeypatch, candidates if candidates is not None else _VOTE_CANDS)
+    monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=reply_factory(
+        text="dale",
+        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
+    )))
+    ctx = ctx_factory(display_name="Opener", user_id=opener_uid, guild_id=100)
+    await indioLogic(ctx, "poné algo", nuevo=False)
+    _freeze_vote_timer(gc)
+    return ctx
+
+
+async def test_multiple_matches_opens_a_vote(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
-    """Several hits → the indio lists them and waits; nothing plays yet."""
+    """Several hits → the indio lists them and opens a vote; nothing plays yet."""
     import playCommand
     play_mock = AsyncMock(return_value=(True, "x"))
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
-    _fake_search(monkeypatch, [
-        {"id": "id1", "title": "Crímenes Perfectos (Estudio)", "duration_string": "3:54"},
-        {"id": "id2", "title": "Crímenes Perfectos (En vivo)", "duration_string": "4:20"},
-        {"id": "id3", "title": "Crímenes Perfectos (cover)", "duration_string": "3:40"},
-    ])
 
-    patch_generate(reply=reply_factory(
-        text="dale",
-        function_calls=[{"name": "play_music", "args": {"query": "Crímenes Perfectos"}}],
-    ))
-
-    ctx = ctx_factory(display_name="Mati", guild_id=100)
-    await indioLogic(ctx, "poné Crímenes Perfectos", nuevo=False)
-    await _drain_pending_tasks()
+    ctx = await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
 
     shown = "\n".join(m for m in ctx.sent_messages if m)
-    assert "Estudio" in shown and "En vivo" in shown    # the options were listed
-    play_mock.assert_not_awaited()                       # didn't play anything yet
-    assert ("guild-100", "uid:1") in indio._indio_pending_choice   # keyed by user id
+    assert "Tema A" in shown and "Tema B" in shown      # options listed
+    play_mock.assert_not_awaited()                       # nothing played yet
+    assert "guild-100" in indio._indio_pending_vote      # a vote is open
 
 
-async def test_pending_choice_resolved_by_number_plays_it(
-        indio, ctx_factory, patch_generate, reply_factory,
-        monkeypatch, disable_relay):
-    """After the indio asks, the requester's "la dos" plays the 2nd option."""
-    import playCommand
-    play_mock = AsyncMock(return_value=(True, "x"))
-    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
-    _fake_search(monkeypatch, [
-        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
-        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
-        {"id": "id3", "title": "Tema C", "duration_string": "5:00"},
-    ])
-
-    patch_generate(reply=reply_factory(
-        text="dale",
-        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
-    ))
-
-    ctx = ctx_factory(display_name="Mati", guild_id=100)
-    await indioLogic(ctx, "poné algo", nuevo=False)        # indio asks
-    await _drain_pending_tasks()
-
-    await indioLogic(ctx, "la dos", nuevo=False)           # requester chooses
-    await _drain_pending_tasks()
-
-    play_mock.assert_awaited_once()
-    assert play_mock.call_args.kwargs["songs"][0]["id"] == "id2"   # the 2nd candidate
-    assert ("guild-100", "uid:1") not in indio._indio_pending_choice   # cleared
-
-
-async def test_pending_choice_cancel_does_not_play(
+async def test_vote_winner_is_the_most_voted(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
     import playCommand
     play_mock = AsyncMock(return_value=(True, "x"))
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
-    _fake_search(monkeypatch, [
-        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
-        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
-    ])
 
-    patch_generate(reply=reply_factory(
-        text="dale",
-        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
-    ))
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
 
-    ctx = ctx_factory(display_name="Mati", guild_id=100)
-    await indioLogic(ctx, "poné algo", nuevo=False)
-    await _drain_pending_tasks()
-
-    await indioLogic(ctx, "ninguna, dejá", nuevo=False)
-    await _drain_pending_tasks()
-
-    play_mock.assert_not_awaited()
-    assert ("guild-100", "uid:1") not in indio._indio_pending_choice
-
-
-async def test_pending_choice_only_requester_resolves(
-        indio, ctx_factory, patch_generate, reply_factory,
-        monkeypatch, disable_relay):
-    """Someone else answering does not consume the requester's pending choice."""
-    import playCommand
-    play_mock = AsyncMock(return_value=(True, "x"))
-    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
-    _fake_search(monkeypatch, [
-        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
-        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
-    ])
-    patch_generate(reply=reply_factory(text="dale"))   # any normal reply for Viny
-
-    # Mati asks → choice pending for Mati.
-    ask_gen = reply_factory(
-        text="dale",
-        function_calls=[{"name": "play_music", "args": {"query": "algo"}}],
-    )
-    import geminiClient
-    monkeypatch.setattr(geminiClient, "generate", AsyncMock(return_value=ask_gen))
-    await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "poné algo", nuevo=False)
-    await _drain_pending_tasks()
-
-    # Viny (a different user id) says "la dos" — but the pending choice is
-    # Mati's, keyed by Mati's user id, so it must NOT resolve for Viny.
-    monkeypatch.setattr(geminiClient, "generate",
-                        AsyncMock(return_value=reply_factory(text="qué onda")))
+    # Two votes for option B, one for option C → B wins.
+    await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "la dos", nuevo=False)
     await indioLogic(ctx_factory(display_name="Viny", user_id=2, guild_id=100), "la dos", nuevo=False)
-    await _drain_pending_tasks()
+    await indioLogic(ctx_factory(display_name="Colo", user_id=3, guild_id=100), "la tres", nuevo=False)
 
-    play_mock.assert_not_awaited()
-    assert ("guild-100", "uid:1") in indio._indio_pending_choice   # still waiting for Mati
+    await indio._close_vote("guild-100")
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
+    assert "guild-100" not in indio._indio_pending_vote   # closed
 
 
-async def test_pending_choice_survives_unrelated_message(
+async def test_vote_with_no_votes_plays_the_first(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
-    """An unrecognised follow-up must NOT discard the options — a later valid
-    answer still works while the choice is within its TTL."""
     import playCommand
     play_mock = AsyncMock(return_value=(True, "x"))
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
-    _fake_search(monkeypatch, [
-        {"id": "id1", "title": "Tema A", "duration_string": "3:00"},
-        {"id": "id2", "title": "Tema B", "duration_string": "4:00"},
-    ])
-    patch_generate(replies=[
-        reply_factory(text="dale",
-                      function_calls=[{"name": "play_music", "args": {"query": "algo"}}]),
-        reply_factory(text="jajaj"),   # the unrelated turn's normal reply
-    ])
 
-    ctx = ctx_factory(display_name="Mati", user_id=1, guild_id=100)
-    await indioLogic(ctx, "poné algo", nuevo=False)        # indio asks
-    await _drain_pending_tasks()
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    await indio._close_vote("guild-100")          # window closes, nobody voted
 
-    await indioLogic(ctx, "jaja qué capo", nuevo=False)    # unrelated chatter
-    await _drain_pending_tasks()
-    assert ("guild-100", "uid:1") in indio._indio_pending_choice   # still there
-    play_mock.assert_not_awaited()
-
-    await indioLogic(ctx, "la dos", nuevo=False)           # real answer still works
-    await _drain_pending_tasks()
     play_mock.assert_awaited_once()
-    assert play_mock.call_args.kwargs["songs"][0]["id"] == "id2"
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"   # the first
+
+
+async def test_vote_tie_breaks_to_lowest_number(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+
+    # One vote for #3, one for #1 → tie → the lowest number (#1) wins.
+    await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "la 3", nuevo=False)
+    await indioLogic(ctx_factory(display_name="Viny", user_id=2, guild_id=100), "la 1", nuevo=False)
+
+    await indio._close_vote("guild-100")
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"
+
+
+async def test_anyone_can_vote_not_just_requester(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """A different user than the one who asked can decide the vote."""
+    import playCommand
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory, opener_uid=1)
+
+    # Someone other than the opener votes, and it counts.
+    await indioLogic(ctx_factory(display_name="Otro", user_id=99, guild_id=100), "la dos", nuevo=False)
+    await indio._close_vote("guild-100")
+
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
+
+
+async def test_unrelated_message_during_vote_is_not_a_vote(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """A non-option message keeps flowing as normal chat and doesn't vote."""
+    import playCommand
+    import geminiClient
+    play_mock = AsyncMock(return_value=(True, "x"))
+    monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
+
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+
+    # An unrelated line: the indio answers normally; no vote recorded.
+    monkeypatch.setattr(geminiClient, "generate",
+                        AsyncMock(return_value=reply_factory(text="jajaj qué capo")))
+    await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "jaja qué capo", nuevo=False)
+
+    assert indio._indio_pending_vote["guild-100"]["votes"] == {}   # nothing counted
+
+    await indio._close_vote("guild-100")
+    play_mock.assert_awaited_once()
+    assert play_mock.call_args.kwargs["songs"][0]["id"] == "idA"    # no votes → first
+
+
+# --- _tally_vote_winner pure-function behavior -----------------------------
+
+
+def test_tally_most_voted_wins():
+    from geminiCommand import _tally_vote_winner
+    cands = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    assert _tally_vote_winner(cands, {"u1": 1, "u2": 1, "u3": 2}) == 1
+
+
+def test_tally_tie_breaks_to_lowest_index():
+    from geminiCommand import _tally_vote_winner
+    cands = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+    assert _tally_vote_winner(cands, {"u1": 2, "u2": 0}) == 0
+
+
+def test_tally_no_votes_returns_first():
+    from geminiCommand import _tally_vote_winner
+    cands = [{"id": "a"}, {"id": "b"}]
+    assert _tally_vote_winner(cands, {}) == 0
 
 
 # --- _parse_choice pure-function behavior ----------------------------------
