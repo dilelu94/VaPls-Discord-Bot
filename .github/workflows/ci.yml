@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -32,3 +32,62 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Run test suite
         run: pytest -q
+
+  # ── Continuous deployment ──────────────────────────────────────────────────
+  # Runs only on pushes to master, only after all matrix test jobs pass.
+  # Gracefully skips when SSH secrets are not configured (e.g. before the
+  # maintainer has set them up) — no hard failure in that case.
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+
+    steps:
+      # ── Guard: check whether SSH secrets are configured ───────────────────
+      - name: Check SSH secrets are configured
+        id: guard
+        run: |
+          if [ -n "${{ secrets.SSH_HOST }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "No SSH_HOST secret configured — skipping deploy."
+            echo "Set SSH_HOST, SSH_USER, and SSH_KEY in repo secrets to enable CD."
+          fi
+
+      # ── Set up SSH ────────────────────────────────────────────────────────
+      - name: Set up SSH key and known_hosts
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          SSH_PORT="${{ secrets.SSH_PORT }}"
+          SSH_PORT="${SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          # Write private key
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Populate known_hosts to avoid interactive host-key prompt
+          ssh-keyscan -p "$SSH_PORT" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      # ── Run deploy script on the server ───────────────────────────────────
+      # We pipe the repo's deploy.sh over stdin (`bash -s`) so the runner's
+      # version always executes, even if the server checkout has not yet been
+      # updated (handles the very first deploy or a broken server state).
+      - name: Check out repository (for deploy.sh)
+        if: steps.guard.outputs.ready == 'true'
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          SSH_PORT="${{ secrets.SSH_PORT }}"
+          SSH_PORT="${SSH_PORT:-22}"
+
+          ssh -i ~/.ssh/deploy_key \
+              -p "$SSH_PORT" \
+              -o StrictHostKeyChecking=yes \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              'bash -s' < scripts/deploy.sh
