@@ -6,6 +6,8 @@ FFmpeg, config, analytics, and greeting triggers.
 """
 import os
 import asyncio
+import difflib
+import unicodedata
 import discord
 import config
 import analytics
@@ -42,6 +44,77 @@ guildPlayers = {}
 # How many search candidates to offer when /play (or the indio) finds several
 # matches for a free-text query. Keeps the "¿cuál querés?" list readable.
 _PLAY_CHOICE_COUNT = 5
+
+# Above this similarity between the user's query and the title of the top
+# yt-dlp hit, we skip the "¿cuál querés?" picker and just queue the top
+# result. The threshold is a behavioural knob: lower = more autoplay (less
+# friction, more risk of playing the wrong song); higher = more picker prompts.
+_PLAY_AUTOPLAY_RATIO = 0.7
+
+# Minimum tokens in the user query before we even consider autoplay. Short
+# queries ("el infierno", "rock") are inherently ambiguous — even if the top
+# hit contains them verbatim, the user is usually browsing, not asking for
+# a specific track. The picker handles that case better.
+_PLAY_AUTOPLAY_MIN_TOKENS = 4
+
+
+def _normalize_for_match(s: str) -> str:
+    """Lowercase, strip accents, drop punctuation, collapse whitespace.
+
+    Used to compare a user's free-text query against a YouTube title without
+    being thrown off by accents, capitalisation, or punctuation like " - ".
+    """
+    if not s:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", s)
+    no_accents = "".join(c for c in nfkd if not unicodedata.combining(c))
+    cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in no_accents)
+    return " ".join(cleaned.lower().split())
+
+
+def _query_title_ratio(query: str, title: str) -> float:
+    """Similarity in [0, 1] between a query and a candidate title.
+
+    Uses a partial-ratio: scores how well the query matches the *best aligned
+    substring* of the title (the rapidfuzz ``partial_ratio`` idea, built on
+    stdlib ``difflib``). This is what lets "el infierno esta encantado esta
+    noche" still match a title that prefixes the artist name and suffixes
+    "(Audio Oficial)" — plain ``ratio()`` would be dragged down by all that
+    extra junk.
+    """
+    q = _normalize_for_match(query)
+    t = _normalize_for_match(title)
+    if not q or not t:
+        return 0.0
+    if len(q) >= len(t):
+        return difflib.SequenceMatcher(None, q, t).ratio()
+    # Slide a query-sized window across the longer title and keep the best
+    # match. Anchored at each matching block found by SequenceMatcher so we
+    # avoid the O(n*m) brute force while still catching the right alignment.
+    sm = difflib.SequenceMatcher(None, q, t)
+    best = 0.0
+    for block in sm.get_matching_blocks():
+        start = max(0, block.b - block.a)
+        window = t[start:start + len(q)]
+        score = difflib.SequenceMatcher(None, q, window).ratio()
+        if score > best:
+            best = score
+    return best
+
+
+def _should_autoplay_top(query: str, title: str,
+                         threshold: float = _PLAY_AUTOPLAY_RATIO) -> bool:
+    """Return True when the top search hit looks like a clear winner for the
+    user's query — i.e. we can queue it directly without showing the picker.
+
+    Two guards combined: the query must be specific enough (≥ ``_PLAY_AUTOPLAY_
+    MIN_TOKENS`` tokens) AND the partial-ratio against the title must clear
+    ``threshold``. Both are needed; either alone produces wrong calls (long
+    vague queries, or short queries that happen to be a verbatim substring).
+    """
+    if len(_normalize_for_match(query).split()) < _PLAY_AUTOPLAY_MIN_TOKENS:
+        return False
+    return _query_title_ratio(query, title) >= threshold
 
 
 def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
@@ -1166,7 +1239,18 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     # Free-text search with several candidates → let the requester pick which
     # one instead of silently grabbing the first hit (which often was the wrong
     # version). A direct URL/playlist skips this and queues straight away.
+    # Exception: if the top hit's title overlaps strongly with the user query
+    # (normalized, sin tildes/punctuation), there's a clear winner and we skip
+    # the picker — the picker is meant for ambiguous queries, not specific ones.
     if isSearch and len(songs) > 1:
+        if _should_autoplay_top(query, songs[0]["title"]):
+            playLogger.info(
+                "[PLAY AUTOPLAY] query=%r top=%r ratio=%.2f → skipping picker",
+                query, songs[0]["title"],
+                _query_title_ratio(query, songs[0]["title"]),
+            )
+            await player.addSongs([songs[0]], ctx)
+            return
         candidates = songs[:_PLAY_CHOICE_COUNT]
         view = PlaySearchView(player, ctx, candidates)
         prompt = _format_choice_prompt(candidates)
