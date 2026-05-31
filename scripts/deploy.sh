@@ -72,6 +72,10 @@ echo "==> Restarting discord-bot and vapls-userbot..."
 sudo systemctl restart discord-bot vapls-userbot
 
 # ── 7. Verify both services came back active ──────────────────────────────────
+# systemd marks Type=simple units "active" the instant the process spawns, so a
+# crash-on-boot (bad import, missing dep) would slip past an immediate check.
+# Give them a few seconds to settle so a fast crash-loop is caught here.
+sleep 5
 FAILED=""
 for svc in discord-bot vapls-userbot; do
     STATUS=$(systemctl is-active "$svc" 2>/dev/null || true)
