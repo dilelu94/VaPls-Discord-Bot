@@ -1156,7 +1156,7 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
     invoke_url = config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/" + endpoint
     headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
     payload = {"channel_id": int(channel_id), "query": query}
-    timeout = aiohttp.ClientTimeout(total=10)
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(invoke_url, json=payload, headers=headers) as resp:
@@ -2096,17 +2096,41 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
     tagged_message = f"{speaker}: {pregunta or ''}"
 
+    # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todos los
+    # posteos publicos del Indio aterrizan ahi en vez de en el canal del slash.
+    # Los mensajes ephemeral (hints al invocador) siguen yendo al canal del slash.
+    override_id = config.INDIO_REPLY_CHANNEL_ID
+    target_channel = ctx.bot.get_channel(override_id) if override_id else None
+    if override_id and target_channel is None:
+        logger.warning(
+            "indioLogic: INDIO_REPLY_CHANNEL_ID=%s no resuelve a canal — caigo "
+            "al canal del slash", override_id,
+        )
+
+    async def _post(content, **kw):
+        """Postea contenido publico del Indio. Va al target_channel si el
+        override esta activo; si no, via ctx.followup.send (canal del slash).
+        Los mensajes ephemeral siempre se mandan via followup."""
+        if target_channel is not None and not kw.get("ephemeral"):
+            return await target_channel.send(content)
+        return await ctx.followup.send(content, **kw)
+
+    def _reply_channel_id():
+        if target_channel is not None:
+            return target_channel.id
+        return getattr(ctx, "channel_id", None) or getattr(
+            getattr(ctx, "channel", None), "id", None)
+
     # How the winner gets announced when the vote closes (relay as the real
     # indio when configured, else via this command's response).
     async def _post_choice(text):
-        channel_id = getattr(ctx, "channel_id", None) or getattr(
-            getattr(ctx, "channel", None), "id", None)
+        channel_id = _reply_channel_id()
         relayed = False
         if (channel_id is not None
                 and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
             relayed = await _relay_to_userbot(channel_id, text, None)
         if not relayed:
-            await _send_reply(ctx, text)
+            await _post(text)
 
     # If a music vote is open for this guild and the message names an option,
     # count it as a vote (anyone can vote) instead of a brand-new turn. Keyed by
@@ -2394,6 +2418,19 @@ async def indioFromVoice(
     pregunta = (pregunta or "").strip()
     if not pregunta:
         return
+    # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todas las
+    # respuestas del Indio (sin importar el trigger) aterrizan ahi.
+    if config.INDIO_REPLY_CHANNEL_ID:
+        target_chan = bot.get_channel(config.INDIO_REPLY_CHANNEL_ID)
+        if target_chan is not None and getattr(target_chan, "guild", None) is not None:
+            channel_id = config.INDIO_REPLY_CHANNEL_ID
+            guild_id = target_chan.guild.id
+        else:
+            logger.warning(
+                "indioFromVoice: INDIO_REPLY_CHANNEL_ID=%s no resuelve a canal — "
+                "caigo al canal original %s",
+                config.INDIO_REPLY_CHANNEL_ID, channel_id,
+            )
     guild = bot.get_guild(guild_id)
     if guild is None:
         logger.warning("indioFromVoice: guild %s not found", guild_id)
