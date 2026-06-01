@@ -2652,6 +2652,24 @@ async def indioFromVoice(
                 landing_msg_id = getattr(sent_header, "id", None)
         except Exception:
             logger.exception("indioFromVoice: question header failed")
+    # Anchor para Discord "reply": el header en target cuando hubo redirect;
+    # sino el mensaje original del wake-word (cuando el bot tiene el id).
+    # Solo se usa para el primer chunk de la respuesta — los chunks siguientes
+    # van plain para no spamear el reply marker.
+    reply_anchor_id = landing_msg_id if redirected else source_message_id
+
+    def _make_ref(mid):
+        if not mid:
+            return None
+        try:
+            return discord.MessageReference(
+                message_id=int(mid),
+                channel_id=int(channel_id),
+                fail_if_not_exists=False,
+            )
+        except Exception:
+            return None
+
     try:
         if vote_open:
             # Vote options: capture the message id so we can react on it.
@@ -2667,7 +2685,7 @@ async def indioFromVoice(
             import types as _types
             if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
                 relay_ids = await _relay_to_userbot(
-                    channel_id, clean_reply, None
+                    channel_id, clean_reply, reply_anchor_id
                 )
                 relayed_via_userbot = bool(relay_ids)
                 if relayed_via_userbot:
@@ -2682,8 +2700,10 @@ async def indioFromVoice(
             if not relayed_via_userbot:
                 chunks = _split_for_discord(clean_reply)
                 sent_msg = None
-                for chunk in chunks:
-                    sent_msg = await channel.send(chunk)
+                first_ref = _make_ref(reply_anchor_id)
+                for i, chunk in enumerate(chunks):
+                    kwargs = {"reference": first_ref} if (i == 0 and first_ref) else {}
+                    sent_msg = await channel.send(chunk, **kwargs)
                 reply_handle = _types.SimpleNamespace(
                     via_relay=False,
                     channel_id=channel_id,

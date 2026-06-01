@@ -516,6 +516,115 @@ async def test_indioFromVoice_no_dm_when_source_equals_target(
     assert dm_calls == [], f"unexpected DM(s): {dm_calls!r}"
 
 
+async def test_indioFromVoice_replies_to_user_message_when_no_redirect(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Wake-word en el mismo canal target: la respuesta del Indio usa la
+    feature de Discord "responder al mensaje" apuntando al mensaje original
+    del user (el wake-word), asi queda atado visualmente en el hilo."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="ahi te explico"))
+
+    sent_kwargs: list[dict] = []
+
+    async def _capture_send(content=None, **kw):
+        sent_kwargs.append(kw)
+        return types.SimpleNamespace(
+            id=6000 + len(sent_kwargs),
+            channel=types.SimpleNamespace(id=9999),
+        )
+
+    target = MagicMock()
+    target.id = 9999
+    target.guild = types.SimpleNamespace(id=100)
+    target.send = AsyncMock(side_effect=_capture_send)
+
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=target)
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(return_value=target)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=9999,
+        pregunta="hola", speaker_name="Tobi",
+        source_message_id=88888,
+    )
+    await _drain()
+
+    # The first send carries a reference back to the user's wake-word message.
+    assert sent_kwargs, "expected at least one send"
+    ref = sent_kwargs[0].get("reference")
+    assert ref is not None, f"first send had no reply reference: {sent_kwargs[0]!r}"
+    assert int(getattr(ref, "message_id", 0)) == 88888
+
+
+async def test_indioFromVoice_replies_to_header_when_redirected(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Wake-word desde otro canal: el Indio le hace reply al header con
+    @user que se postea en el target — asi el hilo queda agrupado debajo
+    de la pregunta y no flotando suelto."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="todo en orden"))
+
+    # Target.send records every call and returns predictable ids so we can
+    # check that the second send (the reply) points at the first (the header).
+    sent_calls: list[dict] = []
+
+    async def _capture_send(content=None, **kw):
+        sent_calls.append({"content": content, **kw})
+        return types.SimpleNamespace(
+            id=7000 + len(sent_calls),
+            channel=types.SimpleNamespace(id=9999),
+        )
+
+    target = MagicMock()
+    target.id = 9999
+    target.guild = types.SimpleNamespace(id=100)
+    target.send = AsyncMock(side_effect=_capture_send)
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="que onda?", speaker_name="Tobi",
+    )
+    await _drain()
+
+    assert len(sent_calls) >= 2, f"expected header + reply sends, got {sent_calls!r}"
+    header_call = sent_calls[0]
+    reply_call = sent_calls[1]
+    # Header is posted plain (no need to reply to anything).
+    assert "preguntó" in (header_call.get("content") or "")
+    # The Indio's reply references the header message (id 7001 = first send).
+    ref = reply_call.get("reference")
+    assert ref is not None, f"reply had no reference: {reply_call!r}"
+    assert int(getattr(ref, "message_id", 0)) == 7001
+
+
 async def test_indioFromVoice_falls_back_when_override_unresolvable(
         indio, patch_generate, reply_factory, monkeypatch):
     """Si el override no se puede resolver, la respuesta cae al canal original
