@@ -770,6 +770,14 @@ async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) 
                     mem_key, len(expected))
 
 
+# Campos del dict de usuario en users.py que SÍ se exponen al prompt del Indio.
+# Cualquier campo fuera de esta tupla (greeting, block_dynamic_substrings, o
+# cualquier futuro campo operativo) nunca llega a Gemini. Si agregás un campo
+# nuevo a USERS pensado para el Indio, sumalo acá Y al test guardrail en
+# tests/test_indio_user_fields_allowlist.py.
+_INDIO_USER_FIELDS: tuple[str, ...] = ("traits", "preguntas_tipicas", "anecdotas")
+
+
 def _static_user_traits() -> dict[str, dict[str, list[str]]]:
     """Pull manual traits/preguntas/anecdotas from users.py. Each entry can
     optionally carry ``traits``, ``preguntas_tipicas`` and ``anecdotas``
@@ -784,9 +792,8 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
         if not name:
             continue
         out[name] = {
-            "traits": [str(t) for t in (info.get("traits") or []) if t],
-            "preguntas_tipicas": [str(t) for t in (info.get("preguntas_tipicas") or []) if t],
-            "anecdotas": [str(t) for t in (info.get("anecdotas") or []) if t],
+            field: [str(t) for t in (info.get(field) or []) if t]
+            for field in _INDIO_USER_FIELDS
         }
     return out
 
@@ -821,10 +828,8 @@ def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
                 continue
             name_str = str(name)
             blocks = blocks_by_name.get(name_str, [])
-            bucket = merged.setdefault(name_str, {
-                "traits": [], "preguntas_tipicas": [], "anecdotas": [],
-            })
-            for key in ("traits", "preguntas_tipicas", "anecdotas"):
+            bucket = merged.setdefault(name_str, {f: [] for f in _INDIO_USER_FIELDS})
+            for key in _INDIO_USER_FIELDS:
                 existing = bucket.setdefault(key, [])
                 for item in (data.get(key) or []):
                     s = str(item)
