@@ -5,9 +5,12 @@ history and pass it in. Designed for the free tier of Gemini AI Studio:
 https://aistudio.google.com/apikey
 """
 import asyncio
+import time
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
+
+import posthog_client
 
 import aiohttp
 
@@ -112,6 +115,8 @@ async def generate(
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     max_output_tokens: int = 1024,
     tools: Optional[list[dict]] = None,
+    distinct_id: Optional[str] = None,
+    guild_id: Optional[str] = None,
 ) -> GeminiReply:
     """Generate a single Gemini reply for a user message.
 
@@ -138,6 +143,7 @@ async def generate(
     Async:
         This function is a coroutine and must be awaited.
     """
+    t_start = time.monotonic()
     if not _pool_keys():
         raise GeminiError("GEMINI_API_KEY not set", kind="config")
 
@@ -262,6 +268,21 @@ async def generate(
         )
 
     usage = data.get("usageMetadata") or {}
+
+    # Track Gemini call in PostHog
+    posthog_client.track_ai_generation(
+        model=mdl,
+        user_message=user_message,
+        system_instruction=system_instruction,
+        history=history,
+        response=text,
+        prompt_tokens=usage.get("promptTokenCount"),
+        response_tokens=usage.get("candidatesTokenCount"),
+        t_start=t_start,
+        user_id=distinct_id,
+        guild_id=guild_id,
+    )
+
     return GeminiReply(
         text=text,
         finish_reason=finish,

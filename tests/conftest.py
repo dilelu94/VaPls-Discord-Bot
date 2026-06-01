@@ -24,11 +24,22 @@ if str(ROOT) not in sys.path:
 # nothing couples to event names/properties and no test ever reaches PostHog.
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
-def stub_analytics(monkeypatch):
+def stub_analytics(request, monkeypatch):
+    if "test_posthog_client" in request.module.__name__:
+        yield
+        return
     import analytics
     for name in ("capture", "capture_exception", "identify_user",
                  "identify_guild", "shutdown"):
         monkeypatch.setattr(analytics, name, MagicMock(), raising=False)
+    
+    try:
+        import posthog_client
+        for name in ("track_request", "identify_user", "group_identify",
+                     "capture_error", "track_ai_generation", "init_observability"):
+            monkeypatch.setattr(posthog_client, name, MagicMock(), raising=False)
+    except ImportError:
+        pass
     yield
 
 

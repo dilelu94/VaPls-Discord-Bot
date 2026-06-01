@@ -211,6 +211,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("userbot")
 
+import posthog_client
+posthog_client.init_observability(service_name="vapls-userbot")
+
 # Webhook forwarding (LOG_WEBHOOK_URL). Installed *after* basicConfig so the
 # stdout StreamHandler still gets added — otherwise basicConfig sees our
 # handler already attached and skips its own setup, killing journalctl logs.

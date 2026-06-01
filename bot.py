@@ -42,6 +42,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
+import posthog_client
+posthog_client.init_observability(service_name="vapls-main-bot")
+
 # Forward logs to a Discord thread via webhook (LOG_WEBHOOK_URL env var).
 # Disabled when the env var is empty — silent no-op.
 _webhook_log_handler = webhookLogger.install_from_env("bot")

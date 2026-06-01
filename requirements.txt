@@ -5,7 +5,13 @@
 py-cord[voice] @ git+https://github.com/Pycord-Development/pycord@ad08770c247a5510cbe1685cdbc8d2824fc0b0a6
 python-dotenv
 psutil
+# Gemini is called over raw HTTP, so AI events are captured manually via
+# posthog_client.track_ai_generation — no SDK auto-instrumentation needed.
+# The opentelemetry-* packages below feed only the OTLP log pipeline.
 posthog>=7.15.0
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp>=1.25.0
 aiohttp>=3.9
 # audioop was removed from the stdlib in Python 3.13. This backport re-adds it
 # so userbot/recording.py can import it if the server's Python is ever upgraded.
