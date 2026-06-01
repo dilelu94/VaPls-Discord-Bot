@@ -6,6 +6,7 @@ https://aistudio.google.com/apikey
 """
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -17,6 +18,7 @@ import geminiKeys
 logger = logging.getLogger("bot.gemini")
 
 GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_CACHE_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/cachedContents"
 DEFAULT_TIMEOUT_SEC = 45
 
 # Cooldown aplicado a una key cuando devuelve HTTP 429. El free tier de Gemini
@@ -31,6 +33,7 @@ _key_cooldowns: dict[str, float] = {}
 # Indice round-robin para empezar la busqueda desde una key distinta cada vez,
 # asi balanceamos cuando hay multiples keys sanas en paralelo.
 _next_key_idx: int = 0
+_cached_contents: dict[str, dict] = {}
 
 
 def _pool_keys() -> list[str]:
@@ -103,6 +106,97 @@ class GeminiReply:
     function_calls: list[dict] = field(default_factory=list)
 
 
+async def ensure_cached_content(
+    *,
+    cache_key: str,
+    system_instruction: str,
+    model: Optional[str] = None,
+    tools: Optional[list[dict]] = None,
+    ttl_sec: Optional[int] = None,
+) -> Optional[str]:
+    """Create or reuse a Gemini cachedContent entry for a static prompt.
+
+    Returns the cachedContent name on success, ``None`` when caching fails or
+    when no keys are configured.
+    """
+    if not cache_key:
+        return None
+    now = time.monotonic()
+    existing = _cached_contents.get(cache_key)
+    if existing and existing.get("expires_at", 0.0) > now:
+        return str(existing.get("name"))
+    if not _pool_keys():
+        return None
+
+    mdl = model or config.GEMINI_MODEL
+    ttl = int(ttl_sec or getattr(config, "GEMINI_CACHE_TTL_SEC", 3600))
+    payload: dict = {
+        "model": mdl,
+        "ttl": f"{max(60, ttl)}s",
+    }
+    if system_instruction:
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
+    if tools:
+        payload["tools"] = [{"function_declarations": tools}]
+
+    timeout = aiohttp.ClientTimeout(total=min(DEFAULT_TIMEOUT_SEC, 30))
+    attempts = max(1, len(_pool_keys()))
+    used_keys: set[str] = set()
+    last_429_msg: Optional[str] = None
+    data: Optional[dict] = None
+    status = 0
+    try:
+        for attempt in range(attempts):
+            picked = _pick_key()
+            if picked is None:
+                return None
+            if picked in used_keys:
+                break
+            used_keys.add(picked)
+            params = {"key": picked}
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.post(GEMINI_CACHE_ENDPOINT, params=params, json=payload) as resp:
+                    status = resp.status
+                    try:
+                        data = await resp.json(content_type=None)
+                    except Exception as e:
+                        logger.warning("gemini cache JSON parse failed: %s", e)
+                        data = None
+                    if 200 <= status < 300 and isinstance(data, dict):
+                        name = data.get("name")
+                        expire = data.get("expireTime")
+                        expires_at = now + max(60, ttl)
+                        if isinstance(expire, str):
+                            try:
+                                expires_at = time.monotonic() + max(60, ttl)
+                            except Exception:
+                                pass
+                        if name:
+                            _cached_contents[cache_key] = {
+                                "name": name,
+                                "expires_at": expires_at,
+                            }
+                            return str(name)
+                        return None
+                    err = (data or {}).get("error") if isinstance(data, dict) else None
+                    msg = (err or {}).get("message") if isinstance(err, dict) else None
+                    if status == 429:
+                        _mark_cooldown(picked)
+                        last_429_msg = msg or "rate limited"
+                        logger.warning(
+                            "gemini cache key …%s hit 429 (attempt %d/%d): %s",
+                            picked[-6:], attempt + 1, attempts, last_429_msg,
+                        )
+                        continue
+                    logger.warning("gemini cache HTTP %d: %s", status, msg or "request failed")
+                    return None
+    except Exception as exc:
+        logger.warning("gemini cache create failed: %s", exc)
+        return None
+    logger.warning("gemini cache create failed (HTTP %d): %s", status, last_429_msg or "no response")
+    return None
+
+
 async def generate(
     *,
     user_message: str,
@@ -112,6 +206,8 @@ async def generate(
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     max_output_tokens: int = 1024,
     tools: Optional[list[dict]] = None,
+    cached_content: Optional[str] = None,
+    response_mime_type: Optional[str] = None,
 ) -> GeminiReply:
     """Generate a single Gemini reply for a user message.
 
@@ -143,7 +239,6 @@ async def generate(
 
     mdl = model or config.GEMINI_MODEL
     body: dict = {
-        "system_instruction": {"parts": [{"text": system_instruction}]},
         "contents": (history or []) + [
             {"role": "user", "parts": [{"text": user_message}]},
         ],
@@ -154,8 +249,14 @@ async def generate(
             "thinkingConfig": {"thinkingBudget": 0},
         },
     }
-    if tools:
-        body["tools"] = [{"function_declarations": tools}]
+    if response_mime_type:
+        body["generationConfig"]["responseMimeType"] = response_mime_type
+    if cached_content:
+        body["cachedContent"] = cached_content
+    else:
+        body["system_instruction"] = {"parts": [{"text": system_instruction}]}
+        if tools:
+            body["tools"] = [{"function_declarations": tools}]
     url = GEMINI_ENDPOINT.format(model=mdl)
     headers = {"Content-Type": "application/json"}
     timeout = aiohttp.ClientTimeout(total=timeout_sec)
