@@ -43,6 +43,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 - [Comandos](docs/commands.md)
 - [Operaciones](docs/operations.md)
 - [Testing](docs/testing.md)
+- [Observabilidad y Logs](docs/observability.md)
 - [Contribución y docstrings](docs/contributing-docs.md)
 
 ## 📋 Descripción General
