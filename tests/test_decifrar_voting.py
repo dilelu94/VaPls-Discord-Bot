@@ -310,3 +310,109 @@ async def test_approved_seed_pairs_respects_cap(monkeypatch):
     pairs = decifrarVoting.approved_seed_pairs()
     # Keeps the 2 most recent (by ts), dropping the older 3.
     assert pairs == [("raw3", "dec3"), ("raw4", "dec4")]
+
+
+# ---- Inline Reaction Voting -----------------------------------------------
+
+async def test_record_inline_adds_reactions_if_selected(monkeypatch):
+    import decifrarVoting
+    import config as main_config
+    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_SAMPLE_RATE", 1)  # always select
+
+    mock_add = AsyncMock()
+    monkeypatch.setattr(decifrarVoting, "_add_inline_reactions", mock_add)
+
+    await decifrarVoting.record("raw text", "cleaned text", msg_id=777, channel_id=888)
+    await asyncio.sleep(0)  # let task settle
+
+    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
+    assert len(rows) == 1
+    assert rows[0]["msg_id"] == 777
+    assert rows[0]["channel_id"] == 888
+    mock_add.assert_awaited_once_with(888, 777)
+
+
+async def test_handle_reaction_vote_registers_reactions_and_resolves_approved(monkeypatch):
+    import decifrarVoting
+    import geminiCommand
+    import config as main_config
+    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
+
+    msg_id = 999_777
+    channel_id = 888_777
+    entry = await _seed_pending_entry(decifrarVoting, "raw", "clean", msg_id)
+    # Also set channel_id in the live entry
+    decifrarVoting._entries[-1]["channel_id"] = channel_id
+
+    fake_bot = MagicMock()
+    fake_msg = MagicMock()
+    fake_msg.id = msg_id
+    fake_msg.channel.id = channel_id
+    fake_msg.author.id = 12345
+    fake_msg.content = "old"
+    fake_msg.edit = AsyncMock()
+    fake_msg.clear_reactions = AsyncMock()
+
+    # Stub bot.get_channel / fetch_channel and fetch_message
+    fake_chan = MagicMock()
+    fake_chan.fetch_message = AsyncMock(return_value=fake_msg)
+    fake_bot.get_channel = MagicMock(return_value=fake_chan)
+    # Stub _bot in decifrarVoting
+    fake_bot.user = MagicMock()
+    fake_bot.user.id = 999  # different from author id (12345)
+    monkeypatch.setattr(decifrarVoting, "_bot", fake_bot)
+
+    mock_relay_edit = AsyncMock(return_value=True)
+    monkeypatch.setattr(geminiCommand, "relay_transcript_decifrado_raw", mock_relay_edit)
+
+    # Vote 1 (👍) from user 10
+    await decifrarVoting.handle_reaction_vote(
+        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="👍", user_id=10, added=True
+    )
+    # Entry should still be pending
+    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
+    assert rows[0]["status"] == "pending"
+
+    # Vote 2 (👍) from user 20
+    await decifrarVoting.handle_reaction_vote(
+        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="👍", user_id=20, added=True
+    )
+
+    # Entry should now be approved
+    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
+    assert rows[0]["status"] == "approved"
+    assert geminiCommand._decifrar_cache_get("raw") == "clean"
+    mock_relay_edit.assert_awaited_once_with(
+        channel_id=channel_id,
+        message_id=msg_id,
+        content="old\n\n✅ aprobado — cacheado",
+    )
+
+
+async def test_handle_reaction_vote_registers_reactions_and_resolves_rejected(monkeypatch):
+    import decifrarVoting
+    import config as main_config
+    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 1)
+
+    msg_id = 999_888
+    channel_id = 888_888
+    await _seed_pending_entry(decifrarVoting, "bad raw", "bad clean", msg_id)
+
+    fake_bot = MagicMock()
+    fake_msg = MagicMock()
+    fake_msg.id = msg_id
+    fake_msg.delete = AsyncMock()
+
+    fake_chan = MagicMock()
+    fake_chan.fetch_message = AsyncMock(return_value=fake_msg)
+    fake_bot.get_channel = MagicMock(return_value=fake_chan)
+
+    # Vote 1 (👎) from user 10
+    await decifrarVoting.handle_reaction_vote(
+        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="👎", user_id=10, added=True
+    )
+
+    # Entry should be rejected (deleted from log)
+    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
+    fake_msg.delete.assert_awaited_once()
+

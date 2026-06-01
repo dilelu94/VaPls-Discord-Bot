@@ -592,6 +592,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         channel_name = data.get("channel_name")
         decifrar = bool(data.get("decifrar", True))
         user_id = int(data["user_id"]) if data.get("user_id") else 0
+        transcript_message_id = int(data["transcript_message_id"]) if data.get("transcript_message_id") else None
 
         async def _run() -> None:
             text = pregunta
@@ -609,7 +610,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 logger.info("indio voice: registered vote from raw %r", text[:200])
                 return
             if decifrar:
-                cleaned = await geminiCommand.decifrarTranscripcion(text)
+                cleaned = await geminiCommand.decifrarTranscripcion(
+                    text,
+                    transcript_message_id=transcript_message_id,
+                    channel_id=channel_id,
+                )
                 if not cleaned:
                     logger.info("indio voice: BASURA dropped raw=%r", text[:200])
                     return

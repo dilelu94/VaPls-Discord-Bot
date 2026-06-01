@@ -102,19 +102,19 @@ def _trim_unlocked() -> None:
 
 # ---- Public entry point --------------------------------------------------
 
-async def record(raw: str, decifrado: str) -> None:
-    """Log a (raw, decifrado) pair and maybe post it to the vote channel.
+async def record(raw: str, decifrado: str, msg_id: Optional[int] = None, channel_id: Optional[int] = None) -> None:
+    """Log a (raw, decifrado) pair and maybe post it to the vote channel or add reactions.
 
     Safe to call from any decifrado callsite — fully fire-and-forget. A no-op
     when voting is disabled, when either argument is empty, or when an
-    identical (raw_key, decifrado) entry already exists in the JSONL (avoids
-    flooding the log when the same noise keeps coming through).
+    identical (raw_key, decifrado) entry already exists in the JSONL.
     """
     if not getattr(config, "DECIFRAR_VOTE_ENABLED", False):
         return
     if not raw or not decifrado:
         return
     norm = _normalize_key(raw)
+    
     async with _lock:
         for e in _entries:
             if e.get("raw_key") == norm and e.get("decifrado") == decifrado:
@@ -127,6 +127,7 @@ async def record(raw: str, decifrado: str) -> None:
             "decifrado": decifrado,
             "status": "pending",
             "msg_id": None,
+            "channel_id": channel_id,
         }
         _entries.append(entry)
         _trim_unlocked()
@@ -136,7 +137,38 @@ async def record(raw: str, decifrado: str) -> None:
             logger.exception("decifrar_log: save failed")
             return
         entry_id = entry["id"]
-    asyncio.create_task(_maybe_post_sample(entry_id))
+
+    rate = max(1, int(config.DECIFRAR_VOTE_SAMPLE_RATE))
+    if random.randint(1, rate) == 1:
+        if msg_id is not None and channel_id is not None:
+            # Inline voting!
+            async with _lock:
+                for e in _entries:
+                    if e.get("id") == entry_id:
+                        e["msg_id"] = msg_id
+                        try:
+                            _save_unlocked()
+                        except OSError:
+                            logger.exception("decifrar_log: save failed inline")
+                        break
+            asyncio.create_task(_add_inline_reactions(channel_id, msg_id))
+        else:
+            # Legacy voting!
+            asyncio.create_task(_maybe_post_sample(entry_id))
+
+
+async def _add_inline_reactions(channel_id: int, message_id: int) -> None:
+    if _bot is None:
+        return
+    try:
+        channel = _bot.get_channel(channel_id) or await _bot.fetch_channel(channel_id)
+        if channel is not None:
+            msg = await channel.fetch_message(message_id)
+            await msg.add_reaction("👍")
+            await msg.add_reaction("👎")
+    except Exception:
+        logger.exception("decifrar_vote: failed to add inline reactions to %s", message_id)
+
 
 
 async def _maybe_post_sample(entry_id: str) -> None:
@@ -272,10 +304,23 @@ async def _resolve_approved(msg_id: int, msg) -> None:
     _voters.pop(msg_id, None)
     if msg is not None:
         try:
-            await msg.edit(
-                content=(msg.content or "") + "\n\n✅ aprobado — cacheado",
-                view=None,
-            )
+            if _bot is None or msg.author.id == _bot.user.id:
+                await msg.edit(
+                    content=(msg.content or "") + "\n\n✅ aprobado — cacheado",
+                    view=None,
+                )
+            else:
+                import geminiCommand
+                new_content = (msg.content or "") + "\n\n✅ aprobado — cacheado"
+                await geminiCommand.relay_transcript_decifrado_raw(
+                    channel_id=msg.channel.id,
+                    message_id=msg.id,
+                    content=new_content,
+                )
+                try:
+                    await msg.clear_reactions()
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -296,6 +341,56 @@ async def _resolve_rejected(msg_id: int, msg) -> None:
             await msg.delete()
         except Exception:
             pass
+
+
+async def handle_reaction_vote(
+    bot: discord.Bot,
+    *,
+    channel_id: int,
+    message_id: int,
+    emoji: str,
+    user_id: int,
+    added: bool,
+) -> None:
+    """Handle raw reaction add/remove on transcript messages for decifrar voting."""
+    if emoji not in ("👍", "👎"):
+        return
+
+    async with _lock:
+        entry = next((e for e in _entries if e.get("msg_id") == message_id), None)
+        if entry is None or entry.get("status") != "pending":
+            return
+
+    voters = _voters.setdefault(message_id, {"up": set(), "down": set()})
+    if added:
+        if emoji == "👍":
+            voters["up"].add(user_id)
+            voters["down"].discard(user_id)
+        else:
+            voters["down"].add(user_id)
+            voters["up"].discard(user_id)
+    else:
+        if emoji == "👍":
+            voters["up"].discard(user_id)
+        else:
+            voters["down"].discard(user_id)
+
+    up = len(voters["up"])
+    down = len(voters["down"])
+    threshold = max(1, int(config.DECIFRAR_VOTE_THRESHOLD))
+    net = up - down
+
+    try:
+        channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+        msg = await channel.fetch_message(message_id)
+    except Exception:
+        msg = None
+
+    if net >= threshold:
+        await _resolve_approved(message_id, msg)
+    elif -net >= threshold:
+        await _resolve_rejected(message_id, msg)
+
 
 
 def _promote_to_cache(raw: str, decifrado: str) -> None:

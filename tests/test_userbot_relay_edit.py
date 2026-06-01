@@ -17,6 +17,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -67,6 +68,7 @@ def _load_relay_edit():
         "client": client_stub,
         "log": log_stub,
         "web": web,
+        "discord": discord,
     }
     exec(block, ns)
     return ns["_relay_edit"], config_stub, client_stub

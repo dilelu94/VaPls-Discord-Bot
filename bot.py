@@ -324,8 +324,36 @@ async def on_raw_reaction_add(payload):
             emoji=str(payload.emoji),
             user_id=payload.user_id,
         )
+        import decifrarVoting
+        await decifrarVoting.handle_reaction_vote(
+            bot,
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            emoji=str(payload.emoji),
+            user_id=payload.user_id,
+            added=True,
+        )
     except Exception:
         log.exception("on_raw_reaction_add failed")
+
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    """Count emoji reaction removals for decifrar votes."""
+    try:
+        if bot.user is not None and payload.user_id == bot.user.id:
+            return
+        import decifrarVoting
+        await decifrarVoting.handle_reaction_vote(
+            bot,
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            emoji=str(payload.emoji),
+            user_id=payload.user_id,
+            added=False,
+        )
+    except Exception:
+        log.exception("on_raw_reaction_remove failed")
 
 
 def _track_command(ctx, name, extra=None):

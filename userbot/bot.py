@@ -1224,6 +1224,7 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                    or not config.WAKE_WORD_ENABLED)
     posted_channel_id: Optional[int] = None
     posted_guild_id: Optional[int] = None
+    posted_message_id: Optional[int] = None
     speaker_name: Optional[str] = None
 
     if config.TRANSCRIPT_CHANNEL_NAME and should_post:
@@ -1235,9 +1236,13 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                 if chan:
                     member = guild.get_member(user_id)
                     speaker_name = _name_for(user_id, member)
-                    await chan.send(f"🎙️ **{speaker_name}:** {text}")
+                    posted = await chan.send(f"🎙️ **{speaker_name}:** {text}")
                     posted_channel_id = chan.id
                     posted_guild_id = guild.id
+                    # Capture the message id so the main bot can come back and
+                    # append the decifrado version below the raw one once Gemini
+                    # finishes (see _relay_edit).
+                    posted_message_id = getattr(posted, "id", None)
                     break
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
@@ -1271,6 +1276,7 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
             pregunta=text,
             speaker_name=speaker_name,
             user_id=user_id,
+            transcript_message_id=posted_message_id,
         ))
 
     if config.ENABLE_HTTP_FORWARD:
@@ -1291,29 +1297,37 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
 
 async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                              pregunta: str, speaker_name: Optional[str],
-                             decifrar: bool = True, user_id: int = 0) -> None:
+                             decifrar: bool = True, user_id: int = 0,
+                             transcript_message_id: Optional[int] = None) -> None:
     """POST the raw transcript to the main bot's /indio endpoint. Voice wake
     word callers leave ``decifrar=True`` so Gemini fixes ASR phonetic errors;
     text-chat callers pass ``decifrar=False`` because the text is already
     clean and an extra Gemini call would just waste tokens.
 
     ``user_id`` is the speaker's Discord id; the main bot uses it to key
-    pending music choices so only the requester can resolve them."""
+    pending music choices so only the requester can resolve them.
+
+    ``transcript_message_id`` is the id of the userbot's "🎙️ **Name:** raw"
+    message; the main bot calls back to /edit on the userbot to append the
+    cleaned decifrado version below the raw one so both versions are visible."""
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
         return
     try:
         session = await _get_http()
+        payload = {
+            "guild_id": str(guild_id),
+            "channel_id": str(channel_id),
+            "pregunta": pregunta,
+            "speaker_name": speaker_name,
+            "decifrar": decifrar,
+            "user_id": str(user_id),
+        }
+        if transcript_message_id is not None:
+            payload["transcript_message_id"] = str(transcript_message_id)
         async with session.post(
             f"{config.MAIN_BOT_API_BASE}/indio",
-            json={
-                "guild_id": str(guild_id),
-                "channel_id": str(channel_id),
-                "pregunta": pregunta,
-                "speaker_name": speaker_name,
-                "decifrar": decifrar,
-                "user_id": str(user_id),
-            },
+            json=payload,
             headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
             timeout=aiohttp.ClientTimeout(total=5),
         ) as resp:
@@ -1895,6 +1909,55 @@ async def _relay_say(request: web.Request) -> web.Response:
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
 
 
+async def _relay_edit(request: web.Request) -> web.Response:
+    """Edit a message previously posted by the userbot.
+
+    Used by the main bot after ``decifrarTranscripcion`` to append the cleaned
+    version of the transcript below the raw one, so both versions are visible
+    in chat. We can only edit messages we own (Discord rule) — the transcript
+    line posted by the userbot at speak-time qualifies; anything else 403s.
+
+    Body: ``{channel_id, message_id, content}``. Replaces the message content
+    entirely with ``content`` (the caller composes the combined raw+cleaned
+    string).
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        message_id = int(data["message_id"])
+        content = str(data["content"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not hasattr(channel, "fetch_message"):
+        return web.json_response({"error": "channel not messageable"}, status=400)
+    try:
+        msg = await channel.fetch_message(message_id)
+    except Exception as e:
+        return web.json_response({"error": f"message not found: {e}"}, status=404)
+    try:
+        await msg.edit(content=content[:1990])
+    except discord.Forbidden:
+        return web.json_response({"error": "cannot edit (not author)"}, status=403)
+    except Exception as e:
+        log.exception("[RELAY] edit failed")
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True, "message_id": message_id})
+
+
 # ---------- Voice recording orchestration ---------------------------------
 # Triggered by the main bot after a Telegram audio is played. We move the
 # userbot into the same voice channel, capture up to N seconds, and POST the
@@ -2403,6 +2466,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
         return None
     app = web.Application()
     app.router.add_post("/say", _relay_say)
+    app.router.add_post("/edit", _relay_edit)
     app.router.add_post("/record", _relay_record)
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)

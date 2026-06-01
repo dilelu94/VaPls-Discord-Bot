@@ -1833,6 +1833,61 @@ async def _edit_via_userbot(channel_id: int, message_id: int,
         return False
 
 
+async def relay_transcript_decifrado_raw(
+    *,
+    channel_id: int,
+    message_id: int,
+    content: str,
+) -> bool:
+    """POST to the userbot's /edit endpoint to replace a message's content entirely."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+
+    if url.endswith("/say"):
+        url = url[:-4] + "/edit"
+    elif not url.endswith("/edit"):
+        url = url.rstrip("/") + "/edit"
+
+    payload = {
+        "channel_id": int(channel_id),
+        "message_id": int(message_id),
+        "content": content,
+    }
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("decifrado relay edit HTTP %d: %s", resp.status, body[:200])
+                    return False
+                return True
+    except Exception:
+        logger.exception("decifrado relay edit failed")
+        return False
+
+
+async def relay_transcript_decifrado(
+    *,
+    channel_id: int,
+    message_id: int,
+    speaker: str,
+    raw: str,
+    cleaned: str,
+) -> bool:
+    """POST to the userbot's /edit endpoint to show both the raw and cleaned text."""
+    content = f"🎙️ **{speaker}:** {raw}\n🧠 **Decifrado:** {cleaned}"
+    return await relay_transcript_decifrado_raw(
+        channel_id=channel_id,
+        message_id=message_id,
+        content=content,
+    )
+
+
+
 def _format_contributors_line() -> str:
     """Thin wrapper kept for module-internal callers; logic now lives in
     ``geminiKeys`` so other commands (e.g. /soundpad) can reuse it."""
@@ -2580,7 +2635,7 @@ def seed_decifrar_cache(items: "list[tuple[str, str]]") -> None:
         _decifrar_cache_put(key, value)
 
 
-async def decifrarTranscripcion(texto: str) -> str:
+async def decifrarTranscripcion(texto: str, transcript_message_id: Optional[int] = None, channel_id: Optional[int] = None) -> str:
     """Run an ASR transcript through Gemini to clean phonetic errors.
 
     Returns the cleaned text, or "" when Gemini flags the input as BASURA
@@ -2629,7 +2684,7 @@ async def decifrarTranscripcion(texto: str) -> str:
     # (e.g. tests of geminiCommand alone).
     try:
         import decifrarVoting
-        asyncio.create_task(decifrarVoting.record(texto, final))
+        asyncio.create_task(decifrarVoting.record(texto, final, msg_id=transcript_message_id, channel_id=channel_id))
     except Exception:
         logger.exception("decifrar: failed to schedule voting record")
     return final
