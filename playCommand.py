@@ -452,6 +452,13 @@ class CancelDownloadView(discord.ui.View):
 
 class GuildPlayer:
     """Per-guild playback state and queue manager."""
+
+    # How many times the auto-resume loop tries to reconnect after a transient
+    # voice drop (region change, WS reset) before giving up. Class-level so
+    # tests can shrink delays without touching production defaults.
+    AUTO_RESUME_ATTEMPTS: int = 3
+    AUTO_RESUME_DELAY_SECONDS: float = 2.0
+
     def __init__(self, guildId: int, bot):
         """Initialize the player state for a guild.
 
@@ -489,6 +496,11 @@ class GuildPlayer:
         # would let the idle watchdog disconnect us before we ever play a note.
         self.pendingVoiceChannel = None              # discord.VoiceChannel | None
         self.pendingTriggerUserId: Optional[int] = None  # for greeting trigger
+        # Auto-resume background task: retries reconnecting to the same channel
+        # after a transient voice-WS drop (typically a Discord region change),
+        # using the preserved interruption snapshot. Tracked here so we can
+        # de-dupe concurrent schedules and cancel cleanly on shutdown.
+        self._autoResumeTask: Optional["asyncio.Task"] = None
 
     def _resolveMusicChannel(self, fallback=None):
         """Return the configured music text channel for this guild.
@@ -564,6 +576,93 @@ class GuildPlayer:
         )
         await self.startPlayingCurrent(seek_seconds=seek)
         return True
+
+    def _scheduleAutoResume(self, channel_id: int) -> None:
+        """Spawn a background task that retries reconnecting to ``channel_id``
+        and resumes the interrupted song.
+
+        Called only from ``onSongFinished`` when the voice client died mid-stream
+        while the bot was still meant to be in the channel (typical signature of
+        a Discord region change or transient WS reset). Kicks and ``/quit`` go
+        through ``on_voice_state_update`` which marks the player interrupted
+        without scheduling auto-resume — reconnecting after those would be wrong.
+
+        Idempotent: a still-running task is not replaced. Skips scheduling when
+        the bot can't resolve the guild — that case is unrecoverable and the
+        player just stays interrupted until ``/play`` retries manually.
+        """
+        existing = self._autoResumeTask
+        if existing is not None and not existing.done():
+            return
+        guild = self.bot.get_guild(self.guildId) if self.bot is not None else None
+        if guild is None or not hasattr(guild, "get_channel"):
+            return
+        try:
+            self._autoResumeTask = asyncio.create_task(
+                self._autoResumeLoop(channel_id)
+            )
+        except RuntimeError:
+            # No running loop (rare — happens in some non-async test setups).
+            self._autoResumeTask = None
+
+    async def _autoResumeLoop(self, channel_id: int) -> None:
+        """Retry reconnecting + resuming for up to ``AUTO_RESUME_ATTEMPTS``
+        cycles, then give up silently and leave the player interrupted.
+
+        Bails out early if another path resumed first (``not self.interrupted``)
+        or the channel/guild disappeared from cache.
+        """
+        attempts = max(1, self.AUTO_RESUME_ATTEMPTS)
+        delay = max(0.0, self.AUTO_RESUME_DELAY_SECONDS)
+        try:
+            for attempt in range(attempts):
+                await asyncio.sleep(delay)
+                if not self.interrupted or not self.currentSong:
+                    return
+                guild = self.bot.get_guild(self.guildId) if self.bot is not None else None
+                channel = None
+                if guild is not None:
+                    try:
+                        channel = guild.get_channel(channel_id)
+                    except Exception:
+                        channel = None
+                if channel is None:
+                    playLogger.info(
+                        "[AUTO-RESUME] channel %s not available, giving up",
+                        channel_id,
+                    )
+                    return
+                try:
+                    vc = await channel.connect(reconnect=True)
+                except Exception as exc:
+                    playLogger.warning(
+                        "[AUTO-RESUME] reconnect attempt %d/%d failed: %s",
+                        attempt + 1, attempts, exc,
+                    )
+                    continue
+                try:
+                    ok = await self.resumeFromInterruption(vc)
+                except Exception as exc:
+                    playLogger.warning(
+                        "[AUTO-RESUME] resume after reconnect failed: %s", exc,
+                    )
+                    try:
+                        await vc.disconnect(force=True)
+                    except Exception:
+                        pass
+                    continue
+                if ok:
+                    playLogger.info(
+                        "[AUTO-RESUME] reconnected and resumed on channel %s",
+                        channel_id,
+                    )
+                    return
+            playLogger.info(
+                "[AUTO-RESUME] giving up after %d attempts on channel %s",
+                attempts, channel_id,
+            )
+        finally:
+            self._autoResumeTask = None
 
     async def _enqueueAndMaybeStart(self, songs, *, source: Optional[str] = None):
         """Shared enqueue → analytics → maybe-start-playback core.
@@ -933,11 +1032,11 @@ class GuildPlayer:
             print(f"[PLAYER] Playback error: {error}")
             playLogger.error(f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}")
 
-        # Defensive: if the voice client died (kick / network drop) and the
-        # caller didn't already flag the interruption via mark_interrupted,
-        # detect it here so we don't lose the current song to the cleanup
-        # below. ``isStopping`` / ``isPrevious`` are explicit user actions
-        # and must continue past this gate.
+        # Defensive: if the voice client died (kick / network drop / region
+        # change) and the caller didn't already flag the interruption via
+        # mark_interrupted, detect it here so we don't lose the current song
+        # to the cleanup below. ``isStopping`` / ``isPrevious`` are explicit
+        # user actions and must continue past this gate.
         if (not self.interrupted
                 and not self.isStopping
                 and not self.isPrevious
@@ -948,7 +1047,21 @@ class GuildPlayer:
             except Exception:
                 connected = True
             if not connected:
+                # Capture the channel id BEFORE mark_interrupted nulls self.vc
+                # so the auto-resume loop knows where to reconnect.
+                channel_id = None
+                try:
+                    if self.vc.channel is not None:
+                        channel_id = self.vc.channel.id
+                except Exception:
+                    channel_id = None
                 self.mark_interrupted()
+                # This path fires when the WS died mid-stream while the bot
+                # was still "supposed" to be in the channel — that's the
+                # region-change signature. on_voice_state_update handles real
+                # kicks/quits separately and does not call this scheduler.
+                if channel_id is not None:
+                    self._scheduleAutoResume(channel_id)
 
         if self.interrupted:
             try:
