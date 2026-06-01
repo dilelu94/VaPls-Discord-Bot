@@ -246,6 +246,10 @@ async def generate(
                             picked[-6:], attempt + 1, attempts, last_429_msg,
                         )
                         continue
+                    logger.warning(
+                        "gemini http %d (key …%s): %s",
+                        status, picked[-6:], msg or "request failed",
+                    )
                     raise GeminiError(
                         f"HTTP {status}: {msg or 'request failed'}",
                         kind="http",

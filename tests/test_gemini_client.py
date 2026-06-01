@@ -59,6 +59,21 @@ async def test_http_500_is_http_error_with_status(gemini_http):
     assert exc.value.status == 500
 
 
+async def test_non_429_failure_is_logged_with_status(gemini_http, caplog):
+    """Operability: 5xx from Gemini debe quedar visible en los logs
+    server-side (no solo informarle al usuario). 429 ya se logueaba aparte —
+    este test pinea que el resto de los status también."""
+    import logging
+    gemini_http(status=503, payload={"error": {"message": "overloaded"}})
+    with caplog.at_level(logging.WARNING, logger="bot.gemini"):
+        with pytest.raises(GeminiError):
+            await _gen()
+    # No nos atamos al wording exacto: solo que el status aparezca en algún
+    # WARNING para que el operador pueda buscar "503" en journalctl.
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("503" in r.getMessage() for r in warnings)
+
+
 async def test_timeout_is_timeout_error(gemini_http):
     gemini_http(enter_exc=asyncio.TimeoutError())
     with pytest.raises(GeminiError) as exc:
