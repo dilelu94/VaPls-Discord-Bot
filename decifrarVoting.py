@@ -105,16 +105,28 @@ def _trim_unlocked() -> None:
 async def record(raw: str, decifrado: str, msg_id: Optional[int] = None, channel_id: Optional[int] = None) -> None:
     """Log a (raw, decifrado) pair and maybe post it to the vote channel or add reactions.
 
-    Safe to call from any decifrado callsite — fully fire-and-forget. A no-op
-    when voting is disabled, when either argument is empty, or when an
-    identical (raw_key, decifrado) entry already exists in the JSONL.
+    Safe to call from any decifrado callsite — fully fire-and-forget.
+
+    **Inline voting** (msg_id + channel_id present): always records the entry
+    and adds 👍/👎 reactions to the transcript message so users can curate the
+    ASR cache directly in the transcript channel.  This path does NOT require
+    ``DECIFRAR_VOTE_ENABLED`` — it's a lightweight overlay on the existing
+    transcript flow.
+
+    **Legacy channel voting** (no msg_id): gated by ``DECIFRAR_VOTE_ENABLED``
+    and ``DECIFRAR_VOTE_SAMPLE_RATE``.  Posts a standalone message to the
+    dedicated vote channel.
     """
-    if not getattr(config, "DECIFRAR_VOTE_ENABLED", False):
-        return
     if not raw or not decifrado:
         return
     norm = _normalize_key(raw)
-    
+
+    inline = msg_id is not None and channel_id is not None
+
+    # Legacy path requires the feature flag; inline path always runs.
+    if not inline and not getattr(config, "DECIFRAR_VOTE_ENABLED", False):
+        return
+
     async with _lock:
         for e in _entries:
             if e.get("raw_key") == norm and e.get("decifrado") == decifrado:
@@ -126,7 +138,7 @@ async def record(raw: str, decifrado: str, msg_id: Optional[int] = None, channel
             "raw_key": norm,
             "decifrado": decifrado,
             "status": "pending",
-            "msg_id": None,
+            "msg_id": msg_id if inline else None,
             "channel_id": channel_id,
         }
         _entries.append(entry)
@@ -138,22 +150,13 @@ async def record(raw: str, decifrado: str, msg_id: Optional[int] = None, channel
             return
         entry_id = entry["id"]
 
-    rate = max(1, int(config.DECIFRAR_VOTE_SAMPLE_RATE))
-    if random.randint(1, rate) == 1:
-        if msg_id is not None and channel_id is not None:
-            # Inline voting!
-            async with _lock:
-                for e in _entries:
-                    if e.get("id") == entry_id:
-                        e["msg_id"] = msg_id
-                        try:
-                            _save_unlocked()
-                        except OSError:
-                            logger.exception("decifrar_log: save failed inline")
-                        break
-            asyncio.create_task(_add_inline_reactions(channel_id, msg_id))
-        else:
-            # Legacy voting!
+    if inline:
+        # Always add reactions for inline transcript messages.
+        asyncio.create_task(_add_inline_reactions(channel_id, msg_id))
+    else:
+        # Legacy: probabilistic posting to the dedicated vote channel.
+        rate = max(1, int(config.DECIFRAR_VOTE_SAMPLE_RATE))
+        if random.randint(1, rate) == 1:
             asyncio.create_task(_maybe_post_sample(entry_id))
 
 
