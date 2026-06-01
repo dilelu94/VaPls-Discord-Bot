@@ -79,15 +79,18 @@ def test_track_ai_generation_formats_event_correctly():
     mock_client = MagicMock()
     posthog_client._posthog = mock_client
     
-    prompt = [{"role": "system", "content": "Be nice"}, {"role": "user", "content": "Hi"}]
+    import time
+    t_start = time.monotonic() - 1.2
     
     posthog_client.track_ai_generation(
         model="gemini-2.5-flash",
-        prompt=prompt,
+        user_message="Hi",
+        system_instruction="Be nice",
+        history=[{"role": "user", "parts": [{"text": "Hello bot"}]}],
         response="Hello!",
         prompt_tokens=15,
         response_tokens=5,
-        latency_sec=1.2,
+        t_start=t_start,
         user_id="user_456",
         guild_id="guild_789",
         custom_tag="expert",
@@ -101,10 +104,14 @@ def test_track_ai_generation_formats_event_correctly():
     
     props = kwargs["properties"]
     assert props["$ai_model"] == "gemini-2.5-flash"
-    assert props["$ai_latency"] == 1.2
+    assert 1.1 <= props["$ai_latency"] <= 1.3
     assert props["$ai_input_tokens"] == 15
     assert props["$ai_output_tokens"] == 5
-    assert props["$ai_input"] == prompt
+    assert props["$ai_input"] == [
+        {"role": "system", "content": "Be nice"},
+        {"role": "user", "content": "Hello bot"},
+        {"role": "user", "content": "Hi"}
+    ]
     assert props["$ai_output_choices"] == [{"text": "Hello!"}]
     assert props["guild_id"] == "guild_789"
     assert props["custom_tag"] == "expert"

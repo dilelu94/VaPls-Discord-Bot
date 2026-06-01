@@ -264,11 +264,13 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 
 def track_ai_generation(
     model: str,
-    prompt: Any,
+    user_message: str,
+    system_instruction: str,
     response: str,
-    prompt_tokens: int,
-    response_tokens: int,
-    latency_sec: float,
+    prompt_tokens: Optional[int],
+    response_tokens: Optional[int],
+    t_start: float,
+    history: Optional[list] = None,
     user_id: Optional[str] = None,
     guild_id: Optional[str] = None,
     **properties
@@ -278,18 +280,37 @@ def track_ai_generation(
     PostHog's LLM Observability dashboard.
 
     Args:
-        model:           The exact Gemini model used.
-        prompt:          String or conversation list of messages.
-        response:        The response text generated.
-        prompt_tokens:   Number of input tokens.
-        response_tokens: Number of output tokens.
-        latency_sec:     Latency in seconds.
-        user_id:         Optional user distinct_id.
-        guild_id:        Optional Discord guild ID.
-        **properties:    Additional custom metadata properties.
+        model:              The exact Gemini model used.
+        user_message:       The raw user prompt string.
+        system_instruction: The raw system instruction string.
+        response:           The response text generated.
+        prompt_tokens:      Number of input tokens.
+        response_tokens:    Number of output tokens.
+        t_start:            The time.monotonic() timestamp when the API call started.
+        history:            Optional conversation history in Gemini format.
+        user_id:            Optional user distinct_id.
+        guild_id:           Optional Discord guild ID.
+        **properties:       Additional custom metadata properties.
     """
     if _posthog is None:
         return
+
+    import time
+
+    # Calculate precise latency
+    latency_sec = time.monotonic() - t_start
+
+    # Build prompt messages context for PostHog AI/LLM dashboard
+    prompt_messages = []
+    if system_instruction:
+        prompt_messages.append({"role": "system", "content": system_instruction})
+    if history:
+        for turn in history:
+            role = turn.get("role")
+            parts = turn.get("parts", [])
+            turn_text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+            prompt_messages.append({"role": role, "content": turn_text})
+    prompt_messages.append({"role": "user", "content": user_message})
 
     # Build the standard $ai_generation event payload
     props = {
@@ -297,18 +318,18 @@ def track_ai_generation(
         "$ai_latency": latency_sec,
         "$ai_input_tokens": int(prompt_tokens) if prompt_tokens is not None else 0,
         "$ai_output_tokens": int(response_tokens) if response_tokens is not None else 0,
-        "$ai_input": prompt,
+        "$ai_input": prompt_messages,
         "$ai_output_choices": [{"text": response}],
     }
 
     if guild_id:
         props["guild_id"] = str(guild_id)
 
-    # Calculate token cost (optional/helpful metadata if we have accurate pricing)
-    # Gemini Flash is free/extremely low cost, but we can set pricing for reference
-    # Input: $0.075 / 1M tokens, Output: $0.30 / 1M tokens (Gemini 1.5 Flash reference)
-    input_cost = (prompt_tokens or 0) * 0.075 / 1_000_000
-    output_cost = (response_tokens or 0) * 0.30 / 1_000_000
+    # Calculate token cost (pricing reference for Gemini 1.5/2.5 Flash)
+    pt = prompt_tokens or 0
+    rt = response_tokens or 0
+    input_cost = pt * 0.075 / 1_000_000
+    output_cost = rt * 0.30 / 1_000_000
     props["$ai_total_cost_usd"] = input_cost + output_cost
 
     props.update(properties)

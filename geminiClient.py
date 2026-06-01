@@ -269,33 +269,19 @@ async def generate(
 
     usage = data.get("usageMetadata") or {}
 
-    # Build prompt messages context for PostHog AI/LLM dashboard
-    messages = []
-    if system_instruction:
-        messages.append({"role": "system", "content": system_instruction})
-    if history:
-        for turn in history:
-            role = turn.get("role")
-            parts = turn.get("parts", [])
-            turn_text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
-            messages.append({"role": role, "content": turn_text})
-    messages.append({"role": "user", "content": user_message})
-
     # Track Gemini call in PostHog
-    try:
-        latency = time.monotonic() - t_start
-        posthog_client.track_ai_generation(
-            model=mdl,
-            prompt=messages,
-            response=text,
-            prompt_tokens=usage.get("promptTokenCount"),
-            response_tokens=usage.get("candidatesTokenCount"),
-            latency_sec=latency,
-            user_id=distinct_id,
-            guild_id=guild_id,
-        )
-    except Exception as e:
-        logger.debug("Failed to track AI generation: %s", e)
+    posthog_client.track_ai_generation(
+        model=mdl,
+        user_message=user_message,
+        system_instruction=system_instruction,
+        history=history,
+        response=text,
+        prompt_tokens=usage.get("promptTokenCount"),
+        response_tokens=usage.get("candidatesTokenCount"),
+        t_start=t_start,
+        user_id=distinct_id,
+        guild_id=guild_id,
+    )
 
     return GeminiReply(
         text=text,
