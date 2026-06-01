@@ -57,6 +57,11 @@ WAKE_WORD_MAX_CAPTURE_SECONDS = float(os.getenv("WAKE_WORD_MAX_CAPTURE_SECONDS",
 # Sustained silence inside a capture that closes it. Keep it close to the
 # regular VAD final-silence threshold (~0.8s) so users feel a natural cutoff.
 WAKE_WORD_SILENCE_FINAL_SECONDS = float(os.getenv("WAKE_WORD_SILENCE_FINAL_SECONDS", "0.8"))
+# Number of alternative transcriptions VOSK returns for each finalized
+# segment (N-best decoding). Higher = better recall on borderline pronunciations
+# — if the speaker says "indio dale" but VOSK ranks "indio" #1 and "indio dale"
+# #2, we accept either. 0 = single-best (legacy behavior).
+VOSK_MAX_ALTERNATIVES = int(os.getenv("VOSK_MAX_ALTERNATIVES", "5"))
 # Debug switch: when true the userbot falls back to the legacy TranscriberSink
 # (transcribes EVERY utterance, posts every line to the transcript channel).
 # Useful for visualizing what Whisper hears in the channel while debugging.
@@ -132,8 +137,8 @@ RECORD_MIN_SECONDS = float(os.getenv("RECORD_MIN_SECONDS", "0.6"))
 INDIO_AUTO_REPLY_ENABLED = os.getenv("INDIO_AUTO_REPLY_ENABLED", "false").lower() == "true"
 
 # Per-channel cooldown in seconds: ignore further matches in the same channel
-# for this long after firing once. 180s = 3 min.
-INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC", "180"))
+# for this long after firing once.
+INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC", "3"))
 
 # Per-guild hourly cap to keep us safely under the Gemini free-tier ceiling
 # (250 RPD shared across /indio slash, voice wake word, and auto-reply).
@@ -144,5 +149,35 @@ INDIO_AUTO_REPLY_GUILD_HOURLY_CAP = int(os.getenv("INDIO_AUTO_REPLY_GUILD_HOURLY
 # (re)joins any channel of the guild. Set to 0 for the legacy "disconnect
 # immediately" behaviour.
 IDLE_LEAVE_SECONDS = float(os.getenv("IDLE_LEAVE_SECONDS", "60"))
+
+# --- Greetings (sound on user join) ---------------------------------------
+# Cuando un humano entra a un canal de voz donde el userbot esta presente,
+# si tiene un audio especifico definido en users.py (campo "greeting") lo
+# reproducimos. NO hay default: usuarios sin "greeting" no gatillan nada.
+# Path absoluto (o relativo al working dir) donde viven los audios; tipicamente
+# coincide con el CUSTOM_AUDIO_PATH del main bot (lo populan lsyncd + el repo).
+CUSTOM_AUDIO_PATH = os.getenv(
+    "CUSTOM_AUDIO_PATH",
+    "/home/ubuntu/vapls-discord-bot/audio_output",
+)
+# Toggle maestro — false desactiva el greeting completo.
+GREETING_ENABLED = os.getenv("GREETING_ENABLED", "true").lower() == "true"
+# Throttle por canal: minimo de segundos entre dos greetings en el mismo VC.
+GREETING_THROTTLE_SECONDS = float(os.getenv("GREETING_THROTTLE_SECONDS", "15"))
+
+# --- Wake sound (confirmation cue on wake-word detection) ------------------
+# Cuando VOSK detecta la palabra clave ("indio"), el userbot reproduce un
+# sonidito corto en el canal de voz como feedback inmediato para que el
+# usuario sepa que se lo escuchó. Se dispara en el momento de la detección
+# (antes de validar con Whisper), así que falsos positivos también suenan;
+# el throttle limita la cantidad.
+WAKE_SOUND_ENABLED = os.getenv("WAKE_SOUND_ENABLED", "true").lower() == "true"
+# Path al audio. Si es relativo se resuelve contra CUSTOM_AUDIO_PATH. Vacío
+# = feature inactivo aunque WAKE_SOUND_ENABLED esté en true.
+WAKE_SOUND_PATH = os.getenv("WAKE_SOUND_PATH", "")
+# Mínimo de segundos entre dos sonidos en el mismo canal. Default 0 = sin
+# throttle (cada detección suena), útil mientras se calibra la wake word.
+# Subir si en producción molesta el spam.
+WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "0.0"))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

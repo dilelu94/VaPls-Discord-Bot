@@ -9,6 +9,7 @@ import os
 import logging
 import asyncio
 import time
+import aiohttp
 import discord
 from discord.ext import commands
 
@@ -16,13 +17,17 @@ from playCommand import playLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic
 from geminiCommand import vaplsLogic, indioLogic
+from suggestionsCommand import sugerenciasLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics
 import apiServer
 from apiServer import startApiServer
+import decifrarVoting
 import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
+import indioArchive
+import webhookLogger
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
@@ -39,6 +44,10 @@ log = logging.getLogger("bot")
 
 import posthog_client
 posthog_client.init_observability(service_name="vapls-main-bot")
+
+# Forward logs to a Discord thread via webhook (LOG_WEBHOOK_URL env var).
+# Disabled when the env var is empty — silent no-op.
+_webhook_log_handler = webhookLogger.install_from_env("bot")
 
 if not discord.opus.is_loaded():
     for lib in ['libopus.so.0', 'libopus.so', 'opus']:
@@ -126,6 +135,12 @@ intents.voice_states = True
 intents.messages = True
 intents.dm_messages = True
 intents.message_content = True
+# Necesario para contar votos por reacción en la votación de música del indio
+# (on_raw_reaction_add). Está en Intents.default() pero lo dejamos explícito.
+intents.reactions = True
+# Sin esto, member.status siempre es "offline" y member.activities siempre
+# vacío en /user/<id>. Requiere activar "PRESENCE INTENT" en el Developer Portal.
+intents.presences = True
 try:
     asyncio.get_event_loop()
 except RuntimeError:
@@ -164,12 +179,22 @@ async def on_ready():
     """
     global _api_runner
     log.info(f"Bot online as {bot.user}")
+    if _webhook_log_handler is not None:
+        _webhook_log_handler.start(asyncio.get_running_loop())
     await bot.sync_commands()
     if _api_runner is None:
         try:
             _api_runner = await startApiServer(bot)
         except Exception as e:
             log.warning(f"Failed to start HTTP API: {e}")
+    try:
+        await decifrarVoting.start(bot)
+    except Exception:
+        log.exception("decifrar voting startup failed")
+    try:
+        indioArchive.start_sweeper()
+    except Exception:
+        log.exception("indio archive sweeper startup failed")
 
 
 @bot.event
@@ -215,6 +240,18 @@ async def on_voice_state_update(member, before, after):
             stop_idle_watchdog(before.channel.guild.id)
         except Exception:
             log.exception("failed to stop idle watchdog")
+        # If a GuildPlayer still has a currentSong, this disconnect was
+        # involuntary (kick, network drop, /quit) — /parar would have removed
+        # the entry from guildPlayers via clearGuildPlayer. Snapshot the
+        # elapsed position so the next /play (or indio resume_music) can
+        # restart from where we left off.
+        try:
+            from playCommand import guildPlayers
+            _player = guildPlayers.get(before.channel.guild.id)
+            if _player is not None and _player.currentSong is not None:
+                _player.mark_interrupted()
+        except Exception:
+            log.exception("failed to mark player as interrupted")
 
 
 @bot.event
@@ -270,6 +307,56 @@ async def on_message(message):
         "gemini key DM from %s (%s): added=%d dupes=%d failed=%d",
         owner_name, owner_id, len(added), len(dupes), len(failed),
     )
+
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    """Count emoji reactions on the indio's music-vote options message as votes.
+
+    Fires for any reaction the bot can see (guild reactions intent). We ignore
+    the bot's own seeding reactions and hand the rest to geminiCommand, which
+    only acts when the reaction lands on an open vote's options message.
+    """
+    try:
+        if bot.user is not None and payload.user_id == bot.user.id:
+            return
+        import geminiCommand
+        geminiCommand.register_reaction_vote(
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            emoji=str(payload.emoji),
+            user_id=payload.user_id,
+        )
+        import decifrarVoting
+        await decifrarVoting.handle_reaction_vote(
+            bot,
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            emoji=str(payload.emoji),
+            user_id=payload.user_id,
+            added=True,
+        )
+    except Exception:
+        log.exception("on_raw_reaction_add failed")
+
+
+@bot.event
+async def on_raw_reaction_remove(payload):
+    """Count emoji reaction removals for decifrar votes."""
+    try:
+        if bot.user is not None and payload.user_id == bot.user.id:
+            return
+        import decifrarVoting
+        await decifrarVoting.handle_reaction_vote(
+            bot,
+            channel_id=payload.channel_id,
+            message_id=payload.message_id,
+            emoji=str(payload.emoji),
+            user_id=payload.user_id,
+            added=False,
+        )
+    except Exception:
+        log.exception("on_raw_reaction_remove failed")
 
 
 def _track_command(ctx, name, extra=None):
@@ -409,6 +496,33 @@ async def indio(
     await indioLogic(ctx, charla, False)
 
 
+@bot.slash_command(name="sugerencias", description="Sugerile algo al bot — se agrupa con ideas similares")
+async def sugerencias(
+    ctx,
+    idea: discord.Option(str, description="Tu idea, cambio o feature deseado"),
+):
+    """Slash command: submit a free-form suggestion to the bot.
+
+    Args:
+        ctx: Discord application context.
+        idea: User-provided suggestion text.
+
+    Side Effects:
+        Persists the suggestion to disk (grouped with similar prior ideas via
+        Gemini Flash-Lite) and replies ephemerally to the user.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception:
+        pass
+    _track_command(ctx, "sugerencias", {"idea_length": len(idea or "")})
+    await sugerenciasLogic(ctx, idea)
+
+
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
     """Slash command: disconnect the bot from voice.
@@ -476,6 +590,140 @@ async def quit(ctx):
             await ctx.followup.send("❌ No estoy conectado a voz en este servidor.")
         except Exception:
             pass
+
+
+@bot.slash_command(name="entraindio", description="Hace que el indio entre a tu canal de voz")
+async def entraindio(ctx):
+    """Slash command: ask the userbot to join the caller's voice channel.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Sends an HTTP request to the userbot relay (``/join``) which makes
+        the real-user Indio account connect to the caller's voice channel.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    await safe_defer(ctx)
+    _track_command(ctx, "entraindio")
+
+    voice_state = getattr(ctx.author, "voice", None)
+    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+    if voice_channel is None:
+        await safe_respond(ctx, "❌ Tenés que estar en un canal de voz para que el indio entre.")
+        return
+
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+        return
+
+    join_url = config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/join"
+    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    payload = {"channel_id": int(voice_channel.id)}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(join_url, json=payload, headers=headers) as resp:
+                body = await resp.text()
+                if resp.status >= 400:
+                    log.warning("entraindio relay HTTP %s: %s", resp.status, body[:200])
+                    await safe_respond(
+                        ctx, f"⚠️ El indio no pudo entrar (HTTP {resp.status})."
+                    )
+                    return
+    except Exception as e:
+        log.exception("entraindio relay failed")
+        await safe_respond(ctx, f"⚠️ Error llamando al indio: {e}")
+        return
+
+    await safe_respond(ctx, f"🪶 El indio va para **{voice_channel.name}**.")
+
+
+@bot.slash_command(name="help", description="Lista los comandos del bot y cómo funciona")
+async def help_cmd(ctx):
+    """Slash command: list available commands and bot/userbot info.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Sends an ephemeral embed with the command list and contributors.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception:
+        pass
+    _track_command(ctx, "help")
+
+    embed = discord.Embed(
+        title="🎙️ VaPls — ayuda",
+        description=(
+            "Bot de voz/música + persona Gemini con memoria. "
+            "Corre en **dos procesos**:\n"
+            "• **Main bot** (este) — slash commands, música, soundpad, Gemini.\n"
+            "• **Userbot (Indio)** — escucha voz en canales E2EE, transcribe "
+            "con faster-whisper y responde al wake-word *indio*."
+        ),
+        color=0x5865F2,
+    )
+    embed.add_field(
+        name="🎵 Música y voz",
+        value=(
+            "**/play** `query` — busca o pega una URL de YouTube y la "
+            "reproduce. Con varios resultados muestra menú.\n"
+            "**/soundpad** `[query]` — abre el panel de clips locales, o "
+            "reproduce el que más se parezca a `query`.\n"
+            "**/entraindio** — hace que el indio (userbot) entre a tu canal "
+            "de voz para escuchar y responder al wake-word.\n"
+            "**/parar** — corta la reproducción, limpia la cola y se "
+            "desconecta.\n"
+            "**/quit** — sale del canal de voz sin tocar la cola."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🤖 Gemini",
+        value=(
+            "**/vapls** `pregunta` — respuesta puntual, sin memoria.\n"
+            "**/indio** `charla` — persona con memoria corta por guild y "
+            "memoria larga destilada (rasgos, anécdotas, chistes internos). "
+            "También responde por voz cuando lo nombrás en un canal donde "
+            "está el userbot."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="💡 Otros",
+        value=(
+            "**/sugerencias** `idea` — mandá una sugerencia o feature; se "
+            "agrupa con ideas parecidas.\n"
+            "**/help** — esto."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🔑 API keys de Gemini",
+        value=(
+            "El pool de keys está bancado por la comunidad. Si querés "
+            "sumar la tuya, mandámela por **DM al bot** "
+            "(formato `AIzaSy…` o `AQ.Ab8RN6…`). Se suma en caliente, sin "
+            "reinicio, y queda asociada a tu user para darte crédito."
+        ),
+        inline=False,
+    )
+    contributors = geminiKeys.format_contributors_line()
+    if contributors:
+        embed.set_footer(text=contributors)
+    try:
+        await ctx.followup.send(embed=embed, ephemeral=True)
+    except Exception:
+        await safe_respond(ctx, "No pude mandar el help — fijate los logs.")
 
 
 @bot.slash_command(name="restart", description="devtool - no usar")

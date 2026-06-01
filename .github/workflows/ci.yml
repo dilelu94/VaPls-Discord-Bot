@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        # Production runs on Ubuntu 22.04 / Python 3.10 (see docs/operations.md).
+        # We only gate on that exact version to keep CI fast.
+        python-version: ["3.10"]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

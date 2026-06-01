@@ -10,6 +10,35 @@ from greeting import set_pending_trigger
 
 _AUDIO_EXTS = {".opus", ".mp3", ".wav", ".ogg", ".m4a"}
 
+# Per-guild registry of "live" soundpad panels. The idle watchdog reads this
+# so it can keep the bot in voice while the panel is still clickable — even
+# if no clip is currently playing. We use a counter (not a bool) because
+# nothing stops the same guild from having two panels open at once.
+_active_panels: dict[int, int] = {}
+
+
+def _register_panel(guild_id: int) -> None:
+    """Mark a soundpad panel as live for this guild."""
+    _active_panels[guild_id] = _active_panels.get(guild_id, 0) + 1
+
+
+def _unregister_panel(guild_id: int) -> None:
+    """Mark a soundpad panel as no longer live. Idempotent past zero."""
+    if guild_id not in _active_panels:
+        return
+    _active_panels[guild_id] -= 1
+    if _active_panels[guild_id] <= 0:
+        _active_panels.pop(guild_id, None)
+
+
+def has_active_panel(guild_id: int) -> bool:
+    """Return True iff at least one soundpad panel is live for this guild.
+
+    Read by ``idleWatchdog._is_active`` so the bot doesn't disconnect from
+    voice while a user can still click a button on the panel.
+    """
+    return _active_panels.get(guild_id, 0) > 0
+
 
 def _normalize_clip_name(text: str) -> str:
     """Normalize a string for fuzzy matching against clip names."""
@@ -174,35 +203,48 @@ async def play_clip_by_query(
 
 class SoundpadView(discord.ui.View):
     """Interactive UI for browsing and playing soundpad audio files."""
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, guild_id: "int | None" = None):
         """Initialize the soundpad view.
 
         Args:
             output_dir: Base directory containing category folders with audio.
+            guild_id: Discord guild this panel belongs to. When provided, the
+                panel registers itself with the active-panel registry so the
+                idle watchdog keeps the bot in voice while the panel is open,
+                and unregisters when the View times out.
 
         Raises:
             ValueError: If the directory is missing or empty.
         """
-        super().__init__(timeout=180)
+        super().__init__(timeout=60)
         self.output_dir = output_dir
         self.message = None
-        
+        self.guild_id = guild_id
+
         if not os.path.exists(output_dir):
             raise ValueError(f"La ruta de audios no existe: {output_dir}")
-            
+
         self.categories = sorted([
-            d for d in os.listdir(output_dir) 
+            d for d in os.listdir(output_dir)
             if os.path.isdir(os.path.join(output_dir, d)) and not d.startswith(".")
         ])
-        
+
         if not self.categories:
             raise ValueError("No se encontraron carpetas (categorías) en la ruta de audios.")
-            
+
         self.selected_category = self.categories[0]
         self.selected_subfolder = "/"
         self.current_page = 0
         self.selected_file = None
         self.setup_components()
+
+        if self.guild_id is not None:
+            _register_panel(self.guild_id)
+
+    async def on_timeout(self):
+        """Remove this panel from the active-panel registry when it expires."""
+        if self.guild_id is not None:
+            _unregister_panel(self.guild_id)
 
     def get_subfolders(self, category: str):
         """Return the list of subfolders for a category.
@@ -807,7 +849,7 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
 
     output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
     try:
-        view = SoundpadView(output_dir)
+        view = SoundpadView(output_dir, guild_id=ctx.guild.id)
         analytics.capture("soundpad panel opened", user=ctx.author, guild=ctx.guild,
                           properties={"categories_count": len(view.categories),
                                       "default_category": view.selected_category})

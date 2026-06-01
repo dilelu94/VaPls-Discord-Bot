@@ -71,6 +71,20 @@ INDIO_RELAY_URL = os.getenv("INDIO_RELAY_URL", "")
 INDIO_RELAY_SECRET = os.getenv("INDIO_RELAY_SECRET", "")
 INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 
+# Indio conversation archive: every Q+A pair from /indio and from the
+# userbot's "indio" auto-reply gets enqueued, and after
+# INDIO_ARCHIVE_DELAY_SECONDS the sweeper posts it (via the userbot relay,
+# so it keeps the Indio identity for later message search) to the thread
+# `INDIO_ARCHIVE_THREAD_ID`. Set the thread id to 0 to disable archiving.
+INDIO_ARCHIVE_THREAD_ID = int(os.getenv("INDIO_ARCHIVE_THREAD_ID", "0"))
+INDIO_ARCHIVE_DELAY_SECONDS = int(os.getenv("INDIO_ARCHIVE_DELAY_SECONDS", "7200"))
+INDIO_ARCHIVE_QUEUE_PATH = os.getenv(
+    "INDIO_ARCHIVE_QUEUE_PATH", "data/indio_archive_queue.jsonl",
+)
+INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS = int(
+    os.getenv("INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS", "60")
+)
+
 # Cuando el indio decide poner musica via [PLAY_MUSIC: ...], los mensajes
 # de estado y el panel de control del GuildPlayer se postean siempre en
 # este text channel. Sin fallback: si no esta, la accion falla.
@@ -90,4 +104,32 @@ USERBOT_RECORD_TRIGGER_TIMEOUT = float(os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT
 
 # Cuántos segundos de inactividad (ni reproduciendo ni pausado) tolera el bot
 # antes de desconectarse solo del canal de voz. Lo maneja idleWatchdog.py.
-VOICE_IDLE_TIMEOUT_SECONDS = float(os.getenv("VOICE_IDLE_TIMEOUT_SECONDS", "60"))
+VOICE_IDLE_TIMEOUT_SECONDS = float(os.getenv("VOICE_IDLE_TIMEOUT_SECONDS", "1"))
+
+# /sugerencias: archivo JSON donde se guardan las ideas/feature-requests de los
+# usuarios. Gemini Flash-Lite agrupa ideas similares para no duplicar entradas.
+SUGGESTIONS_PATH = os.getenv("SUGGESTIONS_PATH", "data/suggestions.json")
+SUGGESTIONS_MODEL = os.getenv("SUGGESTIONS_MODEL", "gemini-2.5-flash-lite")
+
+# --- Decifrar voting / human-in-the-loop curated cache ---------------------
+# Cada decifrado (raw whisper → cleaned Gemini) se loggea a un JSONL. Con
+# probabilidad 1/SAMPLE_RATE el bot publica el par (raw, decifrado) en un
+# canal con botones 👍/👎. Votos 👍 promueven el decifrado al cache
+# persistente (sobrevive al restart); 👎 descarta la entrada y borra el
+# mensaje. Diseñado para curar a mano el cache de un set crecente de
+# transcripciones reales.
+DECIFRAR_VOTE_ENABLED = os.getenv("DECIFRAR_VOTE_ENABLED", "false").lower() == "true"
+DECIFRAR_VOTE_CHANNEL_ID = int(os.getenv("DECIFRAR_VOTE_CHANNEL_ID", "0"))
+# 1 de cada N decifrados se postea (probabilístico, no batch).
+DECIFRAR_VOTE_SAMPLE_RATE = int(os.getenv("DECIFRAR_VOTE_SAMPLE_RATE", "20"))
+# Votos netos (👍 - 👎) necesarios para resolver una votación.
+DECIFRAR_VOTE_THRESHOLD = int(os.getenv("DECIFRAR_VOTE_THRESHOLD", "2"))
+# Cuántas horas tolera una votación sin moverse antes de borrarla.
+DECIFRAR_VOTE_TIMEOUT_HOURS = float(os.getenv("DECIFRAR_VOTE_TIMEOUT_HOURS", "48"))
+# Cap del JSONL — cuando se supera, drop de las más viejas con status=pending
+# (las approved se preservan porque son el conocimiento curado).
+DECIFRAR_LOG_MAX_LINES = int(os.getenv("DECIFRAR_LOG_MAX_LINES", "10000"))
+DECIFRAR_LOG_PATH = os.getenv("DECIFRAR_LOG_PATH", "data/decifrar_log.jsonl")
+# Cuántas entradas approved seedeamos al in-memory LRU al startup (las
+# últimas K por timestamp). Mantiene espacio en el LRU para entradas frescas.
+DECIFRAR_CACHE_SEED_MAX = int(os.getenv("DECIFRAR_CACHE_SEED_MAX", "128"))

@@ -1,11 +1,17 @@
 # Discord library for user accounts. discord.py-self is the maintained
 # fork of discord.py with self-bot/user-token support. Installs as
 # `discord` (replacing any prior discord.py).
-discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self
+#
+# PINNED to v2.1.0 deliberately: newer upstream builds make `intents` required
+# AND fail user login with HTTP 401 against current Discord (stale client
+# identification). v2.1.0 authenticates. Do NOT unpin — an unpinned git dep
+# silently broke the userbot when a deploy pulled a newer master.
+discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self@v2.1.0
 # Voice receive extension. Provides VoiceRecvClient + AudioSink so the
 # user account can receive decoded PCM from speaking members. Install
 # discord.py-self AFTER this so it wins the `discord` namespace.
-discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv
+# Pinned to a commit verified to import cleanly against discord.py-self v2.1.0.
+discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv@ac04ea7b0941112e83767cf1c1469b408fa06748
 faster-whisper>=1.0
 # Lightweight ASR used as wake-word detector with a restricted grammar.
 # Keeps Whisper idle until the word "indio" is heard.

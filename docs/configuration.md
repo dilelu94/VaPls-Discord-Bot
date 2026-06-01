@@ -21,6 +21,18 @@
 | `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model name para `/indio` y `/vapls`. |
 | `GEMINI_DECIFRAR_MODEL` | ❌ | `gemini-2.5-flash-lite` | Modelo para `decifrarTranscripcion` (limpieza ASR). Lite tiene 1000 RPD vs 250 de flash, libera cupo del modelo grande. |
 | `VOICE_IDLE_TIMEOUT_SECONDS` | ❌ | `60` | Segundos sin reproducir/pausado tras los cuales el bot se desconecta solo del canal de voz (manejado por `idleWatchdog.py`). |
+| `DECIFRAR_VOTE_ENABLED` | ❌ | `false` | Master toggle del flujo de votación del decifrado. Cuando está activo, cada decifrado se loggea a JSONL y una muestra se postea para votar 👍/👎. |
+| `DECIFRAR_VOTE_CHANNEL_ID` | ❌ | `0` | ID del canal de Discord donde se postean los pares (raw, decifrado) para votación. `0` = feature inactiva aunque `DECIFRAR_VOTE_ENABLED=true`. |
+| `DECIFRAR_VOTE_SAMPLE_RATE` | ❌ | `20` | 1 de cada N decifrados se postea (probabilístico). Subir para postear menos. |
+| `DECIFRAR_VOTE_THRESHOLD` | ❌ | `2` | Votos netos (👍 - 👎 o viceversa) necesarios para resolver una votación. |
+| `DECIFRAR_VOTE_TIMEOUT_HOURS` | ❌ | `48` | Horas que una votación pendiente vive antes de auto-borrarse. |
+| `DECIFRAR_LOG_MAX_LINES` | ❌ | `10000` | Cap del JSONL; al superarlo se descartan las pendientes más viejas (las approved se preservan). |
+| `DECIFRAR_LOG_PATH` | ❌ | `data/decifrar_log.jsonl` | Path al JSONL persistente (gitignored). |
+| `DECIFRAR_CACHE_SEED_MAX` | ❌ | `128` | Cuántas entradas approved se cargan al cache in-memory al startup (las más recientes). |
+| `INDIO_ARCHIVE_THREAD_ID` | ❌ | `0` | ID del thread donde se archivan los Q+A del Indio. `0` desactiva el archivado por completo. Las entradas se postean via el relay del userbot, así conservan la identidad del Indio para búsqueda de mensajes. |
+| `INDIO_ARCHIVE_DELAY_SECONDS` | ❌ | `7200` | Segundos que un Q+A vive en el queue antes de archivarse al thread. Default 2h. |
+| `INDIO_ARCHIVE_QUEUE_PATH` | ❌ | `data/indio_archive_queue.jsonl` | Path al JSONL persistente que guarda los Q+A pendientes de archivar. Sobrevive restarts. |
+| `INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS` | ❌ | `60` | Cada cuánto corre el sweeper que detecta entradas vencidas y las postea al thread. |
 
 ## Userbot (.env in userbot/)
 | Variable | Required | Default | Description / implications |
@@ -41,6 +53,9 @@
 | `MAIN_BOT_API_BASE` | ❌ | `http://127.0.0.1:8080` | Main bot API for `/playing` polling and `/indio` invocation. |
 | `MAIN_BOT_API_SECRET` | ❌ | empty | Auth for `MAIN_BOT_API_BASE`; must match main bot's `API_SECRET`. |
 | `IDLE_LEAVE_SECONDS` | ❌ | `60` | Segundos sin humanos en ningún canal de voz del guild antes de que el userbot se desconecte. El timer se cancela apenas alguien (re)entra. `0` = legacy (desconectar al instante). |
+| `WAKE_SOUND_ENABLED` | ❌ | `true` | Master toggle del sonidito de confirmación que se reproduce cuando VOSK detecta la wake word. `false` desactiva la feature. |
+| `WAKE_SOUND_PATH` | ❌ | empty | Path al audio. Si es relativo se resuelve contra `CUSTOM_AUDIO_PATH`. Vacío = feature inactiva aunque `WAKE_SOUND_ENABLED=true`. El repo trae un beep bakeado en `userbot/assets/wake.ogg` — apuntalo con path absoluto en el `.env` del server. |
+| `WAKE_SOUND_THROTTLE_SECONDS` | ❌ | `0.0` | Mínimo de segundos entre dos sonidos en el mismo canal. `0` = sin throttle (cada detección suena), útil mientras se calibra. Subir si en producción molesta el spam. |
 | `LOG_LEVEL` | ❌ | `INFO` | Python logging level for the userbot. |
 
 ## Security notes

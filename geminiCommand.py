@@ -17,6 +17,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 from typing import Optional
 
 import aiohttp
@@ -26,6 +27,7 @@ import analytics
 import config
 import geminiClient
 import geminiKeys
+import indioArchive
 
 try:
     from users import USERS as _USERS
@@ -36,6 +38,11 @@ try:
     from users import GROUP_LORE as _GROUP_LORE
 except Exception:
     _GROUP_LORE: dict[str, list[str]] = {}
+
+try:
+    from users import NON_DISCORD_MEMBERS as _NON_DISCORD_MEMBERS
+except Exception:
+    _NON_DISCORD_MEMBERS: list[dict] = []
 
 logger = logging.getLogger("bot.gemini")
 
@@ -57,14 +64,56 @@ sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
 Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
 comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
 \
-Si el grupo te pide música/un tema/una canción, usás la tool `play_music`. Si \
-te piden un audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te \
-piden controlar la música que está sonando, usás `skip_music` (saltear/cambiar), \
-`pause_music` (pausar/frenar), `resume_music` (despausar/seguir) o `stop_music` \
-(parar y limpiar la cola). Una sola tool por mensaje y solo cuando te lo piden \
-de verdad. Antes de llamarla, mandá un texto BREVE de confirmación ("dale, va \
-Queen", "tomá milapollo", "dale, salteo") — sin chamuyo. Nunca digas "no puedo" \
-o "no me anda": las tools andan, las usás y listo. \
+Sos bastante más grande que el grupo: tenés más de 30 años más que cualquiera \
+de tus amigos, sos el viejo veterano de la barra. Eso lo podés referenciar \
+con onda cuando viene al caso (sin restregarlo en cada mensaje). \
+\
+Cada usuario del grupo tiene un APODO (lo ves entre corchetes en cada mensaje, \
+ej. "[Miles]: ...") y, para varios, un NOMBRE REAL distinto (aparece en sus \
+rasgos como "nombre real: X"). Algunos tienen además apodos alternativos \
+listados como "apodos: X, Y, Z". Llamalos SIEMPRE por el apodo (el principal \
+o cualquiera de los alternativos) y usá el nombre real SOLO en silencio para \
+inferir si es hombre o mujer y hablarle con la concordancia correcta. \
+Contexto interno (NO lo expliques en el chat a menos que la charla lleve \
+directo ahí): a nadie del grupo le gusta que lo llamen por el nombre real. \
+Es algo que tenés en cuenta para no meter la pata, no algo que andás \
+contando. \
+\
+Algunos rasgos vienen prefijados con "(privado, no mencionar)": son contexto \
+para vos, te ayudan a responder coherente, pero NO los digas explícitamente \
+en el chat. \
+\
+PRINCIPIO GENERAL para toda la info que tenés del grupo (rasgos, anécdotas, \
+chistes internos, lo que sea): es para que RAZONES y formules respuestas \
+coherentes con quién es cada uno, no para recitarla. No andes diciendo "ah \
+vos sos el de Quilmes, el bombero" o "Miles el programador de Independiente" \
+cada vez que te hablan — eso es robótico y queda raro. Usá esa info como \
+trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
+hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
+lo pide naturalmente. \
+\
+Si el grupo te pide música/un tema/una canción NOMBRANDO qué quieren oír \
+(artista, canción, género, mood), usás la tool `play_music`. Si te piden un \
+audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te piden \
+controlar la música que ya está sonando, usás `skip_music` (saltear/cambiar), \
+`pause_music` (pausar/frenar), `resume_music` (retomar lo pausado) o \
+`stop_music` (parar y limpiar la cola). \
+\
+DISAMBIGUACIÓN CLAVE: si decís "pone play" / "dale play" / "metele play" / \
+"continuá" / "resumí" / "play" SIN nombrar artista o canción, eso NUNCA es \
+play_music — es resume_music cuando hay algo pausado (mirá el [Estado del \
+reproductor] del prompt). play_music solo cuando hay un nombre/género que \
+buscar. \
+\
+Una sola tool por mensaje y solo cuando te lo piden de verdad. Antes de \
+llamarla — y SOLO si la vas a llamar — mandá un texto BREVE de confirmación \
+("dale, va Queen", "tomá milapollo", "dale, salteo", "va, retomo") — sin \
+chamuyo. Si decidís NO llamar ninguna tool (porque es una pregunta, una \
+charla, o el pedido no cumple los REQUISITOS DUROS de la tool), NO digas \
+"tomá", "dale va", "ahí va", "salteo", "retomo" ni nada que suene a \
+confirmación de acción — eso te deja prometiendo algo que no vas a hacer. \
+Respondé como charla normal y listo. Nunca digas "no puedo" o "no me anda": \
+las tools andan, las usás y listo. \
 \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
@@ -99,9 +148,31 @@ _INDIO_TOOLS = [
     {
         "name": "play_music",
         "description": (
-            "Reproducir una canción/tema en el canal de voz #sick-tunes vía "
-            "el comando /play. Usala cuando el grupo te pide música, un "
-            "tema, una canción, o que pongas algo (artista, género, mood)."
+            "Reproducir una canción/tema NUEVO en el canal de voz #sick-tunes vía "
+            "el comando /play. \n"
+            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
+            "explícito de orden — ponete, poneme, ponela, pone, metele, "
+            "mete, tirá, tirate, tirame, reproduci, reproducí, dejá, "
+            "dejame, traete, queremos escuchar — Y (2) un nombre/género/mood "
+            "concreto que diga QUÉ poner (artista, canción, género, palabra "
+            "clave como 'tema'). 'Dale' suelto NO cuenta como verbo de "
+            "orden: es muletilla ambigua que se usa para todo (asentir, "
+            "pedir, animar). Solo si el 'dale' viene seguido de OTRO verbo "
+            "concreto ('dale, poneme', 'dale, tirate') vale, y ahí el verbo "
+            "real es el segundo. \n"
+            "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
+            "un artista (mencionar a 'Queen' en una conversación NO significa "
+            "que quieran escucharlo). Si falta el nombre concreto, tampoco "
+            "(decir 'pone algo' solo, sin más, NO sirve). \n"
+            "Ejemplos VÁLIDOS: 'pone Queen', 'tirate un tema de los redondos', "
+            "'metele algo de jazz', 'reproduci Despacito', 'ponete un tema'. \n"
+            "Ejemplos INVÁLIDOS (NO llamar play_music): 'che indio cómo va', "
+            "'me encanta Queen', 'sacá esta música' (eso es stop_music), "
+            "'la música está fuerte', 'qué buen tema este'. \n"
+            "Si solo dicen 'play' / 'pone play' / 'dale play' / 'metele play' / "
+            "'continuá' / 'resumí' SIN nombrar artista o canción, NO uses esta "
+            "tool — eso es resume_music. Mirá el [Estado del reproductor] del "
+            "prompt para saber si hay algo pausado."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -109,10 +180,11 @@ _INDIO_TOOLS = [
                 "query": {
                     "type": "STRING",
                     "description": (
-                        "Búsqueda en YouTube o URL. Para pedidos vagos usá "
-                        "lo que dijeron tal cual (ej: 'Dua Lipa', 'jazz "
-                        "tranquilo', 'Despacito'). El /play agarra el "
-                        "primer resultado."
+                        "Búsqueda en YouTube o URL. Usá lo que dijeron tal "
+                        "cual (ej: 'Dua Lipa', 'jazz tranquilo', "
+                        "'Despacito'). Si hay varios resultados, el sistema "
+                        "le pregunta al que pidió cuál quiere; si es una URL "
+                        "la reproduce directo. No elijas vos el tema."
                     ),
                 },
             },
@@ -123,8 +195,32 @@ _INDIO_TOOLS = [
         "name": "play_sound",
         "description": (
             "Reproducir un clip corto del soundpad (audio meme/efecto) en "
-            "el canal de voz. Usala cuando te piden un audio, sonido, "
-            "clip o meme por nombre."
+            "el canal de voz. \n"
+            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
+            "explícito de orden — tirá, tirate, tirame, pone, poné, ponete, "
+            "ponela, ponelo, mete, metele, hacé sonar, hacelo sonar, "
+            "traete, queremos escuchar — Y (2) un nombre/keyword concreto "
+            "del clip a reproducir. 'Dale' suelto NO cuenta como verbo de "
+            "orden: es muletilla ambigua que se usa para todo (asentir, "
+            "pedir, animar). Solo si 'dale' viene seguido de OTRO verbo "
+            "concreto ('dale, tirate ese audio', 'dale, pone el de las "
+            "risas') vale, y ahí el verbo real es el segundo. \n"
+            "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
+            "una palabra que matchee con un clip del soundpad. Que alguien "
+            "diga 'el pez' o 'milapollo' en medio de una conversación NO "
+            "significa que quieran que toques ese audio — están hablando del "
+            "tema. Solo cuando hay un imperativo explícito pidiendo "
+            "reproducirlo, llamás esta tool. \n"
+            "Si falta el nombre concreto del clip (solo dicen 'pone un audio' "
+            "sin más), tampoco la uses. \n"
+            "Ejemplos VÁLIDOS: 'tirá el pezpija', 'pone el de las risas', "
+            "'metele milapollo', 'hacé sonar el de aplausos', 'dale, tirate "
+            "ese audio'. \n"
+            "Ejemplos INVÁLIDOS (NO llamar play_sound): 'che indio tenés el "
+            "pez que pescó chalo?' (es una pregunta de charla, no un pedido), "
+            "'qué pescado pescó el chalo?' (sigue siendo charla), 'me "
+            "encantan los memes del soundpad', 'ese audio del otro día "
+            "estaba bueno', 'cuál es tu meme favorito?'."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -160,8 +256,13 @@ _INDIO_TOOLS = [
     {
         "name": "resume_music",
         "description": (
-            "Despausar / retomar la música que estaba pausada. Usala "
-            "cuando piden 'seguí', 'dale', 'reanudá', 'volvé a poner'."
+            "Despausar / retomar la música que estaba pausada. Usala cuando "
+            "piden 'resumí', 'resume', 'continuá' / 'continua', 'dale play', "
+            "'pone play', 'metele play', 'reanudá'. "
+            "REGLA CLAVE: si el [Estado del reproductor] dice que hay música "
+            "pausada y el usuario pide 'play' / 'pone play' / 'continuá' / "
+            "'resumí' sin nombrar artista o canción, ES ESTA TOOL — no "
+            "play_music. play_music es solo cuando dicen qué quieren oír."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -199,6 +300,65 @@ _LT_JOKES = 10
 
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
+
+# How old a turn has to be (in seconds) before we tag it with a "[hace X]"
+# prefix when feeding it back to Gemini. Without this, the model has no temporal
+# cue and confuses last week's "te pasé esta lista" with the current convo.
+_HISTORY_AGE_TAG_THRESHOLD_SEC = 15 * 60   # 15 minutes
+
+
+def _humanize_age(seconds: float) -> str:
+    """Render an age-in-seconds as a Spanish short tag for the prompt.
+
+    Used to prefix old history turns with ``[hace X]`` so Gemini knows the
+    line is not part of the current exchange. Buckets are coarse on purpose —
+    the model only needs to tell "now" from "ago"."""
+    if seconds < 60:
+        return "hace instantes"
+    if seconds < 3600:
+        return f"hace {int(seconds // 60)} min"
+    if seconds < 86400:
+        return f"hace {int(seconds // 3600)} h"
+    if seconds < 86400 * 30:
+        return f"hace {int(seconds // 86400)} días"
+    if seconds < 86400 * 365:
+        return f"hace {int(seconds // (86400 * 30))} meses"
+    return "hace más de un año"
+
+
+def _stamp_history_for_prompt(history: list[dict], now: float) -> list[dict]:
+    """Return a copy of ``history`` where each turn old enough gets a
+    ``[hace X]`` tag prepended to its text, so the model treats those lines
+    as past context, not present.
+
+    Recent turns (≤ ``_HISTORY_AGE_TAG_THRESHOLD_SEC``) pass through unchanged
+    so the current exchange reads naturally. Turns without a ``ts`` field
+    (legacy entries from before this feature) are treated as old.
+    """
+    out: list[dict] = []
+    for turn in history or []:
+        ts = turn.get("ts")
+        if ts is None:
+            age = None
+        else:
+            try:
+                age = max(0.0, now - float(ts))
+            except (TypeError, ValueError):
+                age = None
+        if age is not None and age < _HISTORY_AGE_TAG_THRESHOLD_SEC:
+            # Recent — leave it alone.
+            out.append({k: v for k, v in turn.items() if k != "ts"})
+            continue
+        tag = f"[{_humanize_age(age)}] " if age is not None else "[hace tiempo] "
+        new_parts = []
+        for part in turn.get("parts", []):
+            if isinstance(part, dict) and "text" in part:
+                new_parts.append({"text": tag + str(part["text"])})
+            else:
+                new_parts.append(part)
+        out.append({"role": turn.get("role"),
+                    "parts": new_parts or turn.get("parts", [])})
+    return out
 _indio_long_term: dict[str, dict] = {}
 _indio_locks: dict[str, asyncio.Lock] = {}
 _persist_lock = asyncio.Lock()
@@ -208,6 +368,15 @@ _indio_compressing: set[str] = set()
 # at most once per ``_ROSTER_REFRESH_INTERVAL_SEC``; see _maybe_refresh_current_members.
 _indio_current_members: dict[str, list[str]] = {}
 _indio_members_refreshed_at: dict[str, float] = {}
+
+# Music disambiguation via group vote. When the indio is asked for a song and
+# the search returns several candidates, we list them and open a short voting
+# window managed by ``playCommand.MusicVote`` (shared with the /play button
+# picker so there's a single vote per guild regardless of how it was invoked).
+# This module only bridges input surfaces (voice + reactions on the indio's
+# chat message) into that vote.
+# How many candidates to offer. Kept in sync with playCommand's /play picker.
+_MUSIC_CHOICE_COUNT = 5
 
 
 def _load_indio_state() -> None:
@@ -371,6 +540,8 @@ def _evict_stale_indio() -> None:
         # Lock se libera solo si no quedó nada relevante.
         if key not in _indio_long_term:
             _indio_locks.pop(key, None)
+    # Music votes live in playCommand.active_votes now; they own their own
+    # close timer and self-cleanup. Nothing for the indio side to evict here.
 
 
 async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
@@ -412,6 +583,63 @@ def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
 
 
 _GUILD_EMOJI_LIMIT = 40
+
+
+def _format_player_state(bot, guild_id) -> str:
+    """Render the current music player state as a prompt block.
+
+    The indio needs to know whether something is paused so ambiguous requests
+    like "play" / "continuá" / "metele play" route to ``resume_music`` instead
+    of ``play_music`` with a junk query. Returns "" when there is no active
+    player, no voice client, or the player is fully idle.
+    """
+    if not guild_id:
+        return ""
+    try:
+        import playCommand
+        player = playCommand.guildPlayers.get(int(guild_id))
+    except Exception:
+        return ""
+    if player is None:
+        return ""
+    title = ""
+    cur = getattr(player, "currentSong", None)
+    if isinstance(cur, dict):
+        title = str(cur.get("title") or "").strip()
+    # Interrupted state lives without a vc — the bot got kicked or dropped,
+    # but we kept the song and queue in memory. The indio should steer
+    # ambiguous play requests to resume_music here too.
+    if getattr(player, "interrupted", False) and cur is not None:
+        head = (f'música INTERRUMPIDA por desconexión — "{title}"'
+                if title else "música interrumpida por desconexión")
+        return (
+            f"[Estado del reproductor]: {head}. Si piden 'play' / "
+            f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
+            f"'resumí' / 'retomá' SIN nombrar artista o canción, usá "
+            f"resume_music (NO play_music) — el bot va a reconectarse y "
+            f"retomar desde donde quedó."
+        )
+    vc = getattr(player, "vc", None)
+    if vc is None:
+        return ""
+    try:
+        if vc.is_paused():
+            head = f'música PAUSADA — "{title}"' if title else "música pausada"
+            return (
+                f"[Estado del reproductor]: {head}. Si piden 'play' / "
+                f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
+                f"'resumí' SIN nombrar artista o canción, usá resume_music "
+                f"(NO play_music)."
+            )
+    except Exception:
+        pass
+    try:
+        if vc.is_playing():
+            head = f'sonando — "{title}"' if title else "hay música sonando"
+            return f"[Estado del reproductor]: {head}."
+    except Exception:
+        pass
+    return ""
 
 
 def _format_guild_emojis(guild) -> str:
@@ -487,7 +715,8 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
     lists; these are merged into the long-term render every time the indio
     answers and are never overwritten by Gemini's compression cycle."""
     out: dict[str, dict[str, list[str]]] = {}
-    for info in _USERS.values():
+    sources = list(_USERS.values()) + list(_NON_DISCORD_MEMBERS)
+    for info in sources:
         if not isinstance(info, dict):
             continue
         name = info.get("name")
@@ -501,24 +730,48 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
     return out
 
 
+def _block_lists_by_name() -> dict[str, list[str]]:
+    """Mapa apodo -> lista de substrings (lowercase) que hay que filtrar de
+    la memoria dinámica. Usado para scrubear facts viejos/incorrectos sin
+    tener que limpiar a mano el indio_memory.json del server."""
+    out: dict[str, list[str]] = {}
+    sources = list(_USERS.values()) + list(_NON_DISCORD_MEMBERS)
+    for info in sources:
+        if not isinstance(info, dict):
+            continue
+        name = info.get("name")
+        blocks = info.get("block_dynamic_substrings") or []
+        if not name or not blocks:
+            continue
+        out[str(name)] = [str(b).lower() for b in blocks if b]
+    return out
+
+
 def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
     """Combine the static per-user traits from users.py with whatever Gemini
     has distilled in long-term memory. Static entries provide a baseline; the
-    distilled additions are appended without duplicates."""
+    distilled additions are appended without duplicates. Items in dynamic
+    memory matching a user's ``block_dynamic_substrings`` are filtered out."""
     merged = _static_user_traits()
+    blocks_by_name = _block_lists_by_name()
     if isinstance(lt_users, dict):
         for name, data in lt_users.items():
             if not isinstance(data, dict):
                 continue
-            bucket = merged.setdefault(str(name), {
+            name_str = str(name)
+            blocks = blocks_by_name.get(name_str, [])
+            bucket = merged.setdefault(name_str, {
                 "traits": [], "preguntas_tipicas": [], "anecdotas": [],
             })
             for key in ("traits", "preguntas_tipicas", "anecdotas"):
                 existing = bucket.setdefault(key, [])
                 for item in (data.get(key) or []):
                     s = str(item)
-                    if s and s not in existing:
-                        existing.append(s)
+                    if not s or s in existing:
+                        continue
+                    if blocks and any(b in s.lower() for b in blocks):
+                        continue
+                    existing.append(s)
     return merged
 
 
@@ -600,6 +853,12 @@ exacta:
 Reglas estrictas:
 - NO inventes datos. Solo guardás lo que aparece textualmente o lo que se \
   deduce directamente de la conversación.
+- Si un usuario repite la misma información varias veces en la conversación \
+  (ej: "soy de X", "te digo que soy de X", "no te olvides que soy de X"), \
+  guardala UNA sola vez. No dupliques ni expandís un rasgo porque fue \
+  repetido. No registres el hecho de que lo repitió como rasgo ni anécdota.
+- Si un dato ya está en la memoria actual, no lo volvás a agregar aunque \
+  aparezca en la conversación nueva, ni en palabras distintas.
 - Mantenés los datos previos a menos que la conversación los contradiga.
 - Cada string ≤120 caracteres.
 - Máx %d rasgos, %d preguntas_tipicas y %d anecdotas por usuario.
@@ -860,17 +1119,88 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
         return False, f"relay error: {exc}"
 
 
+_ACTION_FAILURE_MESSAGES = {
+    # Status code (set by _dispatch_indio_actions) → user-facing message. The
+    # indio already promised "dale, va" optimistically *before* the tool ran;
+    # these messages get posted **after** the tool fails so the user finds out
+    # instead of waiting forever for music that's not coming.
+    "resume: not paused":
+        "uh, no había nada pausado para reanudar",
+    "resume: no voice channel to rejoin":
+        "no hay nadie en voz al que pueda conectarme",
+    "resume: nothing to resume":
+        "no me acuerdo qué estaba sonando, decime qué pongo",
+    "pause: not playing":
+        "no estaba sonando nada, no tengo qué pausar",
+}
+
+
+def _failure_feedback(status: str) -> Optional[str]:
+    """Translate a status string emitted by ``_dispatch_indio_actions`` into a
+    user-facing apology, or ``None`` if the status was a success (no feedback
+    needed). Used to surface tool failures the indio promised optimistically."""
+    if not status:
+        return None
+    if status in _ACTION_FAILURE_MESSAGES:
+        return _ACTION_FAILURE_MESSAGES[status]
+    if status.endswith(": no active player"):
+        return "no había reproductor activo, no estaba sonando nada"
+    if status.startswith("music: fail"):
+        # Extract the inner reason after " — " when present.
+        _, _, reason = status.partition(" — ")
+        return (f"no pude poner la música ({reason})"
+                if reason else "no pude poner la música")
+    if status.startswith("sound: fail"):
+        _, _, reason = status.partition(" — ")
+        return (f"no encontré el sonido ({reason})"
+                if reason else "no encontré ese sonido")
+    if status.startswith("resume: reconnect failed"):
+        return "no pude reconectarme al canal para retomar la música"
+    return None
+
+
+# Short, in-character result lines appended after a successful action. Stored
+# without leading punctuation; the joiner adds " — " when editing in place and
+# posts the bare line when it has to fall back to a standalone message.
+_ACTION_SUCCESS_SUFFIX = {
+    "PLAY_MUSIC": "listo 🎵",
+    "PLAY_SOUND": "listo 🔊",
+    "SKIP_MUSIC": "listo ✅",
+    "PAUSE_MUSIC": "listo ✅",
+    "RESUME_MUSIC": "listo ✅",
+    "STOP_MUSIC": "listo ✅",
+}
+
+
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
+                                   reply_handle=None,
+                                   reply_text: str = "",
                                    ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
     real "/play" / "/soundpad" slash commands in the chat. Both land in
     ``config.INDIO_PLAY_CHANNEL_ID`` — that's the dedicated room for
     playback regardless of where the conversation is happening. Falls back
-    to in-process playback if the relay is unavailable. Returns short
-    status strings for logging; the indio's main reply is sent separately."""
+    to in-process playback if the relay is unavailable.
+
+    After the action runs the original reply message is **edited in place**
+    to append a short result indicator (success suffix or failure reason),
+    so the user sees the outcome without a separate message.
+
+    ``reply_handle`` is a ``types.SimpleNamespace`` with:
+      - ``via_relay: bool`` — True when the initial reply went via userbot.
+      - ``channel_id: Optional[int]`` — channel where the reply was posted.
+      - ``message_id: Optional[int]`` — id of the relay-posted message (valid
+        when ``via_relay=True``).
+      - ``message`` — Discord Message object (valid when ``via_relay=False``).
+
+    ``reply_text`` is the clean persona text that was originally sent; the
+    suffix is appended to it before editing.
+
+    Returns short status strings for logging; the indio's main reply is sent
+    separately."""
     if not actions or guild_id is None or bot is None:
         return []
     statuses: list[str] = []
@@ -955,6 +1285,30 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                         await player.togglePausePlay()
                         statuses.append("resume: ok")
                         control_ok = True
+                    elif getattr(player, "interrupted", False) and player.currentSong:
+                        # Bot was kicked / lost connection while a song was
+                        # playing. Reconnect to the most-populated voice
+                        # channel and pick up where we left off.
+                        try:
+                            voice_channel = playCommand._pick_voice_channel(
+                                bot, int(guild_id),
+                            )
+                        except Exception:
+                            voice_channel = None
+                        if voice_channel is None:
+                            statuses.append("resume: no voice channel to rejoin")
+                        else:
+                            try:
+                                new_vc = await voice_channel.connect(reconnect=True)
+                                resumed = await player.resumeFromInterruption(new_vc)
+                                if resumed:
+                                    statuses.append("resume: reconnected & resumed")
+                                    control_ok = True
+                                else:
+                                    statuses.append("resume: nothing to resume")
+                            except Exception as e:
+                                logger.exception("indio RESUME_MUSIC reconnect failed")
+                                statuses.append(f"resume: reconnect failed ({e})")
                     else:
                         statuses.append("resume: not paused")
                 logger.info("indio %s → %s", action, statuses[-1])
@@ -969,7 +1323,416 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     )
         except Exception:
             logger.exception("indio action %s failed", action)
+            statuses.append(f"{action.lower()}: fail — exception")
+
+    # After all actions ran, surface the outcome on the indio's reply. When the
+    # reply was a single message we EDIT it in place to append a short result
+    # line. When it was split into several chunks (rare for the indio's brief
+    # confirmations) we can't safely rewrite one chunk with the whole reply, so
+    # we post the result as a short standalone message instead. Same fallback
+    # when the relay gave us no editable message id. Best-effort: never crash.
+    if reply_handle is not None and statuses:
+        try:
+            primary_action = actions[0][0] if actions else ""
+            first_failure = next(
+                (s for s in statuses if _failure_feedback(s) is not None), None
+            )
+            if first_failure is not None:
+                result_line = _failure_feedback(first_failure) or ""
+            else:
+                result_line = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
+            if result_line:
+                via_relay = getattr(reply_handle, "via_relay", False)
+                ch_id = getattr(reply_handle, "channel_id", None)
+                msg_obj = getattr(reply_handle, "message", None)
+                single = getattr(reply_handle, "single", True)
+                logger.info("indio dispatch result: %r single=%s via_relay=%s",
+                            result_line, single, via_relay)
+                edited = False
+                if single:
+                    new_content = f"{reply_text} — {result_line}"
+                    if via_relay:
+                        msg_id = getattr(reply_handle, "message_id", None)
+                        if ch_id and msg_id:
+                            edited = await _edit_via_userbot(
+                                ch_id, msg_id, new_content
+                            )
+                    elif msg_obj is not None:
+                        await msg_obj.edit(content=new_content)
+                        edited = True
+                if not edited:
+                    # Multi-chunk reply or no editable id: post the result on
+                    # its own so the user still finds out what happened.
+                    if via_relay and ch_id:
+                        await _relay_to_userbot(ch_id, result_line, None)
+                    elif msg_obj is not None and getattr(msg_obj, "channel", None):
+                        await msg_obj.channel.send(result_line)
+        except Exception:
+            logger.exception("indio dispatch result delivery failed")
+
     return statuses
+
+
+# ---------------------------------------------------------------------------
+# Music disambiguation: "che, ¿cuál de estas querés?"
+# ---------------------------------------------------------------------------
+
+_CHOICE_CANCEL_WORDS = (
+    "ninguna", "ninguno", "ningun", "nada", "deja", "dejalo", "dejala",
+    "cancela", "cancelar", "olvidate", "olvidalo", "no quiero", "ni una",
+)
+# Ordinal/number words → 0-based index. Matched by prefix against each token so
+# "primera"/"primero"/"primer" all resolve, etc.
+_ORDINAL_STEMS = {
+    "primer": 0, "uno": 0,
+    "segund": 1, "dos": 1,
+    "tercer": 2, "tres": 2,
+    "cuart": 3, "cuatro": 3,
+    "quint": 4, "cinco": 4,
+}
+_CHOICE_STOPWORDS = {
+    "la", "el", "los", "las", "un", "una", "de", "del", "version", "tema",
+    "cancion", "quiero", "poneme", "pone", "poné", "dale", "esa", "ese",
+    "esta", "este", "che", "indio", "opcion", "numero", "que", "me", "y", "o",
+    "a", "porfa", "porfavor", "mejor",
+}
+
+
+def _normalize_choice(s: str) -> str:
+    """Lowercase + strip accents for matching selection utterances."""
+    n = unicodedata.normalize("NFD", (s or "").lower())
+    return "".join(c for c in n if unicodedata.category(c) != "Mn")
+
+
+def _looks_like_url(query: str) -> bool:
+    q = (query or "").strip()
+    return (q.startswith("http://") or q.startswith("https://")
+            or q.startswith("ytsearch:"))
+
+
+# Words that, when adjacent to an ordinal/number token, signal "this is a
+# selection". Required for ordinal-word matching so bare "uno" / "dos" in
+# normal speech doesn't get parsed as a vote. Includes the selection article
+# ("la 4"), imperatives ("ponela 2", "elegí la tres", "votá la una"), and the
+# explicit "opción"/"número" framing.
+# Stored without accents — _parse_choice normalizes input the same way via
+# _normalize_choice, so the lookup just needs the accent-stripped form.
+_SELECTION_CONTEXT_WORDS = {
+    "la", "el", "los", "las",
+    "ponela", "ponelo", "poneme", "ponete", "pone",
+    "metele", "mete", "tirate", "tira", "tirame",
+    "dame", "dale", "elegi", "elegime", "elige",
+    "vota", "voto", "votala", "votalo",
+    "quiero", "ese", "esa", "este", "esta",
+    "opcion", "numero", "n",
+}
+
+
+def _parse_choice(text: str, candidates: list[dict]):
+    """Interpret a selection utterance against the offered candidates.
+
+    Returns the 0-based index of the chosen candidate, the string ``"cancel"``
+    when the speaker declined, or ``None`` when the message doesn't look like a
+    selection at all (caller should treat it as a normal new message).
+
+    Resolution order: explicit cancel > digit (1..N) > ordinal word
+    (primera/segunda/…) **only when preceded by a selection context word** >
+    a distinctive word that matches exactly one title.
+
+    The selection-context requirement on ordinals is what stops normal speech
+    ("Uno lava todo") from being parsed as a vote — there's no leading "la" /
+    "ponela" / etc., so bare "uno" is ignored.
+    """
+    if not text or not candidates:
+        return None
+    norm = _normalize_choice(text)
+    for w in _CHOICE_CANCEL_WORDS:
+        if w in norm:
+            return "cancel"
+    n = len(candidates)
+    for m in re.finditer(r"\d+", norm):
+        v = int(m.group())
+        if 1 <= v <= n:
+            return v - 1
+    tokens = re.findall(r"[a-z]+", norm)
+    for i, tok in enumerate(tokens):
+        for stem, idx in _ORDINAL_STEMS.items():
+            if not tok.startswith(stem) or idx >= n:
+                continue
+            # Only accept the ordinal if the previous token signals selection
+            # intent. Falls through to None if it doesn't — the caller treats
+            # this as a normal message (chat / Gemini turn), not a vote.
+            prev = tokens[i - 1] if i > 0 else ""
+            if prev in _SELECTION_CONTEXT_WORDS:
+                return idx
+    # Distinctive-word match against the titles (e.g. "la del vivo",
+    # "la de Calamaro"). Only commit when exactly one title wins.
+    sig = [t for t in tokens if len(t) >= 3 and t not in _CHOICE_STOPWORDS]
+    if sig:
+        scores = []
+        for c in candidates:
+            title = _normalize_choice(c.get("title", ""))
+            scores.append(sum(1 for w in sig if w in title))
+        best = max(scores)
+        if best > 0 and scores.count(best) == 1:
+            return scores.index(best)
+    return None
+
+
+_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
+              "5️⃣", "6️⃣", "7️⃣", "8️⃣",
+              "9️⃣", "\U0001f51f"]
+
+
+def _num_emoji(i: int) -> str:
+    """Keycap emoji for a 1-based position (display only)."""
+    return _NUM_EMOJI[i - 1] if 1 <= i <= len(_NUM_EMOJI) else f"{i})"
+
+
+def _format_choices(candidates: list[dict]) -> str:
+    """Render the "¿cuál querés?" list the indio posts in chat."""
+    lines = ["che, ¿cuál de estas querés?"]
+    for i, c in enumerate(candidates, 1):
+        dur = c.get("duration_string") or ""
+        durs = f" [{dur}]" if dur else ""
+        lines.append(f"{_num_emoji(i)} {c['title']}{durs}")
+    lines.append('(decime el número, o "ninguna")')
+    return "\n".join(lines)
+
+
+def _choice_identity(user_id, speaker: str) -> str:
+    """Stable identity for a requester's pending choice.
+
+    Prefers the Discord user id (numeric, globally unique) so two members
+    sharing a display name can't resolve each other's choice. Falls back to the
+    display name only when no id is available. The ``uid:``/``nm:`` prefixes
+    keep a numeric display name from ever colliding with a real id.
+    """
+    if user_id:
+        return f"uid:{user_id}"
+    return f"nm:{speaker or 'alguien'}"
+
+
+def _voter_id_from(user_id, speaker: str) -> int:
+    """Resolve a stable integer "voter id" for MusicVote.register_vote, which
+    keys ``votes`` by int (Discord uid). Falls back to a deterministic hash of
+    the speaker name when no real id is available (older voice messages)."""
+    try:
+        if user_id:
+            return int(user_id)
+    except (TypeError, ValueError):
+        pass
+    # Negative-space "name" voter ids so they never collide with real Discord
+    # uids (which are positive).
+    name = speaker or "alguien"
+    return -(hash(name) & 0xFFFFFFFF) or -1
+
+
+def _try_register_chat_vote(guild_id: Optional[int], user_id: int,
+                            text: str) -> bool:
+    """Bridge for typed-chat votes ("indio ponela 4" in text). Same idea as
+    ``try_register_voice_vote`` but doesn't close immediately — typing is more
+    deliberate, but we still want to give the group its sliding window."""
+    if not guild_id or not text:
+        return False
+    import playCommand
+    vote = playCommand.get_active_vote(int(guild_id))
+    if vote is None:
+        return False
+    decision = _parse_choice(text, vote.candidates)
+    if not isinstance(decision, int) or not (0 <= decision < len(vote.candidates)):
+        return False
+    return vote.register_vote(int(user_id), decision)
+
+
+def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
+                            speaker_name: str, text: str) -> bool:
+    """Try to register a voice utterance as a vote on the guild's open music
+    poll. Returns True when ``text`` parses as a choice and a vote is recorded;
+    False when there's no open vote, no guild context, or ``text`` doesn't name
+    an option.
+
+    Voice votes are decisive: this is someone literally telling the indio "ponela
+    4", so we close the vote immediately (``close_now=True``) instead of waiting
+    out the sliding window. Called from the apiServer **before**
+    ``decifrarTranscripcion`` so the raw transcript's digit ("Indio, tirala 4")
+    survives even if Gemini's cleanup would otherwise drop it.
+    """
+    if not guild_id or not text:
+        return False
+    import playCommand
+    vote = playCommand.get_active_vote(int(guild_id))
+    if vote is None:
+        return False
+    decision = _parse_choice(text, vote.candidates)
+    if not isinstance(decision, int) or not (0 <= decision < len(vote.candidates)):
+        return False
+    voter = _voter_id_from(user_id, speaker_name or "")
+    return vote.register_vote(voter, decision, close_now=True)
+
+
+def register_reaction_vote(*, channel_id: int, message_id: int,
+                           emoji: str, user_id: int) -> bool:
+    """Count an emoji reaction on a vote's options message as a vote.
+
+    Called from the main bot's ``on_raw_reaction_add``. Looks up the open vote
+    by its options message, maps the keycap emoji to an option, and records the
+    reactor's pick keyed by user id. Reactions slide the timer (no close_now);
+    the assumption is multiple people may be reacting in sequence and we want
+    to give them a window.
+    """
+    import playCommand
+    idx = playCommand.emoji_to_index((emoji or "").strip())
+    if idx is None:
+        # Some clients drop the variation selector — try the bare keycap too.
+        idx = playCommand.emoji_to_index((emoji or "").replace("\ufe0f", ""))
+    if idx is None:
+        return False
+    try:
+        cid = int(channel_id)
+        mid = int(message_id)
+    except (TypeError, ValueError):
+        return False
+    for vote in playCommand.active_votes.values():
+        if vote.closed:
+            continue
+        if vote.reaction_message_id == mid and vote.reaction_channel_id == cid:
+            if idx >= len(vote.candidates):
+                return False
+            return vote.register_vote(int(user_id), idx)
+    return False
+
+
+async def _relay_say(channel_id: int, content: str) -> Optional[int]:
+    """Post ``content`` via the userbot relay and return the first message id
+    (so the main bot can react to it), or None if the relay is off/failed.
+    Mirrors _relay_to_userbot but surfaces the message id."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return None
+    payload = {"channel_id": int(channel_id), "content": content}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    return None
+                data = await resp.json(content_type=None)
+        ids = (data or {}).get("message_ids") or []
+        return int(ids[0]) if ids else None
+    except Exception:
+        logger.exception("indio relay say (with id) failed")
+        return None
+
+
+async def _attach_vote_reactions(bot, vote, channel_id: int,
+                                 message_id: int, n: int) -> None:
+    """Remember which message carries this vote and seed it with the number
+    reactions (1️⃣…N) so people can vote by reacting. Best-effort.
+
+    Refuses to overwrite an existing binding: once a vote has been attached
+    to a message, **a later turn's unrelated reply must not steal it**. That
+    was the 2026-05-31 bug — a chat reply ("¡pará, Enrique!…") got 1-5
+    reactions slapped on it because a music vote from an earlier turn was
+    still open in the guild.
+    """
+    if vote is None or not channel_id or not message_id:
+        return
+    if vote.reaction_message_id is not None:
+        # Already bound to a real options message. Don't repoint.
+        return
+    vote.reaction_channel_id = int(channel_id)
+    vote.reaction_message_id = int(message_id)
+    try:
+        channel = bot.get_channel(int(channel_id))
+        if channel is None:
+            channel = await bot.fetch_channel(int(channel_id))
+        msg = await channel.fetch_message(int(message_id))
+        for i in range(1, min(n, len(_NUM_EMOJI)) + 1):
+            await msg.add_reaction(_num_emoji(i))
+    except Exception:
+        logger.exception("indio vote: attaching reactions failed")
+
+
+async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
+    """Play an already-resolved candidate (id + title in hand). We reuse the
+    yt-dlp result we got when building the options list, so there is no second
+    search and no Gemini call — we just hand the song to the player."""
+    import playCommand
+    try:
+        await playCommand.playFromIndio(
+            bot, guild_id, song.get("title") or "tema", songs=[song],
+        )
+    except Exception:
+        logger.exception("indio: play chosen song failed")
+
+
+async def _maybe_disambiguate_music(bot, guild_id, mem_key,
+                                    pending_actions, reply, post):
+    """Intercept a single free-text ``play_music`` so the indio lists the
+    matches and opens a group vote, instead of playing the first hit.
+
+    The search reuses yt-dlp exactly like before (no extra Gemini). With a
+    single clear hit we play it directly; with several we list them and open a
+    voting window (``post`` is how the winner gets announced when it closes). A
+    direct URL, several actions at once, or a non-music turn pass through
+    untouched.
+
+    Returns ``(actions_to_dispatch, reply_text)``.
+    """
+    clean = _strip_indio_prefix(reply.text)
+    clean = _ensure_reply_text(clean, pending_actions)
+    if guild_id is None:
+        return pending_actions, clean
+    music = [a for a in pending_actions if a[0] == "PLAY_MUSIC"]
+    others = [a for a in pending_actions if a[0] != "PLAY_MUSIC"]
+    if len(music) != 1 or others:
+        return pending_actions, clean
+    query = music[0][1]
+    if _looks_like_url(query):
+        # An explicit URL has nothing to disambiguate — let it play directly.
+        return pending_actions, clean
+
+    import playCommand
+    candidates = await playCommand._yt_dlp_search(query, max_results=_MUSIC_CHOICE_COUNT)
+    if not candidates:
+        return [], "no encontré nada en YouTube con eso, decímelo de otra forma"
+    # Re-rank by fuzzy similarity against the user's query so the option the
+    # vote falls back to when nobody picks (candidates[0] in _tally_vote_winner)
+    # is the one that actually best matches what was asked, not just YouTube's
+    # top relevance hit. Stable for ties (Python's sort) so ratio ties keep
+    # YouTube's relative order. Helper lives in playCommand alongside the /play
+    # autoplay logic — single source of truth for "what matches the query".
+    candidates.sort(
+        key=lambda c: playCommand._query_title_ratio(query, c.get("title", "")),
+        reverse=True,
+    )
+    if len(candidates) == 1:
+        # One clear match: play it directly with the metadata we already have.
+        asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
+        return [], clean
+    # Several matches: open a shared MusicVote (one per guild — same storage
+    # used by the /play picker buttons). The indio's chat surface here lists
+    # the options as text + reactions; voice votes and button clicks all write
+    # into the same vote state.
+    import playCommand
+
+    async def _on_resolve(vote, winner: dict) -> None:
+        # Announce + reproduce. ``post`` was passed in by the caller and knows
+        # how to send via the userbot relay (or fall back to channel.send).
+        try:
+            await post(f"dale, va: {winner['title']} 🎵")
+        except Exception:
+            logger.exception("indio vote: announce failed")
+        await _play_chosen_song(bot, guild_id, winner)
+
+    playCommand.open_music_vote(
+        bot=bot, guild_id=int(guild_id),
+        candidates=candidates, on_resolve=_on_resolve,
+    )
+    return [], _format_choices(candidates)
 
 
 _INDIO_PREFIX_RE = re.compile(
@@ -988,14 +1751,20 @@ def _strip_indio_prefix(text: str) -> str:
 
 
 async def _relay_to_userbot(channel_id: int, content: str,
-                            reply_to_id: Optional[int]) -> bool:
+                            reply_to_id: Optional[int]) -> Optional[list[int]]:
     """POST the indio reply to the userbot's local /say endpoint so it gets
-    posted by the real user account. Returns True on success, False on any
-    failure (caller should fall back to posting via vapls)."""
+    posted by the real user account.
+
+    Returns a list of message ids (from the userbot's JSON response
+    ``{"sent": N, "message_ids": [...]}``) on success, or ``None`` on any
+    failure / when the relay is not configured.  Callers that only care about
+    success/failure can test the result via truthiness — a non-empty list is
+    truthy and ``None`` is falsy, so ``if relayed:`` / ``if not relayed:``
+    patterns keep working unchanged."""
     url = config.INDIO_RELAY_URL
     secret = config.INDIO_RELAY_SECRET
     if not url or not secret:
-        return False
+        return None
     payload = {"channel_id": int(channel_id), "content": content}
     if reply_to_id is not None:
         payload["reply_to_message_id"] = int(reply_to_id)
@@ -1007,14 +1776,116 @@ async def _relay_to_userbot(channel_id: int, content: str,
                 if resp.status >= 400:
                     body = await resp.text()
                     logger.warning("indio relay HTTP %d: %s", resp.status, body[:200])
+                    return None
+                data = await resp.json(content_type=None)
+        ids = (data or {}).get("message_ids") or []
+        # The relay succeeded. Normally it echoes the ids of the messages it
+        # posted; if for some reason it doesn't, return ``[0]`` as a "sent but
+        # id unknown" truthy sentinel so the truthiness contract holds for the
+        # 9 callers. Id 0 is never a real Discord id, and the in-place editor
+        # guards with ``if ch_id and msg_id`` so it's safely skipped (it posts
+        # a standalone result line instead).
+        return [int(i) for i in ids] if ids else [0]
+    except asyncio.TimeoutError:
+        logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
+        return None
+    except Exception:
+        logger.exception("indio relay failed")
+        return None
+
+
+async def _edit_via_userbot(channel_id: int, message_id: int,
+                             content: str) -> bool:
+    """Ask the userbot to edit a previously-posted message in place.
+
+    Mirrors ``_relay_to_userbot`` but POSTs to the ``/edit`` endpoint.
+    Body: ``{"channel_id": int, "message_id": int, "content": str}``.
+    Header: ``X-API-Secret: config.INDIO_RELAY_SECRET``.
+
+    Returns True when the userbot responds with HTTP < 400, False otherwise
+    (including when the relay is not configured).  Never raises."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+    edit_url = url.rsplit("/", 1)[0] + "/edit"
+    payload = {"channel_id": int(channel_id), "message_id": int(message_id),
+               "content": content}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(edit_url, json=payload,
+                                    headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("indio relay edit HTTP %d: %s",
+                                   resp.status, body[:200])
                     return False
                 return True
     except asyncio.TimeoutError:
-        logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
+        logger.warning("indio relay edit timeout after %.1fs",
+                       config.INDIO_RELAY_TIMEOUT)
         return False
     except Exception:
-        logger.exception("indio relay failed")
+        logger.warning("indio relay edit failed: %s", "see traceback",
+                       exc_info=True)
         return False
+
+
+async def relay_transcript_decifrado_raw(
+    *,
+    channel_id: int,
+    message_id: int,
+    content: str,
+) -> bool:
+    """POST to the userbot's /edit endpoint to replace a message's content entirely."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+
+    if url.endswith("/say"):
+        url = url[:-4] + "/edit"
+    elif not url.endswith("/edit"):
+        url = url.rstrip("/") + "/edit"
+
+    payload = {
+        "channel_id": int(channel_id),
+        "message_id": int(message_id),
+        "content": content,
+    }
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("decifrado relay edit HTTP %d: %s", resp.status, body[:200])
+                    return False
+                return True
+    except Exception:
+        logger.exception("decifrado relay edit failed")
+        return False
+
+
+async def relay_transcript_decifrado(
+    *,
+    channel_id: int,
+    message_id: int,
+    speaker: str,
+    raw: str,
+    cleaned: str,
+) -> bool:
+    """POST to the userbot's /edit endpoint to show both the raw and cleaned text."""
+    content = f"🎙️ **{speaker}:** {raw}\n🧠 **Decifrado:** {cleaned}"
+    return await relay_transcript_decifrado_raw(
+        channel_id=channel_id,
+        message_id=message_id,
+        content=content,
+    )
+
 
 
 def _format_contributors_line() -> str:
@@ -1157,6 +2028,32 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
     tagged_message = f"[{speaker}]: {pregunta or ''}"
 
+    # How the winner gets announced when the vote closes (relay as the real
+    # indio when configured, else via this command's response).
+    async def _post_choice(text):
+        channel_id = getattr(ctx, "channel_id", None) or getattr(
+            getattr(ctx, "channel", None), "id", None)
+        relayed = False
+        if (channel_id is not None
+                and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+            relayed = await _relay_to_userbot(channel_id, text, None)
+        if not relayed:
+            await _send_reply(ctx, text)
+
+    # If a music vote is open for this guild and the message names an option,
+    # count it as a vote (anyone can vote) instead of a brand-new turn. Keyed by
+    # the Discord user id so each person gets one vote.
+    _choice_guild_id = getattr(getattr(ctx, "guild", None), "id", None)
+    _choice_identity_val = _choice_identity(
+        getattr(getattr(ctx, "author", None), "id", None) or 0, speaker)
+    if (not nuevo and _choice_guild_id is not None
+            and _try_register_chat_vote(
+                int(_choice_guild_id),
+                int(getattr(getattr(ctx, "author", None), "id", None) or 0),
+                pregunta or "",
+            )):
+        return
+
     async with lock:
         history_reset = False
         if nuevo:
@@ -1181,11 +2078,12 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
     emoji_block = _format_guild_emojis(guild_for_extras)
+    player_block = _format_player_state(getattr(ctx, "bot", None), guild_id)
     logger.info("indio: roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
                 len(current_members),
                 len((long_term_snapshot.get("users") or {})),
                 emoji_count, mem_key)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    extras = "\n\n".join(b for b in (lt_block, emoji_block, player_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
@@ -1193,7 +2091,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         reply = await geminiClient.generate(
             user_message=tagged_message,
             system_instruction=system_instruction,
-            history=history_snapshot,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
@@ -1242,9 +2140,21 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
-    clean_reply = _strip_indio_prefix(reply.text)
-    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
+    pending_actions, clean_reply = await _maybe_disambiguate_music(
+        ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
+    )
     relayed_via_userbot = False
+    import playCommand
+    _active_vote = playCommand.get_active_vote(int(getattr(ctx.guild, "id", 0) or 0))
+    # "vote_open" here means "this turn just opened a vote and the reply IS
+    # the options listing". A vote that already has a reaction_message_id
+    # belongs to a previous turn — don't treat the current reply as its
+    # surface (otherwise unrelated chat replies get 1-5 reactions slapped on).
+    vote_open = (_active_vote is not None
+                 and _active_vote.reaction_message_id is None)
+    opts_channel_id = None
+    opts_msg_id = None
+    reply_handle = None
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
         question_msg = await ctx.followup.send(question_header)
@@ -1252,28 +2162,100 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         channel_id = getattr(ctx, "channel_id", None) or getattr(
             getattr(ctx, "channel", None), "id", None
         )
-        if channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-            relayed_via_userbot = await _relay_to_userbot(
+        opts_channel_id = channel_id
+        if vote_open and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET and channel_id is not None:
+            # Vote options: post via relay but capture the message id so we can
+            # add the number reactions to it.
+            opts_msg_id = await _relay_say(channel_id, clean_reply)
+            relayed_via_userbot = opts_msg_id is not None
+            n_chunks = 1 if relayed_via_userbot else 0
+            if not relayed_via_userbot:
+                sent = await ctx.followup.send(clean_reply)
+                opts_msg_id = getattr(sent, "id", None)
+                opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
+                n_chunks = 1
+        elif vote_open:
+            sent = await ctx.followup.send(clean_reply)
+            opts_msg_id = getattr(sent, "id", None)
+            opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
+            n_chunks = 1
+        elif channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            import types as _types
+            relay_ids = await _relay_to_userbot(
                 channel_id, clean_reply, question_msg_id
             )
-        if relayed_via_userbot:
-            n_chunks = 1
+            relayed_via_userbot = bool(relay_ids)
+            if relayed_via_userbot:
+                relay_msg_id = relay_ids[0] if relay_ids else None
+                reply_handle = _types.SimpleNamespace(
+                    via_relay=True,
+                    channel_id=channel_id,
+                    message_id=relay_msg_id,
+                    message=None,
+                    single=len(relay_ids) == 1,
+                )
+                n_chunks = 1
+            else:
+                chunks = _split_for_discord(clean_reply)
+                sent_msg = None
+                for c in chunks:
+                    sent_msg = await ctx.followup.send(c)
+                reply_handle = _types.SimpleNamespace(
+                    via_relay=False,
+                    channel_id=channel_id,
+                    message_id=None,
+                    message=sent_msg,
+                    single=len(chunks) == 1,
+                )
+                n_chunks = len(chunks)
         else:
             # Fallback: post the reply via vapls if relay is disabled or failed.
-            n_chunks = await _send_reply(ctx, clean_reply)
+            import types as _types
+            chunks = _split_for_discord(clean_reply)
+            sent_msg = None
+            for c in chunks:
+                sent_msg = await ctx.followup.send(c)
+            reply_handle = _types.SimpleNamespace(
+                via_relay=False,
+                channel_id=channel_id,
+                message_id=None,
+                message=sent_msg,
+                single=len(chunks) == 1,
+            )
+            n_chunks = len(chunks)
     except Exception as e:
         logger.exception("indio send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
                                     properties={"action": "indio_send"})
         return
 
+    if vote_open and opts_msg_id and opts_channel_id and _active_vote is not None:
+        n = len(_active_vote.candidates)
+        await _attach_vote_reactions(
+            ctx.bot, _active_vote, opts_channel_id, opts_msg_id, n,
+        )
+
+    try:
+        await indioArchive.enqueue(
+            guild_id=getattr(getattr(ctx, "guild", None), "id", None),
+            channel_id=channel_id,
+            speaker=speaker,
+            question=pregunta or "",
+            reply=clean_reply,
+        )
+    except Exception:
+        logger.exception("indio archive enqueue failed")
+
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
+            reply_handle=reply_handle,
+            reply_text=clean_reply,
         ))
 
-    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
-    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
+    _turn_ts = time.time()
+    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
+    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -1342,6 +2324,26 @@ async def indioFromVoice(
     mem_key = f"guild-{guild_id}"
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
     tagged_message = f"[{speaker}]: {pregunta}"
+    # Key the pending choice by the Discord user id (propagated from the
+    # userbot), falling back to the name only when no id is available.
+    _choice_identity_val = _choice_identity(user_id, speaker)
+
+    # How the winner gets announced when the vote closes.
+    async def _post_choice(text):
+        relayed = False
+        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            relayed = await _relay_to_userbot(channel_id, text, None)
+        if not relayed:
+            for chunk in _split_for_discord(text):
+                await channel.send(chunk)
+
+    # If a music vote is open and this message names an option, count it as a
+    # vote (anyone can vote) instead of starting a fresh turn. This is the
+    # voice path — treated as decisive (close_now=True) since the user just
+    # spoke the choice out loud.
+    if try_register_voice_vote(guild_id=guild_id, user_id=user_id,
+                               speaker_name=speaker, text=pregunta):
+        return
 
     async with lock:
         history_snapshot = list(_indio_history.get(mem_key, []))
@@ -1351,7 +2353,8 @@ async def indioFromVoice(
     current_members = list(_indio_current_members.get(mem_key, []))
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    player_block = _format_player_state(bot, guild_id)
+    extras = "\n\n".join(b for b in (lt_block, emoji_block, player_block) if b)
     system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
 
     t0 = time.monotonic()
@@ -1359,7 +2362,7 @@ async def indioFromVoice(
         reply = await geminiClient.generate(
             user_message=tagged_message,
             system_instruction=system_instruction,
-            history=history_snapshot,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
         )
     except geminiClient.GeminiError as e:
@@ -1393,28 +2396,87 @@ async def indioFromVoice(
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
-    clean_reply = _strip_indio_prefix(reply.text)
-    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
+    pending_actions, clean_reply = await _maybe_disambiguate_music(
+        bot, guild_id, mem_key, pending_actions, reply, _post_choice,
+    )
     relayed_via_userbot = False
+    import playCommand
+    _active_vote = playCommand.get_active_vote(int(guild_id) if guild_id else 0)
+    # Same gate as indioLogic: only treat this turn's reply as the options
+    # surface when the live vote is the one we just opened (no message bound
+    # yet). Avoids the "unrelated chat reply gets 1-5 reactions" bug.
+    vote_open = (_active_vote is not None
+                 and _active_vote.reaction_message_id is None)
+    opts_msg_id = None
+    reply_handle = None
     try:
-        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
-            relayed_via_userbot = await _relay_to_userbot(
-                channel_id, clean_reply, None
-            )
-        if not relayed_via_userbot:
-            for chunk in _split_for_discord(clean_reply):
-                await channel.send(chunk)
+        if vote_open:
+            # Vote options: capture the message id so we can react on it.
+            if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                opts_msg_id = await _relay_say(channel_id, clean_reply)
+                relayed_via_userbot = opts_msg_id is not None
+            if not relayed_via_userbot:
+                sent = None
+                for chunk in _split_for_discord(clean_reply):
+                    sent = await channel.send(chunk)
+                opts_msg_id = getattr(sent, "id", None)
+        else:
+            import types as _types
+            if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                relay_ids = await _relay_to_userbot(
+                    channel_id, clean_reply, None
+                )
+                relayed_via_userbot = bool(relay_ids)
+                if relayed_via_userbot:
+                    relay_msg_id = relay_ids[0] if relay_ids else None
+                    reply_handle = _types.SimpleNamespace(
+                        via_relay=True,
+                        channel_id=channel_id,
+                        message_id=relay_msg_id,
+                        message=None,
+                        single=len(relay_ids) == 1,
+                    )
+            if not relayed_via_userbot:
+                chunks = _split_for_discord(clean_reply)
+                sent_msg = None
+                for chunk in chunks:
+                    sent_msg = await channel.send(chunk)
+                reply_handle = _types.SimpleNamespace(
+                    via_relay=False,
+                    channel_id=channel_id,
+                    message_id=None,
+                    message=sent_msg,
+                    single=len(chunks) == 1,
+                )
     except Exception:
         logger.exception("indioFromVoice send failed")
         return
 
+    if vote_open and opts_msg_id and _active_vote is not None:
+        n = len(_active_vote.candidates)
+        await _attach_vote_reactions(bot, _active_vote, channel_id, opts_msg_id, n)
+
+    try:
+        await indioArchive.enqueue(
+            guild_id=guild_id,
+            channel_id=channel_id,
+            speaker=speaker,
+            question=pregunta,
+            reply=clean_reply,
+        )
+    except Exception:
+        logger.exception("indioFromVoice archive enqueue failed")
+
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             bot, guild_id, pending_actions,
+            reply_handle=reply_handle,
+            reply_text=clean_reply,
         ))
 
-    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}]}
-    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}]}
+    _turn_ts = time.time()
+    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
+    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -1455,6 +2517,16 @@ Reglas:
 - No agregues información nueva.
 - Mantené la intención (pregunta, exclamación, etc.) y el voseo rioplatense.
 - Si el hablante invoca al "indio" o "che indio", mantené esa parte tal cual.
+- **PRESERVÁ NÚMEROS LITERALES**: si el ASR transcribió un dígito ("4", "2"), \
+  ese dígito DEBE aparecer en la corrección. Nunca lo borres ni lo reemplaces \
+  por palabras. Ej.: "Indio, tiradela 4" → "che indio, tiradela 4" (NO \
+  "che indio, tirala"). "Indio ponela 3" → "che indio, ponela 3". El número \
+  es la respuesta a una votación abierta — si lo perdés, el voto no cuenta.
+- **PRESERVÁ EL MODO IMPERATIVO**: si el hablante da una orden ("tirate", \
+  "ponete", "ponela", "dale play", "tirá"), DEBE seguir siendo imperativo en \
+  la salida. Nunca lo conjugues en pasado ni en otro modo. Ej.: "Tírate la 4" \
+  → "tirate la 4" (NO "tiraste la 4"). "Pone música" → "poné música" (NO \
+  "puse música"). El indio recibe órdenes, no narraciones.
 - Cuando piden música, mucho ojo con nombres de bandas, canciones y artistas \
   modernos: pueden sonar en spanglish o tener nombres "raros" (ej. Tussi \
   Warriors, Bizarrap, Wos, Trueno, Tiago PZK, Duki, Cazzu, Nicki Nicole, \
@@ -1464,6 +2536,20 @@ Reglas:
   del inglés/original (manteniendo la fonética que escuchaste). El que va a \
   buscar el tema después busca tal cual en YouTube — si lo castellanizás, no \
   lo encuentra.
+
+Ejemplos (raw → corregido). Whisper parte verbos imperativos rioplatenses \
+en pedazos cuando vienen pegados al wake-word; reconstruí el verbo canónico \
+del comando que pidió el hablante:
+- "Indio de tener a música" → "che indio, detené la música"
+- "indio para la música" → "che indio, pará la música"
+- "che indio corta la" → "che indio, cortala"
+- "indio pone Bizarrap" → "che indio, poné Bizarrap"
+- "indio tirate algo de Wos" → "che indio, tirate algo de Wos"
+- "indio passa al siguiente" → "che indio, pasá al siguiente"
+- "indio saltea esta" → "che indio, saltá esta"
+- "indio pausa un toque" → "che indio, pausá un toque"
+- "indio segui con la música" → "che indio, seguí con la música"
+- "indio dale continua" → "che indio, dale, continuá"
 """
 
 
@@ -1494,7 +2580,62 @@ def _decifrar_cache_put(key: str, value: str) -> None:
         _decifrar_cache.popitem(last=False)
 
 
-async def decifrarTranscripcion(texto: str) -> str:
+# Conocidas-y-recurrentes phonetic confusions that Whisper hace en castellano
+# rioplatense. Aplicado como substring substitution case-insensitive ANTES de
+# pasar el texto a Gemini, así pedidos tipo "ponete un tema de líneas horarias"
+# se corrigen a "ponete un tema de indio solari" sin necesidad de votación
+# previa. Cualquier match curado por el voting (👍) termina acá también, pero
+# este set es la "memoria base" que no se aprende sola — la armamos a mano
+# cuando vemos un error recurrente.
+#
+# Convención: claves todas en lower-case (la sustitución es case-insensitive).
+# Si el target es un nombre propio que YouTube necesita con caps, el valor lo
+# lleva en su forma canónica.
+_KNOWN_PHONETIC_FIXES: "list[tuple[str, str]]" = [
+    # Indio Solari — Whisper se la come y la pasa a "líneas horarias" /
+    # "lineas orarias" / similares. Ver caso 2026-05-31 en logs.
+    ("líneas horarias", "Indio Solari"),
+    ("lineas horarias", "Indio Solari"),
+    ("líneas orarias", "Indio Solari"),
+    ("lineas orarias", "Indio Solari"),
+    ("indio sorari", "Indio Solari"),
+    ("indio sorare", "Indio Solari"),
+    ("indio solare", "Indio Solari"),
+]
+
+
+def _apply_known_fixes(texto: str) -> str:
+    """Apply the manually-curated phonetic-confusion table to a transcript.
+
+    Case-insensitive substring substitution; order matters when one fix is a
+    prefix of another so we apply them in declaration order. Returns the input
+    unchanged if no fix matches.
+    """
+    if not texto:
+        return texto
+    out = texto
+    for bad, good in _KNOWN_PHONETIC_FIXES:
+        if not bad:
+            continue
+        # Case-insensitive replace via regex with re.escape.
+        out = re.sub(re.escape(bad), good, out, flags=re.IGNORECASE)
+    return out
+
+
+def seed_decifrar_cache(items: "list[tuple[str, str]]") -> None:
+    """Bulk-insert pre-normalized (key, value) pairs into the in-memory
+    decifrar cache. Used by ``decifrarVoting`` to hydrate the cache at
+    startup (from approved JSONL entries) and to promote freshly-approved
+    entries at runtime. Items go through ``_decifrar_cache_put`` so they
+    obey the LRU cap and get marked as "recent" on insertion.
+    """
+    for key, value in items:
+        if not key:
+            continue
+        _decifrar_cache_put(key, value)
+
+
+async def decifrarTranscripcion(texto: str, transcript_message_id: Optional[int] = None, channel_id: Optional[int] = None) -> str:
     """Run an ASR transcript through Gemini to clean phonetic errors.
 
     Returns the cleaned text, or "" when Gemini flags the input as BASURA
@@ -1507,6 +2648,10 @@ async def decifrarTranscripcion(texto: str) -> str:
     texto = (texto or "").strip()
     if not texto:
         return ""
+    # Aplicar correcciones manuales (substring) ANTES del cache lookup: así
+    # el caché guarda directamente la versión ya corregida, y un mismo error
+    # recurrente comparte hit aun cuando venga con variantes de mayúsculas.
+    texto = _apply_known_fixes(texto)
     cache_key = _decifrar_cache_key(texto)
     cached = _decifrar_cache_get(cache_key)
     if cached is not None:
@@ -1534,6 +2679,14 @@ async def decifrarTranscripcion(texto: str) -> str:
     else:
         logger.info("decifrar: passthrough %r", texto[:200])
     _decifrar_cache_put(cache_key, final)
+    # Fire-and-forget: log the pair for the human-in-the-loop curation flow.
+    # Late import keeps this module standalone if decifrarVoting isn't wired
+    # (e.g. tests of geminiCommand alone).
+    try:
+        import decifrarVoting
+        asyncio.create_task(decifrarVoting.record(texto, final, msg_id=transcript_message_id, channel_id=channel_id))
+    except Exception:
+        logger.exception("decifrar: failed to schedule voting record")
     return final
 
 
@@ -1543,7 +2696,8 @@ async def askIndio(bot: "discord.Bot",
                    *,
                    guild_id: Optional[int] = None,
                    channel_id: Optional[int] = None,
-                   channel_name: Optional[str] = None) -> bool:
+                   channel_name: Optional[str] = None,
+                   user_id: int = 0) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -1556,6 +2710,8 @@ async def askIndio(bot: "discord.Bot",
             has the resolved channel.
         channel_id: Optional explicit channel ID. Wins over channel_name.
         channel_name: Channel name to resolve. Defaults to "bot-testing".
+        user_id: Discord user id of the speaker (0 if unknown). Used to key
+            pending music choices so only the requester can resolve them.
 
     Behavior:
         The reply is posted via the userbot relay (the cuenta-real "Indio")
@@ -1590,7 +2746,7 @@ async def askIndio(bot: "discord.Bot",
         return False
     await indioFromVoice(
         bot,
-        user_id=0,
+        user_id=user_id,
         guild_id=target_guild_id,
         channel_id=target_channel_id,
         pregunta=text,

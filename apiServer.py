@@ -297,10 +297,30 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 "self_mute": vs.self_mute,
                 "self_deaf": vs.self_deaf,
             }
+        else:
+            # Fallback: member.voice can be None even when the user *is*
+            # in a voice channel (cache race / partial state). Scan the
+            # guild's voice channels and rebuild a minimal voice dict.
+            for ch in guild.voice_channels:
+                if any(m.id == userId for m in ch.members):
+                    voice = {
+                        "channel_id": ch.id,
+                        "channel_name": ch.name,
+                        "self_mute": False,
+                        "self_deaf": False,
+                    }
+                    break
         activity = None
         acts = getattr(member, "activities", None) or []
         if acts:
             activity = str(acts[0].name) if hasattr(acts[0], "name") else str(acts[0])
+
+        top = getattr(member, "top_role", None)
+        top_role = (
+            {"name": top.name, "color": f"#{top.color.value:06x}"}
+            if top and top.name != "@everyone"
+            else None
+        )
 
         return web.json_response({
             "id": member.id,
@@ -310,6 +330,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
             "activity": activity,
             "voice": voice,
             "roles": [r.name for r in member.roles],
+            "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+            "created_at": member.created_at.isoformat(),
+            "top_role": top_role,
         })
 
     async def sendMessage(request: web.Request) -> web.Response:
@@ -568,11 +591,30 @@ def makeApp(bot: discord.Bot) -> web.Application:
         channel_id = int(data["channel_id"]) if data.get("channel_id") else None
         channel_name = data.get("channel_name")
         decifrar = bool(data.get("decifrar", True))
+        user_id = int(data["user_id"]) if data.get("user_id") else 0
+        transcript_message_id = int(data["transcript_message_id"]) if data.get("transcript_message_id") else None
 
         async def _run() -> None:
             text = pregunta
+            # Vote shortcut: if there's an open music poll for this guild and
+            # the *raw* transcript names an option, register the vote and stop.
+            # Done before decifrar so Gemini's cleanup can't drop the digit
+            # (e.g. "Indio, tirala 4" → "Che indio, tirala") and so the vote
+            # doesn't burn a Gemini turn.
+            if guild_id is not None and geminiCommand.try_register_voice_vote(
+                guild_id=guild_id,
+                user_id=user_id,
+                speaker_name=speaker_name,
+                text=text,
+            ):
+                logger.info("indio voice: registered vote from raw %r", text[:200])
+                return
             if decifrar:
-                cleaned = await geminiCommand.decifrarTranscripcion(text)
+                cleaned = await geminiCommand.decifrarTranscripcion(
+                    text,
+                    transcript_message_id=transcript_message_id,
+                    channel_id=channel_id,
+                )
                 if not cleaned:
                     logger.info("indio voice: BASURA dropped raw=%r", text[:200])
                     return
@@ -586,6 +628,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 guild_id=guild_id,
                 channel_id=channel_id,
                 channel_name=channel_name,
+                user_id=user_id,
             )
 
         asyncio.create_task(_run())
@@ -633,6 +676,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
             "results": results,
         })
 
+    async def textChannels(request: web.Request) -> web.Response:
+        """List text channels of the guild."""
+        try:
+            guildId = int(request.query["guild_id"])
+        except (KeyError, ValueError):
+            return web.json_response({"error": "missing or invalid guild_id"}, status=400)
+
+        guild = _resolveGuild(bot, guildId)
+        if guild is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+
+        channels = [
+            {"id": ch.id, "name": ch.name}
+            for ch in guild.text_channels
+        ]
+        return web.json_response({"text_channels": channels})
+
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
@@ -642,6 +702,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/indio", indioVoice)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
+    app.router.add_get("/channels", textChannels)
     return app
 
 

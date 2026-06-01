@@ -84,8 +84,8 @@ Los docstrings siguen estilo Google y se pueden renderizar con Sphinx +
 napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.md).
 
 ## CI/CD
-- **CI:** GitHub Actions ejecuta los tests (`python -m unittest discover -s tests`) en cada push y pull request.
-- **Próximos pasos (CD):** empaquetado/artefactos, credenciales de despliegue y aprobaciones por entorno.
+- **CI:** GitHub Actions corre `pytest` sobre una matriz de Python 3.10–3.14 en cada push y pull request.
+- **CD:** al pasar la CI en `master`, un job de deploy SSHea al server y corre `scripts/deploy.sh` (reset a `origin/master`, reinstala deps si cambiaron, reinicia los servicios y verifica que queden `active`). Detalle en [docs/operations.md](docs/operations.md#cicd-pipeline).
 
 ## Estructura del proyecto
 - `bot.py`: Lógica principal, comandos y reproducción.

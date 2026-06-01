@@ -28,6 +28,7 @@ import discord  # discord.py-self
 from discord.ext import voice_recv
 
 import config
+import greeting
 from recording import (
     INPUT_SAMPLE_RATE as _REC_INPUT_SAMPLE_RATE,
     INPUT_WIDTH as _REC_INPUT_WIDTH,
@@ -43,6 +44,7 @@ try:
     from users import USERS as _USERS
 except Exception:
     _USERS = {}
+import webhookLogger  # parent dir; wired after basicConfig() below
 
 
 def _name_for(user_id: int, member=None) -> str:
@@ -211,6 +213,11 @@ log = logging.getLogger("userbot")
 
 import posthog_client
 posthog_client.init_observability(service_name="vapls-userbot")
+
+# Webhook forwarding (LOG_WEBHOOK_URL). Installed *after* basicConfig so the
+# stdout StreamHandler still gets added — otherwise basicConfig sees our
+# handler already attached and skips its own setup, killing journalctl logs.
+_webhook_log_handler = webhookLogger.install_from_env("userbot")
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 logging.getLogger("discord.voice_client").setLevel(logging.INFO)
@@ -277,9 +284,9 @@ def _normalize(s: str) -> str:
     return "".join(c for c in n if unicodedata.category(c) != "Mn")
 
 
-# Phonetic variants of "indio" that Whisper tends to produce. Order doesn't
-# matter; any substring match in the normalized transcript triggers the wake
-# word. Extend this list when logs surface new variants.
+# Phonetic variants of "indio" that Whisper tends to produce. Used by
+# ``_has_text_beyond_wake_word`` to strip the wake-word out of the
+# transcript when deciding whether anything substantive is left to dispatch.
 _WAKE_WORD_TOKENS = (
     "indio", "indyo",
     "endio", "endyo",
@@ -289,14 +296,6 @@ _WAKE_WORD_TOKENS = (
     "cendio", "ceindio",
     "sendio", "sendyo",
 )
-
-
-def _contains_wake_word(text: str) -> bool:
-    """Return True if ``text`` contains a known "indio" phonetic variant."""
-    if not text:
-        return False
-    norm = _normalize(text)
-    return any(tok in norm for tok in _WAKE_WORD_TOKENS)
 
 
 # ---------- Sink: Whisper transcription per speaking user ----------------
@@ -519,30 +518,83 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
 _vosk_model = None  # type: ignore[assignment]
 _vosk_load_lock = threading.Lock()
 
-# Grammar fed to KaldiRecognizer. Includes "indio" + common rioplatense
-# filler words so VOSK has somewhere to map sounds that aren't actually the
-# wake word. With a very restricted grammar (just ["indio", "[unk]"]), VOSK
-# would force vowel-rich gibberish into "indio" and produce a cascade of
-# false positives that saturated Whisper. The filler words give the
-# recognizer alternatives, so it only emits "indio" when it's reasonably
-# confident. "[unk]" remains the catch-all.
-_VOSK_GRAMMAR = json.dumps([
-    "indio", "che indio", "ey indio", "hola indio",
-    "che", "ey", "hola", "buenas", "dale", "vamos",
-    "que", "qué", "como", "cómo", "cual", "cuál",
-    "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
-    "si", "sí", "no", "ah", "eh", "uh", "oh",
-    "el", "la", "los", "las", "un", "una", "uno",
-    "yo", "vos", "tu", "tú", "el", "ella", "nosotros",
-    "ser", "estar", "tener", "hacer", "decir", "ver",
-    "bien", "mal", "todo", "nada", "algo", "mucho", "poco",
-    "boludo", "loco", "posta", "dale", "ahre", "viste",
-    "mira", "escucha", "tira", "anda", "vení",
-    "[unk]",
-])
+# Grammar fed to KaldiRecognizer. Includes "indio" + filler words + the
+# specific command verbs the wake-word matcher cares about ("ponete",
+# "reproduci", …). Filler words give VOSK somewhere to map sounds that
+# aren't the wake word (without them, VOSK forces vowel-rich gibberish
+# into "indio" and floods Whisper with false positives). The command
+# verbs need to be in here too, otherwise VOSK collapses them to [unk]
+# and the matcher never sees "indio ponete".
+def _build_vosk_grammar() -> str:
+    """Build the restricted JSON grammar VOSK uses for wake-word detection.
 
-# Substrings VOSK is allowed to emit that we treat as a wake-word hit.
-_VOSK_WAKE_TOKENS = ("indio",)
+    Only includes:
+      - Multi-token wake-word phrases (lets VOSK lock onto them directly).
+      - The leading particles that pair with "indio" ("che","que","eh","ey","hola").
+      - The verbs / collapsed-verb tokens that follow "indio".
+      - "[unk]" so anything outside the list still lands somewhere (otherwise
+        VOSK forces noise into a wake-word and we get false positives).
+
+    Everything else (filler like "boludo", interrogatives, articles, generic
+    verbs) was removed: it bloated the language model without contributing to
+    any _WAKE_PATTERNS pair. Smaller grammar → VOSK is more decisive on the
+    tokens we actually care about.
+    """
+    return json.dumps([
+        # Multi-token wake-word phrases (canonical + collapsed forms).
+        "che indio", "que indio", "eh indio", "ey indio", "hola indio",
+        "indio ponete", "indio poneme",
+        "indio reproduci", "indio reproducí", "indio reproduce",
+        "indio tirate", "indio dale",
+        "indio por",  # collapsed "indio ponete/poneme"
+        "indio tira", # collapsed "indio tirate"
+        # Third-person mentions ("el/él indio") are common false-positive
+        # neighbors of "eh/che indio". Listing them keeps VOSK from
+        # collapsing them into a wake-word — and the matcher vetoes them
+        # explicitly via _WAKE_ANTI_PATTERNS below.
+        "el indio", "él indio",
+        # Lone tokens so the matcher still works when VOSK emits unpaired.
+        "indio",
+        "che", "que", "eh", "ey", "hola", "el", "él",
+        "ponete", "poneme",
+        "reproduci", "reproducí", "reproduce",
+        "tirate", "tira", "dale", "por",
+        # Catch-all bucket — without it VOSK collapses unknown audio into
+        # the closest grammar entry, producing false positives.
+        "[unk]",
+    ])
+
+
+_VOSK_GRAMMAR = _build_vosk_grammar()
+
+# Adjacent token pairs that count as a wake-word hit. We only fire when one
+# of these specific patterns appears in the VOSK output — "che indio" for
+# invocation, "indio ponete" / "indio reproducí" for commands. Bare "indio"
+# and "indio + random word" don't trigger anymore; that "indio + any word"
+# loophole produced most of the historical false positives.
+# Compared against accent-stripped lowercase tokens (see ``_normalize``).
+_WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("che", "indio"),
+    ("que", "indio"),       # VOSK-small often hears "che" as "que"
+    ("eh", "indio"),        # seen on speakers where "che" comes out as "eh"
+    ("indio", "ponete"),
+    ("indio", "poneme"),
+    ("indio", "por"),       # VOSK-small collapses "ponete"/"poneme" → "por"
+    ("indio", "reproduci"),
+    ("indio", "reproduce"),
+    ("indio", "tirate"),
+    ("indio", "tira"),      # VOSK-small drops trailing "te" → "tira"
+    ("indio", "dale"),
+)
+
+# Patterns that explicitly VETO a match even if some other alternative would
+# fire. Useful for third-person mentions ("el indio", "él indio") that sound
+# similar to "eh/che indio" — when VOSK's N-best contains the anti-pattern,
+# we trust that the speaker was talking ABOUT the indio, not TO it.
+# Compared against accent-stripped lowercase tokens (so "él" → "el").
+_WAKE_ANTI_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("el", "indio"),
+)
 
 
 def _load_vosk_model():
@@ -582,44 +634,86 @@ def _new_vosk_recognizer():
         return None
     try:
         import vosk
-        return vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
+        rec = vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
+        if config.VOSK_MAX_ALTERNATIVES > 0:
+            try:
+                rec.SetMaxAlternatives(config.VOSK_MAX_ALTERNATIVES)
+            except Exception:
+                log.exception("[VOSK] SetMaxAlternatives failed")
+        return rec
     except Exception:
         log.exception("[VOSK] failed to create recognizer")
         return None
 
 
+def _text_matches_wake_pattern(text: str) -> bool:
+    """True when accent-stripped ``text`` contains one of ``_WAKE_PATTERNS``
+    as an adjacent token pair. Pure function — easy to unit-test without
+    loading VOSK."""
+    norm = _normalize(text or "")
+    tokens = [t for t in norm.split() if t]
+    if len(tokens) < 2:
+        return False
+    pairs = set(zip(tokens, tokens[1:]))
+    return any(p in pairs for p in _WAKE_PATTERNS)
+
+
+def _text_has_anti_pattern(text: str) -> bool:
+    """True when ``text`` contains a ``_WAKE_ANTI_PATTERNS`` adjacent pair
+    (e.g. ``("el","indio")``). Used to veto a match when VOSK's N-best
+    suggests the speaker said "el indio" (third-person), not "che indio"."""
+    norm = _normalize(text or "")
+    tokens = [t for t in norm.split() if t]
+    if len(tokens) < 2:
+        return False
+    pairs = set(zip(tokens, tokens[1:]))
+    return any(p in pairs for p in _WAKE_ANTI_PATTERNS)
+
+
 def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
-    """Return True if VOSK has emitted "indio" in a stable utterance segment
-    AND the word came with context (not aliased on its own).
+    """Return True when VOSK finalized a segment matching one of the explicit
+    wake-word phrases (``_WAKE_PATTERNS``).
 
-    We only check ``Result()`` (the finalized segment), and we require the
-    segment to contain "indio" together with at least one neighbouring word.
-    A bare "indio" by itself almost always means VOSK forced a vowel-rich
-    sound into the wake word — those were the bulk of the false positives.
+    With ``VOSK_MAX_ALTERNATIVES > 0`` the recognizer emits N-best hypotheses
+    (``{"alternatives": [{"text": ..., "confidence": ...}, ...]}``) and we
+    gatillamos si **cualquiera** matchea un pattern — covers the case where
+    VOSK ranks "indio" #1 but "indio dale" #2. When single-best (legacy),
+    only ``{"text": "..."}`` comes in.
 
-    ``accepted`` is the return value of the most recent
-    ``rec.AcceptWaveform(chunk)``: VOSK finalizes a segment when it detects
-    sustained silence. Reading Result() only when accepted=True avoids
-    pulling state every frame when nothing has finalized.
+    Logs "near-miss" segments (top-1 contains "indio" but no pattern matches)
+    so we can see whether VOSK is collapsing the verb or the user phrased
+    something unexpected.
     """
     if not accepted:
         return False
     try:
-        text = json.loads(rec.Result() or "{}").get("text", "")
-        if not text:
+        result = json.loads(rec.Result() or "{}")
+        if "alternatives" in result:
+            candidates = [alt.get("text", "") for alt in result["alternatives"]]
+        elif "text" in result:
+            candidates = [result["text"]]
+        else:
             return False
-        norm = _normalize(text)
-        tokens = [t for t in norm.split() if t]
-        # Need "indio" present...
-        if not any(tok in tokens for tok in _VOSK_WAKE_TOKENS):
-            return False
-        # ...and at least one OTHER recognized word with it. A solitary
-        # "indio" is the smoking gun for a false positive.
-        non_wake_words = [t for t in tokens if t not in _VOSK_WAKE_TOKENS]
-        if not non_wake_words:
-            log.info(f"[VOSK] bare wake word, ignoring (text={text!r})")
-            return False
-        return True
+        # If ANY alternative suggests an anti-pattern ("el indio"), the
+        # speaker was talking ABOUT the indio, not TO it. Veto the match.
+        for text in candidates:
+            if text and _text_has_anti_pattern(text):
+                log.info(f"[VOSK] vetoed by anti-pattern: {text!r} "
+                         f"(top-1 was {candidates[0]!r})")
+                return False
+        for idx, text in enumerate(candidates):
+            if text and _text_matches_wake_pattern(text):
+                if idx > 0:
+                    log.info(f"[VOSK] matched via alternative #{idx+1}: "
+                             f"{text!r} (top-1 was {candidates[0]!r})")
+                return True
+        top1 = candidates[0] if candidates else ""
+        if top1 and "indio" in _normalize(top1).split():
+            extra = ""
+            if len(candidates) > 1:
+                extra = f", alts={candidates[1:]!r}"
+            log.info(f"[VOSK] near-miss, no pattern matched (text={top1!r}{extra})")
+        return False
     except Exception:
         log.exception("[VOSK] failed to read recognizer state")
         return False
@@ -670,6 +764,13 @@ class WakeWordSink(voice_recv.AudioSink):
         self._active_lock = threading.Lock()
         self._active_count = 0
         self._idle_loop_started = False
+        # While a wake-word is in flight (capture open OR Whisper still
+        # transcribing), pause VOSK feed for every OTHER user. The triggerer
+        # keeps feeding into its capture buffer; everyone else is dropped on
+        # the floor so we don't burn CPU running per-user recognizers we're
+        # not going to act on anyway. Cleared in _transcribe_and_dispatch().
+        self._wake_in_progress = False
+        self._wake_triggerer_id: Optional[int] = None
 
     def wants_opus(self) -> bool:
         return False
@@ -691,6 +792,11 @@ class WakeWordSink(voice_recv.AudioSink):
             return
         pcm_data = data.pcm
         if not pcm_data:
+            return
+        # Pause processing for everyone except the user that fired the wake
+        # word while we're still capturing + transcribing. Saves CPU on the
+        # 4-vCPU ARM box when 4-5 people happen to talk simultaneously.
+        if self._wake_in_progress and user_id != self._wake_triggerer_id:
             return
 
         self.packet_count += 1
@@ -743,7 +849,10 @@ class WakeWordSink(voice_recv.AudioSink):
                 log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
                          f"starting capture (prebuf_chunks="
                          f"{len(self.prebuffers.get(user_id, ()))})")
+                self._wake_triggerer_id = user_id
+                self._wake_in_progress = True
                 self._start_capture(user_id, now)
+                self._schedule_wake_sound(user_id)
                 try:
                     rec.Reset()
                 except Exception:
@@ -825,12 +934,28 @@ class WakeWordSink(voice_recv.AudioSink):
                      f"({duration:.2f}s)")
             self._finalize_capture(user_id)
 
+    def _schedule_wake_sound(self, user_id: int) -> None:
+        """Hand off wake-sound playback to the main loop. Sink runs in a
+        background thread; play_wake_sound() needs to interact with the
+        VoiceClient via the event loop."""
+        try:
+            asyncio.run_coroutine_threadsafe(
+                greeting.play_wake_sound(self._client_ref, user_id=user_id),
+                self._client_ref.loop,
+            )
+        except Exception:
+            log.exception("[WAKE] failed to schedule wake sound")
+
     def _finalize_capture(self, user_id: int) -> None:
         capture = self.captures.pop(user_id, None)
         if not capture:
+            self._wake_in_progress = False
+            self._wake_triggerer_id = None
             return
         pcm = bytes(capture["buf"])
         if not pcm:
+            self._wake_in_progress = False
+            self._wake_triggerer_id = None
             return
         secs = len(pcm) / (16000 * 2)
         with self._active_lock:
@@ -840,6 +965,8 @@ class WakeWordSink(voice_recv.AudioSink):
             if self._active_count >= limit:
                 log.info(f"[WAKE] capacity full ({self._active_count}/"
                          f"{limit}); dropping {secs:.1f}s from user {user_id}")
+                self._wake_in_progress = False
+                self._wake_triggerer_id = None
                 return
             self._active_count += 1
         asyncio.run_coroutine_threadsafe(
@@ -897,16 +1024,14 @@ class WakeWordSink(voice_recv.AudioSink):
                 return
             log.info(f"[WAKE][es] user_id={user_id} "
                      f"({duration:.1f}s audio, {dt*1000:.0f}ms): {text}")
-            # Drop false positives: VOSK thought it heard "indio" but Whisper
-            # didn't transcribe any variant — caller asked us not to act.
-            if not _contains_wake_word(text):
-                log.info(f"[WAKE] user={user_id} Whisper text has no wake "
-                         f"word, dropping (likely VOSK false positive)")
-                return
-            # If the only content is the wake word itself with nothing else,
-            # caller asked us NOT to invoke the indio.
+            # VOSK already matched a restrictive _WAKE_PATTERNS pair before we
+            # got here, so we trust the trigger and forward whatever Whisper
+            # transcribed — typically the verb + object ("ponete un tema de
+            # Queen"), since the "indio" itself often lands outside the
+            # prebuffer window. Only drop when Whisper produced nothing
+            # substantive (empty or pure filler).
             if not _has_text_beyond_wake_word(text):
-                log.info(f"[WAKE] user={user_id} only wake word, no question; "
+                log.info(f"[WAKE] user={user_id} only wake word / no question; "
                          f"skip")
                 return
             await on_transcript(user_id, text, via_wake_word=True)
@@ -915,6 +1040,9 @@ class WakeWordSink(voice_recv.AudioSink):
         finally:
             with self._active_lock:
                 self._active_count -= 1
+            # Re-arm: other users (and this one) can fire the wake word again.
+            self._wake_in_progress = False
+            self._wake_triggerer_id = None
 
 
 def _has_text_beyond_wake_word(text: str) -> bool:
@@ -1099,6 +1227,7 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                    or not config.WAKE_WORD_ENABLED)
     posted_channel_id: Optional[int] = None
     posted_guild_id: Optional[int] = None
+    posted_message_id: Optional[int] = None
     speaker_name: Optional[str] = None
 
     if config.TRANSCRIPT_CHANNEL_NAME and should_post:
@@ -1110,9 +1239,13 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                 if chan:
                     member = guild.get_member(user_id)
                     speaker_name = _name_for(user_id, member)
-                    await chan.send(f"🎙️ **{speaker_name}:** {text}")
+                    posted = await chan.send(f"🎙️ **{speaker_name}:** {text}")
                     posted_channel_id = chan.id
                     posted_guild_id = guild.id
+                    # Capture the message id so the main bot can come back and
+                    # append the decifrado version below the raw one once Gemini
+                    # finishes (see _relay_edit).
+                    posted_message_id = getattr(posted, "id", None)
                     break
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
@@ -1132,11 +1265,11 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                 posted_guild_id = guild.id
                 break
 
-    # Wake word: if the transcript contains an "indio"-like token, hand the
-    # entire raw transcript to the main bot's /indio endpoint. The server runs
-    # it through Gemini (decifrar=True) to fix ASR errors before the indio
-    # actually responds.
-    if (_contains_wake_word(text or "")
+    # Wake word: when this transcript came from the WakeWordSink (VOSK already
+    # matched a restrictive _WAKE_PATTERNS pair upstream), hand the entire raw
+    # transcript to the main bot's /indio endpoint. The server runs it through
+    # Gemini (decifrar=True) to fix ASR errors before the indio responds.
+    if (via_wake_word
             and posted_channel_id is not None
             and posted_guild_id is not None):
         log.info(f"[INDIO-WAKE] user_id={user_id} raw={text!r}")
@@ -1145,6 +1278,8 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
             channel_id=posted_channel_id,
             pregunta=text,
             speaker_name=speaker_name,
+            user_id=user_id,
+            transcript_message_id=posted_message_id,
         ))
 
     if config.ENABLE_HTTP_FORWARD:
@@ -1165,25 +1300,37 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
 
 async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                              pregunta: str, speaker_name: Optional[str],
-                             decifrar: bool = True) -> None:
+                             decifrar: bool = True, user_id: int = 0,
+                             transcript_message_id: Optional[int] = None) -> None:
     """POST the raw transcript to the main bot's /indio endpoint. Voice wake
     word callers leave ``decifrar=True`` so Gemini fixes ASR phonetic errors;
     text-chat callers pass ``decifrar=False`` because the text is already
-    clean and an extra Gemini call would just waste tokens."""
+    clean and an extra Gemini call would just waste tokens.
+
+    ``user_id`` is the speaker's Discord id; the main bot uses it to key
+    pending music choices so only the requester can resolve them.
+
+    ``transcript_message_id`` is the id of the userbot's "🎙️ **Name:** raw"
+    message; the main bot calls back to /edit on the userbot to append the
+    cleaned decifrado version below the raw one so both versions are visible."""
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
         return
     try:
         session = await _get_http()
+        payload = {
+            "guild_id": str(guild_id),
+            "channel_id": str(channel_id),
+            "pregunta": pregunta,
+            "speaker_name": speaker_name,
+            "decifrar": decifrar,
+            "user_id": str(user_id),
+        }
+        if transcript_message_id is not None:
+            payload["transcript_message_id"] = str(transcript_message_id)
         async with session.post(
             f"{config.MAIN_BOT_API_BASE}/indio",
-            json={
-                "guild_id": str(guild_id),
-                "channel_id": str(channel_id),
-                "pregunta": pregunta,
-                "speaker_name": speaker_name,
-                "decifrar": decifrar,
-            },
+            json=payload,
             headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
             timeout=aiohttp.ClientTimeout(total=5),
         ) as resp:
@@ -1196,11 +1343,11 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
 
 # ---------- Discord client + auto-join logic -------------------------------
 
-# discord.py-self >=2.7 makes `intents` a required argument. A self-bot
-# (user token) is not subject to privileged-intent gating, so we request all
-# intents — this matches the implicit default of older discord.py-self and
-# keeps voice-receive + message access working.
-client = discord.Client(chunk_guilds_at_startup=False, intents=discord.Intents.all())
+# discord.py-self is pinned to v2.1.0 (see userbot/requirements.txt), whose
+# Client API takes no `intents` argument. Newer upstream builds both require
+# `intents` AND fail user login (HTTP 401) against current Discord, so we stay
+# on the pinned version that authenticates.
+client = discord.Client(chunk_guilds_at_startup=False)
 
 
 def _guild_allowed(guild_id: int) -> bool:
@@ -1245,15 +1392,67 @@ def _guild_has_humans(guild: discord.Guild) -> bool:
     """
     self_id = client.user.id if client.user else None
     for ch in guild.voice_channels:
-        for m in ch.members:
-            if m.bot:
-                continue
-            if self_id is not None and m.id == self_id:
-                continue
-            if m.id in config.IGNORE_USER_IDS:
-                continue
+        if _channel_has_humans(ch, self_id=self_id):
             return True
     return False
+
+
+def _channel_has_humans(channel, *, self_id: Optional[int] = None) -> bool:
+    """Return True if ``channel`` has any non-bot, non-self, non-ignored,
+    non-muted, non-deafened member currently connected. Muted or deafened
+    members (self- or server-imposed) are treated as not-really-present —
+    the bot shouldn't anchor in a channel where the only humans left are
+    silent or can't hear anything."""
+    if channel is None:
+        return False
+    if self_id is None:
+        self_id = client.user.id if client.user else None
+    for m in channel.members:
+        if m.bot:
+            continue
+        if self_id is not None and m.id == self_id:
+            continue
+        if m.id in config.IGNORE_USER_IDS:
+            continue
+        voice = getattr(m, "voice", None)
+        if voice is not None and (
+            getattr(voice, "self_mute", False)
+            or getattr(voice, "mute", False)
+            or getattr(voice, "self_deaf", False)
+            or getattr(voice, "deaf", False)
+        ):
+            continue
+        return True
+    return False
+
+
+def _should_follow_user(current_channel, target_channel,
+                       *, self_id: Optional[int] = None) -> bool:
+    """Decide whether the userbot should move to ``target_channel`` when a
+    user just joined/switched there.
+
+    Returns False (stay put) when the userbot is already in a different
+    channel of the same guild and that channel still has at least one human
+    — abandoning the people still there to follow a single mover is wrong.
+
+    Returns True when:
+    - The userbot is not in any channel yet (first join).
+    - The userbot is already in ``target_channel`` (no-op / re-greet).
+    - The userbot's current channel has no other humans (everyone left).
+    - The userbot is sitting in the guild's AFK channel. The AFK channel is
+      a parking spot for idle users; the bot should never anchor there at
+      the cost of ignoring active movers elsewhere.
+    """
+    if current_channel is None:
+        return True
+    if target_channel is None:
+        return False
+    if current_channel.id == target_channel.id:
+        return True
+    afk = getattr(getattr(current_channel, "guild", None), "afk_channel", None)
+    if afk is not None and getattr(afk, "id", None) == current_channel.id:
+        return True
+    return not _channel_has_humans(current_channel, self_id=self_id)
 
 
 def _cancel_idle_leave(guild_id: int) -> None:
@@ -1416,6 +1615,8 @@ async def _leave_if_empty(guild: discord.Guild):
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
+    if _webhook_log_handler is not None:
+        _webhook_log_handler.start(asyncio.get_running_loop())
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):
@@ -1443,7 +1644,29 @@ async def on_voice_state_update(member, before, after):
 
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
         _cancel_idle_leave(guild.id)
-        await _join_channel(after.channel)
+        # Don't follow the moving user if the userbot is already sitting in a
+        # different channel of this guild that still has humans. Following
+        # would abandon the people still in the original channel.
+        current_vc = _vc_for_guild(guild)
+        current_channel = current_vc.channel if current_vc is not None else None
+        if not _should_follow_user(current_channel, after.channel):
+            log.info(
+                "[VOICE] staying in %s — not following %s to %s "
+                "(current channel still has humans)",
+                current_channel.name, member.display_name, after.channel.name,
+            )
+        else:
+            await _join_channel(after.channel)
+            # After the userbot is in the channel, play the per-user greeting
+            # (only for users with an explicit `greeting` in users.py — no default).
+            try:
+                vc = _vc_for_guild(guild)
+                if vc is not None and vc.channel.id == after.channel.id:
+                    asyncio.create_task(greeting.play_user_greeting(
+                        vc, user_id=member.id, channel_id=after.channel.id,
+                    ))
+            except Exception:
+                log.exception("[GREETING] schedule failed")
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
@@ -1460,7 +1683,7 @@ _INDIO_AUTO_HOURLY: dict[int, list[float]] = {}  # guild_id -> recent fire ts
 
 def _autoreply_rate_ok(guild_id: int, channel_id: int) -> bool:
     """Return True if we may fire an auto-reply for this guild+channel right
-    now. Enforces a per-channel cooldown and a per-guild hourly cap so the
+    now. Enforces a short per-channel cooldown and a per-guild hourly cap so the
     Gemini free tier doesn't get hammered by chatty conversations."""
     now = time.time()
     last_fired = _INDIO_AUTO_COOLDOWN.get(channel_id, 0.0)
@@ -1601,6 +1824,7 @@ async def on_message(message):
         pregunta=content,
         speaker_name=speaker_name,
         decifrar=False,
+        user_id=message.author.id,
     ))
 
 
@@ -1686,6 +1910,55 @@ async def _relay_say(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
+
+
+async def _relay_edit(request: web.Request) -> web.Response:
+    """Edit a message previously posted by the userbot.
+
+    Used by the main bot after ``decifrarTranscripcion`` to append the cleaned
+    version of the transcript below the raw one, so both versions are visible
+    in chat. We can only edit messages we own (Discord rule) — the transcript
+    line posted by the userbot at speak-time qualifies; anything else 403s.
+
+    Body: ``{channel_id, message_id, content}``. Replaces the message content
+    entirely with ``content`` (the caller composes the combined raw+cleaned
+    string).
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        message_id = int(data["message_id"])
+        content = str(data["content"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not hasattr(channel, "fetch_message"):
+        return web.json_response({"error": "channel not messageable"}, status=400)
+    try:
+        msg = await channel.fetch_message(message_id)
+    except Exception as e:
+        return web.json_response({"error": f"message not found: {e}"}, status=404)
+    try:
+        await msg.edit(content=content[:1990])
+    except discord.Forbidden:
+        return web.json_response({"error": "cannot edit (not author)"}, status=403)
+    except Exception as e:
+        log.exception("[RELAY] edit failed")
+        return web.json_response({"error": str(e)}, status=500)
+    return web.json_response({"ok": True, "message_id": message_id})
 
 
 # ---------- Voice recording orchestration ---------------------------------
@@ -2100,16 +2373,109 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
+async def _relay_join(request: web.Request) -> web.Response:
+    """Make the userbot join (or move to) a specific voice channel.
+
+    Body: ``{"channel_id": <int>}``. Reuses :func:`_join_channel`, which
+    handles reconnects, guild allowlist, and listening sink setup.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not isinstance(channel, discord.VoiceChannel):
+        return web.json_response({"error": "channel is not a voice channel"}, status=400)
+    if not _guild_allowed(channel.guild.id):
+        return web.json_response({"error": "guild not allowed"}, status=403)
+
+    try:
+        await _join_channel(channel)
+    except Exception as e:
+        log.exception("[RELAY-JOIN] join failed")
+        return web.json_response({"error": f"join failed: {e}"}, status=500)
+    return web.json_response({
+        "joined": True,
+        "channel_id": channel_id,
+        "channel_name": channel.name,
+    })
+
+
+async def _relay_edit(request: web.Request) -> web.Response:
+    """Edit a message that the userbot previously posted in a text channel.
+
+    Used by the main bot to update an Indio reply in-place after an action
+    has completed (e.g. replacing "thinking…" with the final answer).
+
+    Body: ``{"channel_id": <int>, "message_id": <int>, "content": <str>}``.
+    Auth: ``X-API-Secret`` header must equal ``config.RELAY_SECRET``.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        message_id = int(data["message_id"])
+        content = str(data["content"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+
+    if not hasattr(channel, "fetch_message"):
+        return web.json_response(
+            {"error": "channel not messageable"}, status=400)
+
+    try:
+        msg = await channel.fetch_message(message_id)
+    except Exception as e:
+        return web.json_response({"error": f"message not found: {e}"}, status=404)
+
+    try:
+        await msg.edit(content=content)
+    except Exception as e:
+        log.exception("[RELAY] edit failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+    return web.json_response({"ok": True, "message_id": msg.id})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
         return None
     app = web.Application()
     app.router.add_post("/say", _relay_say)
+    app.router.add_post("/edit", _relay_edit)
     app.router.add_post("/record", _relay_record)
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
+    app.router.add_post("/join", _relay_join)
+    app.router.add_post("/edit", _relay_edit)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

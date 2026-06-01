@@ -8,6 +8,18 @@ Per-user keys:
   indio's prompt; survives Gemini's compression cycle.
 - ``preguntas_tipicas``: things this person tends to ask/say. Same merge.
 - ``anecdotas``: memorable moments involving this person. Same merge.
+- ``block_dynamic_substrings``: lowercase substrings; any dynamic-memory item
+  (trait/pregunta/anecdota) containing one of these is filtered out at render
+  time. Useful to scrub stale facts Gemini distilled before the static data
+  was corrected — without needing to wipe the whole memory.json on the server.
+
+Convenciones de ``traits``:
+- "nombre real: X" → el indio infiere el género del nombre y lo trata como
+  hombre/mujer. NUNCA llama al usuario por su nombre real, siempre por el
+  apodo (el ``name`` del bucket). Si no hay "nombre real", podés usar
+  "sexo: hombre/mujer" como fallback.
+- Prefijo "(privado, no mencionar): X" → contexto interno para el indio.
+  Lo usa para responder coherente pero no lo dice explícitamente.
 
 Static fields supplement (never overwrite) the long-term memory Gemini
 distills from conversation. Edit freely — the next /indio picks up changes.
@@ -21,8 +33,9 @@ USERS: dict[int, dict] = {
         "name": "Mila",
         "greeting": "Mila/Milapollo.mp3",
         "traits": [
-            "sexo: mujer",
-            "bombera, trabaja de seguridad",
+            "nombre real: Santiago",
+            "apodos: Mila, Milanesa",
+            "bombero, trabaja de seguridad",
             "hace turnos de 24 horas",
             "de Quilmes",
             "tiene un gato llamado Pionono",
@@ -30,29 +43,42 @@ USERS: dict[int, dict] = {
         "anecdotas": [
             "los piononos (segun chiste del grupo) sirven para limpiarse y despues te dejan un postrecito",
         ],
+        "block_dynamic_substrings": ["sexo: mujer", "es mujer", "bombera"],
     },
     211354006805676032: {
         "name": "Miles",
         "traits": [
-            "sexo: hombre",
-            "programador del carajo (con IA)",
+            "nombre real: Leonel",
+            "es hincha de Boca",
+            "le gusta Queen",
+            "programador (no es para mencionarlo todo el tiempo, sabe algo y listo)",
             "tiene novia",
             "de El Talar de Pacheco (Tigre)",
             "uno de los mejores amigos del indio",
             "tiene codornices y 2 cobayos",
+        ],
+        "block_dynamic_substrings": [
+            "le interesa la parte técnica",
+            "le interesa la parte tecnica",
+            "sabe mucho de tecnolog",
+            "programador del carajo",
+            "explicó al indio sobre sus límites técnicos",
+            "explico al indio sobre sus limites tecnicos",
         ],
     },
     189830039922016256: {
         "name": "Viny",
         "greeting": "Audios/Necesito pito.m4a",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Juan",
+            "apodos: Viny, Pela (y variantes de pelado)",
             "pelado",
             "no tiene trabajo",
             "de Gualeguaychu",
             "medio afeminado",
             "es re colgado, nunca quiere jugar a nada",
             "juega CS",
+            "estudia programación hace 10 años y nunca hizo una app",
         ],
         "preguntas_tipicas": [
             "y la hermana de Mila?",
@@ -61,12 +87,14 @@ USERS: dict[int, dict] = {
     309714566265438221: {
         "name": "Chalo",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Gonzalo",
             "programador jr",
             "le gusta pescar",
+            "es hincha de River",
         ],
         "anecdotas": [
             "roba quesos cremosos",
+            "pescó un pescado con forma de pija",
         ],
     },
     471420397049479180: {
@@ -81,7 +109,7 @@ USERS: dict[int, dict] = {
     231217010522980352: {
         "name": "Juji",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Nicolás",
             "esta en una secta",
             "no entra a Discord hace un monton",
         ],
@@ -89,7 +117,8 @@ USERS: dict[int, dict] = {
     293815496866922507: {
         "name": "Seba",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Sebastián",
+            "tiene el cuello largo",
             "judio (emoji de jugo en chiste interno)",
             "no labura nunca",
             "millonario",
@@ -131,8 +160,19 @@ USERS: dict[int, dict] = {
         "name": "Caro",
         "traits": [
             "sexo: mujer",
-            "gotica, tatuadora",
-            "amiga del indio (la unica mujer del grupo de mejores amigos)",
+            "tatuadora",
+            "amiga del indio",
+            "(privado, no mencionar): es gotica",
+            "(privado, no mencionar): color favorito violeta",
+        ],
+        "block_dynamic_substrings": [
+            "mejor amiga",
+            "única mujer",
+            "unica mujer",
+            "onda gótica",
+            "onda gotica",
+            "gótica",
+            "gotica",
         ],
     },
     138430902547120129: {
@@ -162,11 +202,14 @@ USERS: dict[int, dict] = {
     310165756384116736: {
         "name": "Magote",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Daniel",
             "municipal, ñoqui (chiste interno: no labura)",
             "tiene una hija",
             "casado",
             "uno de los mejores amigos del indio",
+        ],
+        "anecdotas": [
+            "desarrolló una aplicación (chiste: lo logró antes que Viny, que estudia programación hace 10 años)",
         ],
     },
 }
@@ -179,11 +222,34 @@ GROUP_LORE: dict[str, list[str]] = {
         "juegan Terraria juntos a veces",
         "algunos del grupo juegan WoW, Overwatch o Dota",
         "Fide, Viny y Franko son de Gualeguaychu; Mila de Quilmes; Miles de El Talar (Tigre)",
-        "Tobi, Magote, Miles y Caro son los mejores amigos del indio (todos hombres menos Caro)",
-        "Bibi (hombre) es un amigo de toda la vida del indio: ama los muros, a veces llora, el indio tiene fotos con el. No tiene Discord pero el indio tiene su numero y le puede pedir unos bonbons si quisiera",
+        "Tobi, Magote y Miles son los mejores amigos del indio; Caro es amiga",
+        "Bibi es el mejor amigo del indio, no tiene Discord",
     ],
     "chistes_internos": [
+        "Bibi tiene pedido de captura por la corte internacional",
         "los que juegan CS son giles, los que juegan Dota unos capos",
         "los piononos sirven para limpiarse y dejarte un postrecito",
+        "hasta Magote (que no estudia) desarrolló una app y Viny, que estudia programación hace 10 años, todavía no",
+        "Chalo pescó un pescado con forma de pija",
     ],
 }
+
+
+# Personas que el indio conoce pero no tienen Discord.
+# Misma estructura que los buckets de USERS (sin ID de Discord).
+NON_DISCORD_MEMBERS: list[dict] = [
+    {
+        "name": "Bibi",
+        "traits": [
+            "sexo: hombre",
+            "mejor amigo del indio",
+            "a veces llora en los muros",
+            "no tiene Discord",
+            "el indio tiene su número y puede pedirle unos bonbons",
+        ],
+        "anecdotas": [
+            "el indio tiene fotos con él",
+            "tiene pedido de captura por la corte internacional (chiste interno del grupo)",
+        ],
+    },
+]

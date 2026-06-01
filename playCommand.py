@@ -6,6 +6,8 @@ FFmpeg, config, analytics, and greeting triggers.
 """
 import os
 import asyncio
+import difflib
+import unicodedata
 import discord
 import config
 import analytics
@@ -38,6 +40,273 @@ if os.path.exists(_downloadsDirInit):
 
 # Global dictionary to track active player states per guild
 guildPlayers = {}
+
+# Single live music vote per guild. Both the /play picker reactions and the
+# indio's chat-message reactions write into the same MusicVote. One at a time —
+# opening a new one cancels the previous (e.g. someone asks for another query
+# while a vote is still open).
+active_votes: "dict[int, 'MusicVote']" = {}
+
+# Sliding window from the most recent vote: a new vote resets it, and when it
+# elapses with no further votes the vote resolves to the most-voted option.
+_MUSIC_VOTE_WINDOW_SEC = 5.0
+
+# Hard cap from the moment the picker is shown. If nobody votes within this
+# window, the vote resolves automatically to candidates[0] (the top fuzzy match
+# against the query).
+_MUSIC_VOTE_MAX_SEC = 60.0
+
+# How many search candidates to offer when /play (or the indio) finds several
+# matches for a free-text query. Keeps the "¿cuál querés?" list readable.
+_PLAY_CHOICE_COUNT = 5
+
+# Above this similarity between the user's query and the title of the top
+# yt-dlp hit, we skip the "¿cuál querés?" picker and just queue the top
+# result. The threshold is a behavioural knob: lower = more autoplay (less
+# friction, more risk of playing the wrong song); higher = more picker prompts.
+_PLAY_AUTOPLAY_RATIO = 0.55
+
+# Minimum tokens in the user query before we even consider autoplay. Short
+# queries ("el infierno", "rock") are inherently ambiguous — even if the top
+# hit contains them verbatim, the user is usually browsing, not asking for
+# a specific track. The picker handles that case better.
+_PLAY_AUTOPLAY_MIN_TOKENS = 3
+
+
+def _normalize_for_match(s: str) -> str:
+    """Lowercase, strip accents, drop punctuation, collapse whitespace.
+
+    Used to compare a user's free-text query against a YouTube title without
+    being thrown off by accents, capitalisation, or punctuation like " - ".
+    """
+    if not s:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", s)
+    no_accents = "".join(c for c in nfkd if not unicodedata.combining(c))
+    cleaned = "".join(c if c.isalnum() or c.isspace() else " " for c in no_accents)
+    return " ".join(cleaned.lower().split())
+
+
+def _query_title_ratio(query: str, title: str) -> float:
+    """Similarity in [0, 1] between a query and a candidate title.
+
+    Uses a partial-ratio: scores how well the query matches the *best aligned
+    substring* of the title (the rapidfuzz ``partial_ratio`` idea, built on
+    stdlib ``difflib``). This is what lets "el infierno esta encantado esta
+    noche" still match a title that prefixes the artist name and suffixes
+    "(Audio Oficial)" — plain ``ratio()`` would be dragged down by all that
+    extra junk.
+    """
+    q = _normalize_for_match(query)
+    t = _normalize_for_match(title)
+    if not q or not t:
+        return 0.0
+    if len(q) >= len(t):
+        return difflib.SequenceMatcher(None, q, t).ratio()
+    # Slide a query-sized window across the longer title and keep the best
+    # match. Anchored at each matching block found by SequenceMatcher so we
+    # avoid the O(n*m) brute force while still catching the right alignment.
+    sm = difflib.SequenceMatcher(None, q, t)
+    best = 0.0
+    for block in sm.get_matching_blocks():
+        start = max(0, block.b - block.a)
+        window = t[start:start + len(q)]
+        score = difflib.SequenceMatcher(None, q, window).ratio()
+        if score > best:
+            best = score
+    return best
+
+
+def _should_autoplay_top(query: str, title: str,
+                         threshold: float = _PLAY_AUTOPLAY_RATIO) -> bool:
+    """Return True when the top search hit looks like a clear winner for the
+    user's query — i.e. we can queue it directly without showing the picker.
+
+    Two guards combined: the query must be specific enough (≥ ``_PLAY_AUTOPLAY_
+    MIN_TOKENS`` tokens) AND the partial-ratio against the title must clear
+    ``threshold``. Both are needed; either alone produces wrong calls (long
+    vague queries, or short queries that happen to be a verbatim substring).
+    """
+    if len(_normalize_for_match(query).split()) < _PLAY_AUTOPLAY_MIN_TOKENS:
+        return False
+    return _query_title_ratio(query, title) >= threshold
+
+
+# Keycap number emojis used to label the options (display only; the user still
+# picks the same way). Index is 1-based via _num_emoji.
+_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
+              "5️⃣", "6️⃣", "7️⃣", "8️⃣",
+              "9️⃣", "\U0001f51f"]
+
+
+def _num_emoji(i: int) -> str:
+    """Return the keycap emoji for a 1-based position (falls back to ``N.``)."""
+    return _NUM_EMOJI[i - 1] if 1 <= i <= len(_NUM_EMOJI) else f"{i}."
+
+
+def emoji_to_index(emoji_str: str) -> Optional[int]:
+    """Return 0-based index for a keycap emoji string, or ``None`` if it isn't
+    one of the ones we use to label options. Used by the reaction listener to
+    translate a 1️⃣/2️⃣/3️⃣… reaction into a vote index."""
+    try:
+        return _NUM_EMOJI.index(emoji_str)
+    except ValueError:
+        return None
+
+
+class MusicVote:
+    """Pure voting state. One MusicVote per guild lives in ``active_votes``.
+
+    Reactions on the picker message (from /play and the indio's chat message)
+    write votes into this object via :meth:`register_vote`. The class owns:
+
+    - the candidate list (already fuzzy-reordered upstream so candidates[0]
+      is the default if nobody picks),
+    - the votes (one per user; revoting replaces),
+    - the initial hard cap (``vote_max_sec``) that resolves to candidates[0]
+      if nobody votes,
+    - the sliding close timer (``vote_window_sec``) from the most recent vote,
+    - the callback that resolves the winner — typically ``_play_chosen_song``.
+
+    Closing is idempotent: once it fires, further votes are ignored.
+    """
+
+    def __init__(self, *, bot, guild_id: int, candidates: list[dict],
+                 on_resolve, vote_window_sec: float = _MUSIC_VOTE_WINDOW_SEC,
+                 vote_max_sec: float = _MUSIC_VOTE_MAX_SEC):
+        self.bot = bot
+        self.guild_id = guild_id
+        self.candidates = candidates
+        self.vote_window_sec = vote_window_sec
+        self.vote_max_sec = vote_max_sec
+        self.votes: dict[int, int] = {}        # user_id -> option index (0-based)
+        self._closed = False
+        self._close_task: Optional[asyncio.Task] = None
+        self._on_resolve = on_resolve          # async fn(MusicVote, winner_dict)
+        # The picker message used for the reaction UI. Set by callers after
+        # they post the prompt so the close cleanup can clear the reactions.
+        self.reaction_message_id: Optional[int] = None
+        self.reaction_channel_id: Optional[int] = None
+
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def start_timeout(self) -> None:
+        """Arm the initial hard cap. If nobody votes within ``vote_max_sec`` the
+        vote auto-resolves to candidates[0]. Cancelled and replaced by the
+        sliding window as soon as the first vote arrives."""
+        if self._closed:
+            return
+        if self._close_task is not None and not self._close_task.done():
+            self._close_task.cancel()
+        self._close_task = asyncio.create_task(self._close_after(self.vote_max_sec))
+
+    def register_vote(self, user_id: int, idx: int, *,
+                      close_now: bool = False) -> bool:
+        """Record one user's vote. Returns True if the vote was accepted.
+
+        ``close_now=True`` is the "voice override": the indio gets a verbal
+        "ponela 4" command and we resolve immediately instead of waiting for
+        the sliding window — the user has already committed, no point waiting
+        for others.
+        """
+        if self._closed:
+            return False
+        if not (0 <= idx < len(self.candidates)):
+            return False
+        self.votes[user_id] = idx
+        if close_now:
+            # Cancel any pending sliding close and resolve right now.
+            if self._close_task is not None and not self._close_task.done():
+                self._close_task.cancel()
+            self._close_task = asyncio.create_task(self._close())
+        else:
+            self._schedule_close()
+        return True
+
+    def _schedule_close(self) -> None:
+        """(Re)start the sliding close timer at ``vote_window_sec`` from now."""
+        if self._close_task is not None and not self._close_task.done():
+            self._close_task.cancel()
+        self._close_task = asyncio.create_task(self._close_after(self.vote_window_sec))
+
+    async def _close_after(self, delay: float) -> None:
+        try:
+            await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            return
+        await self._close()
+
+    async def _close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        # Pop from the active registry so a future query opens a fresh vote.
+        if active_votes.get(self.guild_id) is self:
+            active_votes.pop(self.guild_id, None)
+        winner = self._tally_winner()
+        # Best-effort: drop the seeded reactions so the closed picker doesn't
+        # invite latecomers to keep tapping.
+        if self.reaction_message_id and self.reaction_channel_id:
+            try:
+                channel = self.bot.get_channel(int(self.reaction_channel_id))
+                if channel is None:
+                    channel = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                msg = await channel.fetch_message(int(self.reaction_message_id))
+                await msg.clear_reactions()
+            except Exception:
+                pass
+        try:
+            await self._on_resolve(self, winner)
+        except Exception:
+            playLogger.exception("[VOTE] on_resolve failed")
+
+    def _tally_winner(self) -> dict:
+        """Most-voted option wins; ties → lowest index; no votes → first."""
+        if not self.votes:
+            return self.candidates[0]
+        counts: dict[int, int] = {}
+        for idx in self.votes.values():
+            counts[idx] = counts.get(idx, 0) + 1
+        best = max(counts.values())
+        winner_idx = min(i for i in counts if counts[i] == best)
+        return self.candidates[winner_idx]
+
+
+def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
+                    on_resolve,
+                    vote_window_sec: Optional[float] = None,
+                    vote_max_sec: Optional[float] = None) -> MusicVote:
+    """Open a fresh music vote for ``guild_id``. If another vote is currently
+    active in the same guild it's cancelled — only one live picker at a time.
+
+    The ``vote_window_sec`` / ``vote_max_sec`` defaults are looked up at call
+    time so tests can monkeypatch the module-level constants to speed up
+    timing-sensitive scenarios.
+    """
+    prev = active_votes.get(guild_id)
+    if prev is not None and not prev._closed:
+        prev._closed = True
+        if prev._close_task is not None and not prev._close_task.done():
+            prev._close_task.cancel()
+    if vote_window_sec is None:
+        vote_window_sec = _MUSIC_VOTE_WINDOW_SEC
+    if vote_max_sec is None:
+        vote_max_sec = _MUSIC_VOTE_MAX_SEC
+    vote = MusicVote(bot=bot, guild_id=guild_id, candidates=candidates,
+                     on_resolve=on_resolve, vote_window_sec=vote_window_sec,
+                     vote_max_sec=vote_max_sec)
+    active_votes[guild_id] = vote
+    return vote
+
+
+def get_active_vote(guild_id: int) -> Optional[MusicVote]:
+    """Return the live vote for a guild, or ``None`` if none is open."""
+    v = active_votes.get(guild_id)
+    if v is None or v._closed:
+        return None
+    return v
 
 
 def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
@@ -146,6 +415,95 @@ class GuildPlayer:
         self.preDownloadTask = None
         self.activeDownloadProc = None
         self.initialCtx = None
+        # Playback-position tracking + interruption state. Used so the bot can
+        # resume the current song from where it was after an involuntary
+        # disconnect (kick, network drop, /quit) without losing the queue.
+        self.playStartedAt: Optional[float] = None   # monotonic when current playback started/resumed
+        self.pausedAt: Optional[float] = None        # monotonic when current pause started
+        self.pausedAccumSecs: float = 0.0            # accumulated paused seconds across pauses
+        self.interrupted: bool = False               # True between disconnect and next resume
+        self.interruptedAtSeconds: float = 0.0       # snapshot of elapsed at interruption time
+        # Deferred-connect state: when /play is invoked while the bot is NOT in
+        # voice, we postpone joining the channel until the first song finishes
+        # downloading. Joining immediately and sitting silent while yt-dlp runs
+        # would let the idle watchdog disconnect us before we ever play a note.
+        self.pendingVoiceChannel = None              # discord.VoiceChannel | None
+        self.pendingTriggerUserId: Optional[int] = None  # for greeting trigger
+
+    def _resolveMusicChannel(self, fallback=None):
+        """Return the configured music text channel for this guild.
+
+        Falls back to ``fallback`` (typically ``ctx.channel``) if the
+        configured channel is missing or not sendable. Used so that the
+        control panel and status messages always land in the music channel
+        regardless of where ``/play`` was invoked.
+        """
+        if self.bot is not None:
+            guild = self.bot.get_guild(self.guildId)
+            if guild is not None:
+                ch = guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+                if ch is not None and hasattr(ch, "send"):
+                    return ch
+        return fallback
+
+    def _currentElapsedSeconds(self) -> float:
+        """Return how many seconds of the current song have actually played.
+
+        Compensates for time spent paused via ``pausedAccumSecs`` so it stays
+        accurate across multiple pause/resume cycles. Returns 0 when no
+        playback has started yet for the current song.
+        """
+        if self.playStartedAt is None:
+            return 0.0
+        ref = self.pausedAt if self.pausedAt is not None else time.monotonic()
+        elapsed = ref - self.playStartedAt - self.pausedAccumSecs
+        return max(0.0, elapsed)
+
+    def mark_interrupted(self) -> None:
+        """Mark the player as interrupted by an involuntary disconnect.
+
+        Idempotent. Snapshots the current elapsed position so the next call
+        to :meth:`resumeFromInterruption` can seek back. Does **not** clear
+        ``currentSong`` or ``queue`` — that's the whole point: preserve them
+        in memory for resume. Does null out ``self.vc`` because the voice
+        client is dead at this point.
+        """
+        if self.interrupted or not self.currentSong:
+            return
+        try:
+            self.interruptedAtSeconds = self._currentElapsedSeconds()
+        except Exception:
+            self.interruptedAtSeconds = 0.0
+        self.interrupted = True
+        self.vc = None
+        playLogger.info(
+            "[PLAYBACK INTERRUPTED] '%s' at %.1fs (queue=%d)",
+            self.currentSong.get("title", "?"),
+            self.interruptedAtSeconds,
+            len(self.queue),
+        )
+
+    async def resumeFromInterruption(self, vc) -> bool:
+        """Re-attach to a freshly-connected voice client and restart playback
+        from the saved interruption position.
+
+        Returns:
+            True if the player had an interrupted song and resume kicked off.
+            False if there was nothing to resume.
+        """
+        if not self.interrupted or not self.currentSong:
+            return False
+        self.vc = vc
+        self.interrupted = False
+        seek = max(0.0, self.interruptedAtSeconds)
+        self.interruptedAtSeconds = 0.0
+        playLogger.info(
+            "[PLAYBACK RESUME-AFTER-INTERRUPTION] '%s' seeking to %.1fs",
+            self.currentSong.get("title", "?"),
+            seek,
+        )
+        await self.startPlayingCurrent(seek_seconds=seek)
+        return True
 
     async def _enqueueAndMaybeStart(self, songs, *, source: Optional[str] = None):
         """Shared enqueue → analytics → maybe-start-playback core.
@@ -204,7 +562,7 @@ class GuildPlayer:
         """
         from bot import safeEdit
 
-        self.textChannel = ctx.channel
+        self.textChannel = self._resolveMusicChannel(fallback=ctx.channel)
         self.lastRequester = ctx.author
 
         isFirst = (not self.currentSong and len(self.queue) == 0)
@@ -254,6 +612,10 @@ class GuildPlayer:
         self.isDownloading = False
         self.downloadingIds.discard(videoId)
         self.initialCtx = None
+        # If we deferred the voice connect, drop the pending target so a later
+        # /play starts from a clean slate.
+        self.pendingVoiceChannel = None
+        self.pendingTriggerUserId = None
         try:
             await interaction.edit_original_response(content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None)
         except Exception:
@@ -265,8 +627,14 @@ class GuildPlayer:
                 pass
             self.vc = None
 
-    async def startPlayingCurrent(self):
+    async def startPlayingCurrent(self, *, seek_seconds: float = 0.0):
         """Ensure the current song is downloaded and start playback.
+
+        Args:
+            seek_seconds: Position (in seconds) to seek to when launching
+                FFmpeg. Used by :meth:`resumeFromInterruption` to pick up
+                where playback was cut off. ``0`` (the default) plays from
+                the start of the file.
 
         Returns:
             None.
@@ -277,7 +645,7 @@ class GuildPlayer:
         Async:
             This function is a coroutine and must be awaited.
         """
-        if not self.currentSong or not self.vc:
+        if not self.currentSong:
             return
 
         videoId = self.currentSong["id"]
@@ -287,7 +655,9 @@ class GuildPlayer:
         os.makedirs(downloadsDir, exist_ok=True)
         filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
 
-        guild = getattr(self.vc, "guild", None)
+        # Guild is sourced from the bot (not self.vc) because we may not be
+        # connected yet — the connect is deferred until after the download.
+        guild = self.bot.get_guild(self.guildId) if self.bot else None
 
         # Wait if currently downloading in background
         if videoId in self.downloadingIds:
@@ -393,6 +763,49 @@ class GuildPlayer:
                 self.downloadingIds.discard(videoId)
                 self.activeDownloadProc = None
 
+        # Lazy voice-connect: when /play was issued without an existing voice
+        # client we deferred joining until now. Joining at this point (file
+        # ready on disk → ffmpeg starts immediately) keeps the silent-in-channel
+        # window at ~0, so the idle watchdog can't disconnect us mid-download.
+        if self.vc is None and self.pendingVoiceChannel is not None:
+            target = self.pendingVoiceChannel
+            trigger_user = self.pendingTriggerUserId or 0
+            self.pendingVoiceChannel = None
+            self.pendingTriggerUserId = None
+            try:
+                set_pending_trigger(target.id, trigger_user)
+                self.vc = await target.connect(reconnect=True)
+            except Exception as e:
+                playLogger.exception("[PLAY] deferred voice connect failed")
+                analytics.capture_exception(
+                    e, user=self.lastRequester, guild=guild,
+                    properties={"stage": "deferred_connect",
+                                "video_id": videoId, "title": videoTitle},
+                )
+                if self.initialCtx:
+                    try:
+                        await self.initialCtx.interaction.edit_original_response(
+                            content=f"❌ No pude conectarme a voz: {e}",
+                            view=None,
+                        )
+                    except Exception:
+                        pass
+                    self.initialCtx = None
+                if self.controlMessage is not None:
+                    await self.updateControlMessage(
+                        f"❌ No pude conectarme a voz para reproducir **{videoTitle}**: {e}"
+                    )
+                self.currentSong = None
+                return
+
+        if not self.vc:
+            playLogger.error(
+                "[PLAYBACK ERROR] vc=None and no pending channel; aborting '%s'",
+                videoTitle,
+            )
+            self.currentSong = None
+            return
+
         # Start playback
         try:
             # Delete/cleanup the initial downloading message
@@ -403,17 +816,31 @@ class GuildPlayer:
                     playLogger.warning(f"[PLAYBACK START] Could not delete original response: {e}")
                 self.initialCtx = None
 
-            audioSource = discord.FFmpegOpusAudio(filepath)
+            if seek_seconds and seek_seconds > 0:
+                audioSource = discord.FFmpegOpusAudio(
+                    filepath, before_options=f"-ss {seek_seconds:.2f}",
+                )
+            else:
+                audioSource = discord.FFmpegOpusAudio(filepath)
 
             def afterCallback(error):
                 asyncio.run_coroutine_threadsafe(self.onSongFinished(error), self.bot.loop)
 
             self.vc.play(audioSource, after=afterCallback)
+            # Reset elapsed-time tracking. When resuming from a seek the
+            # virtual start is shifted back so ``_currentElapsedSeconds``
+            # continues to report the real position within the song.
+            self.playStartedAt = time.monotonic() - (seek_seconds or 0.0)
+            self.pausedAt = None
+            self.pausedAccumSecs = 0.0
+            self.interrupted = False
+            self.interruptedAtSeconds = 0.0
             analytics.capture("play song started", user=self.lastRequester, guild=guild,
                                properties={"video_id": videoId, "title": videoTitle,
-                                           "queue_length": len(self.queue)})
+                                           "queue_length": len(self.queue),
+                                           "seek_seconds": seek_seconds or 0.0})
             await self.updateControlMessage()
-            playLogger.info(f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId})")
+            playLogger.info(f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId}) seek={seek_seconds:.1f}s")
             
             # Start background pre-downloading of the queue
             self.startPreDownloading()
@@ -446,6 +873,34 @@ class GuildPlayer:
             print(f"[PLAYER] Playback error: {error}")
             playLogger.error(f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}")
 
+        # Defensive: if the voice client died (kick / network drop) and the
+        # caller didn't already flag the interruption via mark_interrupted,
+        # detect it here so we don't lose the current song to the cleanup
+        # below. ``isStopping`` / ``isPrevious`` are explicit user actions
+        # and must continue past this gate.
+        if (not self.interrupted
+                and not self.isStopping
+                and not self.isPrevious
+                and self.currentSong is not None
+                and self.vc is not None):
+            try:
+                connected = bool(self.vc.is_connected())
+            except Exception:
+                connected = True
+            if not connected:
+                self.mark_interrupted()
+
+        if self.interrupted:
+            try:
+                title = self.currentSong["title"] if self.currentSong else "?"
+                await self.updateControlMessage(
+                    f"⚠️ Conexión perdida — **{title}** quedó en "
+                    f"{int(self.interruptedAtSeconds)}s. Pedile que retome con /play."
+                )
+            except Exception:
+                pass
+            return
+
         # Delete the file of the finished song
         if self.currentSong:
             videoId = self.currentSong["id"]
@@ -467,7 +922,8 @@ class GuildPlayer:
             playLogger.info(f"[PLAYBACK STOP] Playback stopped. Queue cleared.")
             self.currentSong = None
             await self.updateControlMessage("⏹️ Reproducción detenida y cola vaciada.")
-            await self._leaveVoice("stop")
+            # The idle watchdog will disconnect us shortly — single source of
+            # truth for leaving voice.
             return
 
         # Previous action
@@ -496,58 +952,7 @@ class GuildPlayer:
         else:
             self.currentSong = None
             await self.updateControlMessage("⏹️ Fin de la cola de reproducción.")
-            await self._leaveVoice("queue_finished")
-
-    async def _leaveVoice(self, reason: str):
-        """Disconnect from voice after playback ends.
-
-        Args:
-            reason: Short tag for logs/analytics (e.g. "stop", "queue_finished").
-
-        Side Effects:
-            Disconnects the voice client, fires analytics, clears self.vc.
-
-        Async:
-            This function is a coroutine and must be awaited.
-        """
-        vc = self.vc
-        if not vc:
-            return
-        channel = getattr(vc, "channel", None)
-        channel_name = getattr(channel, "name", None)
-        channel_id = getattr(channel, "id", None)
-        try:
-            if getattr(vc, "recording", False):
-                try:
-                    vc.stop_recording()
-                except Exception:
-                    pass
-                setattr(vc, "recording", False)
-            try:
-                await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
-            except asyncio.TimeoutError:
-                try:
-                    vc.cleanup()
-                except Exception:
-                    pass
-            playLogger.info(f"[PLAYBACK LEAVE] Disconnected from voice ({reason}).")
-            try:
-                analytics.capture(
-                    "voice channel left",
-                    user=self.lastRequester,
-                    guild=self.bot.get_guild(self.guildId) if self.bot else None,
-                    properties={
-                        "channel_id": str(channel_id) if channel_id else None,
-                        "channel_name": channel_name,
-                        "trigger": f"play_{reason}",
-                    },
-                )
-            except Exception:
-                pass
-        except Exception as e:
-            playLogger.warning(f"[PLAYBACK LEAVE] Error disconnecting ({reason}): {e}")
-        finally:
-            self.vc = None
+            # The idle watchdog observes the now-quiet vc and disconnects.
 
     async def predownloadQueue(self):
         """Background task that pre-downloads queued songs.
@@ -628,7 +1033,9 @@ class GuildPlayer:
         """Pause or resume playback based on current state.
 
         Side Effects:
-            Calls pause/resume on the voice client and updates UI.
+            Calls pause/resume on the voice client and updates UI. Maintains
+            elapsed-time accounting so the position stays accurate across
+            multiple pause/resume cycles.
 
         Async:
             This function is a coroutine and must be awaited.
@@ -636,8 +1043,12 @@ class GuildPlayer:
         if self.vc:
             if self.vc.is_playing():
                 self.vc.pause()
+                self.pausedAt = time.monotonic()
                 await self.updateControlMessage()
             elif self.vc.is_paused():
+                if self.pausedAt is not None:
+                    self.pausedAccumSecs += time.monotonic() - self.pausedAt
+                    self.pausedAt = None
                 self.vc.resume()
                 await self.updateControlMessage()
 
@@ -872,6 +1283,17 @@ def clearGuildPlayer(guildId: int):
         player.isDownloading = False
         del guildPlayers[guildId]
 
+def _format_choice_prompt(candidates: list[dict]) -> str:
+    """Render a numbered list of search candidates for the "¿cuál querés?"
+    prompt. Shared shape used by the /play picker message."""
+    lines = ["🎵 Encontré varias, ¿cuál querés?"]
+    for i, c in enumerate(candidates, 1):
+        dur = c.get("duration_string") or ""
+        durSuffix = f" `[{dur}]`" if dur else ""
+        lines.append(f"{_num_emoji(i)} {c['title']}{durSuffix}")
+    return "\n".join(lines)
+
+
 async def playLogic(ctx: discord.ApplicationContext, query: str):
     """Handle the /play slash command.
 
@@ -899,17 +1321,21 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
     channel = ctx.author.voice.channel
 
-    # Connect or move bot to the channel
-    if ctx.voice_client is None:
-        try:
-            set_pending_trigger(channel.id, ctx.author.id)
-            vc = await channel.connect(reconnect=True)
-        except Exception as e:
-            return await safe_respond(ctx, f"❌ Error al conectar al canal: {e}")
-    else:
+    player = getGuildPlayer(ctx.guild.id, ctx.bot)
+    player.textChannel = player._resolveMusicChannel(fallback=ctx.channel)
+
+    # Voice-connect strategy:
+    # - If we already have a voice client, reuse / move it as before. Resume
+    #   any interrupted playback from the snapshotted position.
+    # - If the player is in the "interrupted" state we MUST reconnect now so
+    #   the saved song can keep playing from where it was cut off.
+    # - Otherwise, defer the connect until the first song finishes downloading
+    #   (see startPlayingCurrent). Joining the channel immediately and sitting
+    #   silent during yt-dlp is what lets the idle watchdog kick us out before
+    #   we ever play a note.
+    if ctx.voice_client is not None:
         vc = ctx.voice_client
         if vc.channel.id != channel.id:
-            # Stop recording if active
             if getattr(vc, "recording", False):
                 try:
                     vc.stop_recording()
@@ -918,19 +1344,43 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
                 setattr(vc, "recording", False)
             set_pending_trigger(channel.id, ctx.author.id)
             await vc.move_to(channel)
-
-    player = getGuildPlayer(ctx.guild.id, ctx.bot)
-    player.vc = vc
-    player.textChannel = ctx.channel
+        if player.interrupted and player.currentSong:
+            try:
+                await player.resumeFromInterruption(vc)
+            except Exception:
+                playLogger.exception("[PLAY] resumeFromInterruption failed; falling back to fresh play")
+                player.interrupted = False
+                player.currentSong = None
+        else:
+            player.vc = vc
+    elif player.interrupted and player.currentSong:
+        # Saved song to resume but no live vc — reconnect now (file is still
+        # cached because onSongFinished short-circuits when interrupted).
+        try:
+            set_pending_trigger(channel.id, ctx.author.id)
+            vc = await channel.connect(reconnect=True)
+            await player.resumeFromInterruption(vc)
+        except Exception:
+            playLogger.exception("[PLAY] reconnect-to-resume failed; falling back to fresh play")
+            player.interrupted = False
+            player.currentSong = None
+            player.pendingVoiceChannel = channel
+            player.pendingTriggerUserId = ctx.author.id
+    else:
+        # Defer the connect — startPlayingCurrent will join after the download
+        # completes so the bot never sits silent in the channel.
+        player.pendingVoiceChannel = channel
+        player.pendingTriggerUserId = ctx.author.id
 
     # Prepare search or URL input
     inputStr = query.strip()
     isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://") or inputStr.startswith("ytsearch:"))
     if isSearch:
-        # ytsearch3 para tener candidatos por si el primer hit es un canal
+        # ytsearchN para tener candidatos: los primeros hits suelen ser canales
         # (ej. "Indio Solari" devuelve el canal UCzq3uuD... que yt-dlp no
-        # puede bajar como video). Despues filtramos al primer video valido.
-        inputStr = f"ytsearch3:{inputStr}"
+        # puede bajar como video). Despues filtramos a videos validos y, si hay
+        # mas de uno, le ofrecemos al usuario que elija cual quiere.
+        inputStr = f"ytsearch{_PLAY_CHOICE_COUNT + 2}:{inputStr}"
 
     # 1. Fetch metadata (ID and Title)
     await safeEdit(ctx, "🔍 Buscando y obteniendo metadatos...")
@@ -978,10 +1428,8 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
         if isSearch:
             # YouTube search mezcla videos con canales/playlists; filtramos
-            # los que no son videos (id de canal "UC..." o sin duracion) y
-            # nos quedamos con el primer video.
-            videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
-            songs = videos[:1]
+            # los que no son videos (id de canal "UC..." o sin duracion).
+            songs = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
 
         if not songs:
             return await safeEdit(ctx, "❌ No se pudieron obtener los metadatos del video.")
@@ -994,7 +1442,60 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         print(f"[PLAY ERROR] Exception during metadata fetch: {e}")
         return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
-    # Add songs to player queue
+    # Free-text search with several candidates → let the requester pick which
+    # one instead of silently grabbing the first hit (which often was the wrong
+    # version). A direct URL/playlist skips this and queues straight away.
+    # Exception: if the top hit's title overlaps strongly with the user query
+    # (normalized, sin tildes/punctuation), there's a clear winner and we skip
+    # the picker — the picker is meant for ambiguous queries, not specific ones.
+    if isSearch and len(songs) > 1:
+        if _should_autoplay_top(query, songs[0]["title"]):
+            playLogger.info(
+                "[PLAY AUTOPLAY] query=%r top=%r ratio=%.2f → skipping picker",
+                query, songs[0]["title"],
+                _query_title_ratio(query, songs[0]["title"]),
+            )
+            await player.addSongs([songs[0]], ctx)
+            return
+        # Reorder candidates by fuzzy match against the query so the default
+        # pick (candidates[0] when nobody votes) actually matches what was
+        # asked, not just YouTube's first hit.
+        candidates = sorted(
+            songs[:_PLAY_CHOICE_COUNT],
+            key=lambda c: _query_title_ratio(query, c.get("title", "")),
+            reverse=True,
+        )
+
+        async def _resolve(vote: MusicVote, winner: dict) -> None:
+            await player.addSongs([winner], ctx)
+
+        vote = open_music_vote(
+            bot=ctx.bot, guild_id=ctx.guild.id,
+            candidates=candidates, on_resolve=_resolve,
+        )
+        prompt = _format_choice_prompt(candidates)
+        msg = None
+        try:
+            msg = await ctx.interaction.edit_original_response(
+                content=prompt, view=None,
+            )
+        except Exception:
+            try:
+                msg = await ctx.followup.send(prompt)
+            except Exception:
+                await safeEdit(ctx, prompt)
+        if msg is not None:
+            vote.reaction_message_id = int(msg.id)
+            vote.reaction_channel_id = int(msg.channel.id)
+            for i in range(len(candidates)):
+                try:
+                    await msg.add_reaction(_num_emoji(i + 1))
+                except Exception:
+                    pass
+        vote.start_timeout()
+        return
+
+    # Single result (or a URL/playlist): queue it directly.
     await player.addSongs(songs, ctx)
 
 
@@ -1023,16 +1524,26 @@ def _pick_voice_channel(bot, guild_id: int) -> Optional[discord.VoiceChannel]:
     return candidates[0][0]
 
 
-async def _yt_dlp_search(query: str) -> list[dict]:
+async def _yt_dlp_search(query: str, *, max_results: int = 1) -> list[dict]:
     """Run yt-dlp to resolve the query to song metadata. Returns a list of
-    {id, title, duration_string} dicts; empty list on any failure."""
+    {id, title, duration_string} dicts; empty list on any failure.
+
+    ``max_results`` caps how many *search* hits to return (defaults to 1, the
+    legacy single-pick behaviour). It only applies to free-text searches; a
+    direct URL/playlist always returns every entry yt-dlp reports so playlists
+    keep queueing in full. We fetch a couple extra candidates beyond
+    ``max_results`` because the first hits are often channels/playlists that get
+    filtered out below.
+    """
     inputStr = query.strip()
     isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://")
                     or inputStr.startswith("ytsearch:"))
     if isSearch:
-        # ytsearch3 + filtro abajo: el primer hit suele ser un canal
-        # (ej. "Indio Solari" → UCzq3uuD...) que no se puede bajar.
-        inputStr = f"ytsearch3:{inputStr}"
+        # ytsearchN + filtro abajo: los primeros hits suelen ser canales
+        # (ej. "Indio Solari" → UCzq3uuD...) que no se pueden bajar, así que
+        # pedimos algunos de más para tener candidatos válidos suficientes.
+        fetch_n = max(max_results + 2, 3)
+        inputStr = f"ytsearch{fetch_n}:{inputStr}"
     cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
     args = [config.YT_DLP_PATH]
     if os.path.exists(cookiesPath):
@@ -1071,20 +1582,26 @@ async def _yt_dlp_search(query: str) -> list[dict]:
             "duration_string": dur if dur != "NA" else "",
         })
     if isSearch:
-        # Filtramos canales/playlists para quedarnos con el primer video real.
+        # Filtramos canales/playlists para quedarnos con videos reales.
         videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
-        songs = videos[:1]
+        songs = videos[:max_results]
     return songs
 
 
 async def playFromIndio(bot, guild_id: int, query: str,
-                        voice_channel_id: Optional[int] = None) -> tuple[bool, str]:
+                        voice_channel_id: Optional[int] = None,
+                        *, songs: Optional[list[dict]] = None) -> tuple[bool, str]:
     """Queue a YouTube search/URL programmatically — no slash ctx required.
 
     Used by the indio when someone asks him to play music. Picks a voice
     channel automatically, but the text channel for status + GuildPlayer
     control panel is always ``config.INDIO_PLAY_CHANNEL_ID`` (no fallback);
     if that channel is missing the action fails.
+
+    ``songs`` lets a caller pass an already-resolved list of
+    ``{id, title, duration_string}`` dicts (e.g. the candidate the user picked
+    from a disambiguation menu) so we skip the yt-dlp search entirely. When it
+    is ``None`` we search using ``query`` as before.
 
     Returns:
         (ok, message): ``ok=True`` if playback started or song queued;
@@ -1116,11 +1633,17 @@ async def playFromIndio(bot, guild_id: int, query: str,
         return False, (f"no encuentro el canal de musica configurado "
                        f"(id={config.INDIO_PLAY_CHANNEL_ID})")
 
+    # Voice-connect strategy mirrors playLogic: if already connected reuse/move
+    # the vc; otherwise defer the join until the first song finishes downloading
+    # (startPlayingCurrent handles the lazy connect). Joining first and sitting
+    # silent during yt-dlp would let the idle watchdog kick us out before we
+    # play a note.
     vc = guild.voice_client
+    deferred = False
     try:
         if vc is None or not vc.is_connected():
-            set_pending_trigger(voice_channel.id, bot.user.id if bot.user else 0)
-            vc = await voice_channel.connect(reconnect=True)
+            vc = None
+            deferred = True
         elif vc.channel.id != voice_channel.id:
             if getattr(vc, "recording", False):
                 try:
@@ -1134,13 +1657,18 @@ async def playFromIndio(bot, guild_id: int, query: str,
         playLogger.warning(f"[PLAY-INDIO] voice connect failed: {e}")
         return False, f"no pude conectarme a voz: {e}"
 
-    songs = await _yt_dlp_search(query)
+    if songs is None:
+        songs = await _yt_dlp_search(query)
     if not songs:
         return False, "no encontre nada en YouTube con esa busqueda"
 
     player = getGuildPlayer(guild_id, bot)
-    player.vc = vc
     player.textChannel = text_channel
+    if deferred:
+        player.pendingVoiceChannel = voice_channel
+        player.pendingTriggerUserId = bot.user.id if bot.user else 0
+    else:
+        player.vc = vc
 
     isFirst = (not player.currentSong and len(player.queue) == 0)
     title = songs[0]["title"]
