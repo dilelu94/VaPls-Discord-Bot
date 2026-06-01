@@ -9,6 +9,7 @@ import os
 import logging
 import asyncio
 import time
+from urllib.parse import urljoin
 import aiohttp
 import discord
 from discord.ext import commands
@@ -610,7 +611,7 @@ async def entraindio(ctx):
         await safe_respond(ctx, "❌ El relay del indio no está configurado.")
         return
 
-    join_url = config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/join"
+    join_url = urljoin(config.INDIO_RELAY_URL, "/join")
     headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
     payload = {"channel_id": int(voice_channel.id)}
     timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)

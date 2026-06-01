@@ -18,6 +18,7 @@ import tempfile
 import time
 import unicodedata
 from typing import Optional
+from urllib.parse import urljoin
 
 import aiohttp
 import discord
@@ -1153,7 +1154,7 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
     "Indio used /play" interaction. Returns (ok, message)."""
     if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
         return False, "relay not configured"
-    invoke_url = config.INDIO_RELAY_URL.rsplit("/", 1)[0] + "/" + endpoint
+    invoke_url = urljoin(config.INDIO_RELAY_URL, "/" + endpoint)
     headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
     payload = {"channel_id": int(channel_id), "query": query}
     timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
@@ -1931,7 +1932,7 @@ async def _edit_via_userbot(channel_id: int, message_id: int,
     secret = config.INDIO_RELAY_SECRET
     if not url or not secret:
         return False
-    edit_url = url.rsplit("/", 1)[0] + "/edit"
+    edit_url = urljoin(url, "/edit")
     payload = {"channel_id": int(channel_id), "message_id": int(message_id),
                "content": content}
     headers = {"X-API-Secret": secret}

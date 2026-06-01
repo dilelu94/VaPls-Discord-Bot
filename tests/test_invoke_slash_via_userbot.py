@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
@@ -85,5 +86,50 @@ async def test_succeeds_when_userbot_responds_within_timeout(monkeypatch):
         assert ok is True
         assert msg == "despacito"
         assert received and received[0]["query"] == "despacito"
+    finally:
+        await server.close()
+
+
+@pytest.mark.parametrize("path_suffix", [
+    "/say",         # canonical default — INDIO_RELAY_URL points to /say
+    "/say/",        # trailing slash — common copy-paste mistake
+    "/",            # base URL ends at the host root
+    "/api/say",     # multi-segment path (reverse proxy mounted under /api)
+])
+async def test_url_resolution_is_robust_to_indio_relay_url_shape(
+        monkeypatch, path_suffix):
+    """The fixed URL builder must always hit /invoke_play at the host root,
+    regardless of how INDIO_RELAY_URL is shaped (trailing slash, sub-paths,
+    etc.). Without this, deployments that mount the userbot relay behind a
+    proxy or that accidentally include a trailing slash get 404s.
+    """
+    import geminiCommand
+
+    app = web.Application()
+
+    async def _ok_handler(request):
+        return web.json_response({"invoked": True})
+
+    # Only route registered at the canonical /invoke_play path. A wrong
+    # URL build would 404 here.
+    app.router.add_post("/invoke_play", _ok_handler)
+    server = TestServer(app)
+    await server.start_server()
+    try:
+        base = f"http://{server.host}:{server.port}{path_suffix}"
+        monkeypatch.setattr(geminiCommand.config, "INDIO_RELAY_URL", base,
+                            raising=False)
+        monkeypatch.setattr(geminiCommand.config, "INDIO_RELAY_SECRET",
+                            "test-secret", raising=False)
+        monkeypatch.setattr(geminiCommand.config, "INDIO_RELAY_TIMEOUT", 2.0,
+                            raising=False)
+
+        ok, msg = await geminiCommand._invoke_slash_via_userbot(
+            "invoke_play", channel_id=42, query="x"
+        )
+
+        assert ok is True, (
+            f"URL resolution failed for INDIO_RELAY_URL={base!r}: {msg}"
+        )
     finally:
         await server.close()
