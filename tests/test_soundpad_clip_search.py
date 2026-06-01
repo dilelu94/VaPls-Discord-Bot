@@ -438,6 +438,68 @@ async def test_soundpad_blocks_panel_mode_too_when_no_key(
     assert not views
 
 
+# --------------------------------------------------------------------------
+# Slash-handler-level gate: must reject BEFORE defer so Discord never shows
+# the "thinking…" placeholder for users without a donated key. The check is
+# synchronous (in-memory) so it comfortably fits in the 3s interaction window.
+# --------------------------------------------------------------------------
+async def test_soundpad_slash_handler_rejects_user_without_key_before_defer(
+    gemini_pool, monkeypatch
+):
+    import bot as bot_mod
+
+    gemini_pool([])  # nobody has donated a key
+
+    ctx = MagicMock(name="ApplicationContext")
+    ctx.author = SimpleNamespace(id=1, display_name="Tester", name="tester")
+    ctx.guild = SimpleNamespace(id=999)
+    ctx.defer = AsyncMock()
+    ctx.respond = AsyncMock()
+
+    # If the gate doesn't fire early, safe_defer would be called. Spy on it
+    # so a regression that re-orders defer/gate is loud.
+    spy_defer = AsyncMock(return_value=True)
+    monkeypatch.setattr(bot_mod, "safe_defer", spy_defer)
+    # Ensure soundpadLogic never gets a chance to run.
+    spy_logic = AsyncMock()
+    monkeypatch.setattr(bot_mod, "soundpadLogic", spy_logic)
+
+    await bot_mod.soundpad.callback(ctx, query="bob esponja")
+
+    # The user got an immediate ephemeral and Discord never saw a defer.
+    spy_defer.assert_not_awaited()
+    spy_logic.assert_not_awaited()
+    ctx.respond.assert_awaited_once()
+    args, kwargs = ctx.respond.call_args
+    assert kwargs.get("ephemeral") is True
+    text = args[0] if args else kwargs.get("content", "")
+    assert config.GEMINI_KEYS_DONATION_URL in text
+
+
+async def test_soundpad_slash_handler_defers_and_delegates_when_caller_has_key(
+    caller_has_key, monkeypatch
+):
+    import bot as bot_mod
+
+    ctx = MagicMock(name="ApplicationContext")
+    ctx.author = SimpleNamespace(id=1, display_name="Tester", name="tester")
+    ctx.guild = SimpleNamespace(id=999)
+    ctx.respond = AsyncMock()
+
+    spy_defer = AsyncMock(return_value=True)
+    monkeypatch.setattr(bot_mod, "safe_defer", spy_defer)
+    spy_logic = AsyncMock()
+    monkeypatch.setattr(bot_mod, "soundpadLogic", spy_logic)
+
+    await bot_mod.soundpad.callback(ctx, query="bob esponja")
+
+    # Happy path: defer first (so "thinking…" appears), then hand off to the
+    # logic module. No early ephemeral.
+    spy_defer.assert_awaited_once()
+    spy_logic.assert_awaited_once()
+    ctx.respond.assert_not_awaited()
+
+
 async def test_soundpad_stop_button_stops_playback_and_disables_view():
     channel = _FakeVoiceChannel(channel_id=10)
     vc = _FakeVoiceClient(channel)

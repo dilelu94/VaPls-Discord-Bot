@@ -443,6 +443,25 @@ async def soundpad(
     Async:
         This function is a coroutine and must be awaited.
     """
+    # Gate before defer: a synchronous in-memory check (geminiKeys.has_user_key)
+    # is cheap enough to run inside the 3s interaction window, so users without
+    # a donated key get an immediate ephemeral instead of seeing Discord's
+    # "thinking…" first and the rejection second.
+    if not geminiKeys.has_user_key(ctx.author.id):
+        contributors = geminiKeys.format_contributors_line()
+        msg = (
+            "🔒 Para usar **/soundpad** necesitás aportar una API key de Gemini al pool del bot.\n\n"
+            f"**Cómo conseguirla:** entrá a {config.GEMINI_KEYS_DONATION_URL}, "
+            "clickeá *Create API key* (es gratis con una cuenta de Google) "
+            "y mandámela por DM al bot. Apenas la sumo al pool podés usar el comando."
+        )
+        if contributors:
+            msg = f"{msg}\n\n{contributors}"
+        analytics.capture("soundpad gated", user=ctx.author, guild=ctx.guild,
+                          properties={"reason": "no_user_key"})
+        await ctx.respond(msg, ephemeral=True)
+        return
+
     await safe_defer(ctx)
     _track_command(ctx, "soundpad", {"query_length": len(query or "")})
     await soundpadLogic(ctx, query=query)
