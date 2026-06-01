@@ -19,3 +19,12 @@ vosk>=0.3.45
 numpy
 python-dotenv
 aiohttp>=3.9
+# Observability. The userbot runs in its own venv, so it needs these here too
+# (the main bot's deps live in the repo-root requirements.txt). posthog_client
+# guards every import, so a missing package only disables telemetry — but
+# without them the userbot's init_observability() can never start. None of these
+# depend on `discord`, so they don't disturb the discord.py-self namespace.
+posthog>=7.15.0
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp>=1.25.0
