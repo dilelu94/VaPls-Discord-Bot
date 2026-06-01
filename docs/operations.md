@@ -3,6 +3,11 @@
 ## Server
 - **Producción**: Oracle Cloud Ampere A1 — 4 OCPU (Neoverse N1 aarch64) / 24 GB RAM.
 - **Stack**: Ubuntu 22.04+ aarch64. `faster-whisper` (CTranslate2 con wheels aarch64), `py-cord`, `discord.py-self`, `ffmpeg`.
+- **⚠️ Python 3.10 (constraint de runtime)**: el server corre **Python 3.10.12**
+  (el `python3` que trae Ubuntu 22.04), en ambos venvs (`venv/`, `userbot/venv/`).
+  **Esa es la única versión soportada en producción** y la única sobre la que
+  gatea la CI. Si bumpeás el target de Python, actualizá la matriz en
+  `.github/workflows/ci.yml` y este doc en el mismo cambio.
 - **Razón del upgrade desde E2.1.Micro (1 GB)**: faster-whisper `base` saturaba la CPU (~27s para 1.4s de audio); el modelo `small` ahora corre real-time con concurrencia 5 y deja headroom para `/play` simultáneo.
 
 ## CI/CD pipeline
@@ -10,12 +15,13 @@ El deploy normal es **automático**: hacer push a `master` dispara
 `.github/workflows/ci.yml`.
 
 ```
-push a master ─► job test (matriz Python 3.10–3.14) ─► job deploy (SSH al server)
-                     │ falla ⇒ no deploya          │ corre scripts/deploy.sh
+push a master ─► job test (Python 3.10, = prod) ─► job deploy (SSH al server)
+                     │ falla ⇒ no deploya        │ corre scripts/deploy.sh
 ```
 
-- **`deploy` corre solo** tras pasar toda la matriz de tests, solo en pushes a
-  `master`, y **se saltea sin fallar** si el secret `SSH_HOST` no está seteado.
+- **`deploy` corre solo** tras pasar el job de tests (Python 3.10), solo en
+  pushes a `master`, y **se saltea sin fallar** si el secret `SSH_HOST` no está
+  seteado.
 - El runner de GitHub se conecta por SSH (secrets `SSH_HOST` / `SSH_USER` /
   `SSH_KEY`, opcional `SSH_PORT`) y **pipea `scripts/deploy.sh` por stdin**
   (`bash -s`), así corre la versión del repo aunque el checkout del server esté

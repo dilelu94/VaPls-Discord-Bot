@@ -46,8 +46,14 @@ de Gemini, FFmpeg y el filesystem, así que **no** hace falta el build de git de
 
 ## CI
 `.github/workflows/ci.yml` corre `pytest` en cada `push` y `pull_request`, sobre
-una **matriz de Python 3.10–3.14** (`fail-fast: false`). La matriz amplia existe
-porque `audioop` se removió del stdlib en 3.13 (backport `audioop-lts` en
-`requirements*.txt`); el gap de portabilidad de versión fue la causa del breakage
-original. El job `deploy` corre después de que toda la matriz pasa — ver
+**Python 3.10 únicamente** — la versión exacta que corre el server de producción
+(Ubuntu 22.04). Probar solo esa versión mantiene la CI rápida y la mantiene
+alineada con prod; ver el constraint en
 [Operaciones → CI/CD](operations.md#cicd-pipeline).
+
+> Nota histórica: la CI antes corría una matriz 3.10–3.14 porque `audioop` se
+> removió del stdlib en 3.13 (backport `audioop-lts` en `requirements*.txt`). El
+> backport sigue declarado, así que el bot también levanta en ≥3.13, pero solo
+> gateamos sobre 3.10.
+
+El job `deploy` corre después de que pasa el job de tests.
