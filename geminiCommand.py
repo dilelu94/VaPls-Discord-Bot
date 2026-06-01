@@ -2770,15 +2770,15 @@ async def indioFromVoice(
                 )
 
     # DM al user via userbot (cuenta-real): solo el link al mensaje en el
-    # target + el emoji :ElIndio: del guild (fallback a literal si no esta).
+    # target. Sin emoji custom — el :ElIndio: del server no renderiza en
+    # contextos fuera del guild (DM), aparece literal y queda feo.
     if redirected and user_id:
-        elindio = _find_emoji_code(guild, "ElIndio") or ":ElIndio:"
         if landing_msg_id:
             link = (f"https://discord.com/channels/{guild_id}"
                     f"/{channel_id}/{landing_msg_id}")
-            dm_text = f"te respondi en este canal {link} {elindio}"
+            dm_text = f"te respondi en este canal {link}"
         else:
-            dm_text = f"te respondi en <#{channel_id}> {elindio}"
+            dm_text = f"te respondi en <#{channel_id}>"
         _spawn(_relay_dm_user(int(user_id), dm_text))
 
     analytics.capture("indio voice invoked", user=member, guild=guild, properties={

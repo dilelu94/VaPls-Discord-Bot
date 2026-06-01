@@ -307,61 +307,11 @@ async def test_indioFromVoice_dms_user_with_link_to_target_when_redirected(
     assert sent_user_id == 42
     # The DM contains a discord.com message link pointing at the target.
     assert "discord.com/channels/100/9999/" in sent_content
-    # The :ElIndio: emoji (literal when not in guild.emojis) accompanies it.
-    assert ":ElIndio:" in sent_content
     # The DM should NOT carry the full reply text (the answer lives in target).
     assert "acordate que el bibi anda mal" not in sent_content
-
-
-async def test_indioFromVoice_dm_uses_custom_elindio_emoji_when_available(
-        indio, patch_generate, reply_factory, monkeypatch):
-    """When :ElIndio: exists as a custom guild emoji, the DM renders the
-    proper "<:ElIndio:id>" code so Discord shows the image, not the literal
-    text. Falls back to ":ElIndio:" when the emoji isn't on the guild."""
-    import config
-    import geminiCommand as gc
-
-    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
-    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
-    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
-    patch_generate(reply=reply_factory(text="ok"))
-
-    dm_calls: list[tuple[int, str]] = []
-
-    async def _fake_dm(user_id, content):
-        dm_calls.append((user_id, content))
-        return True
-
-    monkeypatch.setattr(gc, "_relay_dm_user", _fake_dm)
-
-    target = _fake_target_channel(channel_id=9999, guild_id=100)
-    source = _fake_target_channel(channel_id=555, guild_id=100)
-    bot = MagicMock()
-    bot.get_channel = MagicMock(
-        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
-    guild = MagicMock()
-    guild.id = 100
-    guild.get_channel = bot.get_channel
-    # Custom emoji :ElIndio: with id 7777 (not animated).
-    guild.emojis = [
-        types.SimpleNamespace(
-            name="ElIndio", id=7777, animated=False, available=True),
-    ]
-    guild.get_member = MagicMock(
-        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
-    guild.text_channels = []
-    bot.get_guild = MagicMock(return_value=guild)
-    bot.guilds = [guild]
-
-    await indioFromVoice(
-        bot, user_id=42, guild_id=100, channel_id=555,
-        pregunta="hola", speaker_name="Tobi",
-    )
-    await _drain()
-
-    assert len(dm_calls) == 1
-    _, sent_content = dm_calls[0]
-    assert "<:ElIndio:7777>" in sent_content
+    # No custom :ElIndio: emoji — custom server emojis don't render in DMs,
+    # they appear as literal ":ElIndio:" which looks broken.
+    assert "ElIndio" not in sent_content
 
 
 async def test_indioFromVoice_deletes_source_message_when_redirected(
