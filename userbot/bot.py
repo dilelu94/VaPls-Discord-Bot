@@ -1658,6 +1658,16 @@ async def _leave_if_empty(guild: discord.Guild):
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
+    if not config.VAPLS_BOT_ID:
+        # Without this id, _pick_vapls_command can't disambiguate /play and
+        # /soundpad from other bots in the guild and every relay invocation
+        # silently 404s. Surface it loudly so operators don't spend hours
+        # wondering why the indio's music never plays.
+        log.error(
+            "VAPLS_BOT_ID is unset (0) — userbot relay /invoke_* endpoints "
+            "will not be able to identify the VaPls bot's slash commands; "
+            "indio playback will not work until this is configured.",
+        )
     if _webhook_log_handler is not None:
         _webhook_log_handler.start(asyncio.get_running_loop())
     await asyncio.sleep(2)
@@ -2291,7 +2301,10 @@ def _pick_vapls_command(cmds, name: str):
         if _command_owner_id(c) == config.VAPLS_BOT_ID:
             return c
     if matches_by_name:
-        log.warning(
+        # log.error (not warning): without a matching VaPls command id every
+        # relay invocation is doomed to 404 and the operator needs to see
+        # this loudly in journalctl, not bury it among the routine warnings.
+        log.error(
             "[RELAY] /%s exists in channel but no instance is owned by VaPls "
             "bot %s (candidates: %s)",
             name, config.VAPLS_BOT_ID,
