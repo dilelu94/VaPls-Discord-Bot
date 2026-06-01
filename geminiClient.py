@@ -8,7 +8,7 @@ import asyncio
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import posthog_client
 
@@ -140,6 +140,7 @@ async def generate(
     volatile_context: Optional[str] = None,
     distinct_id: Optional[str] = None,
     guild_id: Optional[str] = None,
+    on_retry: Optional[Callable[[int, int, str], Awaitable[None]]] = None,
 ) -> GeminiReply:
     """Generate a single Gemini reply for a user message.
 
@@ -160,6 +161,12 @@ async def generate(
             that changes call-to-call. Sent at the very end of the request,
             bundled into the final user turn, so it never poisons the cacheable
             system-prompt + tools prefix.
+        on_retry: Optional async callback invoked when a key returns 429 and we
+            rotate to another key. Receives ``(attempt, total_attempts, key_suffix)``
+            where ``key_suffix`` is the last 6 chars of the failed key. Awaited
+            inline (must be fast — Discord edits are ~50-200ms). Best-effort:
+            any exception inside is swallowed and logged at debug level so a
+            broken callback never blocks the retry loop.
 
     Returns:
         GeminiReply with the rendered text and usage metadata.
@@ -245,6 +252,11 @@ async def generate(
                             "gemini key …%s hit 429 (attempt %d/%d): %s",
                             picked[-6:], attempt + 1, attempts, last_429_msg,
                         )
+                        if on_retry is not None:
+                            try:
+                                await on_retry(attempt + 1, attempts, picked[-6:])
+                            except Exception:
+                                logger.debug("on_retry callback failed", exc_info=True)
                         continue
                     logger.warning(
                         "gemini http %d (key …%s): %s",

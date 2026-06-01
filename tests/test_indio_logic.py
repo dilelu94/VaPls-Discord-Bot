@@ -1092,3 +1092,37 @@ async def test_plain_chat_no_action_reply_not_edited(
     assert "🎵" not in final
     assert "🔊" not in final
     assert "listo" not in final.lower()
+
+
+# ---------------------------------------------------------------------------
+# Key rotation notice: when geminiClient rotates keys after a 429, the user
+# sees a transient notice in the deferred slot that's replaced by the reply
+# header when it arrives. No "aviso + reply" double message.
+# ---------------------------------------------------------------------------
+
+
+async def test_key_rotation_shows_transient_notice_then_clean_reply(
+        indio, ctx_factory, patch_generate, reply_factory):
+    patch_generate(reply=reply_factory(text="todo bien che"), retries=1)
+    ctx = ctx_factory(display_name="Mati", guild_id=100)
+
+    await indioLogic(ctx, "como andas", nuevo=False)
+
+    # The transient notice appeared during the call.
+    assert any("cambiando de key" in (c or "") for c in ctx.deferred_history)
+    # Final state: the notice is gone — replaced by the header + reply.
+    final = "\n".join(m for m in ctx.sent_messages if m is not None)
+    assert "cambiando de key" not in final
+    assert "todo bien che" in final
+    assert "Mati" in final  # header attribution
+
+
+async def test_no_rotation_does_not_touch_deferred(
+        indio, ctx_factory, patch_generate, reply_factory):
+    patch_generate(reply=reply_factory(text="todo bien"))
+    ctx = ctx_factory(guild_id=100)
+
+    await indioLogic(ctx, "como andas", nuevo=False)
+
+    assert ctx.deferred_history == []
+    assert "todo bien" in "\n".join(m for m in ctx.sent_messages if m is not None)

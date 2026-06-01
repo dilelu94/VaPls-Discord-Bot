@@ -312,6 +312,12 @@ _HISTORY_TTL_SEC = 6 * 3600
 _DISCORD_CHUNK_LIMIT = 1990
 _MAX_CHUNKS = 4
 
+# Aviso visible cuando geminiClient rota a otra key tras un 429. Se edita en el
+# deferred del invoker para que el usuario sepa que hubo un problema transitorio
+# y el sistema sigue intentando. Cuando llega la respuesta final, este texto se
+# reemplaza por el primer chunk del reply (no queda pista en el output final).
+AVISO_ROTACION_GEMINI = "⏳ Aguantame, estoy cambiando de key…"
+
 # Short-term history bounds (in turns; each /indio call appends 2 turns).
 # When history grows past the threshold we kick off a compression task that
 # distills the oldest turns into the long-term notes. HARD_CAP is the safety
@@ -592,12 +598,45 @@ def _evict_stale_indio() -> None:
     # close timer and self-cleanup. Nothing for the indio side to evict here.
 
 
-async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
+def _make_retry_notifier(ctx: discord.ApplicationContext):
+    """Build an on_retry callback that edits the deferred message once on retry.
+
+    Returns ``(notifier, state)`` where ``notifier`` is an async callback to
+    pass to ``geminiClient.generate(on_retry=...)`` and ``state`` is a dict
+    with ``had_retry: bool``. The caller inspects ``state["had_retry"]`` after
+    awaiting ``generate`` to decide whether the first chunk of the final reply
+    should overwrite the notice (via ``edit_first=True``) or fall through to
+    the normal followup flow.
+
+    Only the *first* retry edits — subsequent rotations within the same call
+    leave the notice unchanged. Avoids parpadeo and keeps the test surface
+    small (one edit_original_response call asserted).
+    """
+    state = {"had_retry": False}
+
+    async def _notify(attempt, total, key_suffix):
+        if state["had_retry"]:
+            return
+        state["had_retry"] = True
+        from bot import safeEdit
+        await safeEdit(ctx, AVISO_ROTACION_GEMINI)
+
+    return _notify, state
+
+
+async def _send_reply(
+    ctx: discord.ApplicationContext, text: str, *, edit_first: bool = False,
+) -> int:
     """Send a possibly multi-part reply to Discord.
 
     Args:
         ctx: Discord application context.
         text: Full response text.
+        edit_first: When True, the first chunk overwrites the deferred message
+            via ``edit_original_response`` (used to replace a transient
+            ``AVISO_ROTACION_GEMINI`` notice with the real reply). Subsequent
+            chunks always go through ``followup.send``. Falls back to
+            ``followup.send`` if the edit fails.
 
     Returns:
         Number of chunks sent.
@@ -609,7 +648,14 @@ async def _send_reply(ctx: discord.ApplicationContext, text: str) -> int:
         This function is a coroutine and must be awaited.
     """
     chunks = _split_for_discord(text)
-    for c in chunks:
+    for i, c in enumerate(chunks):
+        if edit_first and i == 0:
+            try:
+                await ctx.interaction.edit_original_response(content=c)
+                continue
+            except Exception:
+                logger.debug("edit_original_response failed, falling back to followup",
+                             exc_info=True)
         await ctx.followup.send(c)
     return len(chunks)
 
@@ -2113,11 +2159,13 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         This function is a coroutine and must be awaited.
     """
     t0 = time.monotonic()
+    notifier, retry_state = _make_retry_notifier(ctx)
     try:
         reply = await geminiClient.generate(
             user_message=pregunta,
             system_instruction=VAPLS_SYSTEM,
             history=None,
+            on_retry=notifier,
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "vapls")
@@ -2125,7 +2173,17 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         # ensuciar el canal con texto que no aporta a la conversación.
         is_rate_limited = e.kind == "http" and e.status == 429
         try:
-            await ctx.followup.send(msg, ephemeral=is_rate_limited)
+            # Si ya se editó el deferred con el aviso de rotación, sobrescribirlo
+            # con el mensaje de error en vez de mandar un followup separado
+            # (evita "aviso colgado + error" en cascada). En ese caso el error
+            # queda público, igual que el aviso — no hay forma de hacer un edit
+            # del original a "ephemeral", así que sacrificamos el ephemeral
+            # del rate limit para no dejar mensajes huérfanos.
+            if retry_state["had_retry"]:
+                from bot import safeEdit
+                await safeEdit(ctx, msg)
+            else:
+                await ctx.followup.send(msg, ephemeral=is_rate_limited)
         except Exception:
             pass
         analytics.capture("vapls failed", user=ctx.author, guild=ctx.guild, properties={
@@ -2148,7 +2206,10 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         return
 
     try:
-        n_chunks = await _send_reply(ctx, _format_user_header(ctx, pregunta) + reply.text)
+        n_chunks = await _send_reply(
+            ctx, _format_user_header(ctx, pregunta) + reply.text,
+            edit_first=retry_state["had_retry"],
+        )
     except Exception as e:
         logger.exception("vapls send failed")
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -2295,6 +2356,14 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     system_instruction = INDIO_SYSTEM + (f"\n\n{stable_extras}" if stable_extras else "")
 
     t0 = time.monotonic()
+    # Solo activamos el aviso de rotación cuando el Indio responde en el canal
+    # del slash. Con override (target_channel), el aviso editaría el deferred
+    # del invoker — que puede estar en otro canal — y queda fuera de contexto.
+    if target_channel is None:
+        notifier, retry_state = _make_retry_notifier(ctx)
+    else:
+        notifier = None
+        retry_state = {"had_retry": False}
     try:
         reply = await geminiClient.generate(
             user_message=tagged_message,
@@ -2302,6 +2371,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
             volatile_context=player_block or None,
+            on_retry=notifier,
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "indio")
@@ -2312,7 +2382,13 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 # esta disponible) para que el indio "real" sea quien dice que
                 # se quedo sin cupo. Header primero, para dar contexto.
                 header = _format_user_header(ctx, pregunta).rstrip()
-                await _post(header)
+                # Si hubo retry y respondemos en el canal del slash, el header
+                # va al slot del deferred (sobrescribe el aviso).
+                if retry_state["had_retry"] and target_channel is None:
+                    from bot import safeEdit
+                    await safeEdit(ctx, header)
+                else:
+                    await _post(header)
                 channel_id = _reply_channel_id()
                 relayed = False
                 if (channel_id is not None
@@ -2321,6 +2397,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                     relayed = await _relay_to_userbot(channel_id, msg, None)
                 if not relayed:
                     await _post(msg)
+            elif retry_state["had_retry"] and target_channel is None:
+                # Sobrescribir el aviso con el mensaje de error en vez de
+                # acumular dos mensajes (aviso + error).
+                from bot import safeEdit
+                await safeEdit(ctx, msg)
             else:
                 await _post(msg)
         except Exception:
@@ -2365,7 +2446,20 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     reply_handle = None
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
-        question_msg = await _post(question_header)
+        # Si hubo retry y respondemos en el canal del slash, el header reemplaza
+        # el aviso de rotación que quedó en el deferred. El _post sigue siendo
+        # el fallback (cuando hay override o cuando el edit falla).
+        question_msg = None
+        if retry_state["had_retry"] and target_channel is None:
+            try:
+                question_msg = await ctx.interaction.edit_original_response(
+                    content=question_header)
+            except Exception:
+                logger.debug("indio: edit header onto aviso failed, falling back",
+                             exc_info=True)
+                question_msg = None
+        if question_msg is None:
+            question_msg = await _post(question_header)
         question_msg_id = getattr(question_msg, "id", None)
         channel_id = _reply_channel_id()
         opts_channel_id = channel_id

@@ -95,6 +95,31 @@ def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100):
     ctx.followup = MagicMock()
     ctx.followup.send = AsyncMock(side_effect=_send)
     ctx.sent_messages = sent
+
+    # Discord interaction surface: defer() ya ocurrió por safe_defer en los
+    # comandos reales. Modelamos ctx.response.is_done() => True y exponemos
+    # ctx.interaction.edit_original_response como AsyncMock. La semántica del
+    # edit es "sobrescribir el deferred (slot 0) en lugar de appendear" — si
+    # no hay nada en sent todavía, lo agrega como slot 0. Capturamos también
+    # el historial completo de contenidos por los que pasó el deferred en
+    # ``ctx.deferred_history`` para poder asertar que un mensaje transitorio
+    # (ej. aviso de rotación) apareció antes de ser reemplazado.
+    ctx.response = MagicMock()
+    ctx.response.is_done = MagicMock(return_value=True)
+    deferred_history: list[str] = []
+
+    async def _edit_original(content=None, **kwargs):
+        msg = _make_fake_message(content, sent)
+        if sent:
+            sent[0] = content
+        else:
+            sent.append(content)
+        deferred_history.append(content)
+        return msg
+
+    ctx.interaction = MagicMock()
+    ctx.interaction.edit_original_response = AsyncMock(side_effect=_edit_original)
+    ctx.deferred_history = deferred_history
     return ctx
 
 
@@ -116,15 +141,24 @@ def sent_text(ctx) -> str:
 def patch_generate(monkeypatch):
     import geminiClient
 
-    def _install(*, reply=None, error=None, replies=None):
+    def _install(*, reply=None, error=None, replies=None, retries=0,
+                 retry_key_suffix="abc123"):
         """`reply` = single GeminiReply for every call; `replies` = iterable of
-        results (GeminiReply or Exception) consumed in order; `error` = raise it.
-        Records calls on the returned list."""
+        results (GeminiReply or Exception) consumed in order; `error` = raise
+        it. ``retries`` simula que la primera/única llamada rotó N veces de
+        key antes de resolver: invoca ``on_retry(attempt, total, key_suffix)``
+        N veces antes de devolver el reply (o levantar el error). Útil para
+        testear que el aviso de rotación se editó en el deferred. Records
+        calls on the returned list."""
         calls: list[dict] = []
         seq = list(replies) if replies is not None else None
 
         async def _gen(**kwargs):
             calls.append(kwargs)
+            on_retry = kwargs.get("on_retry")
+            if retries > 0 and on_retry is not None:
+                for i in range(retries):
+                    await on_retry(i + 1, retries + 1, retry_key_suffix)
             if seq is not None:
                 result = seq.pop(0)
                 if isinstance(result, Exception):
