@@ -138,6 +138,220 @@ async def test_indioFromVoice_redirects_to_override_channel(
     assert all("ahi te explico" not in (m or "") for m in original_chan.sent_messages)
 
 
+async def test_indioFromVoice_does_not_spam_source_channel_when_redirected(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Cuando el wake-word dispara desde otro canal, el bot NO debe postear
+    nada visible en el canal original — toda la conversacion se mueve al
+    target para evitar ruido fuera del canal designado."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="todo en el target"))
+
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+
+    bot = MagicMock()
+
+    def _get_channel(cid):
+        return {9999: target, 555: source}.get(cid)
+    bot.get_channel = MagicMock(side_effect=_get_channel)
+
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(side_effect=_get_channel)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(
+            id=42, display_name="Tobi", name="tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="indio que onda", speaker_name="Tobi",
+    )
+    await _drain()
+
+    assert source.sent_messages == [], (
+        f"source channel got unexpected messages: {source.sent_messages!r}"
+    )
+    # And the actual answer landed in the target.
+    assert any("todo en el target" in (m or "") for m in target.sent_messages)
+
+
+async def test_indioFromVoice_posts_user_mention_header_in_target_when_redirected(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Para que el user reciba notificacion en el target, el bot debe postear
+    un header que pingee a <@user_id> justo antes de la respuesta."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="ahi te explico todo"))
+
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="bibi como anda?", speaker_name="Tobi",
+    )
+    await _drain()
+
+    # Header arrived in target before the reply, and pings the user.
+    target_text = "\n".join(m or "" for m in target.sent_messages)
+    assert "<@42>" in target_text, (
+        f"expected user mention in target, got: {target_text!r}"
+    )
+    # The question itself is quoted in the header so the answer has context.
+    assert "bibi como anda?" in target_text
+
+
+async def test_indioFromVoice_no_header_when_source_equals_target(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Cuando el wake-word ya cae en el target (no hay redirect), no hace
+    falta pingear al user — esta ahi mismo viendo la respuesta. El header
+    seria ruido."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="tranqui"))
+
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=target)
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(return_value=target)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=9999,
+        pregunta="hola", speaker_name="Tobi",
+    )
+    await _drain()
+
+    target_text = "\n".join(m or "" for m in target.sent_messages)
+    assert "<@42>" not in target_text, (
+        "no user mention expected when source == target"
+    )
+    assert "tranqui" in target_text
+
+
+async def test_indioFromVoice_dms_user_with_forwarded_reply_when_redirected(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Cuando la respuesta se mueve a otro canal, el userbot relay /dm
+    le forwardea la respuesta + un puntero al canal target — asi el user
+    se entera por DM (lo mas cercano a un ephemeral en el wake-word path).
+    """
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="acordate que el bibi anda mal"))
+
+    dm_calls: list[tuple[int, str]] = []
+
+    async def _fake_dm(user_id, content):
+        dm_calls.append((user_id, content))
+        return True
+
+    monkeypatch.setattr(gc, "_relay_dm_user", _fake_dm)
+
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="indio", speaker_name="Tobi",
+    )
+    await _drain()
+
+    assert len(dm_calls) == 1, f"expected exactly one DM, got {dm_calls!r}"
+    sent_user_id, sent_content = dm_calls[0]
+    assert sent_user_id == 42
+    # The DM should pointer at the target channel and include the actual answer.
+    assert "9999" in sent_content
+    assert "acordate que el bibi anda mal" in sent_content
+
+
+async def test_indioFromVoice_no_dm_when_source_equals_target(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Sin redirect (el wake-word cayo en el mismo canal target), no se manda
+    DM — el user esta ahi viendo la respuesta y un DM seria spam."""
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="ya estoy aca"))
+
+    dm_calls: list = []
+
+    async def _fake_dm(user_id, content):
+        dm_calls.append((user_id, content))
+        return True
+
+    monkeypatch.setattr(gc, "_relay_dm_user", _fake_dm)
+
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=target)
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(return_value=target)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=9999,
+        pregunta="hola", speaker_name="Tobi",
+    )
+    await _drain()
+
+    assert dm_calls == [], f"unexpected DM(s): {dm_calls!r}"
+
+
 async def test_indioFromVoice_falls_back_when_override_unresolvable(
         indio, patch_generate, reply_factory, monkeypatch):
     """Si el override no se puede resolver, la respuesta cae al canal original
