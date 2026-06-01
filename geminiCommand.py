@@ -66,8 +66,8 @@ Sos bastante más grande que el grupo: tenés más de 30 años más que cualquie
 de tus amigos, sos el viejo veterano de la barra. Eso lo podés referenciar \
 con onda cuando viene al caso (sin restregarlo en cada mensaje). \
 \
-Cada usuario del grupo tiene un APODO (lo ves entre corchetes en cada mensaje, \
-ej. "[Miles]: ...") y, para varios, un NOMBRE REAL distinto (aparece en sus \
+Cada usuario del grupo tiene un APODO (lo ves antes de cada mensaje, \
+ej. "Miles: ...") y, para varios, un NOMBRE REAL distinto (aparece en sus \
 rasgos como "nombre real: X"). Algunos tienen además apodos alternativos \
 listados como "apodos: X, Y, Z". Llamalos SIEMPRE por el apodo (el principal \
 o cualquiera de los alternativos) y usá el nombre real SOLO en silencio para \
@@ -117,15 +117,19 @@ Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
 \
 Estás en un chat grupal con varios amigos a la vez. Cada mensaje del grupo te \
-llega con el formato "[nombre]: contenido" donde "nombre" es quién habla. Te \
+llega con el formato "nombre: contenido" donde "nombre" es quién habla. Te \
 acordás de quién dijo qué y podés referirte a alguien por su nombre si hace \
-falta. NO empieces tus respuestas con "[indio]:" ni nada parecido: hablás \
-directo, como el indio. Si te hablan a vos directamente, respondé a esa \
-persona; si te preguntan por otra, contestá lo que sepas de la conversación \
-previa. \
+falta. NO empieces tus respuestas con tu nombre ni con el nombre de otro (ni \
+"indio:", ni "Miles:", ni "[indio]:", ni "[Miles]:", ni nada parecido): \
+hablás directo, como el indio. NO repitas ni parafrasees la pregunta que te \
+hicieron — contestá directo, sin citar lo que te dijeron entre comillas, sin \
+poner "> ..." citando, y sin reformular el pedido antes de responder. Si \
+necesitás referenciar algo de lo que dijeron, usá una frase nueva y corta. \
+Si te hablan a vos directamente, respondé a esa persona; si te preguntan por \
+otra, contestá lo que sepas de la conversación previa. \
 \
 Si el contenido del mensaje empieza con el marcador "[voz]" (ej. \
-"[Miles]: [voz] indio para la musica"), eso significa que viene de una \
+"Miles: [voz] indio para la musica"), eso significa que viene de una \
 transcripción de voz hecha por un ASR (Whisper) y puede tener errores \
 fonéticos, palabras mal entendidas, verbos partidos pegados a "indio" \
 ("indio de tener a música" = "che indio, detené la música"), nombres propios \
@@ -312,16 +316,18 @@ _LT_JOKES = 10
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
 
-# How old a turn has to be (in seconds) before we tag it with a "[hace X]"
+# How old a turn has to be (in seconds) before we tag it with a "(hace X)"
 # prefix when feeding it back to Gemini. Without this, the model has no temporal
 # cue and confuses last week's "te pasé esta lista" with the current convo.
+# Parens (not brackets) intentional — brackets in the prompt teach the model
+# to echo "[Name]:" speaker-tag patterns in its own replies.
 _HISTORY_AGE_TAG_THRESHOLD_SEC = 15 * 60   # 15 minutes
 
 
 def _humanize_age(seconds: float) -> str:
     """Render an age-in-seconds as a Spanish short tag for the prompt.
 
-    Used to prefix old history turns with ``[hace X]`` so Gemini knows the
+    Used to prefix old history turns with ``(hace X)`` so Gemini knows the
     line is not part of the current exchange. Buckets are coarse on purpose —
     the model only needs to tell "now" from "ago"."""
     if seconds < 60:
@@ -339,7 +345,7 @@ def _humanize_age(seconds: float) -> str:
 
 def _stamp_history_for_prompt(history: list[dict], now: float) -> list[dict]:
     """Return a copy of ``history`` where each turn old enough gets a
-    ``[hace X]`` tag prepended to its text, so the model treats those lines
+    ``(hace X)`` tag prepended to its text, so the model treats those lines
     as past context, not present.
 
     Recent turns (≤ ``_HISTORY_AGE_TAG_THRESHOLD_SEC``) pass through unchanged
@@ -360,7 +366,7 @@ def _stamp_history_for_prompt(history: list[dict], now: float) -> list[dict]:
             # Recent — leave it alone.
             out.append({k: v for k, v in turn.items() if k != "ts"})
             continue
-        tag = f"[{_humanize_age(age)}] " if age is not None else "[hace tiempo] "
+        tag = f"({_humanize_age(age)}) " if age is not None else "(hace tiempo) "
         new_parts = []
         for part in turn.get("parts", []):
             if isinstance(part, dict) and "text" in part:
@@ -392,7 +398,11 @@ _MUSIC_CHOICE_COUNT = 5
 
 def _load_indio_state() -> None:
     """Load history+last_seen+long_term from disk on startup. Silently no-ops
-    if the file is missing or unreadable — memory just starts empty."""
+    if the file is missing or unreadable — memory just starts empty.
+
+    Loaded turns are run through ``_sanitize_for_history`` so legacy entries
+    (with bracketed "[Name]:" speaker prefixes and Discord emoji codes) get
+    migrated to the clean format on the fly, no manual JSON edits needed."""
     path = config.INDIO_MEMORY_PATH
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -414,7 +424,7 @@ def _load_indio_state() -> None:
         keep_short_term = (now - last_seen <= _HISTORY_TTL_SEC)
         if keep_short_term:
             if isinstance(history, list) and history:
-                _indio_history[key] = history
+                _indio_history[key] = [_sanitize_turn_on_load(t) for t in history]
                 _indio_last_seen[key] = last_seen
                 loaded += 1
         if isinstance(long_term, dict) and long_term:
@@ -425,6 +435,21 @@ def _load_indio_state() -> None:
     if loaded or _indio_long_term or _indio_current_members:
         logger.info("indio memory: loaded %d entries (long_term=%d, roster=%d) from %s",
                     loaded, len(_indio_long_term), len(_indio_current_members), path)
+
+
+def _sanitize_turn_on_load(turn: dict) -> dict:
+    """Pass each ``part.text`` of a history turn through ``_sanitize_for_history``.
+    Used by ``_load_indio_state`` to migrate legacy JSON on the fly. Non-dict
+    parts or parts without text are passed through unchanged."""
+    if not isinstance(turn, dict):
+        return turn
+    new_parts: list = []
+    for part in turn.get("parts", []):
+        if isinstance(part, dict) and "text" in part:
+            new_parts.append({**part, "text": _sanitize_for_history(str(part["text"]))})
+        else:
+            new_parts.append(part)
+    return {**turn, "parts": new_parts}
 
 
 async def _persist_indio_state() -> None:
@@ -1701,7 +1726,7 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
 
     Returns ``(actions_to_dispatch, reply_text)``.
     """
-    clean = _strip_indio_prefix(reply.text)
+    clean = _strip_speaker_prefix(reply.text)
     clean = _ensure_reply_text(clean, pending_actions)
     if guild_id is None:
         return pending_actions, clean
@@ -1760,14 +1785,68 @@ _INDIO_PREFIX_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Generic "[Name]:" / "(Name):" speaker tag at the very start of a reply. The
+# model picks it up by mirroring the "Name: contenido" format it sees in user
+# turns and sometimes re-bracketing it. Cap the bracketed name to 40 chars and
+# forbid newlines / nested brackets so we don't eat real bracketed content in
+# the middle of a sentence.
+_LEADING_SPEAKER_PREFIX_RE = re.compile(
+    r"^\s*[\[\(]\s*[^\]\)\n]{1,40}\s*[\]\)]\s*[:\-—]\s*",
+)
 
-def _strip_indio_prefix(text: str) -> str:
-    """Drop any "[indio]:" / "Indio:" / "(el indio) -" style prefix the model
-    sometimes hallucinates, even though INDIO_SYSTEM tells it not to."""
+
+def _strip_speaker_prefix(text: str) -> str:
+    """Drop a leading "[indio]:" / "Indio:" / "[Miles]:" / "(el indio) -" style
+    prefix from a model reply. The model sometimes mirrors the speaker tag
+    format it sees in user turns even though INDIO_SYSTEM tells it not to.
+
+    Applies first the indio-specific stripper (also catches bareword "Indio:"
+    without brackets), then the generic bracketed-name stripper."""
     if not text:
         return text
     out = _INDIO_PREFIX_RE.sub("", text, count=1)
+    out = _LEADING_SPEAKER_PREFIX_RE.sub("", out, count=1)
     return out.lstrip()
+
+
+# Legacy "[Name]:" speaker prefix from before we switched to unbracketed
+# "Name:" format. On load, rewrite the brackets out but preserve the name so
+# the model still knows who said what for those legacy turns.
+_LEGACY_BRACKETED_SPEAKER_RE = re.compile(r"^(\s*)\[([^\]\n]{1,40})\]:\s*")
+
+# Custom Discord emoji markup: <:name:id> / <a:name:id>. Stored history doesn't
+# need it — the system prompt's _format_guild_emojis block already teaches the
+# model how to emit it. Keeping the markup in history was creating a feedback
+# loop where the model picked up the ":name:" shortcode shape from its own
+# prior replies and started using bare shortcodes (which Discord won't render).
+_CUSTOM_EMOJI_MARKUP_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>")
+
+# Bare emoji shortcodes :name:. Lookbehind/lookahead on \w avoids eating
+# legitimate ":" in URLs ("http://foo:8080") or ratios ("4:3").
+_EMOJI_SHORTCODE_RE = re.compile(r"(?<!\w):[A-Za-z0-9_]{2,}:(?!\w)")
+
+# Collapse 3+ blank lines into 2 (sanitization can leave extra whitespace).
+_MULTIBLANK_RE = re.compile(r"\n{3,}")
+
+
+def _sanitize_for_history(text: str) -> str:
+    """Clean a string before it enters ``_indio_history``.
+
+    - Rewrites a legacy bracketed speaker prefix ``[Name]:`` to ``Name:`` so
+      historical user turns keep their speaker identity in the new format.
+    - Strips custom Discord emoji markup ``<:name:id>`` and ``<a:name:id>``.
+    - Strips bare emoji shortcodes ``:name:``.
+
+    The visible reply to Discord is NOT passed through this — emojis still
+    render in the chat. Only the persisted memory is scrubbed, breaking the
+    feedback loop where the model imitated the noise from its own past turns."""
+    if not text:
+        return text
+    out = _LEGACY_BRACKETED_SPEAKER_RE.sub(r"\1\2: ", text, count=1)
+    out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
+    out = _EMOJI_SHORTCODE_RE.sub("", out)
+    out = _MULTIBLANK_RE.sub("\n\n", out)
+    return out.strip()
 
 
 async def _relay_to_userbot(channel_id: int, content: str,
@@ -1991,7 +2070,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     mem_key = _indio_memory_key(ctx)
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
     speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
-    tagged_message = f"[{speaker}]: {pregunta or ''}"
+    tagged_message = f"{speaker}: {pregunta or ''}"
 
     # How the winner gets announced when the vote closes (relay as the real
     # indio when configured, else via this command's response).
@@ -2232,8 +2311,14 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         ))
 
     _turn_ts = time.time()
-    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
-    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
+    # Persisted history scrubs emojis/legacy-brackets; visible reply already
+    # went to Discord above with the emojis intact.
+    user_turn = {"role": "user",
+                 "parts": [{"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}],
+                 "ts": _turn_ts}
+    model_turn = {"role": "model",
+                  "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
+                  "ts": _turn_ts}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -2301,7 +2386,7 @@ async def indioFromVoice(
     _evict_stale_indio()
     mem_key = f"guild-{guild_id}"
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
-    tagged_message = f"[{speaker}]: {pregunta}"
+    tagged_message = f"{speaker}: {pregunta}"
     # Key the pending choice by the Discord user id (propagated from the
     # userbot), falling back to the name only when no id is available.
     _choice_identity_val = _choice_identity(user_id, speaker)
@@ -2447,8 +2532,12 @@ async def indioFromVoice(
         ))
 
     _turn_ts = time.time()
-    user_turn = {"role": "user", "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
-    model_turn = {"role": "model", "parts": [{"text": clean_reply[:_STORED_MSG_MAX_CHARS]}], "ts": _turn_ts}
+    user_turn = {"role": "user",
+                 "parts": [{"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}],
+                 "ts": _turn_ts}
+    model_turn = {"role": "model",
+                  "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
+                  "ts": _turn_ts}
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]

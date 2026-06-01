@@ -1,6 +1,8 @@
 """Behavior: when the indio replays old history into its next prompt, turns
-older than ~15 min get a ``[hace X]`` tag so Gemini can tell "this happened in
-a past conversation" apart from "this is what we just said".
+older than ~15 min get a ``(hace X)`` tag so Gemini can tell "this happened in
+a past conversation" apart from "this is what we just said". Parens (not
+brackets) intentional — brackets in the prompt taught the model to echo
+"[Name]:" speaker-tag patterns in its own replies.
 
 Without this, the indio confused last week's "te pasé la lista" with the
 current exchange and told a user it had given them options that never existed.
@@ -32,14 +34,14 @@ def test_recent_turn_passes_through_unchanged():
 
 
 def test_old_turn_gets_a_temporal_tag():
-    """A turn from 2 days ago must be prefixed with a clear "[hace X]" cue,
+    """A turn from 2 days ago must be prefixed with a clear "(hace X)" cue,
     so the model treats it as past, not present."""
     from geminiCommand import _stamp_history_for_prompt
     now = time.time()
     history = [_turn("user", "pasame la lista de redondos", ts=now - 86400 * 2)]
     out = _stamp_history_for_prompt(history, now)
     text = out[0]["parts"][0]["text"]
-    assert text.startswith("[hace ")
+    assert text.startswith("(hace")
     assert text.endswith("pasame la lista de redondos")
 
 
@@ -52,7 +54,7 @@ def test_legacy_turn_without_ts_is_tagged_as_old():
         [_turn("user", "vieja conversación")], time.time(),
     )
     text = out[0]["parts"][0]["text"]
-    assert text.startswith("[hace ")
+    assert text.startswith("(hace")
 
 
 def test_mixed_recent_and_old_get_distinguished():
@@ -68,8 +70,8 @@ def test_mixed_recent_and_old_get_distinguished():
         _turn("model", "qué onda capo",      ts=now - 25),
     ]
     out = _stamp_history_for_prompt(history, now)
-    assert out[0]["parts"][0]["text"].startswith("[hace ")
-    assert out[1]["parts"][0]["text"].startswith("[hace ")
+    assert out[0]["parts"][0]["text"].startswith("(hace")
+    assert out[1]["parts"][0]["text"].startswith("(hace")
     # The fresh ones are untouched.
     assert out[2]["parts"][0]["text"] == "che indio hola"
     assert out[3]["parts"][0]["text"] == "qué onda capo"

@@ -44,7 +44,9 @@ async def test_first_call_stores_exchange_and_replies(indio, ctx_factory, patch_
     assert "todo bien che" in "\n".join(ctx.sent_messages)
     stored = history(indio)
     assert len(stored) == 2                               # user turn + model turn
-    assert any("[Mati]: como andas" in t for t in texts(stored))
+    # The user turn keeps speaker identity + the question content; we don't
+    # pin the exact format string so the speaker-tag format can evolve.
+    assert any("Mati" in t and "como andas" in t for t in texts(stored))
     assert "todo bien che" in texts(stored)[-1]
 
 
@@ -77,8 +79,8 @@ async def test_same_guild_shared_across_authors(indio, ctx_factory, patch_genera
     await indioLogic(ctx_factory(display_name="Viny", user_id=2, guild_id=100), "buenas", nuevo=False)
 
     stored = texts(history(indio, "guild-100"))
-    assert any("[Mati]" in t for t in stored)
-    assert any("[Viny]" in t for t in stored)
+    assert any("Mati" in t for t in stored)
+    assert any("Viny" in t for t in stored)
 
 
 async def test_nuevo_resets_history_and_long_term(indio, ctx_factory, patch_generate, reply_factory):
@@ -100,7 +102,7 @@ async def test_nuevo_resets_history_and_long_term(indio, ctx_factory, patch_gene
 
 
 async def test_ttl_eviction_drops_history_but_keeps_long_term(indio):
-    indio._indio_history[KEY] = [{"role": "user", "parts": [{"text": "[Mati]: hola"}]}]
+    indio._indio_history[KEY] = [{"role": "user", "parts": [{"text": "Mati: hola"}]}]
     indio._indio_last_seen[KEY] = time.time() - (indio._HISTORY_TTL_SEC + 60)
     indio._indio_long_term[KEY] = {"users": {"Mati": {"traits": ["fan de python"]}}}
 

@@ -101,11 +101,11 @@ def test_format_renders_users_events_and_jokes():
 # ---- _turns_to_text ------------------------------------------------------
 def test_turns_to_text_labels_speakers_and_skips_empty():
     turns = [
-        {"role": "user", "parts": [{"text": "[Mati]: hola"}]},
+        {"role": "user", "parts": [{"text": "Mati: hola"}]},
         {"role": "model", "parts": [{"text": "qué onda"}]},
         {"role": "user", "parts": [{"text": ""}]},     # skipped
     ]
     out = _turns_to_text(turns)
-    assert "grupo: [Mati]: hola" in out
+    assert "grupo: Mati: hola" in out
     assert "indio: qué onda" in out
     assert out.count("\n") == 1                          # only two non-empty lines
