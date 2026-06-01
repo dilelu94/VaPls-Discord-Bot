@@ -93,7 +93,10 @@ _ignore_raw = os.getenv("IGNORE_USER_IDS", "")
 IGNORE_USER_IDS = {int(x) for x in _ignore_raw.split(",") if x.strip()}
 
 # Channel where text transcripts get posted, if writable by the user
-# account. Empty = no posting (logs only).
+# account. TRANSCRIPT_CHANNEL_ID gana sobre TRANSCRIPT_CHANNEL_NAME cuando
+# está seteado — el ID sobrevive renombres del canal en Discord, el name
+# se rompe. Empty / 0 en ambos = no posting (logs only).
+TRANSCRIPT_CHANNEL_ID = int(os.getenv("TRANSCRIPT_CHANNEL_ID", "0"))
 TRANSCRIPT_CHANNEL_NAME = os.getenv("TRANSCRIPT_CHANNEL_NAME", "")
 
 # Local HTTP relay so the main bot can ask the userbot to post a message

@@ -1225,16 +1225,38 @@ async def _get_http() -> aiohttp.ClientSession:
     return _http_session
 
 
+def _resolve_transcript_channel():
+    """Locate the transcript channel from config.
+
+    Prefiere ``TRANSCRIPT_CHANNEL_ID`` (estable frente a renombres del canal en
+    Discord) sobre ``TRANSCRIPT_CHANNEL_NAME`` (scan por nombre por guild).
+    Retorna el channel object o None si ninguna config resuelve a un canal
+    cacheable y enviable.
+    """
+    if config.TRANSCRIPT_CHANNEL_ID:
+        chan = client.get_channel(config.TRANSCRIPT_CHANNEL_ID)
+        if chan is not None and hasattr(chan, "send"):
+            return chan
+    if config.TRANSCRIPT_CHANNEL_NAME:
+        for guild in client.guilds:
+            chan = discord.utils.get(
+                guild.text_channels, name=config.TRANSCRIPT_CHANNEL_NAME
+            )
+            if chan:
+                return chan
+    return None
+
+
 async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False, vosk_result: Optional[dict] = None):
     """Handle a completed transcription: post to transcript channel + optionally
     forward to the main bot and trigger the indio on wake word.
 
     ``via_wake_word`` is set by WakeWordSink so we can skip the unconditional
-    channel post (the user explicitly asked us to stop spamming bot-testing
-    with every utterance). When the wake-word path triggers, we still post the
-    transcript so the question is visible in the channel right above the
-    indio's reply, but we never post anything that didn't pass the wake-word
-    gate.
+    channel post (the user explicitly asked us to stop spamming the transcript
+    channel with every utterance). When the wake-word path triggers, we still
+    post the transcript so the question is visible in the channel right above
+    the indio's reply, but we never post anything that didn't pass the
+    wake-word gate.
     """
     should_post = (via_wake_word
                    or config.DEBUG_TRANSCRIBE_ALL
@@ -1244,40 +1266,31 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False,
     posted_message_id: Optional[int] = None
     speaker_name: Optional[str] = None
 
-    if config.TRANSCRIPT_CHANNEL_NAME and should_post:
+    chan = _resolve_transcript_channel()
+
+    if chan is not None and should_post:
         try:
-            for guild in client.guilds:
-                chan = discord.utils.get(
-                    guild.text_channels, name=config.TRANSCRIPT_CHANNEL_NAME
-                )
-                if chan:
-                    member = guild.get_member(user_id)
-                    speaker_name = _name_for(user_id, member)
-                    posted = await chan.send(f"🎙️ **{speaker_name}:** {text}")
-                    posted_channel_id = chan.id
-                    posted_guild_id = guild.id
-                    # Capture the message id so the main bot can attach
-                    # ASR-quality feedback reactions to this transcript
-                    # (see decifrarVoting.record).
-                    posted_message_id = getattr(posted, "id", None)
-                    break
+            guild = getattr(chan, "guild", None)
+            member = guild.get_member(user_id) if guild else None
+            speaker_name = _name_for(user_id, member)
+            posted = await chan.send(f"🎙️ **{speaker_name}:** {text}")
+            posted_channel_id = chan.id
+            posted_guild_id = guild.id if guild else None
+            # Capture the message id so the main bot can attach
+            # ASR-quality feedback reactions to this transcript
+            # (see decifrarVoting.record).
+            posted_message_id = getattr(posted, "id", None)
         except Exception as e:
             log.warning(f"text-channel post failed: {e}")
 
     # Resolve the destination guild/channel even when we skipped the post (so
-    # the wake-word path can still dispatch to /indio). Re-uses the same lookup
-    # the channel post would have done.
-    if posted_channel_id is None and config.TRANSCRIPT_CHANNEL_NAME:
-        for guild in client.guilds:
-            chan = discord.utils.get(
-                guild.text_channels, name=config.TRANSCRIPT_CHANNEL_NAME
-            )
-            if chan:
-                member = guild.get_member(user_id)
-                speaker_name = _name_for(user_id, member)
-                posted_channel_id = chan.id
-                posted_guild_id = guild.id
-                break
+    # the wake-word path can still dispatch to /indio).
+    if posted_channel_id is None and chan is not None:
+        guild = getattr(chan, "guild", None)
+        member = guild.get_member(user_id) if guild else None
+        speaker_name = _name_for(user_id, member)
+        posted_channel_id = chan.id
+        posted_guild_id = guild.id if guild else None
 
     # Wake word: when this transcript came from the WakeWordSink (VOSK already
     # matched a restrictive _WAKE_PATTERNS pair upstream), hand the entire raw
