@@ -1,7 +1,11 @@
 py-cord[voice] @ git+https://github.com/Pycord-Development/pycord
 python-dotenv
 psutil
-posthog>=7.15.0
+posthog[otel]>=7.15.0
+opentelemetry-api>=1.25.0
+opentelemetry-sdk>=1.25.0
+opentelemetry-exporter-otlp>=1.25.0
+opentelemetry-instrumentation-google-generativeai>=0.38b0
 aiohttp>=3.9
 # audioop was removed from the stdlib in Python 3.13. This backport re-adds it
 # so userbot/recording.py can import it if the server's Python is ever upgraded.

@@ -208,6 +208,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 log = logging.getLogger("userbot")
+
+import posthog_client
+posthog_client.init_observability(service_name="vapls-userbot")
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 logging.getLogger("discord.voice_client").setLevel(logging.INFO)

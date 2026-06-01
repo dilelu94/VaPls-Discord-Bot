@@ -37,6 +37,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("bot")
 
+import posthog_client
+posthog_client.init_observability(service_name="vapls-main-bot")
+
 if not discord.opus.is_loaded():
     for lib in ['libopus.so.0', 'libopus.so', 'opus']:
         try:
