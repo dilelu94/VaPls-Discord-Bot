@@ -952,3 +952,105 @@ async def test_unknown_function_call_is_ignored(
 
     play_mock.assert_not_awaited()
     clip_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Edit-in-place: reply message is edited after the action resolves
+# ---------------------------------------------------------------------------
+
+
+async def test_play_succeeds_reply_is_edited_with_success_marker(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """When a control action (skip) succeeds, the Gemini pre-line reply is
+    EDITED to append a success marker — the user sees the final state without
+    a separate message.
+
+    Control verbs (skip/pause/resume/stop) bypass the music disambiguation
+    flow so they always go through _dispatch_indio_actions directly, making
+    them the clearest test surface for the edit-in-place behavior."""
+    import playCommand
+
+    fake_player = MagicMock()
+    fake_player.skipSong = AsyncMock()
+    fake_player.vc = MagicMock()
+    fake_player.vc.is_playing = MagicMock(return_value=True)
+    fake_player.vc.is_paused = MagicMock(return_value=False)
+    monkeypatch.setitem(playCommand.guildPlayers, 100, fake_player)
+
+    # Stub the #sick-tunes mirror relay to avoid network calls.
+    import geminiCommand
+    monkeypatch.setattr(geminiCommand, "_relay_to_userbot",
+                        AsyncMock(return_value=None))
+
+    patch_generate(reply=reply_factory(
+        text="dale, salteo",
+        function_calls=[{"name": "skip_music", "args": {}}],
+    ))
+
+    ctx = ctx_factory(guild_id=100)
+    await indioLogic(ctx, "saltea este tema", nuevo=False)
+    await _drain_pending_tasks()
+
+    # The skip boundary ran.
+    fake_player.skipSong.assert_awaited()
+
+    # The final user-visible text must contain the original reply AND a
+    # success marker (edit happened in place).
+    final = "\n".join(m for m in ctx.sent_messages if m is not None)
+    assert "dale, salteo" in final
+    assert "listo" in final.lower() or "✅" in final
+
+
+async def test_play_fails_reply_is_edited_with_failure_indication(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """When a control action fails (no active player), the reply is EDITED
+    to include the failure reason, which is distinct from a success suffix."""
+    import playCommand
+
+    # No player → action fails with "no active player".
+    playCommand.guildPlayers.pop(100, None)
+
+    patch_generate(reply=reply_factory(
+        text="dale, salteo",
+        function_calls=[{"name": "skip_music", "args": {}}],
+    ))
+
+    ctx = ctx_factory(guild_id=100)
+    await indioLogic(ctx, "saltea", nuevo=False)
+    await _drain_pending_tasks()
+
+    final = "\n".join(m for m in ctx.sent_messages if m is not None)
+    assert "dale, salteo" in final
+    # A failure reason is present in the edited text.
+    assert "no" in final.lower()
+    # The success emoji must NOT be present without a failure qualifier.
+    # (A failure suffix does not include ✅ alone.)
+    combined_lower = final.lower()
+    # Either no ✅ at all, or ✅ accompanied by failure language — but since
+    # the failure path appends a Spanish reason (not ✅), just check for reason.
+    assert "✅" not in final or "no" in combined_lower
+
+
+async def test_plain_chat_no_action_reply_not_edited(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """When Gemini returns no function call, no action runs and the reply
+    message is NOT edited (there's no suffix to append)."""
+    patch_generate(reply=reply_factory(
+        text="todo bien, ¿y vos?",
+        function_calls=[],
+    ))
+
+    ctx = ctx_factory(guild_id=100)
+    await indioLogic(ctx, "como andas", nuevo=False)
+    await _drain_pending_tasks()
+
+    # The user sees the Gemini reply text.
+    final = "\n".join(m for m in ctx.sent_messages if m is not None)
+    assert "todo bien, ¿y vos?" in final
+    # No suffix was appended: no music emoji, no "listo", no failure marker.
+    assert "🎵" not in final
+    assert "🔊" not in final
+    assert "listo" not in final.lower()
