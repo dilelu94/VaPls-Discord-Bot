@@ -13,12 +13,10 @@ serialisation and HTTP headers are exercised for real.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -347,3 +345,24 @@ async def test_fetch_channel_fallback_used_when_get_channel_misses():
     assert resp.status == 200
     assert body["ok"] is True
     msg.edit.assert_called_once()
+
+
+async def test_non_messageable_channel_returns_400():
+    """A resolved channel that isn't messageable (e.g. a category, which has
+    no fetch_message) must return a clear 400 instead of a misleading 404."""
+    category_like = SimpleNamespace(id=CHANNEL_ID)  # no fetch_message attr
+    _client_stub.get_channel = lambda cid: category_like
+    _client_stub.fetch_channel = AsyncMock(side_effect=Exception("not found"))
+    _client_stub.is_ready = lambda: True
+
+    tc = await _start(_make_app())
+    try:
+        resp = await tc.post(
+            "/edit",
+            json={"channel_id": CHANNEL_ID, "message_id": MESSAGE_ID, "content": "x"},
+            headers=_good_headers(),
+        )
+    finally:
+        await tc.close()
+
+    assert resp.status == 400

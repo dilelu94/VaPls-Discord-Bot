@@ -2379,6 +2379,10 @@ async def _relay_edit(request: web.Request) -> web.Response:
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
 
+    if not hasattr(channel, "fetch_message"):
+        return web.json_response(
+            {"error": "channel not messageable"}, status=400)
+
     try:
         msg = await channel.fetch_message(message_id)
     except Exception as e:

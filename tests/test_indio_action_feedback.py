@@ -61,24 +61,33 @@ def test_success_status_returns_none():
 # --- End-to-end: _dispatch_indio_actions edits reply in place on failure ----
 
 def _make_handle(*, via_relay=False, channel_id=42, message_id=None,
-                 edited_content=None):
+                 edited_content=None, single=True, sent_content=None):
     """Build a reply handle mirroring what indioLogic / indioFromVoice produce.
 
     The ``edited_content`` list (pass a mutable list) is populated by the fake
-    message's ``.edit()`` so tests can assert what was written."""
+    message's ``.edit()`` so tests can assert what was written. ``sent_content``
+    records any standalone ``channel.send`` the dispatcher falls back to when
+    the reply can't be edited in place (e.g. a multi-chunk reply). ``single``
+    mirrors whether the reply fit in a single message."""
     if via_relay:
         return types.SimpleNamespace(
             via_relay=True,
             channel_id=channel_id,
             message_id=message_id or 999,
             message=None,
+            single=single,
         )
     else:
         container = edited_content if edited_content is not None else []
+        sent = sent_content if sent_content is not None else []
+
+        async def _channel_send(content=None, **kwargs):
+            if content is not None:
+                sent.append(content)
 
         class _FakeMsg:
             id = 1234
-            channel = types.SimpleNamespace(id=channel_id)
+            channel = types.SimpleNamespace(id=channel_id, send=_channel_send)
 
             async def edit(self, *, content=None, **kwargs):
                 if content is not None:
@@ -89,6 +98,7 @@ def _make_handle(*, via_relay=False, channel_id=42, message_id=None,
             channel_id=channel_id,
             message_id=None,
             message=_FakeMsg(),
+            single=single,
         )
 
 
@@ -284,3 +294,31 @@ async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
     combined = edited[0]
     assert "tomá" in combined
     assert "🔊" in combined          # sound-specific suffix
+
+
+async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
+    """When the reply was split into several messages we must NOT rewrite one
+    chunk with the whole reply (that duplicates earlier chunks / risks the
+    2000-char limit). Instead the result is posted as a short standalone
+    message so the user still finds out."""
+    import geminiCommand
+    import playCommand
+
+    monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=True)
+
+    edited = []
+    sent = []
+    handle = _make_handle(via_relay=False, edited_content=edited,
+                          sent_content=sent, single=False)
+
+    await geminiCommand._dispatch_indio_actions(
+        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        reply_handle=handle,
+        reply_text="una respuesta larga partida en varios mensajes",
+    )
+
+    # The original (chunked) message was NOT edited; the result went out as a
+    # standalone message instead.
+    assert not edited, "must not overwrite a chunk with the full reply"
+    assert sent, "expected a standalone result message"
+    assert "no" in sent[0].lower()   # failure reason surfaced

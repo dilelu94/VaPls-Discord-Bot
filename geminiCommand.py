@@ -1159,13 +1159,16 @@ def _failure_feedback(status: str) -> Optional[str]:
     return None
 
 
+# Short, in-character result lines appended after a successful action. Stored
+# without leading punctuation; the joiner adds " — " when editing in place and
+# posts the bare line when it has to fall back to a standalone message.
 _ACTION_SUCCESS_SUFFIX = {
-    "PLAY_MUSIC": " — listo 🎵",
-    "PLAY_SOUND": " — listo 🔊",
-    "SKIP_MUSIC": " — listo ✅",
-    "PAUSE_MUSIC": " — listo ✅",
-    "RESUME_MUSIC": " — listo ✅",
-    "STOP_MUSIC": " — listo ✅",
+    "PLAY_MUSIC": "listo 🎵",
+    "PLAY_SOUND": "listo 🔊",
+    "SKIP_MUSIC": "listo ✅",
+    "PAUSE_MUSIC": "listo ✅",
+    "RESUME_MUSIC": "listo ✅",
+    "STOP_MUSIC": "listo ✅",
 }
 
 
@@ -1322,35 +1325,50 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
             logger.exception("indio action %s failed", action)
             statuses.append(f"{action.lower()}: fail — exception")
 
-    # After all actions ran, EDIT the original reply in place to append a
-    # short result indicator.  Best-effort: log on failure, never crash.
+    # After all actions ran, surface the outcome on the indio's reply. When the
+    # reply was a single message we EDIT it in place to append a short result
+    # line. When it was split into several chunks (rare for the indio's brief
+    # confirmations) we can't safely rewrite one chunk with the whole reply, so
+    # we post the result as a short standalone message instead. Same fallback
+    # when the relay gave us no editable message id. Best-effort: never crash.
     if reply_handle is not None and statuses:
         try:
-            # Determine the primary action type for the success suffix.
             primary_action = actions[0][0] if actions else ""
-            # Find the first failing status (if any).
             first_failure = next(
                 (s for s in statuses if _failure_feedback(s) is not None), None
             )
             if first_failure is not None:
-                failure_msg = _failure_feedback(first_failure)
-                suffix = f"\n— {failure_msg}" if failure_msg else ""
+                result_line = _failure_feedback(first_failure) or ""
             else:
-                suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, " — listo ✅")
-            new_content = reply_text + suffix
-            logger.info("indio dispatch edit: suffix=%r via_relay=%s",
-                        suffix, getattr(reply_handle, "via_relay", None))
-            if getattr(reply_handle, "via_relay", False):
+                result_line = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
+            if result_line:
+                via_relay = getattr(reply_handle, "via_relay", False)
                 ch_id = getattr(reply_handle, "channel_id", None)
-                msg_id = getattr(reply_handle, "message_id", None)
-                if ch_id and msg_id:
-                    await _edit_via_userbot(ch_id, msg_id, new_content)
-            else:
-                msg = getattr(reply_handle, "message", None)
-                if msg is not None:
-                    await msg.edit(content=new_content)
+                msg_obj = getattr(reply_handle, "message", None)
+                single = getattr(reply_handle, "single", True)
+                logger.info("indio dispatch result: %r single=%s via_relay=%s",
+                            result_line, single, via_relay)
+                edited = False
+                if single:
+                    new_content = f"{reply_text} — {result_line}"
+                    if via_relay:
+                        msg_id = getattr(reply_handle, "message_id", None)
+                        if ch_id and msg_id:
+                            edited = await _edit_via_userbot(
+                                ch_id, msg_id, new_content
+                            )
+                    elif msg_obj is not None:
+                        await msg_obj.edit(content=new_content)
+                        edited = True
+                if not edited:
+                    # Multi-chunk reply or no editable id: post the result on
+                    # its own so the user still finds out what happened.
+                    if via_relay and ch_id:
+                        await _relay_to_userbot(ch_id, result_line, None)
+                    elif msg_obj is not None and getattr(msg_obj, "channel", None):
+                        await msg_obj.channel.send(result_line)
         except Exception:
-            logger.exception("indio dispatch in-place edit failed")
+            logger.exception("indio dispatch result delivery failed")
 
     return statuses
 
@@ -1761,6 +1779,12 @@ async def _relay_to_userbot(channel_id: int, content: str,
                     return None
                 data = await resp.json(content_type=None)
         ids = (data or {}).get("message_ids") or []
+        # The relay succeeded. Normally it echoes the ids of the messages it
+        # posted; if for some reason it doesn't, return ``[0]`` as a "sent but
+        # id unknown" truthy sentinel so the truthiness contract holds for the
+        # 9 callers. Id 0 is never a real Discord id, and the in-place editor
+        # guards with ``if ch_id and msg_id`` so it's safely skipped (it posts
+        # a standalone result line instead).
         return [int(i) for i in ids] if ids else [0]
     except asyncio.TimeoutError:
         logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
@@ -2113,6 +2137,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                     channel_id=channel_id,
                     message_id=relay_msg_id,
                     message=None,
+                    single=len(relay_ids) == 1,
                 )
                 n_chunks = 1
             else:
@@ -2125,6 +2150,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                     channel_id=channel_id,
                     message_id=None,
                     message=sent_msg,
+                    single=len(chunks) == 1,
                 )
                 n_chunks = len(chunks)
         else:
@@ -2139,6 +2165,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 channel_id=channel_id,
                 message_id=None,
                 message=sent_msg,
+                single=len(chunks) == 1,
             )
             n_chunks = len(chunks)
     except Exception as e:
@@ -2352,16 +2379,19 @@ async def indioFromVoice(
                         channel_id=channel_id,
                         message_id=relay_msg_id,
                         message=None,
+                        single=len(relay_ids) == 1,
                     )
             if not relayed_via_userbot:
+                chunks = _split_for_discord(clean_reply)
                 sent_msg = None
-                for chunk in _split_for_discord(clean_reply):
+                for chunk in chunks:
                     sent_msg = await channel.send(chunk)
                 reply_handle = _types.SimpleNamespace(
                     via_relay=False,
                     channel_id=channel_id,
                     message_id=None,
                     message=sent_msg,
+                    single=len(chunks) == 1,
                 )
     except Exception:
         logger.exception("indioFromVoice send failed")
