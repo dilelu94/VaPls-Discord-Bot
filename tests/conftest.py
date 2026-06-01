@@ -219,6 +219,7 @@ def gemini_http(monkeypatch):
     # deje a "test-key" en cooldown y contamine el proximo caso.
     geminiClient._key_cooldowns.clear()
     geminiClient._next_key_idx = 0
+    geminiClient._sticky_key = None
 
     class _Spy:
         requests: list = []

@@ -299,6 +299,7 @@ def track_ai_generation(
     history: Optional[list] = None,
     user_id: Optional[str] = None,
     guild_id: Optional[str] = None,
+    cached_tokens: Optional[int] = None,
     **properties
 ) -> None:
     """Capture a detailed Gemini LLM generation event in PostHog.
@@ -316,6 +317,8 @@ def track_ai_generation(
         history:            Optional conversation history in Gemini format.
         user_id:            Optional user distinct_id.
         guild_id:           Optional Discord guild ID.
+        cached_tokens:      Input tokens served from Gemini's implicit cache
+                            (subset of prompt_tokens, billed at a discount).
         **properties:       Additional custom metadata properties.
     """
     if _posthog is None:
@@ -349,10 +352,18 @@ def track_ai_generation(
     if guild_id:
         props["guild_id"] = str(guild_id)
 
-    # Calculate token cost (pricing reference for Gemini 1.5/2.5 Flash)
+    # Surface cache hits for the LLM Observability dashboard.
+    ct = cached_tokens or 0
+    if ct:
+        props["$ai_cache_read_input_tokens"] = int(ct)
+
+    # Calculate token cost (pricing reference for Gemini 1.5/2.5 Flash).
+    # Cached input tokens bill at ~25% of the normal input price, so split
+    # prompt tokens into cached vs fresh before costing.
     pt = prompt_tokens or 0
     rt = response_tokens or 0
-    input_cost = pt * 0.075 / 1_000_000
+    fresh_input = max(pt - ct, 0)
+    input_cost = (fresh_input * 0.075 + ct * 0.075 * 0.25) / 1_000_000
     output_cost = rt * 0.30 / 1_000_000
     props["$ai_total_cost_usd"] = input_cost + output_cost
 

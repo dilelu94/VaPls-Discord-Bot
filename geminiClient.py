@@ -31,9 +31,16 @@ _MAX_FAILOVER_WAIT_SEC = 3.0
 
 # Map key -> timestamp (monotonic) hasta cuando esta marcada como agotada.
 _key_cooldowns: dict[str, float] = {}
-# Indice round-robin para empezar la busqueda desde una key distinta cada vez,
-# asi balanceamos cuando hay multiples keys sanas en paralelo.
+# Indice round-robin para elegir una key nueva cuando hay que adoptar una
+# (la sticky se agoto o nunca hubo): reparte el arranque entre las sanas.
 _next_key_idx: int = 0
+# Key "pegajosa": la seguimos usando mientras este sana en vez de rotar en
+# cada llamada. Gemini cachea el prompt de forma implicita POR API key, asi
+# que mantenernos en una sola key hace que nuestro prefijo estable (system
+# prompt + tools) pegue en cache una y otra vez. Round-robin tiraba cada
+# llamada a una key distinta -> cada key veia 1/N del trafico y el cache casi
+# nunca pegaba. Al 429 la key entra en cooldown y _pick_key adopta otra.
+_sticky_key: Optional[str] = None
 
 
 def _pool_keys() -> list[str]:
@@ -52,25 +59,36 @@ def _available_keys() -> list[str]:
 
 
 def _pick_key() -> Optional[str]:
-    """Pick the next non-cooled-down key in round-robin order.
+    """Pick a key, preferring to stick with the current one.
+
+    Sticky selection: while the last-adopted key is healthy we keep returning
+    it, so Gemini's implicit prompt cache (keyed per-API-key) keeps hitting on
+    our stable system-prompt + tools prefix. Only when that key enters cooldown
+    (429) do we adopt the next available key, round-robin, and stick to it.
 
     Returns ``None`` when there are no keys configured. When every key is in
     cooldown, returns the one whose cooldown expires soonest (so the caller
     can decide whether to wait or surface a 429).
     """
-    global _next_key_idx
+    global _next_key_idx, _sticky_key
     keys = _pool_keys()
     if not keys:
         return None
     available = _available_keys()
     if available:
+        # Stay on the sticky key while it's healthy (maximizes cache hits).
+        if _sticky_key is not None and _sticky_key in available:
+            return _sticky_key
+        # Sticky key is gone (cooled down or removed from the pool): adopt the
+        # next available one round-robin and make it the new sticky key.
         start = _next_key_idx % len(keys)
         for offset in range(len(keys)):
             candidate = keys[(start + offset) % len(keys)]
             if candidate in available:
                 _next_key_idx = (start + offset + 1) % len(keys)
+                _sticky_key = candidate
                 return candidate
-    # Todas en cooldown: devolvemos la que se libera antes.
+    # Todas en cooldown: devolvemos la que se libera antes (sin tocar sticky).
     return min(keys, key=lambda k: _key_cooldowns.get(k, 0.0))
 
 
@@ -104,6 +122,10 @@ class GeminiReply:
     response_tokens: Optional[int]
     model: str
     function_calls: list[dict] = field(default_factory=list)
+    # How many of ``prompt_tokens`` were served from Gemini's implicit cache
+    # (billed at a fraction of the normal input price). ``None`` when the API
+    # didn't report it (e.g. no cache hit, or a model without caching).
+    cached_tokens: Optional[int] = None
 
 
 async def generate(
@@ -115,6 +137,7 @@ async def generate(
     timeout_sec: float = DEFAULT_TIMEOUT_SEC,
     max_output_tokens: int = 1024,
     tools: Optional[list[dict]] = None,
+    volatile_context: Optional[str] = None,
     distinct_id: Optional[str] = None,
     guild_id: Optional[str] = None,
 ) -> GeminiReply:
@@ -122,7 +145,10 @@ async def generate(
 
     Args:
         user_message: User input text.
-        system_instruction: System prompt for persona guidance.
+        system_instruction: System prompt for persona guidance. Treated as a
+            *stable prefix* — keep it byte-identical across calls in a session
+            so Gemini's implicit cache can hit on it (don't fold per-turn
+            volatile data in here; use ``volatile_context``).
         history: Optional conversation history in Gemini format.
         model: Override model name; defaults to config.GEMINI_MODEL.
         timeout_sec: Total HTTP timeout.
@@ -130,6 +156,10 @@ async def generate(
         tools: Optional list of FunctionDeclaration dicts. When provided, the
             model can emit ``functionCall`` parts that surface in
             ``GeminiReply.function_calls``.
+        volatile_context: Optional per-turn context (e.g. current player state)
+            that changes call-to-call. Sent at the very end of the request,
+            bundled into the final user turn, so it never poisons the cacheable
+            system-prompt + tools prefix.
 
     Returns:
         GeminiReply with the rendered text and usage metadata.
@@ -148,10 +178,17 @@ async def generate(
         raise GeminiError("GEMINI_API_KEY not set", kind="config")
 
     mdl = model or config.GEMINI_MODEL
+    # Stable prefix (system_instruction, then tools) goes first so Gemini's
+    # implicit cache can match on it; volatile per-turn context rides at the
+    # very end, in the final user turn, after the history.
+    user_parts: list[dict] = []
+    if volatile_context:
+        user_parts.append({"text": volatile_context})
+    user_parts.append({"text": user_message})
     body: dict = {
         "system_instruction": {"parts": [{"text": system_instruction}]},
         "contents": (history or []) + [
-            {"role": "user", "parts": [{"text": user_message}]},
+            {"role": "user", "parts": user_parts},
         ],
         "generationConfig": {
             "temperature": 0.9,
@@ -268,6 +305,17 @@ async def generate(
         )
 
     usage = data.get("usageMetadata") or {}
+    prompt_tokens = usage.get("promptTokenCount")
+    cached_tokens = usage.get("cachedContentTokenCount")
+    response_tokens = usage.get("candidatesTokenCount")
+
+    # Per-call token visibility (issue #16): without this we were guessing
+    # which calls were expensive. cached_tokens shows the implicit cache
+    # actually hitting on our stable prefix.
+    logger.info(
+        "gemini ok model=%s prompt_tokens=%s cached_tokens=%s response_tokens=%s",
+        mdl, prompt_tokens, cached_tokens, response_tokens,
+    )
 
     # Track Gemini call in PostHog
     posthog_client.track_ai_generation(
@@ -276,8 +324,9 @@ async def generate(
         system_instruction=system_instruction,
         history=history,
         response=text,
-        prompt_tokens=usage.get("promptTokenCount"),
-        response_tokens=usage.get("candidatesTokenCount"),
+        prompt_tokens=prompt_tokens,
+        response_tokens=response_tokens,
+        cached_tokens=cached_tokens,
         t_start=t_start,
         user_id=distinct_id,
         guild_id=guild_id,
@@ -286,8 +335,9 @@ async def generate(
     return GeminiReply(
         text=text,
         finish_reason=finish,
-        prompt_tokens=usage.get("promptTokenCount"),
-        response_tokens=usage.get("candidatesTokenCount"),
+        prompt_tokens=prompt_tokens,
+        response_tokens=response_tokens,
         model=mdl,
         function_calls=function_calls,
+        cached_tokens=cached_tokens,
     )

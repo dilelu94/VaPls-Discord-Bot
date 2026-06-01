@@ -2083,8 +2083,11 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 len(current_members),
                 len((long_term_snapshot.get("users") or {})),
                 emoji_count, mem_key)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block, player_block) if b)
-    system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
+    # Stable cache prefix: persona + long-term notes + emojis (change rarely
+    # within a session). Player state is volatile (current track/queue) so it
+    # rides in volatile_context, out of the cached system prompt.
+    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (f"\n\n{stable_extras}" if stable_extras else "")
 
     t0 = time.monotonic()
     try:
@@ -2093,6 +2096,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             system_instruction=system_instruction,
             history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
+            volatile_context=player_block or None,
         )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "indio")
@@ -2354,8 +2358,11 @@ async def indioFromVoice(
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
     player_block = _format_player_state(bot, guild_id)
-    extras = "\n\n".join(b for b in (lt_block, emoji_block, player_block) if b)
-    system_instruction = INDIO_SYSTEM + (f"\n\n{extras}" if extras else "")
+    # Stable cache prefix: persona + long-term notes + emojis (change rarely
+    # within a session). Player state is volatile (current track/queue) so it
+    # rides in volatile_context, out of the cached system prompt.
+    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (f"\n\n{stable_extras}" if stable_extras else "")
 
     t0 = time.monotonic()
     try:
@@ -2364,6 +2371,7 @@ async def indioFromVoice(
             system_instruction=system_instruction,
             history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
+            volatile_context=player_block or None,
         )
     except geminiClient.GeminiError as e:
         # Posteamos el aviso (incluido el 429 "conseguite una key") via el

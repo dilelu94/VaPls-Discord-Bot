@@ -26,7 +26,12 @@ VaPls runs as two cooperating processes:
   `playCommand` state to prevent overlapping music playback. Emits analytics.
 - **geminiCommand.py**: `/vapls` and `/indio` logic. Uses `geminiClient` and
   `analytics`.
-- **geminiClient.py**: Async HTTP client for Gemini generateContent.
+- **geminiClient.py**: Async HTTP client for Gemini generateContent. Multi-key
+  pool with **sticky** selection (stay on one key until it 429s, then rotate)
+  so Gemini's per-key implicit prompt cache keeps hitting the stable
+  system-prompt + tools prefix. Callers pass per-turn volatile data via
+  `volatile_context=` (sent last, in the user turn) to keep that prefix
+  byte-stable; `GeminiReply.cached_tokens` reports cache-hit tokens.
 - **apiServer.py**: HTTP API for status, members, queue, and audio playback.
 - **analytics.py**: PostHog wrapper; no-ops if disabled.
 - **greeting.py**: Greeting trigger + throttling. Uses `users.py` and config.
