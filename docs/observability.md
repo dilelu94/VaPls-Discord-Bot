@@ -58,6 +58,20 @@ Because the main bot (`bot.py`) and the userbot (`userbot/bot.py`) run as separa
 
 Every OTLP log record shipped to PostHog carries its corresponding `service.name` property.
 
+> **Operational gotcha — two processes, two venvs, two env files.** The main
+> bot and the userbot are wired independently:
+>
+> | | venv (deps) | env file (`POSTHOG_API_KEY`) |
+> |---|---|---|
+> | Main bot | repo-root `requirements.txt` → `./venv` | repo-root `.env` |
+> | Userbot | `userbot/requirements.txt` → `userbot/venv` | `userbot/.env` |
+>
+> Enabling observability on the userbot requires **both**: the `posthog` /
+> `opentelemetry-*` packages in `userbot/requirements.txt` **and**
+> `POSTHOG_API_KEY` in `userbot/.env`. Miss either and `init_observability()`
+> degrades to a silent no-op (logs `PostHog API key not set` or
+> `PostHog package is not installed`).
+
 ---
 
 ## 🤖 Gemini AI Observability & Token Monitoring
