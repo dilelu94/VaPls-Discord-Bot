@@ -2468,6 +2468,7 @@ async def indioFromVoice(
         return
     # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todas las
     # respuestas del Indio (sin importar el trigger) aterrizan ahi.
+    original_channel_id = channel_id
     if config.INDIO_REPLY_CHANNEL_ID:
         target_chan = bot.get_channel(config.INDIO_REPLY_CHANNEL_ID)
         if target_chan is not None and getattr(target_chan, "guild", None) is not None:
@@ -2487,6 +2488,19 @@ async def indioFromVoice(
     if channel is None or not hasattr(channel, "send"):
         logger.warning("indioFromVoice: channel %s not found", channel_id)
         return
+    # Si la respuesta se redirige a otro canal, avisar en el original
+    # mencionando al user para que el resto del canal se entere de que la
+    # charla se movio. Best-effort: si el canal original no se puede resolver
+    # o el send falla, sigue sin romper el flow.
+    if user_id and original_channel_id and original_channel_id != channel_id:
+        source_chan = bot.get_channel(original_channel_id)
+        if source_chan is not None and hasattr(source_chan, "send"):
+            try:
+                await source_chan.send(
+                    f"<@{user_id}> te respondo en <#{channel_id}>"
+                )
+            except Exception:
+                logger.exception("indioFromVoice: source-channel ack failed")
     member = guild.get_member(user_id)
     speaker = (speaker_name
                or (member.display_name if member else None)
