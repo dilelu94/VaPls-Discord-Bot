@@ -59,11 +59,15 @@ if not discord.opus.is_loaded():
             continue
 
 
-async def safe_defer(ctx):
+async def safe_defer(ctx, ephemeral: bool = False):
     """Defer a Discord interaction if it has not been responded to yet.
 
     Args:
         ctx: Discord command context/interaction wrapper.
+        ephemeral: If True, the deferred response (and all subsequent
+            followups) are visible only to the invoker. Once an interaction
+            is deferred public, followup ``ephemeral=True`` is silently
+            ignored by Discord — pick the flag here.
 
     Returns:
         True if defer succeeded or was already done, False otherwise.
@@ -77,7 +81,7 @@ async def safe_defer(ctx):
     if hasattr(ctx, "response") and ctx.response.is_done():
         return True
     try:
-        await ctx.defer()
+        await ctx.defer(ephemeral=ephemeral)
         return True
     except Exception:
         return False
@@ -513,15 +517,17 @@ async def indio(
     Async:
         This function is a coroutine and must be awaited.
     """
-    await safe_defer(ctx)
-    _track_command(ctx, "indio", {"prompt_length": len(charla or "")})
     # Cuando el override de canal esta activo y el slash se invoca desde otro
     # canal, avisar al invocador ephemeral (solo lo ve el que disparó /indio)
-    # que la respuesta va al target.
+    # que la respuesta va al target. El defer también va ephemeral, porque si
+    # no Discord ignora el ephemeral=True del followup.
     source_id = getattr(ctx, "channel_id", None) or getattr(
         getattr(ctx, "channel", None), "id", None)
     target_id = config.INDIO_REPLY_CHANNEL_ID
-    if target_id and source_id and source_id != target_id:
+    will_redirect = bool(target_id and source_id and source_id != target_id)
+    await safe_defer(ctx, ephemeral=will_redirect)
+    _track_command(ctx, "indio", {"prompt_length": len(charla or "")})
+    if will_redirect:
         try:
             await ctx.followup.send(
                 f"te respondo en <#{target_id}>", ephemeral=True,
