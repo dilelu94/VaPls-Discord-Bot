@@ -387,6 +387,16 @@ async def parar(ctx):
     await pararLogic(ctx)
 
 
+@bot.slash_command(name="queue", description="Muestra la cola de reproducción actual")
+async def queueCommand(ctx):
+    """Slash command: render the current queue as an ephemeral embed."""
+    from playCommand import guildPlayers, build_queue_embed
+    _track_command(ctx, "queue")
+    player = guildPlayers.get(ctx.guild.id) if ctx.guild else None
+    embed = build_queue_embed(player)
+    await ctx.respond(embed=embed, ephemeral=True)
+
+
 @bot.slash_command(name="play", description="Reproduce una canción o playlist de YouTube")
 async def play(
     ctx,

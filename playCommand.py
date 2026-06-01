@@ -1398,6 +1398,85 @@ class GuildPlayer:
                 pass
 
 
+_QUEUE_EMBED_LIMIT = 15
+
+
+def _parse_duration_secs(s: str) -> int:
+    if not s:
+        return 0
+    try:
+        parts = [int(p) for p in s.split(":")]
+    except ValueError:
+        return 0
+    if len(parts) == 2:
+        return parts[0] * 60 + parts[1]
+    if len(parts) == 3:
+        return parts[0] * 3600 + parts[1] * 60 + parts[2]
+    return 0
+
+
+def _format_secs(total: int) -> str:
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
+
+
+def build_queue_embed(player: Optional["GuildPlayer"]) -> discord.Embed:
+    """Render the current player state as a standalone embed for /queue.
+
+    Pure function: takes the player (or None) and returns the embed. Used by
+    the on-demand slash command so users can inspect what's queued without
+    hunting down the persistent control message.
+    """
+    if player is None or (player.currentSong is None and not player.queue):
+        return discord.Embed(
+            title="🎵 Cola de música",
+            description="No hay música activa en este server.",
+            color=discord.Color.greyple(),
+        )
+
+    embed = discord.Embed(title="🎵 Cola de música", color=discord.Color.blurple())
+
+    if player.currentSong:
+        cur = player.currentSong
+        durStr = cur.get("duration_string", "")
+        durSuffix = f" `[{durStr}]`" if durStr else ""
+        embed.add_field(
+            name="▶️ Reproduciendo",
+            value=f"**{cur['title']}**{durSuffix}",
+            inline=False,
+        )
+
+    n = len(player.queue)
+    if n == 0:
+        embed.add_field(name="📋 Siguientes en cola", value="_Cola vacía._", inline=False)
+    else:
+        shown = player.queue[:_QUEUE_EMBED_LIMIT]
+        lines = []
+        for i, item in enumerate(shown, start=1):
+            durStr = item.get("duration_string", "")
+            durSuffix = f" `[{durStr}]`" if durStr else ""
+            lines.append(f"`{i}.` {item['title']}{durSuffix}")
+        if n > _QUEUE_EMBED_LIMIT:
+            lines.append(f"_…y {n - _QUEUE_EMBED_LIMIT} más._")
+        embed.add_field(
+            name=f"📋 Siguientes en cola ({n})",
+            value="\n".join(lines),
+            inline=False,
+        )
+
+    total = sum(_parse_duration_secs(s.get("duration_string", "")) for s in player.queue)
+    if total > 0:
+        embed.add_field(name="⏱️ Tiempo total de cola", value=_format_secs(total), inline=True)
+
+    if player.history:
+        embed.set_footer(text=f"Canciones en historial: {len(player.history)}")
+
+    return embed
+
+
 class PlayerControlView(discord.ui.View):
     """Playback control buttons for the GuildPlayer UI."""
     def __init__(self, player: GuildPlayer):
