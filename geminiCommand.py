@@ -1222,6 +1222,18 @@ _ACTION_SUCCESS_SUFFIX = {
     "STOP_MUSIC": "listo ✅",
 }
 
+# When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
+# HTTP 200 from Discord acknowledging the slash interaction — the actual
+# yt-dlp download / playback can still fail downstream and we won't learn
+# about it. Use a softer suffix so the indio doesn't falsely promise audio
+# the user might never hear. The fallback path (playFromIndio /
+# play_clip_by_query) runs in-process so the regular "listo" suffix still
+# applies there.
+_ACTION_RELAY_SUCCESS_SUFFIX = {
+    "PLAY_MUSIC": "le pasé el tema al /play 🎵",
+    "PLAY_SOUND": "le pasé el clip al /soundpad 🔊",
+}
+
 
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
@@ -1260,6 +1272,10 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     except Exception:
         logger.exception("indio actions: playCommand import failed")
         return []
+    # Set of (action, "relay") tuples for the playback actions that succeeded
+    # only via the userbot relay (so we got an HTTP ack but not a real "queued"
+    # confirmation). Drives the softer success suffix at the bottom.
+    relayed_success: set[str] = set()
     for action, arg in actions:
         try:
             if action == "PLAY_MUSIC":
@@ -1268,7 +1284,9 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     channel_id=config.INDIO_PLAY_CHANNEL_ID,
                     query=arg,
                 )
-                if not ok:
+                if ok:
+                    relayed_success.add("PLAY_MUSIC")
+                else:
                     logger.warning(
                         "indio PLAY_MUSIC relay failed (%s); falling back to playFromIndio",
                         msg,
@@ -1282,7 +1300,9 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     channel_id=config.INDIO_PLAY_CHANNEL_ID,
                     query=arg,
                 )
-                if not ok:
+                if ok:
+                    relayed_success.add("PLAY_SOUND")
+                else:
                     logger.warning(
                         "indio PLAY_SOUND relay failed (%s); falling back to play_clip_by_query",
                         msg,
@@ -1390,6 +1410,14 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
             )
             if first_failure is not None:
                 result_line = _failure_feedback(first_failure) or ""
+            elif primary_action in relayed_success:
+                # Userbot relay ack — playback may still fail in VaPls
+                # downstream and we won't know. Soften the wording so the
+                # indio doesn't falsely claim audio that may never play.
+                result_line = _ACTION_RELAY_SUCCESS_SUFFIX.get(
+                    primary_action,
+                    _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅"),
+                )
             else:
                 result_line = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
             if result_line:
