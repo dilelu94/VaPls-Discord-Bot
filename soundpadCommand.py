@@ -156,6 +156,18 @@ def _get_clip_index(output_dir: str) -> list[tuple[str, str]]:
     return clips
 
 
+def _truncate_choice(display_name: str) -> str:
+    """Clip a choice label to Discord's 100-char autocomplete limit.
+
+    Discord rejects the *entire* autocomplete response with 400 when any
+    single choice name exceeds 100 chars, so one absurdly-long filename
+    would silently kill the suggestion list for every keystroke.
+    """
+    if len(display_name) <= 100:
+        return display_name
+    return display_name[:99] + "…"
+
+
 async def soundpad_query_autocomplete(ctx):
     """py-cord autocomplete callback for ``/soundpad``'s ``query`` parameter.
 
@@ -166,8 +178,10 @@ async def soundpad_query_autocomplete(ctx):
     partial = _normalize_clip_name(getattr(ctx, "value", "") or "")
     clips = _get_clip_index(output_dir)
     if not partial:
-        return [display for _, display in clips[:25]]
-    return [display for norm, display in clips if partial in norm][:25]
+        pool = clips
+    else:
+        pool = [(n, d) for n, d in clips if partial in n]
+    return [_truncate_choice(display) for _, display in pool[:25]]
 
 
 def _pick_populated_voice_channel(guild: discord.Guild):

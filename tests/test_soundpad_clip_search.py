@@ -539,6 +539,23 @@ async def test_autocomplete_is_case_and_separator_insensitive(soundpad_dir):
     assert dashed, "dashed input should still surface suggestions"
 
 
+async def test_autocomplete_truncates_choices_over_100_chars(tmp_path, monkeypatch):
+    # Discord rejects the whole autocomplete response (400) when any single
+    # choice name exceeds 100 chars — one rogue filename must not nuke the list.
+    root = tmp_path / "audio_output"
+    long_stem = ("Iguana lagarto desayuna con wevo jugo de china del Bueno "
+                 "con pulpa sin pulpa Que! Que! toma mango") + "_to_Juji"
+    assert len(long_stem) > 100  # guard: the fixture must actually be too long
+    _touch(str(root / "Juji" / f"{long_stem}.mp3"))
+    _touch(str(root / "Juji" / "short_juji.mp3"))
+    monkeypatch.setattr(config, "CUSTOM_AUDIO_PATH", str(root), raising=False)
+
+    results = await soundpad_query_autocomplete(_ac_ctx("juji"))
+    assert results, "long filenames should not eliminate suggestions"
+    for r in results:
+        assert len(r) <= 100, f"choice still over Discord's cap: {len(r)} chars"
+
+
 async def test_autocomplete_picks_up_new_clip_after_filesystem_change(soundpad_dir):
     # Baseline: this clip does not exist yet.
     before = await soundpad_query_autocomplete(_ac_ctx("recienllegado"))
