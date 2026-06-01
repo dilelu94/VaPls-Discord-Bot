@@ -2585,6 +2585,52 @@ async def _relay_restrict_speaker(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "guild_id": guild_id, "user_id": user_id})
 
 
+async def _relay_dm(request: web.Request) -> web.Response:
+    """Send a DM as the userbot (the "real Indio").
+
+    Body: ``{user_id, content}``. Resolves the user, opens the DM channel,
+    and posts ``content``. Used so the cuenta-real avisa al user que le
+    respondio en otro canal — el "alert" que el main bot no puede mandar
+    desde su propia cuenta (DMs entre cuenta-real y user se sienten mas
+    naturales que un mensaje del bot vapls).
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        user_id = int(data["user_id"])
+        content = str(data["content"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    user = client.get_user(user_id)
+    if user is None:
+        try:
+            user = await client.fetch_user(user_id)
+        except Exception as e:
+            return web.json_response({"error": f"user not found: {e}"}, status=404)
+
+    chunks = _split_for_relay(content)
+    if not chunks:
+        return web.json_response({"error": "empty content"}, status=400)
+
+    message_ids: list[int] = []
+    try:
+        for chunk in chunks:
+            msg = await user.send(chunk)
+            message_ids.append(msg.id)
+    except Exception as e:
+        log.info(f"[RELAY-DM] send to {user_id} failed: {e}")
+        return web.json_response({"error": str(e)}, status=502)
+
+    return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -2592,6 +2638,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app = web.Application()
     app.router.add_post("/say", _relay_say)
     app.router.add_post("/edit", _relay_edit)
+    app.router.add_post("/dm", _relay_dm)
     app.router.add_post("/record", _relay_record)
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)

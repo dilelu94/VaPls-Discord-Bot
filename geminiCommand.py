@@ -1712,6 +1712,30 @@ def register_reaction_vote(*, channel_id: int, message_id: int,
     return False
 
 
+async def _relay_dm_user(user_id: int, content: str) -> bool:
+    """DM ``content`` to ``user_id`` from the userbot (the cuenta real).
+
+    Used so the alert "te respondí en <#X>" venga del Indio "real" en DM,
+    no del bot vapls. Returns True on success, False when the relay is off,
+    the user has DMs closed, or anything else fails.
+    """
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret or not user_id:
+        return False
+    dm_url = urljoin(url, "/dm")
+    payload = {"user_id": int(user_id), "content": content}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(dm_url, json=payload, headers=headers) as resp:
+                return resp.status < 400
+    except Exception:
+        logger.info("indio: DM relay failed (network/timeout)")
+        return False
+
+
 async def _relay_say(channel_id: int, content: str) -> Optional[int]:
     """Post ``content`` via the userbot relay and return the first message id
     (so the main bot can react to it), or None if the relay is off/failed.
@@ -2491,21 +2515,9 @@ async def indioFromVoice(
     # Cuando la respuesta se redirige a otro canal, el header con @user (mas
     # abajo, antes de postear la respuesta) ya ping al user. No postear nada
     # publico en el canal original — evita spam fuera del canal target.
-    # Adicional: mandarle un DM al user avisando donde aterrizo la respuesta
-    # (lo mas cercano a un "ephemeral" cuando no hay interaction). Si el user
-    # tiene DMs cerrados, falla silencioso.
+    # El forward al DM del user se hace mas abajo, una vez que tenemos
+    # clean_reply, para que la cuenta-real (userbot) se lo mande.
     redirected = bool(original_channel_id and original_channel_id != channel_id)
-    if redirected and user_id:
-        try:
-            user_obj = bot.get_user(int(user_id))
-            if user_obj is None:
-                user_obj = await bot.fetch_user(int(user_id))
-            if user_obj is not None:
-                await user_obj.send(
-                    f"te respondi en <#{channel_id}>"
-                )
-        except Exception:
-            logger.info("indioFromVoice: DM ack skipped (DMs closed?)")
     member = guild.get_member(user_id)
     speaker = (speaker_name
                or (member.display_name if member else None)
@@ -2695,6 +2707,15 @@ async def indioFromVoice(
 
     if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
         _spawn(_maybe_compress(mem_key))
+
+    # Si la respuesta se redirigio a otro canal, mandar un DM via el userbot
+    # (cuenta real) con la respuesta forwardeada + aviso de donde aterrizo.
+    # Best-effort: silencioso si DMs cerrados o relay no configurado.
+    if redirected and user_id:
+        dm_text = (
+            f"te respondi en <#{channel_id}>:\n\n{clean_reply}"
+        )
+        _spawn(_relay_dm_user(int(user_id), dm_text))
 
     analytics.capture("indio voice invoked", user=member, guild=guild, properties={
         "prompt_length": len(pregunta),
