@@ -259,12 +259,12 @@ async def test_indioFromVoice_no_header_when_source_equals_target(
     assert "tranqui" in target_text
 
 
-async def test_indioFromVoice_dms_user_with_forwarded_reply_when_redirected(
+async def test_indioFromVoice_dms_user_with_link_to_target_when_redirected(
         indio, patch_generate, reply_factory, monkeypatch):
-    """Cuando la respuesta se mueve a otro canal, el userbot relay /dm
-    le forwardea la respuesta + un puntero al canal target — asi el user
-    se entera por DM (lo mas cercano a un ephemeral en el wake-word path).
-    """
+    """Cuando la respuesta se mueve a otro canal, el userbot relay /dm le
+    manda al user un mensaje cortito: link al mensaje en el target + el
+    emoji :ElIndio:. NO se forwardea el contenido completo de la respuesta
+    (eso seria duplicado — el mensaje del Indio ya esta en el target)."""
     import config
     import geminiCommand as gc
 
@@ -305,9 +305,173 @@ async def test_indioFromVoice_dms_user_with_forwarded_reply_when_redirected(
     assert len(dm_calls) == 1, f"expected exactly one DM, got {dm_calls!r}"
     sent_user_id, sent_content = dm_calls[0]
     assert sent_user_id == 42
-    # The DM should pointer at the target channel and include the actual answer.
-    assert "9999" in sent_content
-    assert "acordate que el bibi anda mal" in sent_content
+    # The DM contains a discord.com message link pointing at the target.
+    assert "discord.com/channels/100/9999/" in sent_content
+    # The :ElIndio: emoji (literal when not in guild.emojis) accompanies it.
+    assert ":ElIndio:" in sent_content
+    # The DM should NOT carry the full reply text (the answer lives in target).
+    assert "acordate que el bibi anda mal" not in sent_content
+
+
+async def test_indioFromVoice_dm_uses_custom_elindio_emoji_when_available(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """When :ElIndio: exists as a custom guild emoji, the DM renders the
+    proper "<:ElIndio:id>" code so Discord shows the image, not the literal
+    text. Falls back to ":ElIndio:" when the emoji isn't on the guild."""
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="ok"))
+
+    dm_calls: list[tuple[int, str]] = []
+
+    async def _fake_dm(user_id, content):
+        dm_calls.append((user_id, content))
+        return True
+
+    monkeypatch.setattr(gc, "_relay_dm_user", _fake_dm)
+
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    # Custom emoji :ElIndio: with id 7777 (not animated).
+    guild.emojis = [
+        types.SimpleNamespace(
+            name="ElIndio", id=7777, animated=False, available=True),
+    ]
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="hola", speaker_name="Tobi",
+    )
+    await _drain()
+
+    assert len(dm_calls) == 1
+    _, sent_content = dm_calls[0]
+    assert "<:ElIndio:7777>" in sent_content
+
+
+async def test_indioFromVoice_deletes_source_message_when_redirected(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """When the wake-word triggered from another channel and a source
+    message id was provided, the bot deletes the original message so the
+    source channel stays clean. Best-effort: a missing-permissions error
+    must not break the rest of the flow."""
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    monkeypatch.setattr(gc, "_relay_dm_user", AsyncMock(return_value=True))
+    patch_generate(reply=reply_factory(text="ok"))
+
+    # Source channel with a get_partial_message() that records what got asked
+    # to delete; the partial message's delete() succeeds quietly.
+    deleted_ids: list[int] = []
+
+    class _PartialMsg:
+        def __init__(self, mid):
+            self.id = mid
+
+        async def delete(self):
+            deleted_ids.append(self.id)
+
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+    source.get_partial_message = MagicMock(side_effect=lambda mid: _PartialMsg(mid))
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="indio", speaker_name="Tobi",
+        source_message_id=12345,
+    )
+    await _drain()
+
+    assert deleted_ids == [12345], (
+        f"expected delete of source message 12345, got {deleted_ids!r}"
+    )
+
+
+async def test_indioFromVoice_swallows_source_delete_failure(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """If deleting the source message fails (e.g. missing Manage Messages),
+    the rest of the flow still runs — the reply lands in the target and
+    the DM goes out. The user is never left hanging because of a perms
+    issue in the source channel."""
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    dm_calls: list = []
+
+    async def _fake_dm(user_id, content):
+        dm_calls.append((user_id, content))
+        return True
+
+    monkeypatch.setattr(gc, "_relay_dm_user", _fake_dm)
+    patch_generate(reply=reply_factory(text="igual respondo"))
+
+    class _BoomPartial:
+        async def delete(self):
+            raise PermissionError("Manage Messages required")
+
+    source = _fake_target_channel(channel_id=555, guild_id=100)
+    source.get_partial_message = MagicMock(return_value=_BoomPartial())
+    target = _fake_target_channel(channel_id=9999, guild_id=100)
+
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: target, 555: source}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="indio", speaker_name="Tobi",
+        source_message_id=12345,
+    )
+    await _drain()
+
+    # Reply still arrived in target.
+    assert any("igual respondo" in (m or "") for m in target.sent_messages)
+    # And DM still went out.
+    assert len(dm_calls) == 1
 
 
 async def test_indioFromVoice_no_dm_when_source_equals_target(

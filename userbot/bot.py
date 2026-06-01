@@ -1317,6 +1317,7 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                              pregunta: str, speaker_name: Optional[str],
                              is_voice: bool = True, user_id: int = 0,
                              transcript_message_id: Optional[int] = None,
+                             source_message_id: Optional[int] = None,
                              vosk_result: Optional[dict] = None) -> None:
     """POST the raw transcript to the main bot's /indio endpoint.
 
@@ -1346,6 +1347,8 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
         }
         if transcript_message_id is not None:
             payload["transcript_message_id"] = str(transcript_message_id)
+        if source_message_id is not None:
+            payload["source_message_id"] = str(source_message_id)
         if vosk_result is not None:
             payload["vosk_result"] = vosk_result
         async with session.post(
@@ -1878,6 +1881,7 @@ async def on_message(message):
         speaker_name=speaker_name,
         is_voice=False,
         user_id=message.author.id,
+        source_message_id=message.id,
     ))
 
 

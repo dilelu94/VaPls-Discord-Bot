@@ -690,6 +690,19 @@ def _format_player_state(bot, guild_id) -> str:
     return ""
 
 
+def _find_emoji_code(guild, name: str) -> Optional[str]:
+    """Return the Discord render code (``<:name:id>`` or ``<a:name:id>``)
+    for the guild's custom emoji ``name``, or None if it isn't available."""
+    for e in (getattr(guild, "emojis", None) or []):
+        if getattr(e, "name", "") == name and getattr(e, "available", True):
+            eid = getattr(e, "id", None)
+            if eid is None:
+                continue
+            prefix = "a" if getattr(e, "animated", False) else ""
+            return f"<{prefix}:{e.name}:{eid}>"
+    return None
+
+
 def _format_guild_emojis(guild) -> str:
     """Render the guild's custom emojis as a prompt block so the indio can
     drop them into replies. Each entry shows the exact "<:name:id>" code that
@@ -2479,6 +2492,7 @@ async def indioFromVoice(
     channel_id: int,
     pregunta: str,
     speaker_name: Optional[str] = None,
+    source_message_id: Optional[int] = None,
 ) -> None:
     """Trigger the indio persona from a voice transcription.
 
@@ -2617,6 +2631,9 @@ async def indioFromVoice(
                  and _active_vote.reaction_message_id is None)
     opts_msg_id = None
     reply_handle = None
+    # Id del primer mensaje que aterriza en el target — sirve como anchor
+    # para el link que se mandara por DM ("te respondi en este canal <link>").
+    landing_msg_id: Optional[int] = None
     # Header con la pregunta + mencion al user: solo cuando la respuesta se
     # redirige a otro canal (asi el user recibe notificacion). Vota-open no
     # quiere header arriba — la lista de opciones tiene que ir limpia para
@@ -2626,12 +2643,13 @@ async def indioFromVoice(
         quoted = "\n".join(f"> {ln}" for ln in lines)
         question_header = f"<@{user_id}> preguntó:\n{quoted}"
         try:
-            posted = False
             if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
                 ids = await _relay_to_userbot(channel_id, question_header, None)
-                posted = bool(ids)
-            if not posted:
-                await channel.send(question_header)
+                if ids:
+                    landing_msg_id = int(ids[0])
+            if landing_msg_id is None:
+                sent_header = await channel.send(question_header)
+                landing_msg_id = getattr(sent_header, "id", None)
         except Exception:
             logger.exception("indioFromVoice: question header failed")
     try:
@@ -2708,13 +2726,39 @@ async def indioFromVoice(
     if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
         _spawn(_maybe_compress(mem_key))
 
-    # Si la respuesta se redirigio a otro canal, mandar un DM via el userbot
-    # (cuenta real) con la respuesta forwardeada + aviso de donde aterrizo.
-    # Best-effort: silencioso si DMs cerrados o relay no configurado.
+    # Si la respuesta se redirigio a otro canal, fallback al primer mensaje
+    # del Indio en el target como landing point del link cuando no hubo header.
+    if redirected and landing_msg_id is None:
+        if reply_handle is not None:
+            landing_msg_id = (getattr(reply_handle, "message_id", None)
+                              or getattr(getattr(reply_handle, "message", None), "id", None))
+        elif opts_msg_id:
+            landing_msg_id = opts_msg_id
+
+    # Borrar el mensaje original del user en el canal source (best-effort —
+    # requiere "Manage Messages" en el canal source). Mantiene el source
+    # limpio de wake-words sueltos cuando la conversacion se movio.
+    if redirected and source_message_id and original_channel_id:
+        src_chan = bot.get_channel(int(original_channel_id))
+        if src_chan is not None and hasattr(src_chan, "get_partial_message"):
+            try:
+                await src_chan.get_partial_message(int(source_message_id)).delete()
+            except Exception:
+                logger.info(
+                    "indioFromVoice: could not delete source message %s "
+                    "(missing Manage Messages perm?)", source_message_id,
+                )
+
+    # DM al user via userbot (cuenta-real): solo el link al mensaje en el
+    # target + el emoji :ElIndio: del guild (fallback a literal si no esta).
     if redirected and user_id:
-        dm_text = (
-            f"te respondi en <#{channel_id}>:\n\n{clean_reply}"
-        )
+        elindio = _find_emoji_code(guild, "ElIndio") or ":ElIndio:"
+        if landing_msg_id:
+            link = (f"https://discord.com/channels/{guild_id}"
+                    f"/{channel_id}/{landing_msg_id}")
+            dm_text = f"te respondi en este canal {link} {elindio}"
+        else:
+            dm_text = f"te respondi en <#{channel_id}> {elindio}"
         _spawn(_relay_dm_user(int(user_id), dm_text))
 
     analytics.capture("indio voice invoked", user=member, guild=guild, properties={
@@ -2736,7 +2780,8 @@ async def askIndio(bot: "discord.Bot",
                    guild_id: Optional[int] = None,
                    channel_id: Optional[int] = None,
                    channel_name: Optional[str] = None,
-                   user_id: int = 0) -> bool:
+                   user_id: int = 0,
+                   source_message_id: Optional[int] = None) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -2790,6 +2835,7 @@ async def askIndio(bot: "discord.Bot",
         channel_id=target_channel_id,
         pregunta=text,
         speaker_name=speaker_name,
+        source_message_id=source_message_id,
     )
     return True
 

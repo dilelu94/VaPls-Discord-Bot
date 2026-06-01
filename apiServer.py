@@ -596,6 +596,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         is_voice = bool(data.get("is_voice", data.get("decifrar", True)))
         user_id = int(data["user_id"]) if data.get("user_id") else 0
         transcript_message_id = int(data["transcript_message_id"]) if data.get("transcript_message_id") else None
+        source_message_id = int(data["source_message_id"]) if data.get("source_message_id") else None
         vosk_result = data.get("vosk_result")
 
         async def _run() -> None:
@@ -657,6 +658,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 channel_id=channel_id,
                 channel_name=channel_name,
                 user_id=user_id,
+                source_message_id=source_message_id,
             )
 
         asyncio.create_task(_run())
