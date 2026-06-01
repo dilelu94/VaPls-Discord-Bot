@@ -85,13 +85,14 @@ def test_string_overrides_from_env(load_config):
     assert cfg.INDIO_MEMORY_PATH == "/tmp/mem.json"
 
 
-def test_indio_play_channel_id_unset_falls_to_zero(load_config):
-    """When INDIO_PLAY_CHANNEL_ID is unset the relay path must be inactive
-    (0). The previous hardcoded prod ID hid misconfigs by routing relay
-    invocations into a real production channel from any new deploy.
+def test_indio_play_channel_id_unset_falls_to_prod_default(load_config):
+    """When INDIO_PLAY_CHANNEL_ID is unset, falls back to the hardcoded prod
+    music channel (451607097432604672). Same pattern as INDIO_REPLY_CHANNEL_ID:
+    el default apunta a prod para que los wake-words de voz que disparan
+    música caigan directo en el canal correcto sin tener que setear .env.
     """
     cfg = load_config({})
-    assert cfg.INDIO_PLAY_CHANNEL_ID == 0
+    assert cfg.INDIO_PLAY_CHANNEL_ID == 451607097432604672
 
 
 def test_indio_play_channel_id_honors_env(load_config):

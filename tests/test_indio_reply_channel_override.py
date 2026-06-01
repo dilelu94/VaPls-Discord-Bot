@@ -1,7 +1,12 @@
-"""Behavior: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todas las respuestas
-del Indio aterrizan en ese canal — sin importar donde se disparo el trigger
-(slash command, wake-word de texto, voz, HTTP). Cuando esta en 0 (default en
-los tests via conftest), el comportamiento clasico se preserva."""
+"""Behavior: cuando INDIO_REPLY_CHANNEL_ID esta seteado, las respuestas del
+Indio del path de TEXTO (slash /indio, wake-word de texto, HTTP con
+is_voice=False) aterrizan en ese canal. La wake-word de VOZ
+(from_voice=True) queda exenta del override: la respuesta cae en el
+channel_id provisto por el caller (transcript channel del userbot), sin
+header/DM/delete del fuente.
+
+Cuando INDIO_REPLY_CHANNEL_ID esta en 0 (default en los tests via conftest)
+el comportamiento clasico se preserva en todos los paths."""
 import asyncio
 import types
 from unittest.mock import AsyncMock, MagicMock
@@ -92,9 +97,11 @@ async def test_indioLogic_falls_back_when_override_channel_not_resolvable(
 
 async def test_indioFromVoice_redirects_to_override_channel(
         indio, patch_generate, reply_factory, monkeypatch):
-    """Wake-word de texto, voz, y HTTP-direct desembocan en indioFromVoice.
-    Con el override seteado, la respuesta debe aparecer en el canal override
-    aunque el caller pase otro channel_id."""
+    """Wake-word de texto y HTTP-direct (is_voice=False) desembocan en
+    indioFromVoice con from_voice=False. Con el override seteado, la respuesta
+    debe aparecer en el canal override aunque el caller pase otro channel_id.
+    La path de voz (from_voice=True) tiene su propio test que verifica el
+    skip del override."""
     import config
     monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
     monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
@@ -612,3 +619,184 @@ async def test_indioFromVoice_falls_back_when_override_unresolvable(
 
     # Reply lands in the original channel because the override was unusable.
     assert any("rebote ok" in (m or "") for m in original_chan.sent_messages)
+
+
+# ---------------------------------------------------------------------------
+# Voice path: from_voice=True exenta del override INDIO_REPLY_CHANNEL_ID
+# ---------------------------------------------------------------------------
+
+
+async def test_indioFromVoice_skips_override_when_from_voice(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Wake-word de voz: aunque INDIO_REPLY_CHANNEL_ID este seteado, la
+    respuesta queda en el channel_id que mando el caller (transcript
+    channel del userbot) — no se redirige al override."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="hablo en el transcript"))
+
+    transcript_chan = _fake_target_channel(channel_id=555, guild_id=100)
+    override_chan = _fake_target_channel(channel_id=9999, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: override_chan, 555: transcript_chan}.get(cid))
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="che indio que onda", speaker_name="Tobi",
+        from_voice=True,
+    )
+    await _drain()
+
+    assert any("hablo en el transcript" in (m or "")
+               for m in transcript_chan.sent_messages)
+    assert override_chan.sent_messages == [], (
+        f"override channel should be untouched, got: {override_chan.sent_messages!r}"
+    )
+
+
+async def test_indioFromVoice_no_header_when_from_voice(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """from_voice=True: sin override no hay redirect, asi que no se postea
+    el header de '<@user> pregunto:' — el speaker esta ahi mismo en el
+    transcript channel viendo su propio mensaje del bot."""
+    import config
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="sin header"))
+
+    transcript_chan = _fake_target_channel(channel_id=555, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=transcript_chan)
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(return_value=transcript_chan)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="che indio que onda", speaker_name="Tobi",
+        from_voice=True,
+    )
+    await _drain()
+
+    chan_text = "\n".join(m or "" for m in transcript_chan.sent_messages)
+    assert "<@42>" not in chan_text, (
+        f"unexpected user-mention header in voice path: {chan_text!r}"
+    )
+    assert "preguntó" not in chan_text, (
+        f"unexpected 'preguntó' header in voice path: {chan_text!r}"
+    )
+    assert "sin header" in chan_text
+
+
+async def test_indioFromVoice_no_dm_when_from_voice(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Wake-word de voz no manda DM al user — la respuesta ya esta en el
+    transcript channel donde el userbot publica las transcripciones, no hay
+    nada que avisar."""
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="no DM"))
+
+    dm_calls: list = []
+
+    async def _fake_dm(user_id, content):
+        dm_calls.append((user_id, content))
+        return True
+
+    monkeypatch.setattr(gc, "_relay_dm_user", _fake_dm)
+
+    transcript_chan = _fake_target_channel(channel_id=555, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=transcript_chan)
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(return_value=transcript_chan)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="che indio", speaker_name="Tobi",
+        from_voice=True,
+    )
+    await _drain()
+
+    assert dm_calls == [], f"unexpected DM in voice path: {dm_calls!r}"
+
+
+async def test_indioFromVoice_no_source_delete_when_from_voice(
+        indio, patch_generate, reply_factory, monkeypatch):
+    """Wake-word de voz no borra el mensaje fuente — el userbot solo manda
+    transcript_message_id en el dispatch, source_message_id queda None, y
+    aunque viniera seteado tampoco se debe borrar (no hay redirect)."""
+    import config
+    import geminiCommand as gc
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    monkeypatch.setattr(gc, "_relay_dm_user", AsyncMock(return_value=True))
+    patch_generate(reply=reply_factory(text="no delete"))
+
+    deleted_ids: list[int] = []
+
+    class _PartialMsg:
+        def __init__(self, mid):
+            self.id = mid
+
+        async def delete(self):
+            deleted_ids.append(self.id)
+
+    transcript_chan = _fake_target_channel(channel_id=555, guild_id=100)
+    transcript_chan.get_partial_message = MagicMock(
+        side_effect=lambda mid: _PartialMsg(mid))
+    bot = MagicMock()
+    bot.get_channel = MagicMock(return_value=transcript_chan)
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = MagicMock(return_value=transcript_chan)
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi"))
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot, user_id=42, guild_id=100, channel_id=555,
+        pregunta="che indio", speaker_name="Tobi",
+        source_message_id=12345,
+        from_voice=True,
+    )
+    await _drain()
+
+    assert deleted_ids == [], (
+        f"voice path must not delete source message, deleted: {deleted_ids!r}"
+    )

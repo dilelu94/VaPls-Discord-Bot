@@ -287,6 +287,10 @@ def indio(tmp_path, monkeypatch):
     # el flow contra ctx.followup. Los tests que quieran ejercitar el override
     # de canal lo seteen explicito en su monkeypatch.
     monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 0, raising=False)
+    # Lo mismo para el canal de música: el default real apunta a prod, pero
+    # los tests por default desactivan el relay path para no necesitar
+    # mocks del invoke_play en cada caso.
+    monkeypatch.setattr(config, "INDIO_PLAY_CHANNEL_ID", 0, raising=False)
 
     def _clear():
         gc._indio_history.clear()

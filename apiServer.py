@@ -659,6 +659,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 channel_name=channel_name,
                 user_id=user_id,
                 source_message_id=source_message_id,
+                is_voice=is_voice,
             )
 
         asyncio.create_task(_run())

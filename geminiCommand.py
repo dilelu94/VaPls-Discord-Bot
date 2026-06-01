@@ -2594,21 +2594,31 @@ async def indioFromVoice(
     pregunta: str,
     speaker_name: Optional[str] = None,
     source_message_id: Optional[int] = None,
+    from_voice: bool = False,
 ) -> None:
-    """Trigger the indio persona from a voice transcription.
+    """Trigger the indio persona from a voice transcription or text wake-word.
 
     Behaves like indioLogic but without an ApplicationContext: resolves the
     guild/channel directly from the bot and posts the reply via channel.send.
     Shares the same per-guild memory bucket (_indio_memory_key returns
     "guild-<id>") so voice + slash invocations build on the same history.
+
+    ``from_voice`` exenta a la wake-word de voz del override
+    ``INDIO_REPLY_CHANNEL_ID``: cuando es True, la respuesta queda en el
+    ``channel_id`` provisto por el caller (típicamente el transcript channel
+    del userbot) y no se dispara el flujo de redirect (header, DM, delete del
+    fuente). Wake-word de texto y otros callers no-voz siguen aplicando el
+    override.
     """
     pregunta = (pregunta or "").strip()
     if not pregunta:
         return
-    # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todas las
-    # respuestas del Indio (sin importar el trigger) aterrizan ahi.
+    # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, las
+    # respuestas del Indio aterrizan ahi. La wake-word de voz queda exenta
+    # (from_voice=True): el transcript del userbot ya cae en su canal
+    # dedicado y mover la respuesta a otro lado genera ruido.
     original_channel_id = channel_id
-    if config.INDIO_REPLY_CHANNEL_ID:
+    if config.INDIO_REPLY_CHANNEL_ID and not from_voice:
         target_chan = bot.get_channel(config.INDIO_REPLY_CHANNEL_ID)
         if target_chan is not None and getattr(target_chan, "guild", None) is not None:
             channel_id = config.INDIO_REPLY_CHANNEL_ID
@@ -2903,7 +2913,8 @@ async def askIndio(bot: "discord.Bot",
                    channel_id: Optional[int] = None,
                    channel_name: Optional[str] = None,
                    user_id: int = 0,
-                   source_message_id: Optional[int] = None) -> bool:
+                   source_message_id: Optional[int] = None,
+                   is_voice: bool = False) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -2958,6 +2969,7 @@ async def askIndio(bot: "discord.Bot",
         pregunta=text,
         speaker_name=speaker_name,
         source_message_id=source_message_id,
+        from_voice=is_voice,
     )
     return True
 
