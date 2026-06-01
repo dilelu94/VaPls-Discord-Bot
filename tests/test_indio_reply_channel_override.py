@@ -517,19 +517,18 @@ async def test_indioFromVoice_replies_to_user_message_when_no_redirect(
     assert int(getattr(ref, "message_id", 0)) == 88888
 
 
-async def test_indioFromVoice_replies_to_header_when_redirected(
+async def test_indioFromVoice_does_not_self_reply_to_header_when_redirected(
         indio, patch_generate, reply_factory, monkeypatch):
-    """Wake-word desde otro canal: el Indio le hace reply al header con
-    @user que se postea en el target — asi el hilo queda agrupado debajo
-    de la pregunta y no flotando suelto."""
+    """Wake-word desde otro canal: el header lo postea el mismo bot, asi
+    que el reply del Indio NO debe usar Discord "reply" — seria un
+    auto-reply (Indio contestandose a si mismo). El header queda visible
+    arriba sin hilo formal."""
     import config
     monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
     monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
     monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
     patch_generate(reply=reply_factory(text="todo en orden"))
 
-    # Target.send records every call and returns predictable ids so we can
-    # check that the second send (the reply) points at the first (the header).
     sent_calls: list[dict] = []
 
     async def _capture_send(content=None, **kw):
@@ -567,12 +566,13 @@ async def test_indioFromVoice_replies_to_header_when_redirected(
     assert len(sent_calls) >= 2, f"expected header + reply sends, got {sent_calls!r}"
     header_call = sent_calls[0]
     reply_call = sent_calls[1]
-    # Header is posted plain (no need to reply to anything).
+    # Header is posted plain.
     assert "preguntó" in (header_call.get("content") or "")
-    # The Indio's reply references the header message (id 7001 = first send).
-    ref = reply_call.get("reference")
-    assert ref is not None, f"reply had no reference: {reply_call!r}"
-    assert int(getattr(ref, "message_id", 0)) == 7001
+    # The Indio's reply does NOT carry a reference back to the header —
+    # that would render as the bot replying to itself.
+    assert reply_call.get("reference") is None, (
+        f"unexpected self-reply reference: {reply_call!r}"
+    )
 
 
 async def test_indioFromVoice_falls_back_when_override_unresolvable(

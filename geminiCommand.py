@@ -2382,8 +2382,10 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             n_chunks = 1
         elif channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
             import types as _types
+            # No reply-to: el question_msg lo posteo el bot mismo, hacer reply
+            # ahi queda como auto-reply (Indio respondiendose a si mismo).
             relay_ids = await _relay_to_userbot(
-                channel_id, clean_reply, question_msg_id
+                channel_id, clean_reply, None
             )
             relayed_via_userbot = bool(relay_ids)
             if relayed_via_userbot:
@@ -2652,11 +2654,12 @@ async def indioFromVoice(
                 landing_msg_id = getattr(sent_header, "id", None)
         except Exception:
             logger.exception("indioFromVoice: question header failed")
-    # Anchor para Discord "reply": el header en target cuando hubo redirect;
-    # sino el mensaje original del wake-word (cuando el bot tiene el id).
-    # Solo se usa para el primer chunk de la respuesta — los chunks siguientes
-    # van plain para no spamear el reply marker.
-    reply_anchor_id = landing_msg_id if redirected else source_message_id
+    # Anchor para Discord "reply": SOLO cuando podemos atar la respuesta al
+    # mensaje del USER (wake-word original en el mismo canal). Cuando hay
+    # redirect el "anchor" disponible es el header que el bot mismo postea,
+    # y hacer reply ahi se ve como auto-reply (Indio respondiendose). Mejor
+    # postear sin reference y dejar que el header siga visible arriba.
+    reply_anchor_id = None if redirected else source_message_id
 
     def _make_ref(mid):
         if not mid:
