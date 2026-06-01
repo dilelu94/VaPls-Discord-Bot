@@ -24,6 +24,7 @@ import analytics
 import apiServer
 from apiServer import startApiServer
 import decifrarVoting
+import errorHandler
 import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import webhookLogger
@@ -335,6 +336,18 @@ async def on_raw_reaction_add(payload):
         )
     except Exception:
         log.exception("on_raw_reaction_add failed")
+
+
+@bot.event
+async def on_application_command_error(ctx, error):
+    """Red de seguridad para excepciones no atrapadas por los comandos.
+
+    Los comandos atrapan sus propios errores con mensajes específicos
+    (yt-dlp en playCommand, GeminiError en geminiCommand). Este handler
+    solo se dispara cuando algo se escapa — evita que la interaction
+    quede colgada en "thinking..." sin respuesta.
+    """
+    await errorHandler.handle(ctx, error)
 
 
 def _track_command(ctx, name, extra=None):
