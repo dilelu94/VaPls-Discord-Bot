@@ -68,8 +68,11 @@ INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 
 # Cuando el indio decide poner musica via [PLAY_MUSIC: ...], los mensajes
 # de estado y el panel de control del GuildPlayer se postean siempre en
-# este text channel. Sin fallback: si no esta, la accion falla.
-INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "451607097432604672"))
+# este text channel. Sin fallback: si no esta seteado (0), el relay falla
+# explicitamente y la accion cae al playFromIndio local (que tiene su
+# propio canal-pick). Default historico era el ID hardcoded de prod, lo
+# cual ocultaba misconfigs en deploys nuevos.
+INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "0"))
 
 # Canal unico donde se postean las respuestas del Indio (sin importar desde
 # donde se lo invoque: /indio, wake-word de texto, wake-word de voz, HTTP).

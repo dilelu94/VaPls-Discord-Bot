@@ -781,6 +781,11 @@ def enable_relay(monkeypatch):
     monkeypatch.setattr(config, "INDIO_RELAY_URL",
                         "http://127.0.0.1:8081/say", raising=False)
     monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "secret", raising=False)
+    # Play/sound relay calls require a target text channel id; without it,
+    # _invoke_slash_via_userbot refuses and falls back to the in-process
+    # path, which would defeat the point of this fixture.
+    monkeypatch.setattr(config, "INDIO_PLAY_CHANNEL_ID", 1234567890,
+                        raising=False)
     posts: list[dict] = []
 
     class _Resp:

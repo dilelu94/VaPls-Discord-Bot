@@ -13,6 +13,7 @@ _CONFIG_VARS = [
     "YT_DLP_PATH", "DEBUG_GUILD_IDS", "RAM_THRESHOLD_MB", "PLAY_COOLDOWN",
     "POSTHOG_API_KEY", "POSTHOG_HOST", "API_HOST", "API_PORT", "API_SECRET",
     "GEMINI_API_KEY", "GEMINI_MODEL", "INDIO_MEMORY_PATH",
+    "INDIO_PLAY_CHANNEL_ID",
 ]
 
 
@@ -82,3 +83,40 @@ def test_string_overrides_from_env(load_config):
                        "INDIO_MEMORY_PATH": "/tmp/mem.json"})
     assert cfg.GEMINI_MODEL == "gemini-3-pro"
     assert cfg.INDIO_MEMORY_PATH == "/tmp/mem.json"
+
+
+def test_indio_play_channel_id_unset_falls_to_zero(load_config):
+    """When INDIO_PLAY_CHANNEL_ID is unset the relay path must be inactive
+    (0). The previous hardcoded prod ID hid misconfigs by routing relay
+    invocations into a real production channel from any new deploy.
+    """
+    cfg = load_config({})
+    assert cfg.INDIO_PLAY_CHANNEL_ID == 0
+
+
+def test_indio_play_channel_id_honors_env(load_config):
+    cfg = load_config({"INDIO_PLAY_CHANNEL_ID": "9876543210"})
+    assert cfg.INDIO_PLAY_CHANNEL_ID == 9876543210
+
+
+async def test_invoke_slash_via_userbot_refuses_when_channel_id_is_zero(
+        monkeypatch):
+    """End-to-end safety: with INDIO_PLAY_CHANNEL_ID=0 the relay must
+    refuse before touching the network, letting the caller fall back to
+    the local playFromIndio path (which has its own channel-pick logic).
+    """
+    import geminiCommand
+    monkeypatch.setattr(geminiCommand.config, "INDIO_RELAY_URL",
+                        "http://127.0.0.1:1/say", raising=False)
+    monkeypatch.setattr(geminiCommand.config, "INDIO_RELAY_SECRET",
+                        "test-secret", raising=False)
+
+    ok, msg = await geminiCommand._invoke_slash_via_userbot(
+        "invoke_play", channel_id=0, query="x"
+    )
+
+    assert ok is False
+    # The message must distinguish this from "relay not configured" so the
+    # caller's log line can tell operator that the *channel* is the gap,
+    # not the relay endpoint.
+    assert "channel" in msg.lower()
