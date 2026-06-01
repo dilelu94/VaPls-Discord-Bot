@@ -2488,20 +2488,10 @@ async def indioFromVoice(
     if channel is None or not hasattr(channel, "send"):
         logger.warning("indioFromVoice: channel %s not found", channel_id)
         return
-    # Si la respuesta se redirige a otro canal, avisar en el original que la
-    # charla se movio (sin ping — el nombre del user va como texto plano para
-    # no notificar). Best-effort: si el canal original no se puede resolver
-    # o el send falla, sigue sin romper el flow.
-    if original_channel_id and original_channel_id != channel_id:
-        source_chan = bot.get_channel(original_channel_id)
-        if source_chan is not None and hasattr(source_chan, "send"):
-            who = (speaker_name or "").strip() or "che"
-            try:
-                await source_chan.send(
-                    f"{who}, te respondo en <#{channel_id}>"
-                )
-            except Exception:
-                logger.exception("indioFromVoice: source-channel ack failed")
+    # Cuando la respuesta se redirige a otro canal, el header con @user (mas
+    # abajo, antes de postear la respuesta) ya ping al user. No postear nada
+    # en el canal original — evita spam fuera del canal target.
+    redirected = bool(original_channel_id and original_channel_id != channel_id)
     member = guild.get_member(user_id)
     speaker = (speaker_name
                or (member.display_name if member else None)
@@ -2601,6 +2591,23 @@ async def indioFromVoice(
                  and _active_vote.reaction_message_id is None)
     opts_msg_id = None
     reply_handle = None
+    # Header con la pregunta + mencion al user: solo cuando la respuesta se
+    # redirige a otro canal (asi el user recibe notificacion). Vota-open no
+    # quiere header arriba — la lista de opciones tiene que ir limpia para
+    # que las reacciones queden en la primera linea.
+    if redirected and user_id and not vote_open:
+        lines = (pregunta or "").splitlines() or [""]
+        quoted = "\n".join(f"> {ln}" for ln in lines)
+        question_header = f"<@{user_id}> preguntó:\n{quoted}"
+        try:
+            posted = False
+            if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                ids = await _relay_to_userbot(channel_id, question_header, None)
+                posted = bool(ids)
+            if not posted:
+                await channel.send(question_header)
+        except Exception:
+            logger.exception("indioFromVoice: question header failed")
     try:
         if vote_open:
             # Vote options: capture the message id so we can react on it.
