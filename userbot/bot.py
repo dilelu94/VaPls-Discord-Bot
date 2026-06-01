@@ -29,6 +29,7 @@ from discord.ext import voice_recv
 
 import config
 import greeting
+from transcript_channel import resolve_transcript_channel as _resolve_transcript_channel_impl
 from recording import (
     INPUT_SAMPLE_RATE as _REC_INPUT_SAMPLE_RATE,
     INPUT_WIDTH as _REC_INPUT_WIDTH,
@@ -1228,23 +1229,11 @@ async def _get_http() -> aiohttp.ClientSession:
 def _resolve_transcript_channel():
     """Locate the transcript channel from config.
 
-    Prefiere ``TRANSCRIPT_CHANNEL_ID`` (estable frente a renombres del canal en
-    Discord) sobre ``TRANSCRIPT_CHANNEL_NAME`` (scan por nombre por guild).
-    Retorna el channel object o None si ninguna config resuelve a un canal
-    cacheable y enviable.
+    Thin wrapper alrededor de ``transcript_channel.resolve_transcript_channel``
+    (extraído a un módulo aparte para que sea testeable sin levantar
+    discord.py-self).
     """
-    if config.TRANSCRIPT_CHANNEL_ID:
-        chan = client.get_channel(config.TRANSCRIPT_CHANNEL_ID)
-        if chan is not None and hasattr(chan, "send"):
-            return chan
-    if config.TRANSCRIPT_CHANNEL_NAME:
-        for guild in client.guilds:
-            chan = discord.utils.get(
-                guild.text_channels, name=config.TRANSCRIPT_CHANNEL_NAME
-            )
-            if chan:
-                return chan
-    return None
+    return _resolve_transcript_channel_impl(client, config)
 
 
 async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False, vosk_result: Optional[dict] = None):
