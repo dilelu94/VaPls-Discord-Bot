@@ -2488,16 +2488,17 @@ async def indioFromVoice(
     if channel is None or not hasattr(channel, "send"):
         logger.warning("indioFromVoice: channel %s not found", channel_id)
         return
-    # Si la respuesta se redirige a otro canal, avisar en el original
-    # mencionando al user para que el resto del canal se entere de que la
-    # charla se movio. Best-effort: si el canal original no se puede resolver
+    # Si la respuesta se redirige a otro canal, avisar en el original que la
+    # charla se movio (sin ping — el nombre del user va como texto plano para
+    # no notificar). Best-effort: si el canal original no se puede resolver
     # o el send falla, sigue sin romper el flow.
-    if user_id and original_channel_id and original_channel_id != channel_id:
+    if original_channel_id and original_channel_id != channel_id:
         source_chan = bot.get_channel(original_channel_id)
         if source_chan is not None and hasattr(source_chan, "send"):
+            who = (speaker_name or "").strip() or "che"
             try:
                 await source_chan.send(
-                    f"<@{user_id}> te respondo en <#{channel_id}>"
+                    f"{who}, te respondo en <#{channel_id}>"
                 )
             except Exception:
                 logger.exception("indioFromVoice: source-channel ack failed")

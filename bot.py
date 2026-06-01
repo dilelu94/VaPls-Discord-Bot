@@ -487,15 +487,15 @@ async def indio(
     await safe_defer(ctx)
     _track_command(ctx, "indio", {"prompt_length": len(charla or "")})
     # Cuando el override de canal esta activo y el slash se invoca desde otro
-    # canal, postear un aviso publico mencionando al user para que los demas
-    # del canal vean que la charla se movio al target.
+    # canal, avisar al invocador ephemeral (solo lo ve el que disparó /indio)
+    # que la respuesta va al target.
     source_id = getattr(ctx, "channel_id", None) or getattr(
         getattr(ctx, "channel", None), "id", None)
     target_id = config.INDIO_REPLY_CHANNEL_ID
     if target_id and source_id and source_id != target_id:
         try:
             await ctx.followup.send(
-                f"<@{ctx.author.id}> te respondo en <#{target_id}>"
+                f"te respondo en <#{target_id}>", ephemeral=True,
             )
         except Exception:
             log.exception("indio: source-channel ack failed")
