@@ -86,6 +86,28 @@ async def test_model_speaker_prefix_stripped_from_visible_and_stored(
     assert "jaja boludo" in model_text
 
 
+async def test_discord_mentions_stripped_from_history(
+    indio, ctx_factory, patch_generate, reply_factory,
+):
+    """User/channel/role mention markup (``<@123>``, ``<#456>``, ``<@&789>``)
+    is opaque to the model. Strip it from persisted memory so it doesn't
+    accumulate as noise."""
+    patch_generate(reply=reply_factory(text="ok"))
+    ctx = ctx_factory(display_name="Mati", guild_id=100)
+
+    await indio.indioLogic(
+        ctx, "che <@123> mirá <#456> de <@&789>", nuevo=False,
+    )
+
+    user_text = indio._indio_history["guild-100"][0]["parts"][0]["text"]
+    assert "<@123>" not in user_text
+    assert "<#456>" not in user_text
+    assert "<@&789>" not in user_text
+    # The natural-language words around the mentions survive.
+    assert "che" in user_text
+    assert "mirá" in user_text
+
+
 async def test_indio_self_prefix_stripped(
     indio, ctx_factory, patch_generate, reply_factory,
 ):

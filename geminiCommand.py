@@ -1825,6 +1825,12 @@ _CUSTOM_EMOJI_MARKUP_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>")
 # legitimate ":" in URLs ("http://foo:8080") or ratios ("4:3").
 _EMOJI_SHORTCODE_RE = re.compile(r"(?<!\w):[A-Za-z0-9_]{2,}:(?!\w)")
 
+# Discord mention/channel/role markup: <@123>, <@!123> (legacy nickname mention),
+# <#456> (channel), <@&789> (role). These render as clickable pills in the
+# Discord client but are opaque numeric ids in raw text — pure noise in
+# persisted memory.
+_DISCORD_MENTION_RE = re.compile(r"<[@#][&!]?\d+>")
+
 # Collapse 3+ blank lines into 2 (sanitization can leave extra whitespace).
 _MULTIBLANK_RE = re.compile(r"\n{3,}")
 
@@ -1836,15 +1842,19 @@ def _sanitize_for_history(text: str) -> str:
       historical user turns keep their speaker identity in the new format.
     - Strips custom Discord emoji markup ``<:name:id>`` and ``<a:name:id>``.
     - Strips bare emoji shortcodes ``:name:``.
+    - Strips Discord user/channel/role mentions ``<@123>`` / ``<#456>`` /
+      ``<@&789>``: opaque numeric ids that the model can't interpret.
 
-    The visible reply to Discord is NOT passed through this — emojis still
-    render in the chat. Only the persisted memory is scrubbed, breaking the
-    feedback loop where the model imitated the noise from its own past turns."""
+    The visible reply to Discord is NOT passed through this — emojis and
+    mentions still render in the chat. Only the persisted memory is scrubbed,
+    breaking the feedback loop where the model imitated the noise from its
+    own past turns."""
     if not text:
         return text
     out = _LEGACY_BRACKETED_SPEAKER_RE.sub(r"\1\2: ", text, count=1)
     out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
     out = _EMOJI_SHORTCODE_RE.sub("", out)
+    out = _DISCORD_MENTION_RE.sub("", out)
     out = _MULTIBLANK_RE.sub("\n\n", out)
     return out.strip()
 
