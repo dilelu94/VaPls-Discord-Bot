@@ -2490,8 +2490,22 @@ async def indioFromVoice(
         return
     # Cuando la respuesta se redirige a otro canal, el header con @user (mas
     # abajo, antes de postear la respuesta) ya ping al user. No postear nada
-    # en el canal original — evita spam fuera del canal target.
+    # publico en el canal original — evita spam fuera del canal target.
+    # Adicional: mandarle un DM al user avisando donde aterrizo la respuesta
+    # (lo mas cercano a un "ephemeral" cuando no hay interaction). Si el user
+    # tiene DMs cerrados, falla silencioso.
     redirected = bool(original_channel_id and original_channel_id != channel_id)
+    if redirected and user_id:
+        try:
+            user_obj = bot.get_user(int(user_id))
+            if user_obj is None:
+                user_obj = await bot.fetch_user(int(user_id))
+            if user_obj is not None:
+                await user_obj.send(
+                    f"te respondi en <#{channel_id}>"
+                )
+        except Exception:
+            logger.info("indioFromVoice: DM ack skipped (DMs closed?)")
     member = guild.get_member(user_id)
     speaker = (speaker_name
                or (member.display_name if member else None)
