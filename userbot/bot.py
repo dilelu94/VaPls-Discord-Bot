@@ -2300,6 +2300,21 @@ def _pick_vapls_command(cmds, name: str):
     return None
 
 
+async def _resolve_slash_commands(channel, name: str, timeout: float):
+    """Fetch slash commands matching ``name`` in ``channel`` with a hard
+    timeout. discord.py-self may stall here under rate limiting or a slow
+    cache fetch, and there is no cancellation signal back from the caller
+    if the main bot has already given up. Returns the list, or raises
+    asyncio.TimeoutError if Discord doesn't answer in time.
+    """
+    cmds_iter = channel.slash_commands(query=name)
+    if hasattr(cmds_iter, "__aiter__"):
+        async def _collect():
+            return [c async for c in cmds_iter]
+        return await asyncio.wait_for(_collect(), timeout=timeout)
+    return await asyncio.wait_for(cmds_iter, timeout=timeout)
+
+
 async def _relay_invoke_play(request: web.Request) -> web.Response:
     """Ask the userbot (a real Discord user account) to invoke VaPls's /play
     slash command in a given text channel, using the query string supplied by
@@ -2331,11 +2346,14 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         return web.json_response({"error": "channel has no slash_commands"}, status=400)
 
     try:
-        cmds_iter = channel.slash_commands(query="play")
-        if hasattr(cmds_iter, "__aiter__"):
-            cmds = [c async for c in cmds_iter]
-        else:
-            cmds = await cmds_iter
+        cmds = await _resolve_slash_commands(
+            channel, "play", timeout=config.INDIO_RELAY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning("[RELAY-PLAY] slash_commands() timed out for channel %s",
+                    channel_id)
+        return web.json_response({"error": "slash_commands() timed out"},
+                                 status=504)
     except Exception as e:
         log.exception("[RELAY-PLAY] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
@@ -2387,11 +2405,14 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         return web.json_response({"error": "channel has no slash_commands"}, status=400)
 
     try:
-        cmds_iter = channel.slash_commands(query="soundpad")
-        if hasattr(cmds_iter, "__aiter__"):
-            cmds = [c async for c in cmds_iter]
-        else:
-            cmds = await cmds_iter
+        cmds = await _resolve_slash_commands(
+            channel, "soundpad", timeout=config.INDIO_RELAY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning("[RELAY-SOUNDPAD] slash_commands() timed out for channel %s",
+                    channel_id)
+        return web.json_response({"error": "slash_commands() timed out"},
+                                 status=504)
     except Exception as e:
         log.exception("[RELAY-SOUNDPAD] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
