@@ -2329,7 +2329,8 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         data = await request.json()
         channel_id = int(data["channel_id"])
         query = str(data["query"]).strip()
-    except Exception:
+    except Exception as e:
+        log.warning("[RELAY-PLAY] rejected invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
     if not query:
         return web.json_response({"error": "empty query"}, status=400)
@@ -2388,7 +2389,8 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         data = await request.json()
         channel_id = int(data["channel_id"])
         query = str(data["query"]).strip()
-    except Exception:
+    except Exception as e:
+        log.warning("[RELAY-SOUNDPAD] rejected invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
     if not query:
         return web.json_response({"error": "empty query"}, status=400)

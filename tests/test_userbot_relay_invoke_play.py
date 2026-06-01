@@ -129,6 +129,35 @@ async def test_invoke_play_returns_504_when_slash_commands_stalls():
     assert elapsed < 1.0, f"timeout did not fire in time (took {elapsed:.2f}s)"
 
 
+async def test_invoke_play_logs_warning_when_body_is_invalid(caplog):
+    """A malformed request body must produce a log line so operators can
+    diagnose without guessing. Returning a bare 400 with no log entry
+    hides Telegram-bridge / main-bot misconfigurations indefinitely."""
+    tc = await _start()
+    try:
+        with caplog.at_level("WARNING", logger="test_invoke_play"):
+            resp = await tc.post(
+                "/invoke_play",
+                data="this is not json",  # malformed payload
+                headers={
+                    "X-API-Secret": RELAY_SECRET,
+                    "Content-Type": "application/json",
+                },
+            )
+    finally:
+        await tc.close()
+
+    assert resp.status == 400
+    # Some "rejected invalid body" log line was emitted at WARNING level
+    # or higher. Don't assert the literal — the contract is "operator can
+    # find this in journalctl", not the exact wording.
+    rejected_logs = [
+        r for r in caplog.records
+        if "invalid body" in r.getMessage().lower()
+    ]
+    assert rejected_logs, "expected a log line for the rejected body"
+
+
 async def test_invoke_play_returns_404_when_no_vapls_command_found():
     """Sanity: with a working channel that exposes other bots' /play but
     none owned by VaPls, the handler still returns 404 (no regression).
