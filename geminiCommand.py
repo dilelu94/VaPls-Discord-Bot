@@ -44,6 +44,20 @@ except Exception:
 
 logger = logging.getLogger("bot.gemini")
 
+# Strong-ref set for fire-and-forget background tasks. Without this, CPython
+# can GC the Task object before it finishes (the event loop holds only a weak
+# reference). Symptom seen in the wild: indio dispatches PLAY_MUSIC, the task
+# vanishes mid-flight, and no music plays without any error in the logs.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
 VAPLS_SYSTEM = """\
 Sos el bot del servidor de Discord "VaPls". Tu rol es ayudar a los amigos del \
 server con preguntas, traducciones, datos curiosos o lo que necesiten. Sos \
@@ -1755,7 +1769,7 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
     )
     if len(candidates) == 1:
         # One clear match: play it directly with the metadata we already have.
-        asyncio.create_task(_play_chosen_song(bot, guild_id, candidates[0]))
+        _spawn(_play_chosen_song(bot, guild_id, candidates[0]))
         return [], clean
     # Several matches: open a shared MusicVote (one per guild — same storage
     # used by the /play picker buttons). The indio's chat surface here lists
@@ -2314,7 +2328,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         )
 
     if pending_actions:
-        asyncio.create_task(_dispatch_indio_actions(
+        _spawn(_dispatch_indio_actions(
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
             reply_handle=reply_handle,
             reply_text=clean_reply,
@@ -2342,7 +2356,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
 
     # Background distillation when the short-term log grows past threshold.
     if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-        asyncio.create_task(_maybe_compress(mem_key))
+        _spawn(_maybe_compress(mem_key))
 
     analytics.capture("indio invoked", user=ctx.author, guild=ctx.guild, properties={
         "prompt_length": len(pregunta or ""),
@@ -2535,7 +2549,7 @@ async def indioFromVoice(
         await _attach_vote_reactions(bot, _active_vote, channel_id, opts_msg_id, n)
 
     if pending_actions:
-        asyncio.create_task(_dispatch_indio_actions(
+        _spawn(_dispatch_indio_actions(
             bot, guild_id, pending_actions,
             reply_handle=reply_handle,
             reply_text=clean_reply,
@@ -2559,7 +2573,7 @@ async def indioFromVoice(
     await _persist_indio_state()
 
     if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-        asyncio.create_task(_maybe_compress(mem_key))
+        _spawn(_maybe_compress(mem_key))
 
     analytics.capture("indio voice invoked", user=member, guild=guild, properties={
         "prompt_length": len(pregunta),
