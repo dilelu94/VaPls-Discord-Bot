@@ -15,7 +15,7 @@ Call `init_observability()` once at app startup, before anything else.
 
 import logging
 import os
-import sys
+import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -27,26 +27,17 @@ try:
 except ImportError:
     pass
 
-# OpenTelemetry: logs
+# OpenTelemetry logs pipeline. The logs signal still lives under the underscore
+# (`_logs`) namespaces in opentelemetry-python; the non-underscore paths don't
+# exist, so importing them silently disables the whole pipeline. Use `_logs`.
 _OTEL_LOGS_AVAILABLE = False
 try:
-    from opentelemetry import logs as otel_logs
-    from opentelemetry.sdk.logs import LoggerProvider, LoggingHandler
-    from opentelemetry.sdk.logs.export import BatchLogRecordProcessor
+    from opentelemetry._logs import set_logger_provider
+    from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+    from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+    from opentelemetry.sdk.resources import Resource, SERVICE_NAME
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
     _OTEL_LOGS_AVAILABLE = True
-except ImportError:
-    pass
-
-# OpenTelemetry: traces (for AI observability)
-_OTEL_TRACES_AVAILABLE = False
-try:
-    from opentelemetry import trace
-    from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.resources import Resource, SERVICE_NAME
-    from posthog.ai.otel import PostHogSpanProcessor
-    from opentelemetry.instrumentation.google_generativeai import GoogleGenerativeAiInstrumentor
-    _OTEL_TRACES_AVAILABLE = True
 except ImportError:
     pass
 
@@ -54,6 +45,8 @@ except ImportError:
 _posthog: Optional[Any] = None
 _logger: logging.Logger = logging.getLogger("posthog_client")
 _observability_initialized = False
+# Guilds already sent to PostHog via group_identify, deduped per process.
+_known_groups: set[str] = set()
 
 
 def init_observability(service_name: str = "vapls-app") -> None:
@@ -62,7 +55,9 @@ def init_observability(service_name: str = "vapls-app") -> None:
     Sets up:
       - PostHog client (analytics + error tracking)
       - OpenTelemetry -> PostHog log pipeline (asynchronous log batching)
-      - OpenTelemetry tracing for Gemini AI observability (auto-instrumented if SDK is used)
+
+    Gemini AI observability is captured manually via track_ai_generation()
+    because the bot talks to Gemini over raw HTTP, not the official SDK.
 
     Args:
         service_name: Identifies your app (e.g., 'vapls-main-bot' or 'vapls-userbot').
@@ -98,11 +93,12 @@ def init_observability(service_name: str = "vapls-app") -> None:
     # 2. OpenTelemetry Logs -> PostHog Log Pipeline
     if _OTEL_LOGS_AVAILABLE:
         try:
-            # We explicitly define the Resource with service_name so logs are easily differentiated
-            resource = Resource(attributes={SERVICE_NAME: service_name}) if _OTEL_TRACES_AVAILABLE else None
-            
+            # Tag every log record with service.name so the two processes
+            # (main bot / userbot) can be filtered apart in PostHog.
+            resource = Resource(attributes={SERVICE_NAME: service_name})
+
             logger_provider = LoggerProvider(resource=resource)
-            otel_logs.set_logger_provider(logger_provider)
+            set_logger_provider(logger_provider)
 
             otlp_exporter = OTLPLogExporter(
                 endpoint=f"{host}/i/v1/logs",
@@ -119,24 +115,6 @@ def init_observability(service_name: str = "vapls-app") -> None:
             _logger.warning("Failed to hook OpenTelemetry logs pipeline: %s", e)
     else:
         _logger.warning("OpenTelemetry logs packages are not installed; OTLP log pipeline disabled.")
-
-    # 3. OpenTelemetry Traces -> PostHog (for Gemini AI observability auto-instrumentation)
-    if _OTEL_TRACES_AVAILABLE:
-        try:
-            resource = Resource(attributes={SERVICE_NAME: service_name})
-            tracer_provider = TracerProvider(resource=resource)
-            tracer_provider.add_span_processor(
-                PostHogSpanProcessor(api_key=api_key, host=host)
-            )
-            trace.set_tracer_provider(tracer_provider)
-
-            # Auto-instrument standard google-generativeai SDK calls if they ever happen
-            GoogleGenerativeAiInstrumentor().instrument()
-            _logger.info("OpenTelemetry auto-instrumentation for Gemini SDK enabled.")
-        except Exception as e:
-            _logger.warning("Failed to hook OpenTelemetry trace pipeline/Gemini instrumentor: %s", e)
-    else:
-        _logger.warning("OpenTelemetry trace packages not fully installed; tracing auto-instrumentation disabled.")
 
     _observability_initialized = True
 
@@ -173,27 +151,75 @@ def request_context(user_id: str, **extra_tags):
 
 # --- Analytics ---
 
-def track_request(user_id: Optional[str], event: str, **properties) -> None:
+def track_request(
+    user_id: Optional[str],
+    event: str,
+    *,
+    groups: Optional[dict] = None,
+    **properties,
+) -> None:
     """Capture a custom analytics event for a user action.
 
     Usage:
         track_request(user_id, "chat_message_sent", model="gemini-2.0-flash")
 
+    When ``user_id`` is falsy the event is captured *personless* (with
+    ``$process_person_profile=False``) so bot/system actions never spawn a
+    junk person profile in PostHog.
+
     Args:
-        user_id:      The user's unique ID.
+        user_id:      The user's unique ID, or None for a personless event.
         event:        Event name, e.g. "chat_message_sent".
+        groups:       Optional PostHog group attribution, e.g. {"guild": "123"}.
         **properties: Any key-value pairs to attach to the event.
     """
     if _posthog is None:
         return
+    props = dict(properties)
     try:
         if user_id:
-            _posthog.capture(distinct_id=str(user_id), event=event, properties=properties or None)
+            _posthog.capture(
+                distinct_id=str(user_id),
+                event=event,
+                properties=props or None,
+                groups=groups,
+            )
         else:
-            # Fallback to context or personless
-            _posthog.capture(event=event, properties=properties or None)
+            # Personless event: no person profile is created for this actor.
+            props["$process_person_profile"] = False
+            guild_key = (groups or {}).get("guild", "system")
+            _posthog.capture(
+                distinct_id=f"bot-{guild_key}",
+                event=event,
+                properties=props,
+                groups=groups,
+            )
     except Exception as e:
         _logger.debug("track_request failed: %s", e)
+
+
+def group_identify(group_type: str, group_key: str, **properties) -> None:
+    """Register/refresh a PostHog group, deduped once per process.
+
+    Args:
+        group_type:   PostHog group type, e.g. "guild".
+        group_key:    Unique key for the group instance.
+        **properties: Group properties to set (None values are dropped).
+    """
+    if _posthog is None or not group_key:
+        return
+    cache_key = f"{group_type}:{group_key}"
+    if cache_key in _known_groups:
+        return
+    try:
+        _posthog.group_identify(
+            group_type=group_type,
+            group_key=str(group_key),
+            properties={k: v for k, v in properties.items() if v is not None} or None,
+        )
+        _known_groups.add(cache_key)
+    except Exception as e:
+        _logger.debug("group_identify failed: %s", e)
 
 
 def identify_user(user_id: str, **person_properties) -> None:
@@ -220,7 +246,7 @@ def identify_user(user_id: str, **person_properties) -> None:
 
 # --- Error tracking ---
 
-def capture_error(error: Exception, user_id: Optional[str] = None, **properties) -> None:
+def capture_error(error: BaseException, user_id: Optional[str] = None, **properties) -> None:
     """Manually capture an exception and send it to PostHog Error Tracking.
     Use this inside try/except blocks for handled errors.
 
@@ -294,8 +320,6 @@ def track_ai_generation(
     """
     if _posthog is None:
         return
-
-    import time
 
     # Calculate precise latency
     latency_sec = time.monotonic() - t_start

@@ -17,9 +17,11 @@ def reset_client_globals():
     """Ensure we reset the initialized states of posthog_client before and after tests."""
     posthog_client._posthog = None
     posthog_client._observability_initialized = False
+    posthog_client._known_groups.clear()
     yield
     posthog_client._posthog = None
     posthog_client._observability_initialized = False
+    posthog_client._known_groups.clear()
 
 
 def test_init_observability_no_key_is_noop(monkeypatch):
@@ -66,12 +68,52 @@ def test_track_request_delegates_to_posthog():
     posthog_client._posthog = mock_client
     
     posthog_client.track_request("user_123", "button_clicked", source="web")
-    
+
     mock_client.capture.assert_called_once_with(
         distinct_id="user_123",
         event="button_clicked",
         properties={"source": "web"},
+        groups=None,
     )
+
+
+def test_track_request_without_user_is_personless():
+    """A bot/system event (no user_id) must not create a person profile."""
+    mock_client = MagicMock()
+    posthog_client._posthog = mock_client
+
+    posthog_client.track_request(None, "bot_action", groups={"guild": "42"})
+
+    _, kwargs = mock_client.capture.call_args
+    # PostHog suppresses person profiles when this flag is False.
+    assert kwargs["properties"]["$process_person_profile"] is False
+    # The synthetic distinct_id is derived from the guild, not a real person.
+    assert kwargs["distinct_id"] == "bot-42"
+    assert kwargs["groups"] == {"guild": "42"}
+
+
+def test_track_request_forwards_group_attribution():
+    """guild group attribution must reach PostHog so server-level analytics work."""
+    mock_client = MagicMock()
+    posthog_client._posthog = mock_client
+
+    posthog_client.track_request("user_9", "played_song", groups={"guild": "777"})
+
+    _, kwargs = mock_client.capture.call_args
+    assert kwargs["groups"] == {"guild": "777"}
+
+
+def test_group_identify_dedupes_per_process():
+    """The same guild is identified to PostHog only once, not on every event."""
+    mock_client = MagicMock()
+    posthog_client._posthog = mock_client
+
+    posthog_client.group_identify("guild", "123", name="VaPls")
+    posthog_client.group_identify("guild", "123", name="VaPls")
+    posthog_client.group_identify("guild", "456", name="Other")
+
+    # Two distinct guilds -> two calls; the repeat for 123 is suppressed.
+    assert mock_client.group_identify.call_count == 2
 
 
 def test_track_ai_generation_formats_event_correctly():

@@ -51,12 +51,12 @@ We maintain a dual-logging pipeline that preserves standard terminal outputs whi
 
 ## 🏷️ Process Separation (`service.name`)
 
-Because the main bot (`bot.py`) and the userbot (`userbot/bot.py`) run as separate processes, standard OpenTelemetry `Resource` attributes are assigned at startup so you can instantly filter and segment logs in PostHog:
+Because the main bot (`bot.py`) and the userbot (`userbot/bot.py`) run as separate processes, a standard OpenTelemetry `Resource` is attached to the log pipeline at startup so you can instantly filter and segment logs in PostHog:
 
 *   **Main Bot:** Initializes with `service_name="vapls-main-bot"`.
 *   **Userbot:** Initializes with `service_name="vapls-userbot"`.
 
-Any OTLP log record or AI trace shipped to PostHog carries its corresponding `service.name` property.
+Every OTLP log record shipped to PostHog carries its corresponding `service.name` property.
 
 ---
 

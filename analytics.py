@@ -62,19 +62,12 @@ def identify_guild(guild) -> None:
     guild_id = str(getattr(guild, "id", "") or "")
     if not guild_id:
         return
-    client = getattr(posthog_client, "_posthog", None)
-    if client is not None:
-        try:
-            client.group_identify(
-                group_type="guild",
-                group_key=guild_id,
-                properties={
-                    "name": getattr(guild, "name", None),
-                    "member_count": getattr(guild, "member_count", None),
-                },
-            )
-        except Exception as e:
-            logger.debug("identify_guild failed: %s", e)
+    posthog_client.group_identify(
+        "guild",
+        guild_id,
+        name=getattr(guild, "name", None),
+        member_count=getattr(guild, "member_count", None),
+    )
 
 
 def capture(
@@ -102,11 +95,10 @@ def capture(
         identify_guild(guild)
 
     guild_id = props.get("guild_id")
-    posthog_client.track_request(
-        user_id=did or f"bot-{guild_id or 'system'}",
-        event=event,
-        **props
-    )
+    groups = {"guild": str(guild_id)} if guild_id else None
+    # did may be None: track_request then captures a personless event, so bot
+    # and system actions never create a person profile in PostHog.
+    posthog_client.track_request(did, event, groups=groups, **props)
 
 
 def capture_exception(exc: BaseException, *, user=None, guild=None, properties: Optional[dict[str, Any]] = None) -> None:
@@ -123,15 +115,7 @@ def capture_exception(exc: BaseException, *, user=None, guild=None, properties: 
     if guild is not None:
         props.setdefault("guild_id", str(getattr(guild, "id", "") or "") or None)
 
-    if isinstance(exc, Exception):
-        posthog_client.capture_error(exc, user_id=did, **props)
-    else:
-        client = getattr(posthog_client, "_posthog", None)
-        if client is not None:
-            try:
-                client.capture_exception(exc, distinct_id=did, properties=props)
-            except Exception as e:
-                logger.debug("capture_exception failed: %s", e)
+    posthog_client.capture_error(exc, user_id=did, **props)
 
 
 def shutdown() -> None:

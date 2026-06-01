@@ -35,8 +35,8 @@ def stub_analytics(request, monkeypatch):
     
     try:
         import posthog_client
-        for name in ("track_request", "identify_user", "capture_error",
-                     "track_ai_generation", "init_observability"):
+        for name in ("track_request", "identify_user", "group_identify",
+                     "capture_error", "track_ai_generation", "init_observability"):
             monkeypatch.setattr(posthog_client, name, MagicMock(), raising=False)
     except ImportError:
         pass
