@@ -249,6 +249,10 @@ def indio(tmp_path, monkeypatch):
 
     mem_path = tmp_path / "indio_memory.json"
     monkeypatch.setattr(config, "INDIO_MEMORY_PATH", str(mem_path), raising=False)
+    # Por default, los tests del Indio no redirigen a un canal externo — testean
+    # el flow contra ctx.followup. Los tests que quieran ejercitar el override
+    # de canal lo seteen explicito en su monkeypatch.
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 0, raising=False)
 
     def _clear():
         gc._indio_history.clear()

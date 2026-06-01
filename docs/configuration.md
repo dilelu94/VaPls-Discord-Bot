@@ -24,6 +24,7 @@
 | `DECIFRAR_FEEDBACK_SAMPLE_RATE` | ❌ | `3` | 1 de cada N transcripciones de voz recibe el par de reacciones. Subir para sampleo menor (menos ruido en el canal). |
 | `DECIFRAR_FEEDBACK_TIMEOUT_MINUTES` | ❌ | `60` | Minutos antes de que el sweeper limpie las reacciones de un sample que nadie votó. |
 | `DECIFRAR_FALSE_POSITIVES_LOG_PATH` | ❌ | `data/false_positives.jsonl` | Path al JSONL persistente donde se loggean los ❌ (raw whisper + VOSK N-best) para debug offline de la calidad del ASR. Gitignored. |
+| `INDIO_REPLY_CHANNEL_ID` | ❌ | `1490008278275461280` | Canal único donde el Indio postea sus respuestas, sin importar el trigger (`/indio`, wake-word de texto, voz, HTTP). Cuando el `/indio` se invoca desde otro canal, se postea un aviso público "<@user> te respondo en <#TARGET>" en el canal del slash. `0` = comportamiento clásico (responde donde se lo invoca). |
 
 ## Userbot (.env in userbot/)
 | Variable | Required | Default | Description / implications |

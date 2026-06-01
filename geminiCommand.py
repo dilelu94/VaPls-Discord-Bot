@@ -2219,19 +2219,17 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 # esta disponible) para que el indio "real" sea quien dice que
                 # se quedo sin cupo. Header primero, para dar contexto.
                 header = _format_user_header(ctx, pregunta).rstrip()
-                await ctx.followup.send(header)
-                channel_id = getattr(ctx, "channel_id", None) or getattr(
-                    getattr(ctx, "channel", None), "id", None
-                )
+                await _post(header)
+                channel_id = _reply_channel_id()
                 relayed = False
                 if (channel_id is not None
                         and config.INDIO_RELAY_URL
                         and config.INDIO_RELAY_SECRET):
                     relayed = await _relay_to_userbot(channel_id, msg, None)
                 if not relayed:
-                    await ctx.followup.send(msg)
+                    await _post(msg)
             else:
-                await ctx.followup.send(msg)
+                await _post(msg)
         except Exception:
             pass
         analytics.capture("indio failed", user=ctx.author, guild=ctx.guild, properties={
@@ -2248,7 +2246,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     except Exception as e:
         logger.exception("indio unexpected error")
         try:
-            await ctx.followup.send("❌ Algo se rompió. Probá de nuevo.")
+            await _post("❌ Algo se rompió. Probá de nuevo.")
         except Exception:
             pass
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -2274,11 +2272,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     reply_handle = None
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
-        question_msg = await ctx.followup.send(question_header)
+        question_msg = await _post(question_header)
         question_msg_id = getattr(question_msg, "id", None)
-        channel_id = getattr(ctx, "channel_id", None) or getattr(
-            getattr(ctx, "channel", None), "id", None
-        )
+        channel_id = _reply_channel_id()
         opts_channel_id = channel_id
         if vote_open and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET and channel_id is not None:
             # Vote options: post via relay but capture the message id so we can
@@ -2287,12 +2283,12 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             relayed_via_userbot = opts_msg_id is not None
             n_chunks = 1 if relayed_via_userbot else 0
             if not relayed_via_userbot:
-                sent = await ctx.followup.send(clean_reply)
+                sent = await _post(clean_reply)
                 opts_msg_id = getattr(sent, "id", None)
                 opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
                 n_chunks = 1
         elif vote_open:
-            sent = await ctx.followup.send(clean_reply)
+            sent = await _post(clean_reply)
             opts_msg_id = getattr(sent, "id", None)
             opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
             n_chunks = 1
@@ -2316,7 +2312,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 chunks = _split_for_discord(clean_reply)
                 sent_msg = None
                 for c in chunks:
-                    sent_msg = await ctx.followup.send(c)
+                    sent_msg = await _post(c)
                 reply_handle = _types.SimpleNamespace(
                     via_relay=False,
                     channel_id=channel_id,
@@ -2331,7 +2327,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             chunks = _split_for_discord(clean_reply)
             sent_msg = None
             for c in chunks:
-                sent_msg = await ctx.followup.send(c)
+                sent_msg = await _post(c)
             reply_handle = _types.SimpleNamespace(
                 via_relay=False,
                 channel_id=channel_id,

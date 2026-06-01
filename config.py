@@ -71,6 +71,11 @@ INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 # este text channel. Sin fallback: si no esta, la accion falla.
 INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "451607097432604672"))
 
+# Canal unico donde se postean las respuestas del Indio (sin importar desde
+# donde se lo invoque: /indio, wake-word de texto, wake-word de voz, HTTP).
+# 0 = comportamiento clasico (responde en el canal del trigger).
+INDIO_REPLY_CHANNEL_ID = int(os.getenv("INDIO_REPLY_CHANNEL_ID", "1490008278275461280"))
+
 # Userbot voice-recording endpoint. After /play-audio finishes playing a
 # Telegram-uploaded clip we ask the userbot to capture the voice channel's
 # reply and POST it back to the Telegram bridge. Leave USERBOT_RECORD_URL
