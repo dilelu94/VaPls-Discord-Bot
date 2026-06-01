@@ -219,6 +219,12 @@ async def test_soundpad_works_again_after_vote_closes(
     monkeypatch.setattr(geminiKeys, "has_user_key", lambda uid: True)
     play_clip = AsyncMock(return_value="/audio_output/x.ogg")
     monkeypatch.setattr(soundpadCommand, "play_clip_by_query", play_clip)
+    # The soundpad query branch looks up the clip on disk first. Tests must
+    # not depend on `audio_output/` being populated — it is gitignored and
+    # empty on a fresh checkout (CI). Stub the lookup so we exercise the
+    # gate-then-play path regardless of filesystem state.
+    monkeypatch.setattr(soundpadCommand, "find_best_match",
+                        lambda query, output_dir, cutoff=0.4: "/audio_output/x.ogg")
     # Skip the "bot already playing music" gate (it's the next one in the
     # function and not what we're testing here).
     from playCommand import guildPlayers
