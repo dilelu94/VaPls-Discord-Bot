@@ -116,6 +116,7 @@ USERS: dict[int, dict] = {
     },
     293815496866922507: {
         "name": "Seba",
+        "greeting": "Audios/hava-nagila-cut.mp3",
         "traits": [
             "nombre real: Sebastián",
             "tiene el cuello largo",
