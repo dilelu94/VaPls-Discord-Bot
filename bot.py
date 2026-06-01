@@ -16,7 +16,7 @@ from discord.ext import commands
 
 from playCommand import playLogic
 from pararCommand import pararLogic
-from soundpadCommand import soundpadLogic
+from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic
 from suggestionsCommand import sugerenciasLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
@@ -426,6 +426,7 @@ async def soundpad(
         description="Nombre aproximado del clip a reproducir (vacío = abrir panel)",
         required=False,
         default=None,
+        autocomplete=soundpad_query_autocomplete,
     ) = None,
 ):
     """Slash command: open the soundpad UI or play a clip by fuzzy name.

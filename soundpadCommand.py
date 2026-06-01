@@ -98,6 +98,78 @@ def find_best_match(query: str, output_dir: str, cutoff: float = 0.4):
     return None
 
 
+# Autocomplete index for the /soundpad `query` parameter. Keyed by
+# ``output_dir`` so a config swap doesn't poison results. The fingerprint
+# is a tuple of (st_mtime_ns) values for the root and every category
+# directory — lsyncd touching any file under a category bumps that
+# category's mtime, so the cache invalidates itself without external hooks.
+_AUTOCOMPLETE_CACHE: dict[str, tuple[tuple, list[tuple[str, str]]]] = {}
+
+
+def _dirs_fingerprint(output_dir: str) -> tuple:
+    """Return a cheap signature of the soundpad tree's structure.
+
+    Reads ``st_mtime_ns`` of the root and every category subdir. When the
+    file tree changes (lsyncd create/move/delete), the parent directory's
+    mtime changes immediately, so a single fingerprint comparison detects
+    all relevant changes without walking files.
+    """
+    try:
+        root_mtime = os.stat(output_dir).st_mtime_ns
+    except OSError:
+        return ()
+    parts = [("__root__", root_mtime)]
+    try:
+        entries = sorted(os.listdir(output_dir))
+    except OSError:
+        return tuple(parts)
+    for name in entries:
+        if name.startswith("."):
+            continue
+        sub = os.path.join(output_dir, name)
+        try:
+            st = os.stat(sub)
+        except OSError:
+            continue
+        if not os.path.isdir(sub):
+            continue
+        parts.append((name, st.st_mtime_ns))
+    return tuple(parts)
+
+
+def _get_clip_index(output_dir: str) -> list[tuple[str, str]]:
+    """Return cached ``(normalized_name, display_name)`` for every clip.
+
+    Cache hit cost: O(N categories) stat() calls. Cache miss cost: a full
+    ``iter_clips`` walk. Invalidates automatically when the directory tree
+    changes.
+    """
+    fp = _dirs_fingerprint(output_dir)
+    entry = _AUTOCOMPLETE_CACHE.get(output_dir)
+    if entry is not None and entry[0] == fp:
+        return entry[1]
+    clips: list[tuple[str, str]] = []
+    for path, _ in iter_clips(output_dir):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        clips.append((_normalize_clip_name(stem), stem))
+    _AUTOCOMPLETE_CACHE[output_dir] = (fp, clips)
+    return clips
+
+
+async def soundpad_query_autocomplete(ctx):
+    """py-cord autocomplete callback for ``/soundpad``'s ``query`` parameter.
+
+    Returns up to 25 suggestions (Discord's hard cap) whose normalized
+    clip name contains the user's partial input as a substring.
+    """
+    output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
+    partial = _normalize_clip_name(getattr(ctx, "value", "") or "")
+    clips = _get_clip_index(output_dir)
+    if not partial:
+        return [display for _, display in clips[:25]]
+    return [display for norm, display in clips if partial in norm][:25]
+
+
 def _pick_populated_voice_channel(guild: discord.Guild):
     """Return the voice channel in ``guild`` with the most non-bot members, or None."""
     candidates = [

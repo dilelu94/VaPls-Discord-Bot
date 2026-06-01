@@ -14,9 +14,11 @@ import pytest
 import config
 from soundpadCommand import (
     SoundpadStopView,
+    _AUTOCOMPLETE_CACHE,
     find_best_match,
     iter_clips,
     play_clip_by_query,
+    soundpad_query_autocomplete,
     soundpadLogic,
 )
 
@@ -483,3 +485,71 @@ async def test_play_clip_by_query_stays_connected_if_bot_was_already_in_voice(so
     assert played is not None
     assert existing_vc.played is not None, "should reuse the existing voice client"
     assert not existing_vc.disconnected, "should not disconnect when reusing"
+
+
+# --------------------------------------------------------------------------
+# /soundpad query autocomplete
+# --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _clear_autocomplete_cache():
+    """Reset the autocomplete cache between tests so fixtures don't leak."""
+    _AUTOCOMPLETE_CACHE.clear()
+    yield
+    _AUTOCOMPLETE_CACHE.clear()
+
+
+def _ac_ctx(value: str):
+    """Minimal stand-in for ``discord.AutocompleteContext`` (only ``.value`` is read)."""
+    return SimpleNamespace(value=value)
+
+
+async def test_autocomplete_returns_suggestion_matching_partial_input(soundpad_dir):
+    suggestions = await soundpad_query_autocomplete(_ac_ctx("bob"))
+    # The user typed "bob"; they should see the bob-esponja clip among results.
+    assert any("bob" in s.lower().replace("_", " ").replace("-", " ") for s in suggestions)
+
+
+async def test_autocomplete_returns_clips_when_input_empty(soundpad_dir):
+    suggestions = await soundpad_query_autocomplete(_ac_ctx(""))
+    # Empty input → user is just browsing; they should see existing clips.
+    assert len(suggestions) > 0
+    assert len(suggestions) <= 25
+
+
+async def test_autocomplete_caps_at_25_results(tmp_path, monkeypatch):
+    root = tmp_path / "audio_output"
+    for i in range(40):
+        _touch(str(root / "Bulk" / f"clip_{i:02d}.mp3"))
+    monkeypatch.setattr(config, "CUSTOM_AUDIO_PATH", str(root), raising=False)
+
+    suggestions = await soundpad_query_autocomplete(_ac_ctx(""))
+    assert len(suggestions) == 25  # Discord's hard cap on autocomplete options.
+
+
+async def test_autocomplete_returns_empty_when_nothing_matches(soundpad_dir):
+    suggestions = await soundpad_query_autocomplete(_ac_ctx("xyzqwertyabsolutelynothing"))
+    assert suggestions == []
+
+
+async def test_autocomplete_is_case_and_separator_insensitive(soundpad_dir):
+    upper = await soundpad_query_autocomplete(_ac_ctx("BOB ESPONJA"))
+    dashed = await soundpad_query_autocomplete(_ac_ctx("bob-esponja"))
+    # Both spellings find the same clip regardless of case/separator style.
+    assert upper, "uppercase input should still surface suggestions"
+    assert dashed, "dashed input should still surface suggestions"
+
+
+async def test_autocomplete_picks_up_new_clip_after_filesystem_change(soundpad_dir):
+    # Baseline: this clip does not exist yet.
+    before = await soundpad_query_autocomplete(_ac_ctx("recienllegado"))
+    assert before == []
+
+    # lsyncd drops a new file into an existing category.
+    new_clip = os.path.join(soundpad_dir, "Juji", "recienllegado_to_juji.mp3")
+    _touch(new_clip)
+    # Bump category mtime in case the filesystem's resolution masked the create.
+    os.utime(os.path.join(soundpad_dir, "Juji"), None)
+
+    after = await soundpad_query_autocomplete(_ac_ctx("recienllegado"))
+    # Cache must invalidate so the new clip becomes visible without restart.
+    assert any("recienllegado" in s.lower() for s in after)
