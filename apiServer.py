@@ -620,6 +620,19 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     return
                 if cleaned != text:
                     logger.info("indio voice: decifrado %r -> %r", text, cleaned)
+                    # Edit the userbot's transcript message to show both
+                    # the raw ASR output and the Gemini-cleaned version.
+                    if transcript_message_id is not None and channel_id is not None:
+                        try:
+                            await geminiCommand.relay_transcript_decifrado(
+                                channel_id=channel_id,
+                                message_id=transcript_message_id,
+                                speaker=speaker_name,
+                                raw=text,
+                                cleaned=cleaned,
+                            )
+                        except Exception:
+                            logger.exception("indio voice: relay_transcript_decifrado failed")
                 text = cleaned
             await geminiCommand.askIndio(
                 bot,
