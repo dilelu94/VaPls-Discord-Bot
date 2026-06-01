@@ -574,10 +574,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
         """Trigger the indio persona from a voice transcription.
 
         Body JSON: {pregunta, speaker_name, guild_id?, channel_id?,
-        channel_name?, decifrar?}. When ``decifrar`` is true (default), the raw
-        transcript is first passed through geminiCommand.decifrarTranscripcion
-        to fix ASR phonetic errors; the cleaned text is then handed to
-        askIndio. Returns immediately; the reply is delivered async.
+        channel_name?, is_voice?}. When ``is_voice`` is true (default), the
+        transcript is marked with a ``[voz] `` prefix so the indio knows to
+        tolerate ASR errors, and a 1-in-N sampler may add ASR-quality
+        feedback reactions to the transcript message. Returns immediately;
+        the reply is delivered async.
         """
         try:
             data = await request.json()
@@ -590,50 +591,64 @@ def makeApp(bot: discord.Bot) -> web.Application:
         guild_id = int(data["guild_id"]) if data.get("guild_id") else None
         channel_id = int(data["channel_id"]) if data.get("channel_id") else None
         channel_name = data.get("channel_name")
-        decifrar = bool(data.get("decifrar", True))
+        # ``decifrar`` is kept as a back-compat alias for ``is_voice``: callers
+        # that still send the old key keep working without changes.
+        is_voice = bool(data.get("is_voice", data.get("decifrar", True)))
         user_id = int(data["user_id"]) if data.get("user_id") else 0
         transcript_message_id = int(data["transcript_message_id"]) if data.get("transcript_message_id") else None
+        vosk_result = data.get("vosk_result")
 
         async def _run() -> None:
             text = pregunta
-            # Vote shortcut: if there's an open music poll for this guild and
-            # the *raw* transcript names an option, register the vote and stop.
-            # Done before decifrar so Gemini's cleanup can't drop the digit
-            # (e.g. "Indio, tirala 4" → "Che indio, tirala") and so the vote
-            # doesn't burn a Gemini turn.
-            if guild_id is not None and geminiCommand.try_register_voice_vote(
-                guild_id=guild_id,
-                user_id=user_id,
-                speaker_name=speaker_name,
-                text=text,
-            ):
-                logger.info("indio voice: registered vote from raw %r", text[:200])
-                return
-            if decifrar:
-                cleaned = await geminiCommand.decifrarTranscripcion(
-                    text,
-                    transcript_message_id=transcript_message_id,
-                    channel_id=channel_id,
-                )
-                if not cleaned:
-                    logger.info("indio voice: BASURA dropped raw=%r", text[:200])
+            # Vote-aware gating. When a music poll is live in this guild:
+            #   - non-requester speakers are silently dropped (the userbot
+            #     already filters them, but we backstop here in case of a
+            #     relay-sync race or a userbot restart),
+            #   - the requester's utterance is interpreted ONLY as a vote;
+            #     non-vote text doesn't spawn askIndio (which would otherwise
+            #     cascade a brand-new music vote on top of the open one).
+            if guild_id is not None:
+                import playCommand
+                active_vote = playCommand.get_active_vote(int(guild_id))
+                if active_vote is not None:
+                    if (active_vote.requester_id and user_id
+                            and int(user_id) != int(active_vote.requester_id)):
+                        logger.info(
+                            "indio voice: drop non-requester %s during open "
+                            "vote (requester=%s) raw=%r",
+                            user_id, active_vote.requester_id, text[:200],
+                        )
+                        return
+                    if geminiCommand.try_register_voice_vote(
+                        guild_id=guild_id,
+                        user_id=user_id,
+                        speaker_name=speaker_name,
+                        text=text,
+                    ):
+                        logger.info("indio voice: registered vote from raw %r",
+                                    text[:200])
+                        return
+                    logger.info(
+                        "indio voice: drop requester non-vote during open vote: %r",
+                        text[:200],
+                    )
                     return
-                if cleaned != text:
-                    logger.info("indio voice: decifrado %r -> %r", text, cleaned)
-                    # Edit the userbot's transcript message to show both
-                    # the raw ASR output and the Gemini-cleaned version.
-                    if transcript_message_id is not None and channel_id is not None:
-                        try:
-                            await geminiCommand.relay_transcript_decifrado(
-                                channel_id=channel_id,
-                                message_id=transcript_message_id,
-                                speaker=speaker_name,
-                                raw=text,
-                                cleaned=cleaned,
-                            )
-                        except Exception:
-                            logger.exception("indio voice: relay_transcript_decifrado failed")
-                text = cleaned
+            if is_voice:
+                # Probabilistic ASR-quality feedback: maybe add 👍/❌ reactions
+                # to the transcript message so users can flag false positives.
+                try:
+                    import decifrarVoting
+                    asyncio.create_task(decifrarVoting.record(
+                        text,
+                        msg_id=transcript_message_id,
+                        channel_id=channel_id,
+                        vosk_result=vosk_result,
+                    ))
+                except Exception:
+                    logger.exception("indio voice: failed to schedule feedback record")
+                # Tag the message so the indio knows it came from voice ASR
+                # (so it tolerates phonetic errors instead of asking to repeat).
+                text = f"[voz] {text}"
             await geminiCommand.askIndio(
                 bot,
                 text,

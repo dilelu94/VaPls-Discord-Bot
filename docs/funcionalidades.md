@@ -141,9 +141,19 @@ concisas.
 - Soporte de tools, manejo tipado de errores
   (config/http/timeout/blocked/empty/parse).
 
-**`decifrarTranscripcion`** — limpia transcripciones de voz (errores fonéticos
-del ASR) con un modelo más barato (`flash-lite`), con caché. Devuelve `BASURA`
-para descartar ruido.
+**Indio tolerante a ASR** — las transcripciones de voz llegan al `/indio`
+prefijadas con `[voz] ` y el system prompt del Indio le instruye a tolerar
+errores fonéticos típicos de Whisper (verbos partidos, nombres propios mal
+oídos, dígitos perdidos). Esto reemplaza al viejo paso de `decifrarTranscripcion`
+(una llamada Gemini extra para limpiar el ASR antes de razonar): ahora el
+Indio razona sobre el raw y se ahorra una llamada al modelo.
+
+**Feedback inline de calidad del ASR (`decifrarVoting.py`)** — 1 de cada N
+transcripciones de voz recibe reacciones 👍 / ❌ en el mensaje de
+transcripción. 👍 = entendió bien (no se loggea nada). ❌ = falso positivo
+del wake-word o transcripción mala (se appendea al JSONL
+`DECIFRAR_FALSE_POSITIVES_LOG_PATH` con el raw Whisper y el resultado N-best
+de VOSK, para debug offline de la calidad del ASR).
 
 ---
 
@@ -189,7 +199,7 @@ un bot de Telegram externo:
 | `GET /playing` | Si el bot está reproduciendo (lo usa el userbot para ajustar concurrencia) |
 | `POST /message` | Publica texto en un canal (prefijado `[TG/...]`) |
 | `POST /play-audio` | Reproduce un audio subido desde Telegram; opcionalmente pide al userbot que **grabe la respuesta de voz** y la mande de vuelta |
-| `POST /indio` | Invoca al Indio desde una transcripción de voz (con `decifrar`) |
+| `POST /indio` | Invoca al Indio desde una transcripción de voz (prefija `[voz] ` y opcionalmente seedea reacciones de feedback ASR) |
 | `POST /gemini-key` | Recibe keys de Gemini reenviadas por el userbot |
 
 ---
@@ -212,7 +222,8 @@ El proceso más técnico. Funciones clave:
   antes del wake word), filtrado de falsos positivos y límites de concurrencia
   (3 mientras hay música, 5 si no).
 - Al detectar pregunta válida → la manda al `/indio` del main bot (con
-  `decifrar=True`).
+  `is_voice=True`); el main bot prefija el texto con `[voz] ` antes de
+  pasárselo al Indio.
 
 **Auto-reply en chat de texto:** si alguien escribe "indio" en un canal, reenvía
 el mensaje al `/indio` (cooldown de 3 s por canal y tope horario por guild).

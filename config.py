@@ -52,11 +52,6 @@ GEMINI_API_KEYS: list[str] = _parse_gemini_keys()
 # truthy check; mantenelo apuntando a la primera key del pool.
 GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else None
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-# Modelo usado por decifrarTranscripcion (limpieza de transcripciones ASR).
-# Es una tarea corta/correctiva donde flash-lite alcanza, y tiene 4x la cuota
-# diaria del free tier (1000 RPD vs 250) — esto libera cupo del modelo grande
-# para el /indio.
-GEMINI_DECIFRAR_MODEL = os.getenv("GEMINI_DECIFRAR_MODEL", "gemini-2.5-flash-lite")
 # Archivo persistente con el pool de keys (gitignored). geminiKeys.py lo lee
 # al startup y lo escribe cuando alguien manda una key nueva por DM. Si no
 # existe, se siembra con GEMINI_API_KEYS del .env.
@@ -111,25 +106,16 @@ VOICE_IDLE_TIMEOUT_SECONDS = float(os.getenv("VOICE_IDLE_TIMEOUT_SECONDS", "1"))
 SUGGESTIONS_PATH = os.getenv("SUGGESTIONS_PATH", "data/suggestions.json")
 SUGGESTIONS_MODEL = os.getenv("SUGGESTIONS_MODEL", "gemini-2.5-flash-lite")
 
-# --- Decifrar voting / human-in-the-loop curated cache ---------------------
-# Cada decifrado (raw whisper → cleaned Gemini) se loggea a un JSONL. Con
-# probabilidad 1/SAMPLE_RATE el bot publica el par (raw, decifrado) en un
-# canal con botones 👍/👎. Votos 👍 promueven el decifrado al cache
-# persistente (sobrevive al restart); 👎 descarta la entrada y borra el
-# mensaje. Diseñado para curar a mano el cache de un set crecente de
-# transcripciones reales.
-DECIFRAR_VOTE_ENABLED = os.getenv("DECIFRAR_VOTE_ENABLED", "false").lower() == "true"
-DECIFRAR_VOTE_CHANNEL_ID = int(os.getenv("DECIFRAR_VOTE_CHANNEL_ID", "0"))
-# 1 de cada N decifrados se postea (probabilístico, no batch).
-DECIFRAR_VOTE_SAMPLE_RATE = int(os.getenv("DECIFRAR_VOTE_SAMPLE_RATE", "20"))
-# Votos netos (👍 - 👎) necesarios para resolver una votación.
-DECIFRAR_VOTE_THRESHOLD = int(os.getenv("DECIFRAR_VOTE_THRESHOLD", "2"))
-# Cuántas horas tolera una votación sin moverse antes de borrarla.
-DECIFRAR_VOTE_TIMEOUT_HOURS = float(os.getenv("DECIFRAR_VOTE_TIMEOUT_HOURS", "48"))
-# Cap del JSONL — cuando se supera, drop de las más viejas con status=pending
-# (las approved se preservan porque son el conocimiento curado).
-DECIFRAR_LOG_MAX_LINES = int(os.getenv("DECIFRAR_LOG_MAX_LINES", "10000"))
-DECIFRAR_LOG_PATH = os.getenv("DECIFRAR_LOG_PATH", "data/decifrar_log.jsonl")
-# Cuántas entradas approved seedeamos al in-memory LRU al startup (las
-# últimas K por timestamp). Mantiene espacio en el LRU para entradas frescas.
-DECIFRAR_CACHE_SEED_MAX = int(os.getenv("DECIFRAR_CACHE_SEED_MAX", "128"))
+# --- ASR-quality feedback (inline reactions) -------------------------------
+# Cada transcripción de voz que entra al `/indio` puede ser sampleada para
+# pedir feedback de calidad del ASR: el bot agrega 👍 / ❌ al mensaje de
+# transcripción. 👍 = entendió bien (no se loggea nada). ❌ = wake-word
+# falso positivo o transcripción mala (se loggea a un JSONL para debug
+# offline del ASR).
+DECIFRAR_FEEDBACK_ENABLED = os.getenv("DECIFRAR_FEEDBACK_ENABLED", "true").lower() == "true"
+# 1 de cada N transcripciones de voz recibe el par de reacciones.
+DECIFRAR_FEEDBACK_SAMPLE_RATE = int(os.getenv("DECIFRAR_FEEDBACK_SAMPLE_RATE", "3"))
+# Minutos antes de que el sweeper limpie las reacciones de un sample que
+# nadie votó.
+DECIFRAR_FEEDBACK_TIMEOUT_MINUTES = float(os.getenv("DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", "60"))
+DECIFRAR_FALSE_POSITIVES_LOG_PATH = os.getenv("DECIFRAR_FALSE_POSITIVES_LOG_PATH", "data/false_positives.jsonl")

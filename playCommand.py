@@ -15,6 +15,9 @@ import time
 import logging
 from logging.handlers import RotatingFileHandler
 from typing import Optional
+from urllib.parse import urljoin
+
+import aiohttp
 
 from greeting import set_pending_trigger
 
@@ -173,7 +176,8 @@ class MusicVote:
 
     def __init__(self, *, bot, guild_id: int, candidates: list[dict],
                  on_resolve, vote_window_sec: float = _MUSIC_VOTE_WINDOW_SEC,
-                 vote_max_sec: float = _MUSIC_VOTE_MAX_SEC):
+                 vote_max_sec: float = _MUSIC_VOTE_MAX_SEC,
+                 requester_id: int = 0):
         self.bot = bot
         self.guild_id = guild_id
         self.candidates = candidates
@@ -183,6 +187,11 @@ class MusicVote:
         self._closed = False
         self._close_task: Optional[asyncio.Task] = None
         self._on_resolve = on_resolve          # async fn(MusicVote, winner_dict)
+        # Discord id of the user who triggered the vote (via /play or via the
+        # indio's voice/chat request). Voice votes are restricted to this id
+        # so a music poll doesn't keep spawning while the requester deliberates.
+        # 0 means "unknown" → no restriction (fallback to legacy behaviour).
+        self.requester_id: int = int(requester_id or 0)
         # The picker message used for the reaction UI. Set by callers after
         # they post the prompt so the close cleanup can clear the reactions.
         self.reaction_message_id: Optional[int] = None
@@ -245,6 +254,10 @@ class MusicVote:
         # Pop from the active registry so a future query opens a fresh vote.
         if active_votes.get(self.guild_id) is self:
             active_votes.pop(self.guild_id, None)
+        # Lift the userbot's voice-input restriction so the next utterance from
+        # anyone is heard again. Fire-and-forget — main bot's defence-in-depth
+        # filter catches anything that races through the closing window.
+        asyncio.create_task(_notify_userbot_vote_restriction(self.guild_id, None))
         winner = self._tally_winner()
         # Best-effort: drop the seeded reactions so the closed picker doesn't
         # invite latecomers to keep tapping.
@@ -277,13 +290,19 @@ class MusicVote:
 def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
                     on_resolve,
                     vote_window_sec: Optional[float] = None,
-                    vote_max_sec: Optional[float] = None) -> MusicVote:
+                    vote_max_sec: Optional[float] = None,
+                    requester_id: int = 0) -> MusicVote:
     """Open a fresh music vote for ``guild_id``. If another vote is currently
     active in the same guild it's cancelled — only one live picker at a time.
 
     The ``vote_window_sec`` / ``vote_max_sec`` defaults are looked up at call
     time so tests can monkeypatch the module-level constants to speed up
     timing-sensitive scenarios.
+
+    ``requester_id`` is the Discord id of the user who triggered the vote
+    (``ctx.author.id`` for /play, the voice/chat speaker's id for indio-driven
+    votes). It scopes voice voting to that user so the bot doesn't keep
+    spawning new votes while the requester deliberates.
     """
     prev = active_votes.get(guild_id)
     if prev is not None and not prev._closed:
@@ -296,9 +315,50 @@ def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
         vote_max_sec = _MUSIC_VOTE_MAX_SEC
     vote = MusicVote(bot=bot, guild_id=guild_id, candidates=candidates,
                      on_resolve=on_resolve, vote_window_sec=vote_window_sec,
-                     vote_max_sec=vote_max_sec)
+                     vote_max_sec=vote_max_sec, requester_id=requester_id)
     active_votes[guild_id] = vote
+    # Tell the userbot to only feed voice from the requester until the vote
+    # closes. Fire-and-forget; if the relay is off or fails, the apiServer's
+    # /indio handler still filters as defence-in-depth.
+    asyncio.create_task(_notify_userbot_vote_restriction(guild_id, requester_id))
     return vote
+
+
+async def _notify_userbot_vote_restriction(guild_id: int,
+                                           requester_id: Optional[int]) -> None:
+    """Tell the userbot which speaker is "the requester" for this guild's
+    open music vote (or that no vote is active, when ``requester_id`` is None).
+
+    Best-effort: returns silently if the relay is disabled or unreachable.
+    The userbot uses this to drop VOSK feed for non-requester speakers,
+    saving Whisper cycles. The main bot also filters on its own side so a
+    failed relay call doesn't break correctness — only efficiency.
+    """
+    base = (config.INDIO_RELAY_URL or "").strip()
+    secret = (config.INDIO_RELAY_SECRET or "").strip()
+    if not base or not secret:
+        return
+    url = urljoin(base, "/restrict_speaker")
+    payload = {
+        "guild_id": str(int(guild_id)),
+        "user_id": (str(int(requester_id))
+                    if requester_id is not None and int(requester_id) > 0
+                    else None),
+    }
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    playLogger.warning(
+                        "[VOTE-RESTRICT] userbot relay rc=%s for guild=%s requester=%s",
+                        resp.status, guild_id, requester_id,
+                    )
+    except Exception as e:
+        playLogger.warning(
+            "[VOTE-RESTRICT] userbot relay failed (%s): %s", type(e).__name__, e,
+        )
 
 
 def get_active_vote(guild_id: int) -> Optional[MusicVote]:
@@ -1472,6 +1532,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         vote = open_music_vote(
             bot=ctx.bot, guild_id=ctx.guild.id,
             candidates=candidates, on_resolve=_resolve,
+            requester_id=int(getattr(ctx.author, "id", 0) or 0),
         )
         prompt = _format_choice_prompt(candidates)
         msg = None

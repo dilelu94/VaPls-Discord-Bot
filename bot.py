@@ -311,11 +311,13 @@ async def on_message(message):
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    """Count emoji reactions on the indio's music-vote options message as votes.
+    """Route emoji reactions to the relevant subsystems.
 
-    Fires for any reaction the bot can see (guild reactions intent). We ignore
-    the bot's own seeding reactions and hand the rest to geminiCommand, which
-    only acts when the reaction lands on an open vote's options message.
+    Two consumers:
+      - ``geminiCommand.register_reaction_vote``: counts keycap reactions on
+        an open music-vote options message.
+      - ``decifrarVoting.handle_reaction_vote``: resolves 👍/❌ on sampled
+        voice-transcript messages (ASR-quality feedback).
     """
     try:
         if bot.user is not None and payload.user_id == bot.user.id:
@@ -338,25 +340,6 @@ async def on_raw_reaction_add(payload):
         )
     except Exception:
         log.exception("on_raw_reaction_add failed")
-
-
-@bot.event
-async def on_raw_reaction_remove(payload):
-    """Count emoji reaction removals for decifrar votes."""
-    try:
-        if bot.user is not None and payload.user_id == bot.user.id:
-            return
-        import decifrarVoting
-        await decifrarVoting.handle_reaction_vote(
-            bot,
-            channel_id=payload.channel_id,
-            message_id=payload.message_id,
-            emoji=str(payload.emoji),
-            user_id=payload.user_id,
-            added=False,
-        )
-    except Exception:
-        log.exception("on_raw_reaction_remove failed")
 
 
 def _track_command(ctx, name, extra=None):

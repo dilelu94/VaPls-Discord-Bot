@@ -388,10 +388,12 @@ async def test_anyone_can_vote_not_just_requester(
     assert play_mock.call_args.kwargs["songs"][0]["id"] == "idB"
 
 
-async def test_unrelated_message_during_vote_is_not_a_vote(
+async def test_unrelated_message_during_vote_blocks_conversation(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
-    """A non-option message keeps flowing as normal chat and doesn't vote."""
+    """While a vote is open, /indio is gated: a non-option message is bounced
+    with a "decidí primero" hint instead of cascading another Gemini turn (and
+    potentially a fresh vote on top of the open one)."""
     import playCommand
     import geminiClient
     play_mock = AsyncMock(return_value=(True, "x"))
@@ -399,12 +401,16 @@ async def test_unrelated_message_during_vote_is_not_a_vote(
 
     await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
 
-    # An unrelated line: the indio answers normally; no vote recorded.
-    monkeypatch.setattr(geminiClient, "generate",
-                        AsyncMock(return_value=reply_factory(text="jajaj qué capo")))
-    await indioLogic(ctx_factory(display_name="Mati", user_id=1, guild_id=100), "jaja qué capo", nuevo=False)
+    # An unrelated /indio call while the vote is open: must NOT hit Gemini.
+    gen_mock = AsyncMock(return_value=reply_factory(text="jajaj qué capo"))
+    monkeypatch.setattr(geminiClient, "generate", gen_mock)
+    ctx_unrelated = ctx_factory(display_name="Mati", user_id=1, guild_id=100)
+    await indioLogic(ctx_unrelated, "jaja qué capo", nuevo=False)
 
-    assert _active_vote(100).votes == {}                # nothing counted
+    gen_mock.assert_not_awaited()                              # no Gemini burn
+    assert _active_vote(100).votes == {}                       # nothing counted
+    visible = "\n".join(m for m in ctx_unrelated.sent_messages if m)
+    assert "votaci" in visible.lower()                         # user got a hint
 
     await _close_active_vote(100)
     play_mock.assert_awaited_once()
@@ -559,10 +565,13 @@ async def test_voice_vote_shortcut_registers_from_raw_text(
     play_mock = AsyncMock(return_value=(True, "x"))
     monkeypatch.setattr(playCommand, "playFromIndio", play_mock)
 
-    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    # opener_uid=1 → vote.requester_id=1. Voice votes are restricted to the
+    # requester, so we exercise the shortcut with the same user id.
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory,
+                           opener_uid=1)
 
     ok = indio.try_register_voice_vote(
-        guild_id=100, user_id=42, speaker_name="Tobi",
+        guild_id=100, user_id=1, speaker_name="Tobi",
         text="Indio, tiradela 2",
     )
     assert ok is True
@@ -585,10 +594,11 @@ async def test_voice_vote_closes_immediately(
     # would clearly miss this test's deadline.
     monkeypatch.setattr(playCommand, "_MUSIC_VOTE_WINDOW_SEC", 10.0)
 
-    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory,
+                           opener_uid=1)
 
     indio.try_register_voice_vote(
-        guild_id=100, user_id=42, speaker_name="Tobi", text="ponela 2",
+        guild_id=100, user_id=1, speaker_name="Tobi", text="ponela 2",
     )
     # The close task was scheduled; let the loop run it.
     await _drain_pending_tasks()
@@ -609,15 +619,36 @@ async def test_voice_vote_shortcut_skips_when_no_open_vote(indio):
 async def test_voice_vote_shortcut_ignores_unrelated_text(
         indio, ctx_factory, patch_generate, reply_factory,
         monkeypatch, disable_relay):
-    """A non-option utterance during an open vote returns False so it can be
-    decifrado and fed to Gemini as a normal turn."""
-    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory)
+    """A non-option utterance from the requester returns False — the apiServer
+    handler then drops the message instead of opening a brand-new vote."""
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory,
+                           opener_uid=1)
 
     ok = indio.try_register_voice_vote(
-        guild_id=100, user_id=42, speaker_name="Tobi",
+        guild_id=100, user_id=1, speaker_name="Tobi",
         text="che indio cómo va",
     )
     assert ok is False
+    assert _active_vote(100).votes == {}
+
+
+async def test_voice_vote_from_non_requester_is_rejected(
+        indio, ctx_factory, patch_generate, reply_factory,
+        monkeypatch, disable_relay):
+    """Voice votes are restricted to the user who triggered the vote. Anyone
+    else's spoken pick is dropped so the bot only listens to the requester
+    while the poll is open."""
+    await _open_music_vote(indio, ctx_factory, monkeypatch, reply_factory,
+                           opener_uid=1)
+
+    # Same text "ponela 2" that the requester could use, but from a different
+    # speaker → must NOT register and must NOT close the vote.
+    ok = indio.try_register_voice_vote(
+        guild_id=100, user_id=42, speaker_name="Otro",
+        text="ponela 2",
+    )
+    assert ok is False
+    assert _active_vote(100) is not None
     assert _active_vote(100).votes == {}
 
 

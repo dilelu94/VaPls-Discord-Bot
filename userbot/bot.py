@@ -394,6 +394,10 @@ class TranscriberSink(voice_recv.AudioSink):
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
+        # Mute non-requesters while a music vote is open in this guild.
+        guild_id = getattr(getattr(source, "guild", None), "id", None)
+        if not _is_speaker_allowed(guild_id, user_id):
+            return
         pcm_data = data.pcm
         if not pcm_data:
             return
@@ -671,8 +675,8 @@ def _text_has_anti_pattern(text: str) -> bool:
     return any(p in pairs for p in _WAKE_ANTI_PATTERNS)
 
 
-def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
-    """Return True when VOSK finalized a segment matching one of the explicit
+def _vosk_heard_wake_word(rec, accepted: bool) -> tuple[bool, Optional[dict]]:
+    """Return (True, result) when VOSK finalized a segment matching one of the explicit
     wake-word phrases (``_WAKE_PATTERNS``).
 
     With ``VOSK_MAX_ALTERNATIVES > 0`` the recognizer emits N-best hypotheses
@@ -686,7 +690,7 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
     something unexpected.
     """
     if not accepted:
-        return False
+        return False, None
     try:
         result = json.loads(rec.Result() or "{}")
         if "alternatives" in result:
@@ -694,30 +698,30 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> bool:
         elif "text" in result:
             candidates = [result["text"]]
         else:
-            return False
+            return False, None
         # If ANY alternative suggests an anti-pattern ("el indio"), the
         # speaker was talking ABOUT the indio, not TO it. Veto the match.
         for text in candidates:
             if text and _text_has_anti_pattern(text):
                 log.info(f"[VOSK] vetoed by anti-pattern: {text!r} "
                          f"(top-1 was {candidates[0]!r})")
-                return False
+                return False, None
         for idx, text in enumerate(candidates):
             if text and _text_matches_wake_pattern(text):
                 if idx > 0:
                     log.info(f"[VOSK] matched via alternative #{idx+1}: "
                              f"{text!r} (top-1 was {candidates[0]!r})")
-                return True
+                return True, result
         top1 = candidates[0] if candidates else ""
         if top1 and "indio" in _normalize(top1).split():
             extra = ""
             if len(candidates) > 1:
                 extra = f", alts={candidates[1:]!r}"
             log.info(f"[VOSK] near-miss, no pattern matched (text={top1!r}{extra})")
-        return False
+        return False, None
     except Exception:
         log.exception("[VOSK] failed to read recognizer state")
-        return False
+        return False, None
 
 
 class WakeWordSink(voice_recv.AudioSink):
@@ -735,7 +739,7 @@ class WakeWordSink(voice_recv.AudioSink):
     Once a capture closes, the full PCM (pre-buffer + capture) is handed off
     to Whisper in a background thread. If Whisper returns text containing a
     wake-word token, ``on_transcript`` is invoked the same way the legacy
-    sink does — so the downstream "decifrar + askIndio" pipeline is untouched.
+    sink does — so the downstream ``askIndio`` pipeline is untouched.
     """
 
     def __init__(self, client_ref: discord.Client):
@@ -790,6 +794,12 @@ class WakeWordSink(voice_recv.AudioSink):
     def write(self, source, data: voice_recv.VoiceData) -> None:
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
+            return
+        # Mute non-requesters while a music vote is open in this guild — the
+        # main bot toggles _vote_restrictions via the /restrict_speaker relay
+        # endpoint. Sits before any audio work so non-requesters cost zero.
+        guild_id = getattr(getattr(source, "guild", None), "id", None)
+        if not _is_speaker_allowed(guild_id, user_id):
             return
         pcm_data = data.pcm
         if not pcm_data:
@@ -846,13 +856,14 @@ class WakeWordSink(voice_recv.AudioSink):
             if rec is None:
                 return
             accepted = rec.AcceptWaveform(data_16k)
-            if _vosk_heard_wake_word(rec, accepted):
+            matched, vosk_result = _vosk_heard_wake_word(rec, accepted)
+            if matched:
                 log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
                          f"starting capture (prebuf_chunks="
                          f"{len(self.prebuffers.get(user_id, ()))})")
                 self._wake_triggerer_id = user_id
                 self._wake_in_progress = True
-                self._start_capture(user_id, now)
+                self._start_capture(user_id, now, vosk_result)
                 self._schedule_wake_sound(user_id)
                 try:
                     rec.Reset()
@@ -905,7 +916,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 self.recognizers[user_id] = rec
         return rec
 
-    def _start_capture(self, user_id: int, now: float) -> None:
+    def _start_capture(self, user_id: int, now: float, vosk_result: Optional[dict] = None) -> None:
         # Seed the capture buffer with the prebuffer contents so Whisper sees
         # whatever the user said leading up to and including the wake word.
         seed = bytearray()
@@ -915,6 +926,7 @@ class WakeWordSink(voice_recv.AudioSink):
             "buf": seed,
             "started_at": now,
             "last_voice_ts": now,
+            "vosk_result": vosk_result,
         }
 
     def _extend_capture(self, user_id: int, capture: dict, chunk: bytes,
@@ -959,6 +971,7 @@ class WakeWordSink(voice_recv.AudioSink):
             self._wake_triggerer_id = None
             return
         secs = len(pcm) / (16000 * 2)
+        vosk_result = capture.get("vosk_result")
         with self._active_lock:
             limit = (config.MAX_CONCURRENT_WHILE_PLAYING
                      if _main_bot_is_playing()
@@ -971,7 +984,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 return
             self._active_count += 1
         asyncio.run_coroutine_threadsafe(
-            self._transcribe_and_dispatch(user_id, pcm, secs),
+            self._transcribe_and_dispatch(user_id, pcm, secs, vosk_result),
             self._client_ref.loop,
         )
 
@@ -1014,7 +1027,7 @@ class WakeWordSink(voice_recv.AudioSink):
     # ---- Whisper handoff --------------------------------------------------
 
     async def _transcribe_and_dispatch(self, user_id: int, pcm_16k: bytes,
-                                       duration: float) -> None:
+                                       duration: float, vosk_result: Optional[dict] = None) -> None:
         try:
             t0 = time.monotonic()
             text = await asyncio.to_thread(_run_whisper, pcm_16k)
@@ -1035,7 +1048,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 log.info(f"[WAKE] user={user_id} only wake word / no question; "
                          f"skip")
                 return
-            await on_transcript(user_id, text, via_wake_word=True)
+            await on_transcript(user_id, text, via_wake_word=True, vosk_result=vosk_result)
         except Exception:
             log.exception("[WAKE] transcribe failed")
         finally:
@@ -1212,7 +1225,7 @@ async def _get_http() -> aiohttp.ClientSession:
     return _http_session
 
 
-async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False):
+async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False, vosk_result: Optional[dict] = None):
     """Handle a completed transcription: post to transcript channel + optionally
     forward to the main bot and trigger the indio on wake word.
 
@@ -1243,9 +1256,9 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
                     posted = await chan.send(f"🎙️ **{speaker_name}:** {text}")
                     posted_channel_id = chan.id
                     posted_guild_id = guild.id
-                    # Capture the message id so the main bot can come back and
-                    # append the decifrado version below the raw one once Gemini
-                    # finishes (see _relay_edit).
+                    # Capture the message id so the main bot can attach
+                    # ASR-quality feedback reactions to this transcript
+                    # (see decifrarVoting.record).
                     posted_message_id = getattr(posted, "id", None)
                     break
         except Exception as e:
@@ -1268,8 +1281,8 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
 
     # Wake word: when this transcript came from the WakeWordSink (VOSK already
     # matched a restrictive _WAKE_PATTERNS pair upstream), hand the entire raw
-    # transcript to the main bot's /indio endpoint. The server runs it through
-    # Gemini (decifrar=True) to fix ASR errors before the indio responds.
+    # transcript to the main bot's /indio endpoint. The server prefixes the
+    # text with "[voz] " so the indio knows to tolerate ASR errors.
     if (via_wake_word
             and posted_channel_id is not None
             and posted_guild_id is not None):
@@ -1281,6 +1294,7 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
             speaker_name=speaker_name,
             user_id=user_id,
             transcript_message_id=posted_message_id,
+            vosk_result=vosk_result,
         ))
 
     if config.ENABLE_HTTP_FORWARD:
@@ -1301,19 +1315,22 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False)
 
 async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
                              pregunta: str, speaker_name: Optional[str],
-                             decifrar: bool = True, user_id: int = 0,
-                             transcript_message_id: Optional[int] = None) -> None:
-    """POST the raw transcript to the main bot's /indio endpoint. Voice wake
-    word callers leave ``decifrar=True`` so Gemini fixes ASR phonetic errors;
-    text-chat callers pass ``decifrar=False`` because the text is already
-    clean and an extra Gemini call would just waste tokens.
+                             is_voice: bool = True, user_id: int = 0,
+                             transcript_message_id: Optional[int] = None,
+                             vosk_result: Optional[dict] = None) -> None:
+    """POST the raw transcript to the main bot's /indio endpoint.
+
+    Voice wake-word callers leave ``is_voice=True`` so the main bot prefixes
+    the text with "[voz] " before handing it to the indio (which knows to
+    tolerate ASR errors on that marker). Text-chat callers pass
+    ``is_voice=False`` because the message is already clean.
 
     ``user_id`` is the speaker's Discord id; the main bot uses it to key
     pending music choices so only the requester can resolve them.
 
     ``transcript_message_id`` is the id of the userbot's "🎙️ **Name:** raw"
-    message; the main bot calls back to /edit on the userbot to append the
-    cleaned decifrado version below the raw one so both versions are visible."""
+    message; the main bot may add ASR-quality feedback reactions on it
+    (1-in-N sampler in ``decifrarVoting``)."""
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[INDIO-WAKE] MAIN_BOT_API_BASE/SECRET missing, skipping")
         return
@@ -1324,11 +1341,13 @@ async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
             "channel_id": str(channel_id),
             "pregunta": pregunta,
             "speaker_name": speaker_name,
-            "decifrar": decifrar,
+            "is_voice": is_voice,
             "user_id": str(user_id),
         }
         if transcript_message_id is not None:
             payload["transcript_message_id"] = str(transcript_message_id)
+        if vosk_result is not None:
+            payload["vosk_result"] = vosk_result
         async with session.post(
             f"{config.MAIN_BOT_API_BASE}/indio",
             json=payload,
@@ -1382,6 +1401,29 @@ def _vc_for_guild(guild: discord.Guild) -> Optional[voice_recv.VoiceRecvClient]:
 # IDLE_LEAVE_SECONDS after the guild goes quiet; any human (re)joining a VC
 # of the guild cancels the task before it fires.
 _idle_leave_tasks: dict[int, asyncio.Task] = {}
+
+
+# Per-guild "only-this-speaker is heard" lock used while a music vote is open
+# in the main bot. The main bot toggles it via the /restrict_speaker relay
+# endpoint: while ``_vote_restrictions[guild_id] == user_id`` the sinks drop
+# every other speaker's audio before VOSK / Whisper even runs. Cleared when
+# the vote closes. Defence-in-depth lives on the main bot side, so a missing
+# or stale entry here only impacts efficiency, not correctness.
+_vote_restrictions: dict[int, int] = {}
+
+
+def _is_speaker_allowed(guild_id: Optional[int], user_id: Optional[int]) -> bool:
+    """Return False if a vote-restriction excludes this speaker for the guild.
+
+    Returns True (allow) whenever guild/user ids are missing or no restriction
+    is set — i.e. legacy behaviour outside of an active music vote.
+    """
+    if not guild_id or not user_id:
+        return True
+    restricted = _vote_restrictions.get(int(guild_id))
+    if restricted is None:
+        return True
+    return int(user_id) == int(restricted)
 
 
 def _guild_has_humans(guild: discord.Guild) -> bool:
@@ -1824,7 +1866,7 @@ async def on_message(message):
         channel_id=channel_id,
         pregunta=content,
         speaker_name=speaker_name,
-        decifrar=False,
+        is_voice=False,
         user_id=message.author.id,
     ))
 
@@ -1916,14 +1958,11 @@ async def _relay_say(request: web.Request) -> web.Response:
 async def _relay_edit(request: web.Request) -> web.Response:
     """Edit a message previously posted by the userbot.
 
-    Used by the main bot after ``decifrarTranscripcion`` to append the cleaned
-    version of the transcript below the raw one, so both versions are visible
-    in chat. We can only edit messages we own (Discord rule) — the transcript
-    line posted by the userbot at speak-time qualifies; anything else 403s.
+    We can only edit messages we own (Discord rule) — the transcript line
+    posted by the userbot at speak-time qualifies; anything else 403s.
 
     Body: ``{channel_id, message_id, content}``. Replaces the message content
-    entirely with ``content`` (the caller composes the combined raw+cleaned
-    string).
+    entirely with ``content``.
     """
     if not config.RELAY_SECRET:
         return web.json_response({"error": "relay disabled"}, status=503)
@@ -2464,6 +2503,37 @@ async def _relay_edit(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "message_id": msg.id})
 
 
+async def _relay_restrict_speaker(request: web.Request) -> web.Response:
+    """Set or clear the per-guild "only this speaker is heard" lock used by
+    the sinks while a music vote is open in the main bot.
+
+    Body: ``{"guild_id": <int>, "user_id": <int|null>}``. ``user_id=null``
+    (or omitted) clears the restriction for ``guild_id``.
+    Auth: ``X-API-Secret`` must equal ``config.RELAY_SECRET``.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    raw_user_id = data.get("user_id")
+    if raw_user_id in (None, "", 0, "0"):
+        _vote_restrictions.pop(guild_id, None)
+        log.info(f"[VOTE-RESTRICT] cleared for guild={guild_id}")
+        return web.json_response({"ok": True, "guild_id": guild_id, "user_id": None})
+    try:
+        user_id = int(raw_user_id)
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid user_id"}, status=400)
+    _vote_restrictions[guild_id] = user_id
+    log.info(f"[VOTE-RESTRICT] guild={guild_id} → only user {user_id} is heard")
+    return web.json_response({"ok": True, "guild_id": guild_id, "user_id": user_id})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -2476,7 +2546,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
     app.router.add_post("/join", _relay_join)
-    app.router.add_post("/edit", _relay_edit)
+    app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

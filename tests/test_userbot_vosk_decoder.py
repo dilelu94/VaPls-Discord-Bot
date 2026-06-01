@@ -6,6 +6,10 @@ single-best result format.
 
 Tests `_vosk_heard_wake_word` and `_build_vosk_grammar` extracted from
 ``userbot/bot.py`` so we don't need to import the discord-side code.
+
+The helper returns ``(matched, result_dict)`` — tests look only at the
+first element since the second is forwarded raw to the dispatch payload
+and any change in shape would not affect wake-word semantics.
 """
 from __future__ import annotations
 
@@ -80,7 +84,7 @@ class _FakeRec:
 
 def test_not_accepted_returns_false_without_reading_state():
     rec = _FakeRec({"alternatives": [{"text": "indio dale"}]})
-    assert heard(rec, accepted=False) is False
+    assert heard(rec, accepted=False)[0] is False
 
 
 # ---- _vosk_heard_wake_word: N-best (alternatives format) -----------------
@@ -90,7 +94,7 @@ def test_alternatives_top1_matches_fires():
         {"text": "indio dale", "confidence": -10.0},
         {"text": "indio",       "confidence": -11.0},
     ]})
-    assert heard(rec, accepted=True) is True
+    assert heard(rec, accepted=True)[0] is True
 
 
 def test_alternatives_second_matches_fires():
@@ -100,7 +104,7 @@ def test_alternatives_second_matches_fires():
         {"text": "indio dale",  "confidence": -11.5},
         {"text": "indio por",   "confidence": -12.0},
     ]})
-    assert heard(rec, accepted=True) is True
+    assert heard(rec, accepted=True)[0] is True
 
 
 def test_alternatives_none_match_returns_false():
@@ -109,12 +113,12 @@ def test_alternatives_none_match_returns_false():
         {"text": "indio anda",   "confidence": -11.0},
         {"text": "indio mucho",  "confidence": -12.0},
     ]})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_alternatives_empty_list_returns_false():
     rec = _FakeRec({"alternatives": []})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_alternatives_che_indio_in_top1_fires():
@@ -122,7 +126,7 @@ def test_alternatives_che_indio_in_top1_fires():
         {"text": "che indio", "confidence": -8.0},
         {"text": "que indio", "confidence": -9.0},
     ]})
-    assert heard(rec, accepted=True) is True
+    assert heard(rec, accepted=True)[0] is True
 
 
 # ---- anti-pattern: "el indio" should NOT fire ---------------------------
@@ -133,7 +137,7 @@ def test_el_indio_top1_does_not_fire():
     rec = _FakeRec({"alternatives": [
         {"text": "el indio", "confidence": -8.0},
     ]})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_el_indio_as_alternative_vetoes_match():
@@ -144,7 +148,7 @@ def test_el_indio_as_alternative_vetoes_match():
         {"text": "che indio", "confidence": -8.0},
         {"text": "el indio",  "confidence": -8.5},
     ]})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_el_indio_with_accent_is_vetoed():
@@ -153,7 +157,7 @@ def test_el_indio_with_accent_is_vetoed():
     rec = _FakeRec({"alternatives": [
         {"text": "él indio", "confidence": -8.0},
     ]})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_che_indio_without_el_indio_still_fires():
@@ -163,7 +167,7 @@ def test_che_indio_without_el_indio_still_fires():
         {"text": "que indio",  "confidence": -9.0},
         {"text": "indio dale", "confidence": -10.0},
     ]})
-    assert heard(rec, accepted=True) is True
+    assert heard(rec, accepted=True)[0] is True
 
 
 # ---- _vosk_heard_wake_word: legacy single-best format --------------------
@@ -171,17 +175,17 @@ def test_che_indio_without_el_indio_still_fires():
 def test_legacy_text_format_matches_fires():
     """Without SetMaxAlternatives, VOSK emits {"text": "..."} only."""
     rec = _FakeRec({"text": "indio tirate"})
-    assert heard(rec, accepted=True) is True
+    assert heard(rec, accepted=True)[0] is True
 
 
 def test_legacy_text_format_no_match_returns_false():
     rec = _FakeRec({"text": "indio anda"})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_empty_result_returns_false():
     rec = _FakeRec({})
-    assert heard(rec, accepted=True) is False
+    assert heard(rec, accepted=True)[0] is False
 
 
 def test_malformed_result_does_not_crash():
@@ -189,7 +193,7 @@ def test_malformed_result_does_not_crash():
     class Boom:
         def Result(self):
             raise RuntimeError("decoder exploded")
-    assert heard(Boom(), accepted=True) is False
+    assert heard(Boom(), accepted=True)[0] is False
 
 
 # ---- _build_vosk_grammar: contents ---------------------------------------

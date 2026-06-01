@@ -10,7 +10,6 @@ discarded — so the indio feels like a friend that remembers the group.
 Depends on geminiClient and analytics.
 """
 import asyncio
-import collections
 import json
 import logging
 import os
@@ -125,6 +124,19 @@ falta. NO empieces tus respuestas con "[indio]:" ni nada parecido: hablás \
 directo, como el indio. Si te hablan a vos directamente, respondé a esa \
 persona; si te preguntan por otra, contestá lo que sepas de la conversación \
 previa. \
+\
+Si el contenido del mensaje empieza con el marcador "[voz]" (ej. \
+"[Miles]: [voz] indio para la musica"), eso significa que viene de una \
+transcripción de voz hecha por un ASR (Whisper) y puede tener errores \
+fonéticos, palabras mal entendidas, verbos partidos pegados a "indio" \
+("indio de tener a música" = "che indio, detené la música"), nombres propios \
+castellanizados ("líneas horarias" = "Indio Solari"), o dígitos que sonaron \
+como palabras. Tolerá esos errores: inferí qué intentó decir el hablante en \
+español rioplatense natural y respondé en consecuencia, sin pedir que repita \
+ni explicar que no entendiste. Si te dan una orden con un dígito ("indio \
+tirala 4"), preservá el número — es una respuesta a una votación abierta. \
+El marcador "[voz]" es solo una pista para vos: NO lo repitas en la \
+respuesta. \
 \
 Sos opinable pero no agresivo. Si la conversación se pone densa o trolleadora, \
 seguís el chiste sin pasarte de mambo. Si te preguntan si sos un bot, esquivás \
@@ -1554,15 +1566,22 @@ def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
 
     Voice votes are decisive: this is someone literally telling the indio "ponela
     4", so we close the vote immediately (``close_now=True``) instead of waiting
-    out the sliding window. Called from the apiServer **before**
-    ``decifrarTranscripcion`` so the raw transcript's digit ("Indio, tirala 4")
-    survives even if Gemini's cleanup would otherwise drop it.
+    out the sliding window. Called from the apiServer **before** the indio
+    dispatch so the raw transcript's digit ("Indio, tirala 4") is captured as
+    a vote instead of being interpreted as a chat message.
     """
     if not guild_id or not text:
         return False
     import playCommand
     vote = playCommand.get_active_vote(int(guild_id))
     if vote is None:
+        return False
+    # Voice votes are restricted to the requester (the user who triggered the
+    # vote via /play or by asking the indio to play). Other speakers' votes
+    # are silently dropped — the userbot's WakeWordSink already filters them
+    # at the VOSK layer, and this is the main-bot backstop in case a transcript
+    # races through the close window or the relay restriction sync lags.
+    if vote.requester_id and user_id and int(user_id) != int(vote.requester_id):
         return False
     decision = _parse_choice(text, vote.candidates)
     if not isinstance(decision, int) or not (0 <= decision < len(vote.candidates)):
@@ -1670,7 +1689,8 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
 
 
 async def _maybe_disambiguate_music(bot, guild_id, mem_key,
-                                    pending_actions, reply, post):
+                                    pending_actions, reply, post,
+                                    *, requester_id: int = 0):
     """Intercept a single free-text ``play_music`` so the indio lists the
     matches and opens a group vote, instead of playing the first hit.
 
@@ -1731,6 +1751,7 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
     playCommand.open_music_vote(
         bot=bot, guild_id=int(guild_id),
         candidates=candidates, on_resolve=_on_resolve,
+        requester_id=int(requester_id or 0),
     )
     return [], _format_choices(candidates)
 
@@ -1831,61 +1852,6 @@ async def _edit_via_userbot(channel_id: int, message_id: int,
         logger.warning("indio relay edit failed: %s", "see traceback",
                        exc_info=True)
         return False
-
-
-async def relay_transcript_decifrado_raw(
-    *,
-    channel_id: int,
-    message_id: int,
-    content: str,
-) -> bool:
-    """POST to the userbot's /edit endpoint to replace a message's content entirely."""
-    url = config.INDIO_RELAY_URL
-    secret = config.INDIO_RELAY_SECRET
-    if not url or not secret:
-        return False
-
-    if url.endswith("/say"):
-        url = url[:-4] + "/edit"
-    elif not url.endswith("/edit"):
-        url = url.rstrip("/") + "/edit"
-
-    payload = {
-        "channel_id": int(channel_id),
-        "message_id": int(message_id),
-        "content": content,
-    }
-    headers = {"X-API-Secret": secret}
-    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                if resp.status >= 400:
-                    body = await resp.text()
-                    logger.warning("decifrado relay edit HTTP %d: %s", resp.status, body[:200])
-                    return False
-                return True
-    except Exception:
-        logger.exception("decifrado relay edit failed")
-        return False
-
-
-async def relay_transcript_decifrado(
-    *,
-    channel_id: int,
-    message_id: int,
-    speaker: str,
-    raw: str,
-    cleaned: str,
-) -> bool:
-    """POST to the userbot's /edit endpoint to show both the raw and cleaned text."""
-    content = f"🎙️ **{speaker}:** {raw}\n🧠 **Decifrado:** {cleaned}"
-    return await relay_transcript_decifrado_raw(
-        channel_id=channel_id,
-        message_id=message_id,
-        content=content,
-    )
-
 
 
 def _format_contributors_line() -> str:
@@ -2054,6 +2020,25 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             )):
         return
 
+    # Conversation is paused while a music vote is open in the guild. The
+    # vote-choice shortcut above already let a vote-naming message through;
+    # anything else (a /indio with an off-topic question, or an unrelated chat
+    # message) is bounced with a hint so we don't spawn cascading Gemini turns
+    # — or, worse, a brand-new vote — on top of the open one.
+    if not nuevo and _choice_guild_id is not None:
+        import playCommand
+        _open_vote = playCommand.get_active_vote(int(_choice_guild_id))
+        if _open_vote is not None:
+            try:
+                await ctx.followup.send(
+                    "che, hay una votación de música abierta — decidí primero "
+                    "(o esperá que cierre).",
+                    ephemeral=True,
+                )
+            except Exception:
+                logger.exception("indio: notify-vote-open failed")
+            return
+
     async with lock:
         history_reset = False
         if nuevo:
@@ -2146,6 +2131,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
+        requester_id=int(getattr(getattr(ctx, "author", None), "id", None) or 0),
     )
     relayed_via_userbot = False
     import playCommand
@@ -2406,6 +2392,7 @@ async def indioFromVoice(
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         bot, guild_id, mem_key, pending_actions, reply, _post_choice,
+        requester_id=int(user_id or 0),
     )
     relayed_via_userbot = False
     import playCommand
@@ -2508,194 +2495,6 @@ async def indioFromVoice(
 
 
 _BOT_TESTING_CHANNEL_NAME = "bot-testing"
-
-
-DECIFRAR_SYSTEM = """\
-Sos un asistente que corrige transcripciones de voz a texto en español \
-rioplatense. La transcripción viene de un sistema ASR (Whisper) y puede tener \
-errores: palabras mal entendidas fonéticamente, repeticiones, palabras \
-inventadas o partes inaudibles. Devolvé SOLO el texto corregido, lo más fiel \
-posible a lo que el hablante probablemente quiso decir, en español \
-rioplatense natural. Sin comillas, sin prefijos como "Texto:", sin explicar.
-
-Reglas:
-- Si la transcripción es ininteligible o vacía, devolvé exactamente la \
-  palabra: BASURA
-- Si hay palabras claramente fonéticas (ruido), inferí qué se quiso decir.
-- No agregues información nueva.
-- Mantené la intención (pregunta, exclamación, etc.) y el voseo rioplatense.
-- Si el hablante invoca al "indio" o "che indio", mantené esa parte tal cual.
-- **PRESERVÁ NÚMEROS LITERALES**: si el ASR transcribió un dígito ("4", "2"), \
-  ese dígito DEBE aparecer en la corrección. Nunca lo borres ni lo reemplaces \
-  por palabras. Ej.: "Indio, tiradela 4" → "che indio, tiradela 4" (NO \
-  "che indio, tirala"). "Indio ponela 3" → "che indio, ponela 3". El número \
-  es la respuesta a una votación abierta — si lo perdés, el voto no cuenta.
-- **PRESERVÁ EL MODO IMPERATIVO**: si el hablante da una orden ("tirate", \
-  "ponete", "ponela", "dale play", "tirá"), DEBE seguir siendo imperativo en \
-  la salida. Nunca lo conjugues en pasado ni en otro modo. Ej.: "Tírate la 4" \
-  → "tirate la 4" (NO "tiraste la 4"). "Pone música" → "poné música" (NO \
-  "puse música"). El indio recibe órdenes, no narraciones.
-- Cuando piden música, mucho ojo con nombres de bandas, canciones y artistas \
-  modernos: pueden sonar en spanglish o tener nombres "raros" (ej. Tussi \
-  Warriors, Bizarrap, Wos, Trueno, Tiago PZK, Duki, Cazzu, Nicki Nicole, \
-  Bandalos Chinos, etc.). NO los castellanices ni los inventes en español \
-  ("tossiborreros", "biza arap"). Si una palabra dentro de un pedido de \
-  música suena a anglicismo o nombre propio raro, dejala lo más cerca posible \
-  del inglés/original (manteniendo la fonética que escuchaste). El que va a \
-  buscar el tema después busca tal cual en YouTube — si lo castellanizás, no \
-  lo encuentra.
-
-Ejemplos (raw → corregido). Whisper parte verbos imperativos rioplatenses \
-en pedazos cuando vienen pegados al wake-word; reconstruí el verbo canónico \
-del comando que pidió el hablante:
-- "Indio de tener a música" → "che indio, detené la música"
-- "indio para la música" → "che indio, pará la música"
-- "che indio corta la" → "che indio, cortala"
-- "indio pone Bizarrap" → "che indio, poné Bizarrap"
-- "indio tirate algo de Wos" → "che indio, tirate algo de Wos"
-- "indio passa al siguiente" → "che indio, pasá al siguiente"
-- "indio saltea esta" → "che indio, saltá esta"
-- "indio pausa un toque" → "che indio, pausá un toque"
-- "indio segui con la música" → "che indio, seguí con la música"
-- "indio dale continua" → "che indio, dale, continuá"
-"""
-
-
-# Cache de resultados de decifrar para ahorrar calls a Gemini ante falsos
-# positivos de wake-word que producen transcripciones repetidas (ej. ruido
-# ambiente que Whisper devuelve siempre como la misma frase). La clave se
-# normaliza (lower + whitespace) para captar variantes triviales. El valor es
-# lo que devolvió Gemini ("" para BASURA, texto limpio para el resto).
-_DECIFRAR_CACHE_MAX = 256
-_decifrar_cache: "collections.OrderedDict[str, str]" = collections.OrderedDict()
-
-
-def _decifrar_cache_key(texto: str) -> str:
-    return re.sub(r"\s+", " ", texto.lower()).strip()
-
-
-def _decifrar_cache_get(key: str) -> Optional[str]:
-    if key in _decifrar_cache:
-        _decifrar_cache.move_to_end(key)
-        return _decifrar_cache[key]
-    return None
-
-
-def _decifrar_cache_put(key: str, value: str) -> None:
-    _decifrar_cache[key] = value
-    _decifrar_cache.move_to_end(key)
-    while len(_decifrar_cache) > _DECIFRAR_CACHE_MAX:
-        _decifrar_cache.popitem(last=False)
-
-
-# Conocidas-y-recurrentes phonetic confusions that Whisper hace en castellano
-# rioplatense. Aplicado como substring substitution case-insensitive ANTES de
-# pasar el texto a Gemini, así pedidos tipo "ponete un tema de líneas horarias"
-# se corrigen a "ponete un tema de indio solari" sin necesidad de votación
-# previa. Cualquier match curado por el voting (👍) termina acá también, pero
-# este set es la "memoria base" que no se aprende sola — la armamos a mano
-# cuando vemos un error recurrente.
-#
-# Convención: claves todas en lower-case (la sustitución es case-insensitive).
-# Si el target es un nombre propio que YouTube necesita con caps, el valor lo
-# lleva en su forma canónica.
-_KNOWN_PHONETIC_FIXES: "list[tuple[str, str]]" = [
-    # Indio Solari — Whisper se la come y la pasa a "líneas horarias" /
-    # "lineas orarias" / similares. Ver caso 2026-05-31 en logs.
-    ("líneas horarias", "Indio Solari"),
-    ("lineas horarias", "Indio Solari"),
-    ("líneas orarias", "Indio Solari"),
-    ("lineas orarias", "Indio Solari"),
-    ("indio sorari", "Indio Solari"),
-    ("indio sorare", "Indio Solari"),
-    ("indio solare", "Indio Solari"),
-]
-
-
-def _apply_known_fixes(texto: str) -> str:
-    """Apply the manually-curated phonetic-confusion table to a transcript.
-
-    Case-insensitive substring substitution; order matters when one fix is a
-    prefix of another so we apply them in declaration order. Returns the input
-    unchanged if no fix matches.
-    """
-    if not texto:
-        return texto
-    out = texto
-    for bad, good in _KNOWN_PHONETIC_FIXES:
-        if not bad:
-            continue
-        # Case-insensitive replace via regex with re.escape.
-        out = re.sub(re.escape(bad), good, out, flags=re.IGNORECASE)
-    return out
-
-
-def seed_decifrar_cache(items: "list[tuple[str, str]]") -> None:
-    """Bulk-insert pre-normalized (key, value) pairs into the in-memory
-    decifrar cache. Used by ``decifrarVoting`` to hydrate the cache at
-    startup (from approved JSONL entries) and to promote freshly-approved
-    entries at runtime. Items go through ``_decifrar_cache_put`` so they
-    obey the LRU cap and get marked as "recent" on insertion.
-    """
-    for key, value in items:
-        if not key:
-            continue
-        _decifrar_cache_put(key, value)
-
-
-async def decifrarTranscripcion(texto: str, transcript_message_id: Optional[int] = None, channel_id: Optional[int] = None) -> str:
-    """Run an ASR transcript through Gemini to clean phonetic errors.
-
-    Returns the cleaned text, or "" when Gemini flags the input as BASURA
-    (so callers can drop the utterance instead of forwarding noise downstream).
-    Falls back to the raw text on Gemini failure.
-
-    Results are cached per normalized input so repeated noise transcriptions
-    (typical with wake-word false positives) don't burn Gemini quota.
-    """
-    texto = (texto or "").strip()
-    if not texto:
-        return ""
-    # Aplicar correcciones manuales (substring) ANTES del cache lookup: así
-    # el caché guarda directamente la versión ya corregida, y un mismo error
-    # recurrente comparte hit aun cuando venga con variantes de mayúsculas.
-    texto = _apply_known_fixes(texto)
-    cache_key = _decifrar_cache_key(texto)
-    cached = _decifrar_cache_get(cache_key)
-    if cached is not None:
-        logger.info("decifrar: cache hit raw=%r -> %r", texto[:200], cached[:200])
-        return cached
-    try:
-        reply = await geminiClient.generate(
-            user_message=texto,
-            system_instruction=DECIFRAR_SYSTEM,
-            history=None,
-            model=config.GEMINI_DECIFRAR_MODEL,
-            max_output_tokens=256,
-        )
-    except Exception:
-        logger.exception("decifrarTranscripcion failed")
-        return texto
-    out = (reply.text or "").strip().strip('"').strip("'")
-    if out.upper().strip() == "BASURA":
-        logger.info("decifrar: descartado como BASURA, raw=%r", texto[:200])
-        _decifrar_cache_put(cache_key, "")
-        return ""
-    final = out or texto
-    if final != texto:
-        logger.info("decifrar: raw=%r -> cleaned=%r", texto[:200], final[:200])
-    else:
-        logger.info("decifrar: passthrough %r", texto[:200])
-    _decifrar_cache_put(cache_key, final)
-    # Fire-and-forget: log the pair for the human-in-the-loop curation flow.
-    # Late import keeps this module standalone if decifrarVoting isn't wired
-    # (e.g. tests of geminiCommand alone).
-    try:
-        import decifrarVoting
-        asyncio.create_task(decifrarVoting.record(texto, final, msg_id=transcript_message_id, channel_id=channel_id))
-    except Exception:
-        logger.exception("decifrar: failed to schedule voting record")
-    return final
 
 
 async def askIndio(bot: "discord.Bot",

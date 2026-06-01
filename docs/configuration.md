@@ -19,16 +19,11 @@
 | `API_SECRET` | ⚠️ | empty | Required to authorize API requests; if empty, API returns 503. |
 | `GEMINI_API_KEY` | ⚠️ | empty | Required for `/vapls` and `/indio`. |
 | `GEMINI_MODEL` | ❌ | `gemini-2.5-flash` | Gemini model name para `/indio` y `/vapls`. |
-| `GEMINI_DECIFRAR_MODEL` | ❌ | `gemini-2.5-flash-lite` | Modelo para `decifrarTranscripcion` (limpieza ASR). Lite tiene 1000 RPD vs 250 de flash, libera cupo del modelo grande. |
 | `VOICE_IDLE_TIMEOUT_SECONDS` | ❌ | `60` | Segundos sin reproducir/pausado tras los cuales el bot se desconecta solo del canal de voz (manejado por `idleWatchdog.py`). |
-| `DECIFRAR_VOTE_ENABLED` | ❌ | `false` | Master toggle del flujo de votación del decifrado. Cuando está activo, cada decifrado se loggea a JSONL y una muestra se postea para votar 👍/👎. |
-| `DECIFRAR_VOTE_CHANNEL_ID` | ❌ | `0` | ID del canal de Discord donde se postean los pares (raw, decifrado) para votación. `0` = feature inactiva aunque `DECIFRAR_VOTE_ENABLED=true`. |
-| `DECIFRAR_VOTE_SAMPLE_RATE` | ❌ | `20` | 1 de cada N decifrados se postea (probabilístico). Subir para postear menos. |
-| `DECIFRAR_VOTE_THRESHOLD` | ❌ | `2` | Votos netos (👍 - 👎 o viceversa) necesarios para resolver una votación. |
-| `DECIFRAR_VOTE_TIMEOUT_HOURS` | ❌ | `48` | Horas que una votación pendiente vive antes de auto-borrarse. |
-| `DECIFRAR_LOG_MAX_LINES` | ❌ | `10000` | Cap del JSONL; al superarlo se descartan las pendientes más viejas (las approved se preservan). |
-| `DECIFRAR_LOG_PATH` | ❌ | `data/decifrar_log.jsonl` | Path al JSONL persistente (gitignored). |
-| `DECIFRAR_CACHE_SEED_MAX` | ❌ | `128` | Cuántas entradas approved se cargan al cache in-memory al startup (las más recientes). |
+| `DECIFRAR_FEEDBACK_ENABLED` | ❌ | `true` | Master toggle del feedback inline de calidad del ASR. Cuando está activo, 1 de cada N transcripciones de voz recibe reacciones 👍/❌ para que los usuarios marquen falsos positivos. |
+| `DECIFRAR_FEEDBACK_SAMPLE_RATE` | ❌ | `3` | 1 de cada N transcripciones de voz recibe el par de reacciones. Subir para sampleo menor (menos ruido en el canal). |
+| `DECIFRAR_FEEDBACK_TIMEOUT_MINUTES` | ❌ | `60` | Minutos antes de que el sweeper limpie las reacciones de un sample que nadie votó. |
+| `DECIFRAR_FALSE_POSITIVES_LOG_PATH` | ❌ | `data/false_positives.jsonl` | Path al JSONL persistente donde se loggean los ❌ (raw whisper + VOSK N-best) para debug offline de la calidad del ASR. Gitignored. |
 | `INDIO_ARCHIVE_THREAD_ID` | ❌ | `0` | ID del thread donde se archivan los Q+A del Indio. `0` desactiva el archivado por completo. Las entradas se postean via el relay del userbot, así conservan la identidad del Indio para búsqueda de mensajes. |
 | `INDIO_ARCHIVE_DELAY_SECONDS` | ❌ | `7200` | Segundos que un Q+A vive en el queue antes de archivarse al thread. Default 2h. |
 | `INDIO_ARCHIVE_QUEUE_PATH` | ❌ | `data/indio_archive_queue.jsonl` | Path al JSONL persistente que guarda los Q+A pendientes de archivar. Sobrevive restarts. |

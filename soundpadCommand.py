@@ -786,6 +786,20 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
                           properties={"reason": "no_user_key"})
         return await ctx.followup.send(msg, ephemeral=True)
 
+    # Block while a music vote is open: a soundpad clip stomping on top of an
+    # in-progress music selection makes the bot feel hyperactive (and the
+    # /play queue ends up muted by the clip). Decide the song first.
+    import playCommand
+    if (ctx.guild is not None
+            and playCommand.get_active_vote(int(ctx.guild.id)) is not None):
+        analytics.capture("soundpad gated", user=ctx.author, guild=ctx.guild,
+                          properties={"reason": "music_vote_open"})
+        return await ctx.followup.send(
+            "che, hay una votación de música abierta — decidí primero "
+            "(o esperá que cierre).",
+            ephemeral=True,
+        )
+
     from playCommand import guildPlayers
     if ctx.guild.id in guildPlayers:
         player = guildPlayers[ctx.guild.id]

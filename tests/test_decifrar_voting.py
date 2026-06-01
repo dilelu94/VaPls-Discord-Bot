@@ -1,24 +1,24 @@
-"""Behavior: human-in-the-loop curation of the decifrar cache.
+"""Behavior: inline ASR-quality feedback on voice transcripts.
 
-The promises pinned here:
-- A decifrado run gets recorded to the JSONL when voting is on.
-- A 👍 vote (over the threshold) marks the entry approved AND seeds the
-  in-memory cache so the next identical raw hits without calling Gemini.
-- A 👎 vote (over the threshold) deletes the entry from the JSONL.
-- At startup, approved entries from disk are loaded into the cache.
-- When voting is disabled, the whole thing is a no-op (no file is written,
-  no cache promotion happens).
+The bot samples 1-in-N voice transcripts and seeds 👍/❌ reactions on the
+transcript message. The promises pinned here:
 
-Tests speak to the public surface (`record`, the resolver entry points,
-`approved_seed_pairs`, `start`) — never to private locks or save helpers —
-so the storage strategy stays free to change.
+- When sampling fires, the bot seeds reactions on the transcript message.
+- ❌ from any user appends a JSONL row to the false-positives log capturing
+  the raw Whisper text + (optional) VOSK N-best.
+- 👍 from any user does NOT touch the log.
+- Either reaction triggers cleanup of the bot's seeded reactions.
+- When the feature flag is off or the sampler doesn't fire, nothing is seeded
+  and nothing is logged.
+
+Tests speak only to ``record`` and ``handle_reaction_vote`` — the storage
+layout is free to change.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import os
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,24 +26,16 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _reset_state(monkeypatch, tmp_path):
-    """Each test gets a fresh JSONL path and clean module state."""
     import decifrarVoting
     import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_LOG_PATH",
-                        str(tmp_path / "decifrar_log.jsonl"))
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_ENABLED", True)
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_SAMPLE_RATE", 1_000_000)  # never auto-post
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 1)
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_CHANNEL_ID", 12345)
-    monkeypatch.setattr(main_config, "DECIFRAR_LOG_MAX_LINES", 100)
-    monkeypatch.setattr(main_config, "DECIFRAR_CACHE_SEED_MAX", 100)
+    monkeypatch.setattr(main_config, "DECIFRAR_FEEDBACK_ENABLED", True)
+    monkeypatch.setattr(main_config, "DECIFRAR_FEEDBACK_SAMPLE_RATE", 1)  # always sample
+    monkeypatch.setattr(main_config, "DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", 60)
+    monkeypatch.setattr(main_config, "DECIFRAR_FALSE_POSITIVES_LOG_PATH",
+                        str(tmp_path / "false_positives.jsonl"))
     decifrarVoting._reset_for_tests()
-    # Also reset the geminiCommand cache so seed/promote tests are isolated.
-    import geminiCommand
-    geminiCommand._decifrar_cache.clear()
     yield
     decifrarVoting._reset_for_tests()
-    geminiCommand._decifrar_cache.clear()
 
 
 def _read_jsonl(path):
@@ -53,427 +45,259 @@ def _read_jsonl(path):
         return [json.loads(line) for line in fh if line.strip()]
 
 
+def _fake_bot(user_id: int = 999):
+    bot = MagicMock()
+    bot.user = MagicMock()
+    bot.user.id = user_id
+    return bot
+
+
 # ---- record() ------------------------------------------------------------
 
-async def test_record_appends_pending_entry_to_jsonl(monkeypatch):
+async def test_record_seeds_reactions_when_sampler_fires(monkeypatch):
+    import decifrarVoting
+
+    seeded = []
+
+    async def fake_seed(channel_id, message_id):
+        seeded.append((channel_id, message_id))
+
+    monkeypatch.setattr(decifrarVoting, "_seed_reactions", fake_seed)
+    decifrarVoting._bot = _fake_bot()
+
+    await decifrarVoting.record("hola indio", msg_id=111, channel_id=222)
+    await asyncio.sleep(0)
+
+    assert seeded == [(222, 111)]
+
+
+async def test_record_is_a_noop_when_feature_disabled(monkeypatch):
     import decifrarVoting
     import config as main_config
 
-    await decifrarVoting.record("hola indio", "hola indio cómo estás")
-    await asyncio.sleep(0)  # let the maybe_post task settle (no-op at 1/1M)
+    monkeypatch.setattr(main_config, "DECIFRAR_FEEDBACK_ENABLED", False)
+    seeded = []
 
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
+    async def fake_seed(channel_id, message_id):
+        seeded.append((channel_id, message_id))
+
+    monkeypatch.setattr(decifrarVoting, "_seed_reactions", fake_seed)
+
+    await decifrarVoting.record("hola indio", msg_id=111, channel_id=222)
+    await asyncio.sleep(0)
+
+    assert seeded == []
+
+
+async def test_record_is_a_noop_when_sampler_misses(monkeypatch):
+    import decifrarVoting
+    import config as main_config
+
+    # Effectively impossible to fire: 1/very-big rolls 1.
+    monkeypatch.setattr(main_config, "DECIFRAR_FEEDBACK_SAMPLE_RATE", 10_000_000)
+    seeded = []
+
+    async def fake_seed(channel_id, message_id):
+        seeded.append((channel_id, message_id))
+
+    monkeypatch.setattr(decifrarVoting, "_seed_reactions", fake_seed)
+
+    await decifrarVoting.record("hola indio", msg_id=111, channel_id=222)
+    await asyncio.sleep(0)
+
+    assert seeded == []
+
+
+async def test_record_ignores_calls_without_message_id(monkeypatch):
+    import decifrarVoting
+
+    seeded = []
+
+    async def fake_seed(channel_id, message_id):
+        seeded.append((channel_id, message_id))
+
+    monkeypatch.setattr(decifrarVoting, "_seed_reactions", fake_seed)
+
+    await decifrarVoting.record("hola", msg_id=None, channel_id=222)
+    await decifrarVoting.record("hola", msg_id=111, channel_id=None)
+    await decifrarVoting.record("", msg_id=111, channel_id=222)
+    await asyncio.sleep(0)
+
+    assert seeded == []
+
+
+# ---- handle_reaction_vote() ----------------------------------------------
+
+async def _seed_entry(decifrarVoting, msg_id, channel_id,
+                     raw="ruido", vosk_result=None):
+    """Drive the public record() path so the entry exists exactly like in
+    production. The seeded reactions are stubbed to a no-op so the test
+    doesn't need to fake Discord."""
+    async def _noop(*args, **kwargs):
+        return None
+
+    # Monkey patch via attribute since we don't have monkeypatch here.
+    decifrarVoting._seed_reactions = _noop  # type: ignore[attr-defined]
+    await decifrarVoting.record(raw, msg_id=msg_id, channel_id=channel_id,
+                                vosk_result=vosk_result)
+    await asyncio.sleep(0)
+
+
+async def test_x_reaction_logs_false_positive(monkeypatch):
+    import decifrarVoting
+    import config as main_config
+
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id,
+                      raw="puro ruido", vosk_result={"alternatives": [{"text": "el indio"}]})
+
+    bot = _fake_bot()
+    # Stub the cleanup so we don't need real Discord.
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions",
+                        AsyncMock())
+
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="❌", user_id=42, added=True,
+    )
+    # Let the cleanup task settle.
+    await asyncio.sleep(0)
+
+    rows = _read_jsonl(main_config.DECIFRAR_FALSE_POSITIVES_LOG_PATH)
     assert len(rows) == 1
-    assert rows[0]["raw"] == "hola indio"
-    assert rows[0]["decifrado"] == "hola indio cómo estás"
-    assert rows[0]["status"] == "pending"
-    assert rows[0]["msg_id"] is None
+    assert rows[0]["raw_whisper"] == "puro ruido"
+    assert rows[0]["voter_id"] == 42
+    assert rows[0]["vosk_result"] == {"alternatives": [{"text": "el indio"}]}
 
 
-async def test_record_is_a_noop_when_voting_disabled(monkeypatch):
-    import decifrarVoting
-    import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_ENABLED", False)
-
-    await decifrarVoting.record("algo", "algo decifrado")
-
-    assert not os.path.exists(main_config.DECIFRAR_LOG_PATH)
-
-
-async def test_record_deduplicates_identical_raw_decifrado_pairs():
+async def test_thumbs_up_does_not_log(monkeypatch):
     import decifrarVoting
     import config as main_config
 
-    await decifrarVoting.record("hola indio", "hola indio")
-    await decifrarVoting.record("Hola Indio", "hola indio")  # different case → same key
-    await decifrarVoting.record("hola indio", "hola indio cómo estás")  # diff decifrado, ok
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id)
 
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    # First two collapse (same normalized raw + same decifrado), third is distinct.
-    assert len(rows) == 2
+    bot = _fake_bot()
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions", AsyncMock())
 
-
-async def test_record_ignores_empty_inputs():
-    import decifrarVoting
-    import config as main_config
-
-    await decifrarVoting.record("", "")
-    await decifrarVoting.record("hola", "")
-    await decifrarVoting.record("", "hola")
-
-    assert not os.path.exists(main_config.DECIFRAR_LOG_PATH)
-
-
-# ---- Vote resolution -----------------------------------------------------
-
-async def _seed_pending_entry(decifrarVoting, raw, decifrado, msg_id):
-    """Helper: write a pending entry directly with a known msg_id so tests can
-    drive the resolvers without going through the random-sample post."""
-    await decifrarVoting.record(raw, decifrado)
-    # Patch the just-appended entry's msg_id.
-    async with decifrarVoting._lock:
-        entry = decifrarVoting._entries[-1]
-        entry["msg_id"] = msg_id
-        decifrarVoting._save_unlocked()
-    return entry
-
-
-async def test_thumbs_up_marks_approved_and_seeds_cache():
-    import decifrarVoting
-    import geminiCommand
-    import config as main_config
-
-    msg_id = 999_000
-    entry = await _seed_pending_entry(
-        decifrarVoting, "che indio dale algo", "che indio dale algo", msg_id,
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="👍", user_id=42, added=True,
     )
+    await asyncio.sleep(0)
 
-    fake_msg = MagicMock()
-    fake_msg.content = "old"
-    fake_msg.edit = AsyncMock()
-    await decifrarVoting._resolve_approved(msg_id, fake_msg)
-
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    statuses = [r["status"] for r in rows]
-    assert "approved" in statuses
-
-    cache_key = geminiCommand._decifrar_cache_key(entry["raw"])
-    assert geminiCommand._decifrar_cache_get(cache_key) == entry["decifrado"]
-
-    fake_msg.edit.assert_awaited_once()
+    assert _read_jsonl(main_config.DECIFRAR_FALSE_POSITIVES_LOG_PATH) == []
 
 
-async def test_thumbs_down_removes_entry_from_jsonl():
+async def test_any_reaction_triggers_cleanup(monkeypatch):
     import decifrarVoting
-    import config as main_config
 
-    msg_id = 999_111
-    await _seed_pending_entry(
-        decifrarVoting, "ruido feo", "ruido feo limpio", msg_id,
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id)
+
+    bot = _fake_bot()
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions", cleanup_mock)
+
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="👍", user_id=42, added=True,
     )
-    assert len(_read_jsonl(main_config.DECIFRAR_LOG_PATH)) == 1
+    # cleanup runs as a task — give it a tick.
+    await asyncio.sleep(0)
 
-    fake_msg = MagicMock()
-    fake_msg.delete = AsyncMock()
-    await decifrarVoting._resolve_rejected(msg_id, fake_msg)
-
-    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
-    fake_msg.delete.assert_awaited_once()
+    cleanup_mock.assert_awaited()
 
 
-async def test_handle_vote_dedups_same_user_clicking_twice(monkeypatch):
+async def test_unrelated_emoji_is_ignored(monkeypatch):
     import decifrarVoting
     import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
 
-    msg_id = 999_222
-    await _seed_pending_entry(decifrarVoting, "hola", "hola", msg_id)
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id)
 
-    user = SimpleNamespace(id=42)
-    msg = MagicMock()
-    msg.id = msg_id
-    interaction = MagicMock()
-    interaction.user = user
-    interaction.message = msg
-    interaction.response.send_message = AsyncMock()
-    interaction.response.defer = AsyncMock()
+    bot = _fake_bot()
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions", cleanup_mock)
 
-    await decifrarVoting._handle_vote(interaction, +1)  # first 👍
-    await decifrarVoting._handle_vote(interaction, +1)  # same user clicks again
+    # An emoji we did NOT seed should not consume the entry.
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="🎉", user_id=42, added=True,
+    )
+    await asyncio.sleep(0)
 
-    # The same user voting twice should NOT cross the threshold (2 needed).
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert [r["status"] for r in rows] == ["pending"]
+    cleanup_mock.assert_not_awaited()
+    assert _read_jsonl(main_config.DECIFRAR_FALSE_POSITIVES_LOG_PATH) == []
 
 
-async def test_two_users_thumbs_up_crosses_threshold_and_approves(monkeypatch):
+async def test_bot_reactions_are_ignored(monkeypatch):
+    """The bot itself seeds 👍/❌ — those events must not consume the entry."""
     import decifrarVoting
     import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
 
-    msg_id = 999_333
-    await _seed_pending_entry(decifrarVoting, "che indio", "che indio", msg_id)
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id)
 
-    msg = MagicMock()
-    msg.id = msg_id
-    msg.content = "x"
-    msg.edit = AsyncMock()
-    msg.delete = AsyncMock()
+    bot = _fake_bot(user_id=999)
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions", cleanup_mock)
 
-    def _interaction(uid):
-        i = MagicMock()
-        i.user = SimpleNamespace(id=uid)
-        i.message = msg
-        i.response.defer = AsyncMock()
-        i.response.send_message = AsyncMock()
-        return i
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="❌", user_id=999, added=True,
+    )
+    await asyncio.sleep(0)
 
-    await decifrarVoting._handle_vote(_interaction(1), +1)
-    await decifrarVoting._handle_vote(_interaction(2), +1)
-
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert any(r["status"] == "approved" for r in rows)
+    cleanup_mock.assert_not_awaited()
+    assert _read_jsonl(main_config.DECIFRAR_FALSE_POSITIVES_LOG_PATH) == []
 
 
-async def test_vote_switching_is_supported(monkeypatch):
-    """A user can change their mind: clicking 👎 after 👍 removes the 👍 and
-    adds the 👎 (net moves by 2)."""
+async def test_reaction_removes_are_ignored(monkeypatch):
+    """We only care about reactions being ADDED, not removed."""
     import decifrarVoting
     import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 1)
 
-    msg_id = 999_444
-    await _seed_pending_entry(decifrarVoting, "abc", "abc", msg_id)
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id)
 
-    msg = MagicMock()
-    msg.id = msg_id
-    msg.content = "x"
-    msg.edit = AsyncMock()
-    msg.delete = AsyncMock()
+    bot = _fake_bot()
+    cleanup_mock = AsyncMock()
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions", cleanup_mock)
 
-    def _interaction(uid):
-        i = MagicMock()
-        i.user = SimpleNamespace(id=uid)
-        i.message = msg
-        i.response.defer = AsyncMock()
-        i.response.send_message = AsyncMock()
-        return i
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="❌", user_id=42, added=False,
+    )
+    await asyncio.sleep(0)
 
-    await decifrarVoting._handle_vote(_interaction(1), +1)  # +1, would approve at threshold=1
-    # Already crosses threshold and approves — for this test, let's bump threshold first.
-    # Reset and retry:
-    decifrarVoting._reset_for_tests()
-    decifrarVoting._entries.clear()
-    await _seed_pending_entry(decifrarVoting, "abc", "abc", msg_id)
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
-
-    await decifrarVoting._handle_vote(_interaction(1), +1)
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert [r["status"] for r in rows] == ["pending"]
-
-    # Same user flips to 👎 — net moves from +1 to -1 (delta of 2), but still
-    # below abs(threshold) for downvote (need -2). Then a second user votes
-    # 👎 and we cross.
-    await decifrarVoting._handle_vote(_interaction(1), -1)
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert [r["status"] for r in rows] == ["pending"]
-
-    await decifrarVoting._handle_vote(_interaction(2), -1)
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert rows == []  # rejected, entry gone
+    cleanup_mock.assert_not_awaited()
+    assert _read_jsonl(main_config.DECIFRAR_FALSE_POSITIVES_LOG_PATH) == []
 
 
-# ---- Startup seeding -----------------------------------------------------
-
-async def test_startup_seeds_cache_from_approved_entries():
-    import decifrarVoting
-    import geminiCommand
-    import config as main_config
-
-    # Write a JSONL with one approved + one pending; only approved should seed.
-    payload = [
-        {"id": "a", "ts": 1.0, "raw": "che indio",
-         "raw_key": "che indio", "decifrado": "che indio dale",
-         "status": "approved", "msg_id": None},
-        {"id": "b", "ts": 2.0, "raw": "ruido",
-         "raw_key": "ruido", "decifrado": "ruido",
-         "status": "pending", "msg_id": None},
-    ]
-    with open(main_config.DECIFRAR_LOG_PATH, "w", encoding="utf-8") as fh:
-        for row in payload:
-            fh.write(json.dumps(row) + "\n")
-
-    fake_bot = MagicMock()
-    fake_bot.add_view = MagicMock()
-
-    await decifrarVoting.start(fake_bot)
-
-    assert geminiCommand._decifrar_cache.get("che indio") == "che indio dale"
-    assert "ruido" not in geminiCommand._decifrar_cache
-
-
-async def test_approved_seed_pairs_respects_cap(monkeypatch):
+async def test_second_reaction_after_resolution_is_a_noop(monkeypatch):
+    """Once a sample is resolved (a user reacted), additional reactions on
+    the same message no longer log to the false-positive file."""
     import decifrarVoting
     import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_CACHE_SEED_MAX", 2)
 
-    payload = [
-        {"id": str(i), "ts": float(i), "raw": f"raw{i}",
-         "raw_key": f"raw{i}", "decifrado": f"dec{i}",
-         "status": "approved", "msg_id": None}
-        for i in range(5)
-    ]
-    with open(main_config.DECIFRAR_LOG_PATH, "w", encoding="utf-8") as fh:
-        for row in payload:
-            fh.write(json.dumps(row) + "\n")
+    msg_id, channel_id = 7777, 8888
+    await _seed_entry(decifrarVoting, msg_id, channel_id, raw="primera")
 
-    pairs = decifrarVoting.approved_seed_pairs()
-    # Keeps the 2 most recent (by ts), dropping the older 3.
-    assert pairs == [("raw3", "dec3"), ("raw4", "dec4")]
+    bot = _fake_bot()
+    monkeypatch.setattr(decifrarVoting, "_clear_seeded_reactions", AsyncMock())
 
+    # First user fires ❌ → row appended.
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="❌", user_id=1, added=True,
+    )
+    # Second user fires ❌ on the same (now resolved) message → no extra row.
+    await decifrarVoting.handle_reaction_vote(
+        bot, channel_id=channel_id, message_id=msg_id,
+        emoji="❌", user_id=2, added=True,
+    )
+    await asyncio.sleep(0)
 
-# ---- Inline Reaction Voting -----------------------------------------------
-
-async def test_record_inline_adds_reactions_if_selected(monkeypatch):
-    import decifrarVoting
-    import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_SAMPLE_RATE", 1)  # always select
-
-    mock_add = AsyncMock()
-    monkeypatch.setattr(decifrarVoting, "_add_inline_reactions", mock_add)
-
-    await decifrarVoting.record("raw text", "cleaned text", msg_id=777, channel_id=888)
-    await asyncio.sleep(0)  # let task settle
-
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
+    rows = _read_jsonl(main_config.DECIFRAR_FALSE_POSITIVES_LOG_PATH)
     assert len(rows) == 1
-    assert rows[0]["msg_id"] == 777
-    assert rows[0]["channel_id"] == 888
-    mock_add.assert_awaited_once_with(888, 777)
-
-
-async def test_handle_reaction_vote_registers_reactions_and_resolves_approved(monkeypatch):
-    import decifrarVoting
-    import geminiCommand
-    import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
-
-    msg_id = 999_777
-    channel_id = 888_777
-    entry = await _seed_pending_entry(decifrarVoting, "raw", "clean", msg_id)
-    # Also set channel_id in the live entry
-    decifrarVoting._entries[-1]["channel_id"] = channel_id
-
-    fake_bot = MagicMock()
-    fake_msg = MagicMock()
-    fake_msg.id = msg_id
-    fake_msg.channel.id = channel_id
-    fake_msg.author.id = 12345
-    fake_msg.content = "old"
-    fake_msg.edit = AsyncMock()
-    fake_msg.clear_reactions = AsyncMock()
-
-    # Stub bot.get_channel / fetch_channel and fetch_message
-    fake_chan = MagicMock()
-    fake_chan.fetch_message = AsyncMock(return_value=fake_msg)
-    fake_bot.get_channel = MagicMock(return_value=fake_chan)
-    # Stub _bot in decifrarVoting
-    fake_bot.user = MagicMock()
-    fake_bot.user.id = 999  # different from author id (12345)
-    monkeypatch.setattr(decifrarVoting, "_bot", fake_bot)
-
-    mock_relay_edit = AsyncMock(return_value=True)
-    monkeypatch.setattr(geminiCommand, "relay_transcript_decifrado_raw", mock_relay_edit)
-
-    # Vote 1 (👍) from user 10
-    await decifrarVoting.handle_reaction_vote(
-        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="👍", user_id=10, added=True
-    )
-    # Entry should still be pending
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert rows[0]["status"] == "pending"
-
-    # Vote 2 (👍) from user 20
-    await decifrarVoting.handle_reaction_vote(
-        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="👍", user_id=20, added=True
-    )
-
-    # Entry should now be approved
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert rows[0]["status"] == "approved"
-    assert geminiCommand._decifrar_cache_get("raw") == "clean"
-    mock_relay_edit.assert_awaited_once_with(
-        channel_id=channel_id,
-        message_id=msg_id,
-        content="old\n\n✅ aprobado — cacheado",
-    )
-
-
-async def test_handle_reaction_vote_registers_reactions_and_resolves_rejected(monkeypatch):
-    import decifrarVoting
-    import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 1)
-
-    msg_id = 999_888
-    channel_id = 888_888
-    await _seed_pending_entry(decifrarVoting, "bad raw", "bad clean", msg_id)
-
-    fake_bot = MagicMock()
-    fake_msg = MagicMock()
-    fake_msg.id = msg_id
-    fake_msg.delete = AsyncMock()
-
-    fake_chan = MagicMock()
-    fake_chan.fetch_message = AsyncMock(return_value=fake_msg)
-    fake_bot.get_channel = MagicMock(return_value=fake_chan)
-
-    # Vote 1 (👎) from user 10
-    await decifrarVoting.handle_reaction_vote(
-        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="👎", user_id=10, added=True
-    )
-
-    # Entry should be rejected (deleted from log)
-    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
-    fake_msg.delete.assert_awaited_once()
-
-
-async def test_handle_reaction_vote_registers_false_positive_and_resolves_rejected(monkeypatch):
-    import decifrarVoting
-    import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 1)
-
-    msg_id = 999_999
-    channel_id = 888_999
-    await _seed_pending_entry(decifrarVoting, "fp raw", "fp clean", msg_id)
-
-    fake_bot = MagicMock()
-    fake_msg = MagicMock()
-    fake_msg.id = msg_id
-    fake_msg.delete = AsyncMock()
-
-    fake_chan = MagicMock()
-    fake_chan.fetch_message = AsyncMock(return_value=fake_msg)
-    fake_bot.get_channel = MagicMock(return_value=fake_chan)
-
-    # Vote 1 (❌) from user 10
-    await decifrarVoting.handle_reaction_vote(
-        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="❌", user_id=10, added=True
-    )
-
-    # Entry should be rejected (deleted from log)
-    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
-    fake_msg.delete.assert_awaited_once()
-
-
-async def test_handle_vote_view_fp_resolves_rejected(monkeypatch):
-    import decifrarVoting
-    import config as main_config
-    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
-
-    msg_id = 999_888_777
-    await _seed_pending_entry(decifrarVoting, "fp raw 2", "fp clean 2", msg_id)
-
-    msg = MagicMock()
-    msg.id = msg_id
-    msg.delete = AsyncMock()
-
-    def _interaction(uid):
-        i = MagicMock()
-        i.user = SimpleNamespace(id=uid)
-        i.message = msg
-        i.response.defer = AsyncMock()
-        i.response.send_message = AsyncMock()
-        return i
-
-    # Vote 1 (fp) from user 1
-    await decifrarVoting._handle_vote(_interaction(1), "fp")
-    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
-    assert [r["status"] for r in rows] == ["pending"]
-
-    # Vote 2 (fp) from user 2
-    await decifrarVoting._handle_vote(_interaction(2), "fp")
-
-    # Should cross threshold and reject/delete
-    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
-    msg.delete.assert_awaited_once()
-
