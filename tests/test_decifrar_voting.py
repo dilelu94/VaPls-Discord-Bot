@@ -416,3 +416,64 @@ async def test_handle_reaction_vote_registers_reactions_and_resolves_rejected(mo
     assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
     fake_msg.delete.assert_awaited_once()
 
+
+async def test_handle_reaction_vote_registers_false_positive_and_resolves_rejected(monkeypatch):
+    import decifrarVoting
+    import config as main_config
+    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 1)
+
+    msg_id = 999_999
+    channel_id = 888_999
+    await _seed_pending_entry(decifrarVoting, "fp raw", "fp clean", msg_id)
+
+    fake_bot = MagicMock()
+    fake_msg = MagicMock()
+    fake_msg.id = msg_id
+    fake_msg.delete = AsyncMock()
+
+    fake_chan = MagicMock()
+    fake_chan.fetch_message = AsyncMock(return_value=fake_msg)
+    fake_bot.get_channel = MagicMock(return_value=fake_chan)
+
+    # Vote 1 (❌) from user 10
+    await decifrarVoting.handle_reaction_vote(
+        fake_bot, channel_id=channel_id, message_id=msg_id, emoji="❌", user_id=10, added=True
+    )
+
+    # Entry should be rejected (deleted from log)
+    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
+    fake_msg.delete.assert_awaited_once()
+
+
+async def test_handle_vote_view_fp_resolves_rejected(monkeypatch):
+    import decifrarVoting
+    import config as main_config
+    monkeypatch.setattr(main_config, "DECIFRAR_VOTE_THRESHOLD", 2)
+
+    msg_id = 999_888_777
+    await _seed_pending_entry(decifrarVoting, "fp raw 2", "fp clean 2", msg_id)
+
+    msg = MagicMock()
+    msg.id = msg_id
+    msg.delete = AsyncMock()
+
+    def _interaction(uid):
+        i = MagicMock()
+        i.user = SimpleNamespace(id=uid)
+        i.message = msg
+        i.response.defer = AsyncMock()
+        i.response.send_message = AsyncMock()
+        return i
+
+    # Vote 1 (fp) from user 1
+    await decifrarVoting._handle_vote(_interaction(1), "fp")
+    rows = _read_jsonl(main_config.DECIFRAR_LOG_PATH)
+    assert [r["status"] for r in rows] == ["pending"]
+
+    # Vote 2 (fp) from user 2
+    await decifrarVoting._handle_vote(_interaction(2), "fp")
+
+    # Should cross threshold and reject/delete
+    assert _read_jsonl(main_config.DECIFRAR_LOG_PATH) == []
+    msg.delete.assert_awaited_once()
+

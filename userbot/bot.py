@@ -559,6 +559,7 @@ def _build_vosk_grammar() -> str:
         "ponete", "poneme",
         "reproduci", "reproducí", "reproduce",
         "tirate", "tira", "dale", "por",
+        "y", "i", "o", "a", "si", "no",
         # Catch-all bucket — without it VOSK collapses unknown audio into
         # the closest grammar entry, producing false positives.
         "[unk]",

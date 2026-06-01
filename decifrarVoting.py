@@ -169,6 +169,7 @@ async def _add_inline_reactions(channel_id: int, message_id: int) -> None:
             msg = await channel.fetch_message(message_id)
             await msg.add_reaction("👍")
             await msg.add_reaction("👎")
+            await msg.add_reaction("❌")
     except Exception:
         logger.exception("decifrar_vote: failed to add inline reactions to %s", message_id)
 
@@ -245,7 +246,7 @@ class VoteView(discord.ui.View):
     )
     async def vote_up(self, button: discord.ui.Button,
                       interaction: discord.Interaction) -> None:
-        await _handle_vote(interaction, +1)
+        await _handle_vote(interaction, "up")
 
     @discord.ui.button(
         label="👎 Mal", style=discord.ButtonStyle.danger,
@@ -253,10 +254,22 @@ class VoteView(discord.ui.View):
     )
     async def vote_down(self, button: discord.ui.Button,
                         interaction: discord.Interaction) -> None:
-        await _handle_vote(interaction, -1)
+        await _handle_vote(interaction, "down")
+
+    @discord.ui.button(
+        label="❌ Falso Positivo", style=discord.ButtonStyle.secondary,
+        custom_id="decifrar_vote_fp",
+    )
+    async def vote_fp(self, button: discord.ui.Button,
+                      interaction: discord.Interaction) -> None:
+        await _handle_vote(interaction, "fp")
 
 
-async def _handle_vote(interaction: discord.Interaction, delta: int) -> None:
+async def _handle_vote(interaction: discord.Interaction, vote_type: str | int) -> None:
+    if vote_type == 1:
+        vote_type = "up"
+    elif vote_type == -1:
+        vote_type = "down"
     user_id = getattr(getattr(interaction, "user", None), "id", 0)
     msg = getattr(interaction, "message", None)
     msg_id = getattr(msg, "id", 0)
@@ -266,30 +279,36 @@ async def _handle_vote(interaction: discord.Interaction, delta: int) -> None:
         except Exception:
             pass
         return
-    direction = "up" if delta > 0 else "down"
-    other = "down" if delta > 0 else "up"
-    voters = _voters.setdefault(msg_id, {"up": set(), "down": set()})
-    if user_id in voters[direction]:
+    voters = _voters.setdefault(msg_id, {"up": set(), "down": set(), "fp": set()})
+    if "fp" not in voters:
+        voters["fp"] = set()
+
+    if user_id in voters[vote_type]:
+        emoji_map = {"up": "👍", "down": "👎", "fp": "❌"}
         try:
             await interaction.response.send_message(
-                f"ya votaste {'👍' if delta > 0 else '👎'}", ephemeral=True,
+                f"ya votaste {emoji_map.get(vote_type)}", ephemeral=True,
             )
         except Exception:
             pass
         return
-    voters[direction].add(user_id)
-    voters[other].discard(user_id)
+    voters[vote_type].add(user_id)
+    for other in {"up", "down", "fp"}:
+        if other != vote_type:
+            voters[other].discard(user_id)
     up = len(voters["up"])
     down = len(voters["down"])
+    fp = len(voters["fp"])
     threshold = max(1, int(config.DECIFRAR_VOTE_THRESHOLD))
-    net = up - down
     try:
         await interaction.response.defer()
     except Exception:
         pass
-    if net >= threshold:
+    if up - down >= threshold:
         await _resolve_approved(msg_id, msg)
-    elif -net >= threshold:
+    elif down - up >= threshold:
+        await _resolve_rejected(msg_id, msg)
+    elif fp >= threshold:
         await _resolve_rejected(msg_id, msg)
 
 
@@ -356,7 +375,7 @@ async def handle_reaction_vote(
     added: bool,
 ) -> None:
     """Handle raw reaction add/remove on transcript messages for decifrar voting."""
-    if emoji not in ("👍", "👎"):
+    if emoji not in ("👍", "👎", "❌"):
         return
 
     async with _lock:
@@ -364,24 +383,35 @@ async def handle_reaction_vote(
         if entry is None or entry.get("status") != "pending":
             return
 
-    voters = _voters.setdefault(message_id, {"up": set(), "down": set()})
+    voters = _voters.setdefault(message_id, {"up": set(), "down": set(), "fp": set()})
+    if "fp" not in voters:
+        voters["fp"] = set()
+
     if added:
         if emoji == "👍":
             voters["up"].add(user_id)
             voters["down"].discard(user_id)
-        else:
+            voters["fp"].discard(user_id)
+        elif emoji == "👎":
             voters["down"].add(user_id)
             voters["up"].discard(user_id)
+            voters["fp"].discard(user_id)
+        elif emoji == "❌":
+            voters["fp"].add(user_id)
+            voters["up"].discard(user_id)
+            voters["down"].discard(user_id)
     else:
         if emoji == "👍":
             voters["up"].discard(user_id)
-        else:
+        elif emoji == "👎":
             voters["down"].discard(user_id)
+        elif emoji == "❌":
+            voters["fp"].discard(user_id)
 
     up = len(voters["up"])
     down = len(voters["down"])
+    fp = len(voters["fp"])
     threshold = max(1, int(config.DECIFRAR_VOTE_THRESHOLD))
-    net = up - down
 
     try:
         channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
@@ -389,9 +419,11 @@ async def handle_reaction_vote(
     except Exception:
         msg = None
 
-    if net >= threshold:
+    if up - down >= threshold:
         await _resolve_approved(message_id, msg)
-    elif -net >= threshold:
+    elif down - up >= threshold:
+        await _resolve_rejected(message_id, msg)
+    elif fp >= threshold:
         await _resolve_rejected(message_id, msg)
 
 
