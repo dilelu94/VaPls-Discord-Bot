@@ -507,9 +507,6 @@ def _write_json_atomic(path: str, payload: dict) -> None:
         raise
 
 
-_load_indio_state()
-
-
 def _indio_memory_key(ctx: discord.ApplicationContext) -> str:
     """Build the memory bucket key for the Indio persona.
 
@@ -2738,3 +2735,9 @@ async def askIndio(bot: "discord.Bot",
         speaker_name=speaker_name,
     )
     return True
+
+
+# Cargar el estado persistido al final, cuando todas las funciones helpers
+# (incluida _sanitize_for_history) ya estan definidas — sino la sanitizacion
+# de history al startup falla con NameError.
+_load_indio_state()
