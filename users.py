@@ -165,12 +165,10 @@ USERS: dict[int, dict] = {
             "tatuadora",
             "amiga del indio",
             "(privado, no mencionar): es gotica",
-            "(privado, no mencionar): color favorito violeta",
+            "color favorito violeta",
         ],
         "block_dynamic_substrings": [
             "mejor amiga",
-            "única mujer",
-            "unica mujer",
             "onda gótica",
             "onda gotica",
             "gótica",
