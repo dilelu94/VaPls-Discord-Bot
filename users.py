@@ -159,6 +159,7 @@ USERS: dict[int, dict] = {
     },
     581288610410790912: {
         "name": "Caro",
+        "greeting": "Audios/snoop-dogg-smoke-weed-everyday.mp3",
         "traits": [
             "sexo: mujer",
             "tatuadora",
