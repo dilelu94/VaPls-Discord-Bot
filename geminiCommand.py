@@ -26,7 +26,6 @@ import analytics
 import config
 import geminiClient
 import geminiKeys
-import indioArchive
 
 try:
     from users import USERS as _USERS
@@ -2225,17 +2224,6 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             ctx.bot, _active_vote, opts_channel_id, opts_msg_id, n,
         )
 
-    try:
-        await indioArchive.enqueue(
-            guild_id=getattr(getattr(ctx, "guild", None), "id", None),
-            channel_id=channel_id,
-            speaker=speaker,
-            question=pregunta or "",
-            reply=clean_reply,
-        )
-    except Exception:
-        logger.exception("indio archive enqueue failed")
-
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
@@ -2450,17 +2438,6 @@ async def indioFromVoice(
     if vote_open and opts_msg_id and _active_vote is not None:
         n = len(_active_vote.candidates)
         await _attach_vote_reactions(bot, _active_vote, channel_id, opts_msg_id, n)
-
-    try:
-        await indioArchive.enqueue(
-            guild_id=guild_id,
-            channel_id=channel_id,
-            speaker=speaker,
-            question=pregunta,
-            reply=clean_reply,
-        )
-    except Exception:
-        logger.exception("indioFromVoice archive enqueue failed")
 
     if pending_actions:
         asyncio.create_task(_dispatch_indio_actions(

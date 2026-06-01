@@ -26,7 +26,6 @@ from apiServer import startApiServer
 import decifrarVoting
 import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
-import indioArchive
 import webhookLogger
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
@@ -191,10 +190,6 @@ async def on_ready():
         await decifrarVoting.start(bot)
     except Exception:
         log.exception("decifrar voting startup failed")
-    try:
-        indioArchive.start_sweeper()
-    except Exception:
-        log.exception("indio archive sweeper startup failed")
 
 
 @bot.event

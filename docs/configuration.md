@@ -24,10 +24,6 @@
 | `DECIFRAR_FEEDBACK_SAMPLE_RATE` | ❌ | `3` | 1 de cada N transcripciones de voz recibe el par de reacciones. Subir para sampleo menor (menos ruido en el canal). |
 | `DECIFRAR_FEEDBACK_TIMEOUT_MINUTES` | ❌ | `60` | Minutos antes de que el sweeper limpie las reacciones de un sample que nadie votó. |
 | `DECIFRAR_FALSE_POSITIVES_LOG_PATH` | ❌ | `data/false_positives.jsonl` | Path al JSONL persistente donde se loggean los ❌ (raw whisper + VOSK N-best) para debug offline de la calidad del ASR. Gitignored. |
-| `INDIO_ARCHIVE_THREAD_ID` | ❌ | `0` | ID del thread donde se archivan los Q+A del Indio. `0` desactiva el archivado por completo. Las entradas se postean via el relay del userbot, así conservan la identidad del Indio para búsqueda de mensajes. |
-| `INDIO_ARCHIVE_DELAY_SECONDS` | ❌ | `7200` | Segundos que un Q+A vive en el queue antes de archivarse al thread. Default 2h. |
-| `INDIO_ARCHIVE_QUEUE_PATH` | ❌ | `data/indio_archive_queue.jsonl` | Path al JSONL persistente que guarda los Q+A pendientes de archivar. Sobrevive restarts. |
-| `INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS` | ❌ | `60` | Cada cuánto corre el sweeper que detecta entradas vencidas y las postea al thread. |
 
 ## Userbot (.env in userbot/)
 | Variable | Required | Default | Description / implications |

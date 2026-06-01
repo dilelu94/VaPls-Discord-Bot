@@ -66,20 +66,6 @@ INDIO_RELAY_URL = os.getenv("INDIO_RELAY_URL", "")
 INDIO_RELAY_SECRET = os.getenv("INDIO_RELAY_SECRET", "")
 INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 
-# Indio conversation archive: every Q+A pair from /indio and from the
-# userbot's "indio" auto-reply gets enqueued, and after
-# INDIO_ARCHIVE_DELAY_SECONDS the sweeper posts it (via the userbot relay,
-# so it keeps the Indio identity for later message search) to the thread
-# `INDIO_ARCHIVE_THREAD_ID`. Set the thread id to 0 to disable archiving.
-INDIO_ARCHIVE_THREAD_ID = int(os.getenv("INDIO_ARCHIVE_THREAD_ID", "0"))
-INDIO_ARCHIVE_DELAY_SECONDS = int(os.getenv("INDIO_ARCHIVE_DELAY_SECONDS", "7200"))
-INDIO_ARCHIVE_QUEUE_PATH = os.getenv(
-    "INDIO_ARCHIVE_QUEUE_PATH", "data/indio_archive_queue.jsonl",
-)
-INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS = int(
-    os.getenv("INDIO_ARCHIVE_SWEEP_INTERVAL_SECONDS", "60")
-)
-
 # Cuando el indio decide poner musica via [PLAY_MUSIC: ...], los mensajes
 # de estado y el panel de control del GuildPlayer se postean siempre en
 # este text channel. Sin fallback: si no esta, la accion falla.
