@@ -33,7 +33,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
       - name: Run test suite
-        run: pytest -q
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -v --tb=long --color=no -o log_cli=false 2>&1 | tee pytest.log
+      - name: Upload pytest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-log-${{ matrix.python-version }}
+          path: pytest.log
+          retention-days: 7
 
   # ── Continuous deployment ──────────────────────────────────────────────────
   # Runs only on pushes to master, only after all matrix test jobs pass.
