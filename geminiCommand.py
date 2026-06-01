@@ -1241,6 +1241,21 @@ _ACTION_RELAY_SUCCESS_SUFFIX = {
 }
 
 
+# Per-guild lock so two concurrent indio dispatches in the same guild
+# (e.g. text /indio + voice wake word firing back-to-back) serialize their
+# play/sound invocations. Without this, two relay calls race the userbot
+# into firing two slash interactions on top of each other.
+_dispatch_locks: dict[int, asyncio.Lock] = {}
+
+
+def _dispatch_lock_for(guild_id: int) -> asyncio.Lock:
+    lock = _dispatch_locks.get(guild_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _dispatch_locks[guild_id] = lock
+    return lock
+
+
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
@@ -1282,180 +1297,185 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     # only via the userbot relay (so we got an HTTP ack but not a real "queued"
     # confirmation). Drives the softer success suffix at the bottom.
     relayed_success: set[str] = set()
-    for action, arg in actions:
-        try:
-            if action == "PLAY_MUSIC":
-                ok, msg = await _invoke_slash_via_userbot(
-                    "invoke_play",
-                    channel_id=config.INDIO_PLAY_CHANNEL_ID,
-                    query=arg,
-                )
-                if ok:
-                    relayed_success.add("PLAY_MUSIC")
-                else:
-                    logger.warning(
-                        "indio PLAY_MUSIC relay failed (%s); falling back to playFromIndio",
-                        msg,
+    # Serialize per guild so back-to-back dispatches (e.g. text + voice
+    # arriving at the same time) don't race the userbot into firing two
+    # slash interactions concurrently. Held across the action loop AND
+    # the result-feedback edit.
+    async with _dispatch_lock_for(int(guild_id)):
+        for action, arg in actions:
+            try:
+                if action == "PLAY_MUSIC":
+                    ok, msg = await _invoke_slash_via_userbot(
+                        "invoke_play",
+                        channel_id=config.INDIO_PLAY_CHANNEL_ID,
+                        query=arg,
                     )
-                    ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
-                statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
-                logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
-            elif action == "PLAY_SOUND":
-                ok, msg = await _invoke_slash_via_userbot(
-                    "invoke_soundpad",
-                    channel_id=config.INDIO_PLAY_CHANNEL_ID,
-                    query=arg,
-                )
-                if ok:
-                    relayed_success.add("PLAY_SOUND")
-                else:
-                    logger.warning(
-                        "indio PLAY_SOUND relay failed (%s); falling back to play_clip_by_query",
-                        msg,
-                    )
-                    try:
-                        from soundpadCommand import play_clip_by_query
-                    except Exception:
-                        logger.exception("indio PLAY_SOUND: soundpadCommand import failed")
-                        statuses.append("sound: fail — import error")
-                        continue
-                    guild = bot.get_guild(int(guild_id))
-                    if guild is None:
-                        statuses.append(f"sound: fail — guild {guild_id} not found")
-                        logger.warning("indio PLAY_SOUND: guild %s not found", guild_id)
-                        continue
-                    played_path = await play_clip_by_query(bot, guild, query=arg)
-                    ok = played_path is not None
-                    msg = played_path or "no match"
-                statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
-                logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
-            elif action in ("SKIP_MUSIC", "PAUSE_MUSIC", "RESUME_MUSIC", "STOP_MUSIC"):
-                # Pure playback controls don't have a slash command equivalent —
-                # they only exist as UI buttons on the player. We talk to the
-                # GuildPlayer directly. If no player exists for this guild it
-                # means nothing was ever queued, so we no-op instead of
-                # implicitly creating one.
-                player = playCommand.guildPlayers.get(int(guild_id))
-                if player is None:
-                    statuses.append(f"{action.lower()}: no active player")
-                    logger.info("indio %s: no active player for guild %s", action, guild_id)
-                    continue
-                vc = getattr(player, "vc", None)
-                control_ok = False
-                if action == "SKIP_MUSIC":
-                    await player.skipSong()
-                    statuses.append("skip: ok")
-                    control_ok = True
-                elif action == "STOP_MUSIC":
-                    await player.stopPlayback()
-                    statuses.append("stop: ok")
-                    control_ok = True
-                elif action == "PAUSE_MUSIC":
-                    if vc and vc.is_playing():
-                        await player.togglePausePlay()
-                        statuses.append("pause: ok")
-                        control_ok = True
+                    if ok:
+                        relayed_success.add("PLAY_MUSIC")
                     else:
-                        statuses.append("pause: not playing")
-                elif action == "RESUME_MUSIC":
-                    if vc and vc.is_paused():
-                        await player.togglePausePlay()
-                        statuses.append("resume: ok")
-                        control_ok = True
-                    elif getattr(player, "interrupted", False) and player.currentSong:
-                        # Bot was kicked / lost connection while a song was
-                        # playing. Reconnect to the most-populated voice
-                        # channel and pick up where we left off.
+                        logger.warning(
+                            "indio PLAY_MUSIC relay failed (%s); falling back to playFromIndio",
+                            msg,
+                        )
+                        ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
+                    statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
+                elif action == "PLAY_SOUND":
+                    ok, msg = await _invoke_slash_via_userbot(
+                        "invoke_soundpad",
+                        channel_id=config.INDIO_PLAY_CHANNEL_ID,
+                        query=arg,
+                    )
+                    if ok:
+                        relayed_success.add("PLAY_SOUND")
+                    else:
+                        logger.warning(
+                            "indio PLAY_SOUND relay failed (%s); falling back to play_clip_by_query",
+                            msg,
+                        )
                         try:
-                            voice_channel = playCommand._pick_voice_channel(
-                                bot, int(guild_id),
-                            )
+                            from soundpadCommand import play_clip_by_query
                         except Exception:
-                            voice_channel = None
-                        if voice_channel is None:
-                            statuses.append("resume: no voice channel to rejoin")
+                            logger.exception("indio PLAY_SOUND: soundpadCommand import failed")
+                            statuses.append("sound: fail — import error")
+                            continue
+                        guild = bot.get_guild(int(guild_id))
+                        if guild is None:
+                            statuses.append(f"sound: fail — guild {guild_id} not found")
+                            logger.warning("indio PLAY_SOUND: guild %s not found", guild_id)
+                            continue
+                        played_path = await play_clip_by_query(bot, guild, query=arg)
+                        ok = played_path is not None
+                        msg = played_path or "no match"
+                    statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
+                elif action in ("SKIP_MUSIC", "PAUSE_MUSIC", "RESUME_MUSIC", "STOP_MUSIC"):
+                    # Pure playback controls don't have a slash command equivalent —
+                    # they only exist as UI buttons on the player. We talk to the
+                    # GuildPlayer directly. If no player exists for this guild it
+                    # means nothing was ever queued, so we no-op instead of
+                    # implicitly creating one.
+                    player = playCommand.guildPlayers.get(int(guild_id))
+                    if player is None:
+                        statuses.append(f"{action.lower()}: no active player")
+                        logger.info("indio %s: no active player for guild %s", action, guild_id)
+                        continue
+                    vc = getattr(player, "vc", None)
+                    control_ok = False
+                    if action == "SKIP_MUSIC":
+                        await player.skipSong()
+                        statuses.append("skip: ok")
+                        control_ok = True
+                    elif action == "STOP_MUSIC":
+                        await player.stopPlayback()
+                        statuses.append("stop: ok")
+                        control_ok = True
+                    elif action == "PAUSE_MUSIC":
+                        if vc and vc.is_playing():
+                            await player.togglePausePlay()
+                            statuses.append("pause: ok")
+                            control_ok = True
                         else:
+                            statuses.append("pause: not playing")
+                    elif action == "RESUME_MUSIC":
+                        if vc and vc.is_paused():
+                            await player.togglePausePlay()
+                            statuses.append("resume: ok")
+                            control_ok = True
+                        elif getattr(player, "interrupted", False) and player.currentSong:
+                            # Bot was kicked / lost connection while a song was
+                            # playing. Reconnect to the most-populated voice
+                            # channel and pick up where we left off.
                             try:
-                                new_vc = await voice_channel.connect(reconnect=True)
-                                resumed = await player.resumeFromInterruption(new_vc)
-                                if resumed:
-                                    statuses.append("resume: reconnected & resumed")
-                                    control_ok = True
-                                else:
-                                    statuses.append("resume: nothing to resume")
-                            except Exception as e:
-                                logger.exception("indio RESUME_MUSIC reconnect failed")
-                                statuses.append(f"resume: reconnect failed ({e})")
-                    else:
-                        statuses.append("resume: not paused")
-                logger.info("indio %s → %s", action, statuses[-1])
-                # Mirror the control in the playback channel via the userbot
-                # so the action is visible in #sick-tunes (these tools don't
-                # have slash commands of their own to land there).
-                if control_ok:
-                    await _relay_to_userbot(
-                        config.INDIO_PLAY_CHANNEL_ID,
-                        _ACTION_FALLBACK_TEXT.get(action, "👍"),
-                        reply_to_id=None,
-                    )
-        except Exception:
-            logger.exception("indio action %s failed", action)
-            statuses.append(f"{action.lower()}: fail — exception")
+                                voice_channel = playCommand._pick_voice_channel(
+                                    bot, int(guild_id),
+                                )
+                            except Exception:
+                                voice_channel = None
+                            if voice_channel is None:
+                                statuses.append("resume: no voice channel to rejoin")
+                            else:
+                                try:
+                                    new_vc = await voice_channel.connect(reconnect=True)
+                                    resumed = await player.resumeFromInterruption(new_vc)
+                                    if resumed:
+                                        statuses.append("resume: reconnected & resumed")
+                                        control_ok = True
+                                    else:
+                                        statuses.append("resume: nothing to resume")
+                                except Exception as e:
+                                    logger.exception("indio RESUME_MUSIC reconnect failed")
+                                    statuses.append(f"resume: reconnect failed ({e})")
+                        else:
+                            statuses.append("resume: not paused")
+                    logger.info("indio %s → %s", action, statuses[-1])
+                    # Mirror the control in the playback channel via the userbot
+                    # so the action is visible in #sick-tunes (these tools don't
+                    # have slash commands of their own to land there).
+                    if control_ok:
+                        await _relay_to_userbot(
+                            config.INDIO_PLAY_CHANNEL_ID,
+                            _ACTION_FALLBACK_TEXT.get(action, "👍"),
+                            reply_to_id=None,
+                        )
+            except Exception:
+                logger.exception("indio action %s failed", action)
+                statuses.append(f"{action.lower()}: fail — exception")
 
-    # After all actions ran, surface the outcome on the indio's reply. When the
-    # reply was a single message we EDIT it in place to append a short result
-    # line. When it was split into several chunks (rare for the indio's brief
-    # confirmations) we can't safely rewrite one chunk with the whole reply, so
-    # we post the result as a short standalone message instead. Same fallback
-    # when the relay gave us no editable message id. Best-effort: never crash.
-    if reply_handle is not None and statuses:
-        try:
-            primary_action = actions[0][0] if actions else ""
-            first_failure = next(
-                (s for s in statuses if _failure_feedback(s) is not None), None
-            )
-            if first_failure is not None:
-                result_line = _failure_feedback(first_failure) or ""
-            elif primary_action in relayed_success:
-                # Userbot relay ack — playback may still fail in VaPls
-                # downstream and we won't know. Soften the wording so the
-                # indio doesn't falsely claim audio that may never play.
-                result_line = _ACTION_RELAY_SUCCESS_SUFFIX.get(
-                    primary_action,
-                    _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅"),
+        # After all actions ran, surface the outcome on the indio's reply. When the
+        # reply was a single message we EDIT it in place to append a short result
+        # line. When it was split into several chunks (rare for the indio's brief
+        # confirmations) we can't safely rewrite one chunk with the whole reply, so
+        # we post the result as a short standalone message instead. Same fallback
+        # when the relay gave us no editable message id. Best-effort: never crash.
+        if reply_handle is not None and statuses:
+            try:
+                primary_action = actions[0][0] if actions else ""
+                first_failure = next(
+                    (s for s in statuses if _failure_feedback(s) is not None), None
                 )
-            else:
-                result_line = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
-            if result_line:
-                via_relay = getattr(reply_handle, "via_relay", False)
-                ch_id = getattr(reply_handle, "channel_id", None)
-                msg_obj = getattr(reply_handle, "message", None)
-                single = getattr(reply_handle, "single", True)
-                logger.info("indio dispatch result: %r single=%s via_relay=%s",
-                            result_line, single, via_relay)
-                edited = False
-                if single:
-                    new_content = f"{reply_text} — {result_line}"
-                    if via_relay:
-                        msg_id = getattr(reply_handle, "message_id", None)
-                        if ch_id and msg_id:
-                            edited = await _edit_via_userbot(
-                                ch_id, msg_id, new_content
-                            )
-                    elif msg_obj is not None:
-                        await msg_obj.edit(content=new_content)
-                        edited = True
-                if not edited:
-                    # Multi-chunk reply or no editable id: post the result on
-                    # its own so the user still finds out what happened.
-                    if via_relay and ch_id:
-                        await _relay_to_userbot(ch_id, result_line, None)
-                    elif msg_obj is not None and getattr(msg_obj, "channel", None):
-                        await msg_obj.channel.send(result_line)
-        except Exception:
-            logger.exception("indio dispatch result delivery failed")
+                if first_failure is not None:
+                    result_line = _failure_feedback(first_failure) or ""
+                elif primary_action in relayed_success:
+                    # Userbot relay ack — playback may still fail in VaPls
+                    # downstream and we won't know. Soften the wording so the
+                    # indio doesn't falsely claim audio that may never play.
+                    result_line = _ACTION_RELAY_SUCCESS_SUFFIX.get(
+                        primary_action,
+                        _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅"),
+                    )
+                else:
+                    result_line = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
+                if result_line:
+                    via_relay = getattr(reply_handle, "via_relay", False)
+                    ch_id = getattr(reply_handle, "channel_id", None)
+                    msg_obj = getattr(reply_handle, "message", None)
+                    single = getattr(reply_handle, "single", True)
+                    logger.info("indio dispatch result: %r single=%s via_relay=%s",
+                                result_line, single, via_relay)
+                    edited = False
+                    if single:
+                        new_content = f"{reply_text} — {result_line}"
+                        if via_relay:
+                            msg_id = getattr(reply_handle, "message_id", None)
+                            if ch_id and msg_id:
+                                edited = await _edit_via_userbot(
+                                    ch_id, msg_id, new_content
+                                )
+                        elif msg_obj is not None:
+                            await msg_obj.edit(content=new_content)
+                            edited = True
+                    if not edited:
+                        # Multi-chunk reply or no editable id: post the result on
+                        # its own so the user still finds out what happened.
+                        if via_relay and ch_id:
+                            await _relay_to_userbot(ch_id, result_line, None)
+                        elif msg_obj is not None and getattr(msg_obj, "channel", None):
+                            await msg_obj.channel.send(result_line)
+            except Exception:
+                logger.exception("indio dispatch result delivery failed")
 
-    return statuses
+        return statuses
 
 
 # ---------------------------------------------------------------------------
