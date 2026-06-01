@@ -158,6 +158,55 @@ async def test_invoke_play_logs_warning_when_body_is_invalid(caplog):
     assert rejected_logs, "expected a log line for the rejected body"
 
 
+async def test_invoke_play_returns_429_when_discord_rate_limits():
+    """Discord can rate-limit a slash invocation with HTTPException
+    status=429. The relay must surface that distinctly (not a generic
+    500) so the caller's metrics + future backoff logic can tell
+    'transient throttle' from 'real error'.
+    """
+    async def _async_iter():
+        yield SimpleNamespace(name="play", application_id=999_999,
+                              # __call__ raises 429
+                              )
+
+    class _PlayCmd:
+        name = "play"
+        application_id = 999_999
+
+        async def __call__(self, query=None):
+            raise discord.HTTPException(
+                SimpleNamespace(status=429, reason="Too Many Requests"),
+                {"message": "rate limited", "code": 0},
+            )
+
+    play_cmd = _PlayCmd()
+
+    async def _aiter_cmds():
+        yield play_cmd
+
+    def _slash_commands(query=None):
+        return _aiter_cmds()
+
+    channel = SimpleNamespace(slash_commands=_slash_commands)
+    _client.get_channel = lambda cid: channel
+    _cfg.INDIO_RELAY_TIMEOUT = 2.0
+    _cfg.VAPLS_BOT_ID = 999_999
+
+    tc = await _start()
+    try:
+        resp = await tc.post(
+            "/invoke_play",
+            json={"channel_id": CHANNEL_ID, "query": "despacito"},
+            headers={"X-API-Secret": RELAY_SECRET},
+        )
+        body = await resp.json()
+    finally:
+        await tc.close()
+
+    assert resp.status == 429, f"expected 429, got {resp.status}"
+    assert "rate" in body.get("error", "").lower()
+
+
 async def test_invoke_play_returns_404_when_no_vapls_command_found():
     """Sanity: with a working channel that exposes other bots' /play but
     none owned by VaPls, the handler still returns 404 (no regression).

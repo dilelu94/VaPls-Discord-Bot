@@ -2384,6 +2384,15 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         await play_cmd(query=query)
         log.info(f"[RELAY-PLAY] invoked /play query={query!r} in channel={channel_id}")
         return web.json_response({"invoked": True, "query": query})
+    except discord.HTTPException as e:
+        # Discord rate-limit (429) vs anything else: signal 429 distinctly
+        # so the caller can decide on backoff. Other HTTPExceptions get
+        # the same 500 treatment as before.
+        if getattr(e, "status", None) == 429:
+            log.warning("[RELAY-PLAY] Discord rate-limited /play invocation: %s", e)
+            return web.json_response({"error": f"rate-limited: {e}"}, status=429)
+        log.exception("[RELAY-PLAY] invocation failed")
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
     except Exception as e:
         log.exception("[RELAY-PLAY] invocation failed")
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
@@ -2444,6 +2453,12 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         await sp_cmd(query=query)
         log.info(f"[RELAY-SOUNDPAD] invoked /soundpad query={query!r} in channel={channel_id}")
         return web.json_response({"invoked": True, "query": query})
+    except discord.HTTPException as e:
+        if getattr(e, "status", None) == 429:
+            log.warning("[RELAY-SOUNDPAD] Discord rate-limited /soundpad invocation: %s", e)
+            return web.json_response({"error": f"rate-limited: {e}"}, status=429)
+        log.exception("[RELAY-SOUNDPAD] invocation failed")
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
     except Exception as e:
         log.exception("[RELAY-SOUNDPAD] invocation failed")
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
