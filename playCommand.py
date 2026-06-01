@@ -14,7 +14,7 @@ import analytics
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Optional
+from typing import NamedTuple, Optional
 from urllib.parse import urljoin
 
 import aiohttp
@@ -369,54 +369,104 @@ def get_active_vote(guild_id: int) -> Optional[MusicVote]:
     return v
 
 
-def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> str:
-    """Mapea stderr de yt-dlp (o exception) a un mensaje accionable para el usuario.
+class YtDlpDiagnosis(NamedTuple):
+    """Diagnóstico estructurado de un fallo de yt-dlp.
 
-    Devuelve un string corto que explica la causa probable. Si no matchea ningún
-    patrón conocido, devuelve la última línea no vacía del stderr (recortada).
+    ``audience`` indica quién puede resolverlo (``user``, ``admin`` o ``both``).
+    ``summary`` es la causa corta para logs/analytics. ``user_step`` y
+    ``admin_step`` son los próximos pasos accionables; uno o los dos pueden ser
+    ``None`` cuando no aplican.
+    """
+    audience: str
+    summary: str
+    user_step: Optional[str]
+    admin_step: Optional[str]
+
+    def format(self) -> str:
+        parts = []
+        if self.user_step:
+            parts.append(f"[Usuario] {self.user_step}")
+        if self.admin_step:
+            parts.append(f"[Admin] {self.admin_step}")
+        return " · ".join(parts) if parts else self.summary
+
+
+def _diag(audience: str, summary: str, user_step: Optional[str] = None,
+          admin_step: Optional[str] = None) -> YtDlpDiagnosis:
+    return YtDlpDiagnosis(audience, summary, user_step, admin_step)
+
+
+def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> YtDlpDiagnosis:
+    """Mapea stderr de yt-dlp (o exception) a un diagnóstico accionable.
+
+    El diagnóstico distingue si el problema lo arregla el usuario (elegir otro
+    video, esperar) o el admin (cookies, yt-dlp viejo, red del server). Los
+    casos ambiguos (ej. HTTP 403) devuelven los dos próximos pasos.
     """
     if not stderr:
         if returncode == 2 or "No such file" in str(returncode):
-            return "yt-dlp no está instalado en el server."
-        return f"yt-dlp falló (returncode={returncode}) sin output. Revisá play.log."
+            return _diag("admin", "yt-dlp no está instalado en el server.",
+                         admin_step="yt-dlp no está instalado en el server.")
+        return _diag("admin", f"yt-dlp falló (returncode={returncode}) sin output.",
+                     admin_step=f"yt-dlp falló (returncode={returncode}) sin output. Revisá play.log.")
 
     s = stderr.lower()
     # Discord/UX-friendly diagnostics ordered by specificity.
     if "sign in to confirm you're not a bot" in s or "confirm you're not a bot" in s:
-        return ("YouTube pide login (bot-check). Las cookies del server pueden estar "
-                "caducas — re-exportalas y subílas con upload-cookies-discord-bot.sh.")
+        return _diag("both", "YouTube pide login (bot-check).",
+                     user_step="YouTube pide login para este video. Probá otro link.",
+                     admin_step="Bot-check de YouTube: las cookies del server pueden estar caducas — re-exportalas y subílas con upload-cookies-discord-bot.sh.")
     if "sign in to confirm your age" in s or "age-restricted" in s or "age restricted" in s:
-        return "El video tiene restricción de edad y las cookies del server no la pasan."
+        return _diag("both", "Video con restricción de edad.",
+                     user_step="El video tiene restricción de edad. Probá otro link.",
+                     admin_step="Las cookies del server no tienen login adulto que pase el gate.")
     if "members-only" in s or "members only" in s or "join this channel to get access" in s:
-        return "El video es members-only del canal — no se puede descargar."
+        return _diag("user", "Video members-only.",
+                     user_step="El video es members-only del canal — no se puede descargar. Probá otro link.")
     if "private video" in s or "this video is private" in s:
-        return "El video es privado."
+        return _diag("user", "Video privado.",
+                     user_step="El video es privado. Probá otro link.")
     if "video unavailable" in s or "this video is unavailable" in s:
-        return "Video no disponible (eliminado o bloqueado en tu región)."
+        return _diag("user", "Video no disponible.",
+                     user_step="Video no disponible (eliminado o bloqueado en tu región). Probá otro link.")
     if "premiere will begin" in s or "premieres in" in s:
-        return "Es un premiere que todavía no empezó."
+        return _diag("user", "Premiere todavía no empezó.",
+                     user_step="Es un premiere que todavía no empezó — esperá a que arranque.")
     if "live event will begin" in s or "this live event" in s:
-        return "Es un live que todavía no empezó."
+        return _diag("user", "Live todavía no empezó.",
+                     user_step="Es un live que todavía no empezó — esperá a que arranque.")
     if "video is no longer available" in s or "copyright" in s:
-        return "Video bloqueado por copyright."
+        return _diag("user", "Video bloqueado por copyright.",
+                     user_step="Video bloqueado por copyright. Probá otro link.")
     if "http error 429" in s or "too many requests" in s:
-        return "YouTube nos rate-limiteó (HTTP 429). Esperá unos minutos."
+        return _diag("admin", "Rate-limit (HTTP 429) de YouTube.",
+                     user_step="YouTube nos rate-limiteó. Esperá unos minutos y reintentá.",
+                     admin_step="HTTP 429: bajar concurrencia o esperar a que YouTube nos libere.")
     if "http error 403" in s:
-        return "YouTube devolvió 403 — probable bot-check o token de stream vencido."
+        return _diag("both", "HTTP 403 de YouTube.",
+                     user_step="YouTube rechazó la descarga (403). Probá otro link.",
+                     admin_step="HTTP 403: probable bot-check o token de stream vencido — revisar cookies / yt-dlp.")
     if "unable to extract" in s and "player response" in s:
-        return ("yt-dlp no pudo parsear el video — probablemente está desactualizado. "
-                "Correr: pip install --user --upgrade --pre yt-dlp")
+        return _diag("admin", "yt-dlp desactualizado.",
+                     admin_step="yt-dlp no pudo parsear el video, probablemente está desactualizado. Correr `pip install --upgrade --pre yt-dlp` y reiniciar el service.")
     if "no supported javascript runtime" in s:
-        return "Falta deno en el server (yt-dlp lo necesita para resolver JS de YouTube)."
+        return _diag("admin", "Falta deno en el server.",
+                     admin_step="Falta `deno` en el server (yt-dlp lo necesita para resolver JS de YouTube).")
     if "no video formats found" in s or "requested format is not available" in s:
-        return "No hay formato de audio disponible para ese video."
+        return _diag("user", "Sin formato de audio disponible.",
+                     user_step="Ese video no tiene formato de audio descargable. Probá otro link.")
     if "name or service not known" in s or "temporary failure in name resolution" in s:
-        return "El server no resuelve DNS (problema de red)."
+        return _diag("admin", "DNS del server falló.",
+                     admin_step="El server no resuelve DNS (problema de red).")
     if "connection refused" in s or "connection reset" in s:
-        return "Conexión rechazada/reseteada (red o YouTube cayéndose)."
+        return _diag("admin", "Conexión rechazada/reseteada.",
+                     admin_step="Conexión rechazada/reseteada (red del server o YouTube cayéndose). Reintentar.")
     # Fallback: última línea no vacía de stderr, recortada.
     last = next((ln.strip() for ln in reversed(stderr.splitlines()) if ln.strip()), "")
-    return last[:300] if last else f"yt-dlp falló (returncode={returncode})."
+    tail = last[:300] if last else f"yt-dlp falló (returncode={returncode})."
+    return _diag("both", tail,
+                 user_step="Algo falló al bajar este video. Probá con otro link.",
+                 admin_step=f"Revisar `play.log` para el stderr completo. Último: {tail}")
 
 class CancelDownloadView(discord.ui.View):
     """UI view that lets a user cancel the initial yt-dlp download."""
@@ -866,12 +916,14 @@ class GuildPlayer:
                     stderrStr = stderr.decode('utf-8', errors='replace')
                     errTail = stderrStr.strip().splitlines()[-5:]
                     errMsg = " | ".join(errTail)
-                    reason = _diagnoseYtDlpFailure(stderrStr, proc.returncode)
+                    diag = _diagnoseYtDlpFailure(stderrStr, proc.returncode)
+                    reason = diag.format()
                     analytics.capture("play song failed", user=self.lastRequester, guild=guild,
                                       properties={"stage": "download", "video_id": videoId,
                                                   "title": videoTitle, "returncode": proc.returncode,
-                                                  "stderr_tail": errMsg[:500], "reason": reason})
-                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. reason: {reason}. stderr: {errMsg}")
+                                                  "stderr_tail": errMsg[:500], "reason": reason,
+                                                  "audience": diag.audience, "summary": diag.summary})
+                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg}")
                     if self.initialCtx:
                         try:
                             await self.initialCtx.interaction.edit_original_response(
@@ -896,14 +948,19 @@ class GuildPlayer:
                     # Download was cancelled
                     return
                 self.isDownloading = False
-                reason = _diagnoseYtDlpFailure(str(e))
                 if isinstance(e, FileNotFoundError):
-                    reason = f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env."
+                    diag = _diag("admin",
+                                 f"yt-dlp no encontrado en {config.YT_DLP_PATH}.",
+                                 admin_step=f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.")
+                else:
+                    diag = _diagnoseYtDlpFailure(str(e))
+                reason = diag.format()
                 print(f"[PLAYER ERROR] Download exception: {e}")
                 analytics.capture_exception(e, user=self.lastRequester, guild=guild,
                                             properties={"stage": "download", "video_id": videoId,
-                                                        "title": videoTitle, "reason": reason})
-                playLogger.error(f"[DOWNLOAD ERROR] Exception downloading '{videoTitle}': {e} → reason: {reason}")
+                                                        "title": videoTitle, "reason": reason,
+                                                        "audience": diag.audience, "summary": diag.summary})
+                playLogger.error(f"[DOWNLOAD ERROR] Exception downloading '{videoTitle}': {e} → audience: {diag.audience}. summary: {diag.summary}")
                 if self.initialCtx:
                     try:
                         await self.initialCtx.interaction.edit_original_response(
@@ -1580,9 +1637,10 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             errMsg = stderr.decode('utf-8', errors='replace').strip()
-            reason = _diagnoseYtDlpFailure(errMsg, proc.returncode)
+            diag = _diagnoseYtDlpFailure(errMsg, proc.returncode)
+            reason = diag.format()
             print(f"[PLAY ERROR] Metadata fetch failed: {reason} ({errMsg[:200]})")
-            playLogger.error(f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. reason: {reason}. stderr: {errMsg[:500]}")
+            playLogger.error(f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg[:500]}")
             return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
         lines = stdout.decode('utf-8', errors='replace').strip().split('\n')
@@ -1607,11 +1665,15 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         if not songs:
             return await safeEdit(ctx, "❌ No se pudieron obtener los metadatos del video.")
     except FileNotFoundError as e:
+        diag = _diag("admin",
+                     f"yt-dlp no encontrado en {config.YT_DLP_PATH}.",
+                     admin_step=f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.")
         playLogger.error(f"[METADATA FAIL] yt-dlp binary missing at {config.YT_DLP_PATH}: {e}")
-        return await safeEdit(ctx, f"❌ yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.")
+        return await safeEdit(ctx, f"❌ Error al buscar el video: {diag.format()}")
     except Exception as e:
-        reason = _diagnoseYtDlpFailure(str(e))
-        playLogger.error(f"[METADATA FAIL] Exception during metadata fetch for '{query}': {e} → reason: {reason}")
+        diag = _diagnoseYtDlpFailure(str(e))
+        reason = diag.format()
+        playLogger.error(f"[METADATA FAIL] Exception during metadata fetch for '{query}': {e} → audience: {diag.audience}. summary: {diag.summary}")
         print(f"[PLAY ERROR] Exception during metadata fetch: {e}")
         return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
