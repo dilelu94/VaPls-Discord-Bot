@@ -551,6 +551,15 @@ class GuildPlayer:
         # using the preserved interruption snapshot. Tracked here so we can
         # de-dupe concurrent schedules and cancel cleanly on shutdown.
         self._autoResumeTask: Optional["asyncio.Task"] = None
+        # Mensaje editable que postea ``playFromIndio`` cuando el indio dispara
+        # música y cae al fallback (path B). Cubre las fases "buscando" →
+        # "descargando" → "te puse / encolé" — sin esto el primer mensaje
+        # queda estático mientras yt-dlp baja un archivo grande (vimos 138s
+        # mudos en prod para un mix de 2 hs). ``startPlayingCurrent`` lo edita
+        # al texto final cuando el playback realmente arranca; ``cancelDownload``
+        # y ``stopPlayback`` lo limpian para evitar leak entre runs.
+        self.indioProgressMessage = None
+        self.indioProgressMeta: dict = {}
 
     def _resolveMusicChannel(self, fallback=None):
         """Return the configured music text channel for this guild.
@@ -825,6 +834,11 @@ class GuildPlayer:
         # /play starts from a clean slate.
         self.pendingVoiceChannel = None
         self.pendingTriggerUserId = None
+        # Soltar el handle del mensaje progresivo del indio si quedó pendiente
+        # (sin esto, una próxima canción cuyo video_id matcheara accidentalmente
+        # editaría un mensaje ya stale).
+        self.indioProgressMessage = None
+        self.indioProgressMeta = {}
         try:
             await interaction.edit_original_response(content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None)
         except Exception:
@@ -1057,7 +1071,28 @@ class GuildPlayer:
                                            "seek_seconds": seek_seconds or 0.0})
             await self.updateControlMessage()
             playLogger.info(f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId}) seek={seek_seconds:.1f}s")
-            
+
+            # Editar el mensaje que postea ``playFromIndio`` al texto final.
+            # Sólo cuando matchea el currentSong: si entre encolar y arrancar
+            # hubo skip/cancel, el meta corresponde a otra canción y se ignora.
+            if (self.indioProgressMessage is not None
+                    and self.indioProgressMeta.get("video_id") == videoId):
+                meta = self.indioProgressMeta
+                duration = meta.get("duration") or ""
+                duration_part = f" *({duration})*" if duration else ""
+                is_first = meta.get("isFirst", False)
+                final_text = (
+                    f"🎶 Te puse: **{videoTitle}**{duration_part} — *pedido al indio*"
+                    if is_first else
+                    f"📥 Encolé: **{videoTitle}**{duration_part} — *pedido al indio*"
+                )
+                try:
+                    await self.indioProgressMessage.edit(content=final_text)
+                except Exception:
+                    playLogger.debug("[PLAY-INDIO] final edit failed", exc_info=True)
+                self.indioProgressMessage = None
+                self.indioProgressMeta = {}
+
             # Start background pre-downloading of the queue
             self.startPreDownloading()
         except Exception as e:
@@ -1325,6 +1360,9 @@ class GuildPlayer:
         self.isStopping = True
         self.queue.clear()
         self.isDownloading = False
+        # Soltar el handle del mensaje progresivo del indio (idem cancelDownload).
+        self.indioProgressMessage = None
+        self.indioProgressMeta = {}
         if self.vc:
             if self.vc.is_playing() or self.vc.is_paused():
                 self.vc.stop()
@@ -1972,10 +2010,27 @@ async def playFromIndio(bot, guild_id: int, query: str,
         playLogger.warning(f"[PLAY-INDIO] voice connect failed: {e}")
         return False, f"no pude conectarme a voz: {e}"
 
+    # Mensaje editable que va contando qué está pasando. Si las songs vienen
+    # pre-resueltas (caller pasó el candidato del menú de desambiguación) no
+    # hay yt-dlp search, así que la fase "Buscando" se saltea.
+    progress_msg = None
     if songs is None:
+        try:
+            progress_msg = await text_channel.send(
+                f"🔎 Buscando **{query}**… *(pedido al indio)*"
+            )
+        except Exception:
+            playLogger.exception("[PLAY-INDIO] failed to post 'Buscando' msg")
         songs = await _yt_dlp_search(query)
-    if not songs:
-        return False, "no encontre nada en YouTube con esa busqueda"
+        if not songs:
+            if progress_msg is not None:
+                try:
+                    await progress_msg.edit(
+                        content=f"❌ No encontré nada para **{query}** *(pedido al indio)*"
+                    )
+                except Exception:
+                    pass
+            return False, "no encontre nada en YouTube con esa busqueda"
 
     player = getGuildPlayer(guild_id, bot)
     player.textChannel = text_channel
@@ -1987,16 +2042,45 @@ async def playFromIndio(bot, guild_id: int, query: str,
 
     isFirst = (not player.currentSong and len(player.queue) == 0)
     title = songs[0]["title"]
-    note = f"🎶 **{title}** {'arrancando' if isFirst else 'a la cola'} (pedido al indio)."
+    duration = songs[0].get("duration_string") or songs[0].get("duration") or ""
+    duration_part = f" *({duration})*" if duration else ""
+    verb = "Descargando" if isFirst else "Encolando"
+    icon = "⬇️" if isFirst else "📥"
+    progress_text = (
+        f"{icon} {verb}: **{title}**{duration_part} — *pedido al indio*"
+    )
     try:
-        await text_channel.send(note)
+        if progress_msg is not None:
+            await progress_msg.edit(content=progress_text)
+        else:
+            progress_msg = await text_channel.send(progress_text)
     except Exception:
-        playLogger.exception("[PLAY-INDIO] failed to post note in sick-tunes")
+        playLogger.exception("[PLAY-INDIO] failed to update progress msg")
+
+    # Stash en el player para que startPlayingCurrent edite al texto final
+    # ("Te puse" / "Encolé") cuando realmente arranque el playback.
+    if progress_msg is not None:
+        player.indioProgressMessage = progress_msg
+        player.indioProgressMeta = {
+            "title": title,
+            "duration": duration,
+            "isFirst": isFirst,
+            "video_id": songs[0].get("id"),
+        }
 
     try:
         await player._enqueueAndMaybeStart(songs, source="indio")
     except Exception as e:
         playLogger.exception("[PLAY-INDIO] enqueue/start failed")
+        if player.indioProgressMessage is not None:
+            try:
+                await player.indioProgressMessage.edit(
+                    content=f"❌ No pude poner **{title}**: {e} *(pedido al indio)*"
+                )
+            except Exception:
+                pass
+            player.indioProgressMessage = None
+            player.indioProgressMeta = {}
         return False, f"falló el inicio: {e}"
 
     return True, title

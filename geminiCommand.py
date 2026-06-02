@@ -1214,12 +1214,20 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
     `/soundpad`) from the real user account, so Discord shows the full
     "Indio used /play" interaction. Returns (ok, message)."""
     if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        logger.warning(
+            "indio %s relay disabled: INDIO_RELAY_URL/SECRET missing — "
+            "cayendo a playFromIndio (bot principal)", endpoint,
+        )
         return False, "relay not configured"
     if not channel_id:
         # 0/None channel means INDIO_PLAY_CHANNEL_ID is unset. Without a
         # target text channel the relay would have to guess, so we refuse
         # here and let the caller fall back to playFromIndio (which has
         # its own channel-picking logic).
+        logger.warning(
+            "indio %s relay disabled: INDIO_PLAY_CHANNEL_ID=0 — cayendo a "
+            "playFromIndio (bot principal)", endpoint,
+        )
         return False, "play channel not configured"
     invoke_url = urljoin(config.INDIO_RELAY_URL, "/" + endpoint)
     headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
