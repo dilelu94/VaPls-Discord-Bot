@@ -13,6 +13,16 @@ import types
 from unittest.mock import MagicMock
 
 
+def _member_in_voice(user_id=42, channel_id=99):
+    """A requester that passes the music gate in ``_dispatch_indio_actions``:
+    a Discord member with an ``id`` and a ``voice.channel``. Without this the
+    PLAY_MUSIC actions are gated as 'no requester' before reaching the relay."""
+    return types.SimpleNamespace(
+        id=user_id,
+        voice=types.SimpleNamespace(channel=types.SimpleNamespace(id=channel_id)),
+    )
+
+
 async def test_concurrent_dispatches_same_guild_are_serialized(monkeypatch):
     """Observable promise: when dispatch_A is in the middle of a PLAY_MUSIC
     relay call and dispatch_B fires for the same guild, dispatch_B's relay
@@ -66,10 +76,12 @@ async def test_concurrent_dispatches_same_guild_are_serialized(monkeypatch):
     task_a = asyncio.create_task(geminiCommand._dispatch_indio_actions(
         bot, 100, [("PLAY_MUSIC", "song-A")],
         reply_handle=_make_handle(), reply_text="dale",
+        requester_member=_member_in_voice(),
     ))
     task_b = asyncio.create_task(geminiCommand._dispatch_indio_actions(
         bot, 100, [("PLAY_MUSIC", "song-B")],
         reply_handle=_make_handle(), reply_text="dale",
+        requester_member=_member_in_voice(),
     ))
 
     # Give both tasks a chance to start; only the first should reach the
@@ -121,10 +133,12 @@ async def test_concurrent_dispatches_different_guilds_run_in_parallel(
     task_a = asyncio.create_task(geminiCommand._dispatch_indio_actions(
         bot, 100, [("PLAY_MUSIC", "song-A")],
         reply_handle=None, reply_text="",
+        requester_member=_member_in_voice(),
     ))
     task_b = asyncio.create_task(geminiCommand._dispatch_indio_actions(
         bot, 200, [("PLAY_MUSIC", "song-B")],  # different guild
         reply_handle=None, reply_text="",
+        requester_member=_member_in_voice(),
     ))
 
     # Yield the loop. Both should have entered the relay path (different

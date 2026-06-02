@@ -47,17 +47,27 @@ def stub_analytics(request, monkeypatch):
 # Fake Discord ApplicationContext: the single seam through which command logic
 # talks to the user. `ctx.followup.send` records every message sent.
 # --------------------------------------------------------------------------
-def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100):
+def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100,
+             in_voice=True, voice_channel_id=99):
     """Build a fake ApplicationContext.
 
     `display_name`/`name` may be None to exercise fall-through in the header
     formatter. `guild_id=None` simulates a DM (no guild).
+
+    `in_voice=True` (default) puts the author in a voice channel so music
+    actions pass the requester-in-voice gate in ``_dispatch_indio_actions``.
+    Pass `in_voice=False` to model a requester outside voice (gated).
     """
     author = types.SimpleNamespace(id=user_id)
     if display_name is not None:
         author.display_name = display_name
     if name is not None:
         author.name = name
+    if in_voice:
+        author.voice = types.SimpleNamespace(
+            channel=types.SimpleNamespace(id=voice_channel_id))
+    else:
+        author.voice = None
 
     ctx = MagicMock(name="ApplicationContext")
     ctx.author = author
