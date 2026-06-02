@@ -25,13 +25,31 @@ def test_indio_voice_differs_from_vapls(kind):
 
 
 def test_http_status_surfaced_in_message():
-    assert "503" in _error_message("http", 503, "vapls")
+    assert "500" in _error_message("http", 500, "vapls")
 
 
 def test_http_rate_limit_differs_from_generic_http():
     rate_limited = _error_message("http", 429, "vapls")
     generic = _error_message("http", 500, "vapls")
     assert rate_limited != generic
+
+
+@pytest.mark.parametrize("persona", ["vapls", "indio"])
+def test_service_unavailable_is_its_own_case(persona):
+    # A 503 (Gemini overloaded / down) is an expected, transient outage — it
+    # should read as "the service is down, try later", not leak a raw HTTP code
+    # like the generic server-error path does.
+    unavailable = _error_message("http", 503, persona)
+    generic = _error_message("http", 500, persona)
+    rate_limited = _error_message("http", 429, persona)
+    assert unavailable.strip()
+    assert unavailable != generic
+    assert unavailable != rate_limited
+    assert "503" not in unavailable
+
+
+def test_service_unavailable_indio_voice_differs_from_vapls():
+    assert _error_message("http", 503, "indio") != _error_message("http", 503, "vapls")
 
 
 def test_config_message_shared_across_personas():
