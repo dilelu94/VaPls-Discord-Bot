@@ -1435,6 +1435,40 @@ class GuildPlayer:
             except Exception:
                 pass
 
+    async def showIdleDisconnect(self):
+        """Turn the live control panel into a dead "disconnected" state.
+
+        When the idle watchdog drops the bot from voice, the existing control
+        message would otherwise keep its live ⏮️/⏸️/⏭️/⏹️ buttons — "ghost
+        buttons" the user can keep clicking for hours with no effect. This
+        edits that same message in place: status becomes
+        "💤 Desconectado por inactividad", the playback buttons are greyed out,
+        and a single ▶️ Reconectar button can revive the last song.
+
+        Called by the watchdog right before the GuildPlayer is cleared, so the
+        revive button carries the last song independently of the (about to be
+        wiped) player state.
+
+        Async:
+            This function is a coroutine and must be awaited.
+        """
+        if not self.controlMessage:
+            return
+
+        lastSong = self.currentSong or (self.history[-1] if self.history else None)
+
+        embed = discord.Embed(title="🎵 Reproductor de Música", color=discord.Color.greyple())
+        status = "💤 Desconectado por inactividad."
+        if lastSong:
+            status += f"\nÚltima canción: **{lastSong['title']}**"
+        embed.description = status
+
+        view = DisconnectedControlView(self.bot, self.guildId, lastSong)
+        try:
+            await self.controlMessage.edit(embed=embed, view=view)
+        except Exception as e:
+            playLogger.warning(f"[PLAYER] Failed to mark control message disconnected: {e}")
+
 
 _QUEUE_EMBED_LIMIT = 15
 
@@ -1566,6 +1600,82 @@ class PlayerControlView(discord.ui.View):
         """Handle the Stop button click."""
         await interaction.response.defer()
         await self.player.stopPlayback()
+
+
+class DisconnectedControlView(discord.ui.View):
+    """Dead control panel shown after an idle disconnect.
+
+    Mirrors the playback controls greyed-out (so the panel still reads as a
+    player) but none of them fire — that's the whole point: kill the ghost
+    buttons. A single live ▶️ Reconectar button re-queues the last song. The
+    view holds only ``bot``/``guildId``/``song`` so it survives the GuildPlayer
+    being cleared right after the disconnect.
+    """
+
+    def __init__(self, bot, guild_id: int, last_song: Optional[dict]):
+        """Build the disconnected panel.
+
+        Args:
+            bot: Discord client (used by the Reconnect button at click time).
+            guild_id: Guild this panel belongs to.
+            last_song: ``{id, title, ...}`` of the song to revive, or ``None``
+                when there's nothing to reconnect to (the Reconnect button is
+                dropped in that case).
+        """
+        super().__init__(timeout=None)
+        self.bot = bot
+        self.guildId = guild_id
+        self.song = last_song
+
+        # Greyed-out echoes of the real controls, on the top row.
+        for label in ("⏮️ Anterior", "⏸️ Pausar", "⏭️ Siguiente", "⏹️ Stop"):
+            self.add_item(
+                discord.ui.Button(
+                    label=label,
+                    style=discord.ButtonStyle.secondary,
+                    disabled=True,
+                    row=0,
+                )
+            )
+
+        if last_song is None:
+            for child in list(self.children):
+                if getattr(child, "custom_id", None) == "btn_reconnect":
+                    self.remove_item(child)
+
+    @discord.ui.button(
+        label="▶️ Reconectar",
+        style=discord.ButtonStyle.success,
+        custom_id="btn_reconnect",
+        row=1,
+    )
+    async def reconnectButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Revive the last song: re-join voice and play it again."""
+        # Disable the whole dead panel up front so it can't be double-clicked
+        # (and to acknowledge the interaction).
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+
+        user = getattr(interaction, "user", None)
+        voice = getattr(user, "voice", None)
+        voiceChannelId = getattr(getattr(voice, "channel", None), "id", None)
+
+        ok, msg = await reconnectLastSong(
+            self.bot,
+            self.guildId,
+            self.song,
+            voice_channel_id=voiceChannelId,
+            requester=user,
+        )
+        if not ok:
+            try:
+                await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+            except Exception:
+                pass
 
 
 def getGuildPlayer(guildId: int, bot) -> GuildPlayer:
@@ -2084,6 +2194,81 @@ async def playFromIndio(bot, guild_id: int, query: str,
         return False, f"falló el inicio: {e}"
 
     return True, title
+
+
+async def reconnectLastSong(
+    bot,
+    guild_id: int,
+    song: Optional[dict],
+    *,
+    voice_channel_id: Optional[int] = None,
+    requester=None,
+) -> tuple[bool, str]:
+    """Revive a single already-resolved song after an idle disconnect.
+
+    Driven by the ▶️ Reconectar button on the dead control panel. The song
+    metadata (``id``/``title``) is already known, so there's no yt-dlp search —
+    we just reconnect to voice (preferring the clicker's channel) and queue it.
+    Mirrors the deferred-connect strategy of ``playLogic``/``playFromIndio``:
+    when not already in voice we postpone the join until the file is downloaded
+    so the idle watchdog can't kick us out mid-download.
+
+    Returns:
+        (ok, message): ``ok=True`` if playback started; the message is the song
+        title on success or a short failure reason.
+    """
+    if not song:
+        return False, "no hay canción para reconectar"
+
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return False, "guild no encontrado"
+
+    voice_channel = None
+    if voice_channel_id:
+        ch = guild.get_channel(int(voice_channel_id))
+        if isinstance(ch, discord.VoiceChannel):
+            voice_channel = ch
+    if voice_channel is None:
+        voice_channel = _pick_voice_channel(bot, guild_id)
+    if voice_channel is None:
+        return False, "no hay nadie en un canal de voz para reproducir"
+
+    player = getGuildPlayer(guild_id, bot)
+    player.textChannel = player._resolveMusicChannel()
+    if player.textChannel is None:
+        return False, "no encuentro el canal de música configurado"
+    if requester is not None:
+        player.lastRequester = requester
+
+    trigger_user = (
+        getattr(requester, "id", None)
+        or (bot.user.id if getattr(bot, "user", None) else 0)
+    )
+
+    vc = guild.voice_client
+    try:
+        if vc is None or not vc.is_connected():
+            # Defer the join — startPlayingCurrent connects after the download.
+            player.pendingVoiceChannel = voice_channel
+            player.pendingTriggerUserId = trigger_user
+        elif vc.channel.id != voice_channel.id:
+            set_pending_trigger(voice_channel.id, trigger_user)
+            await vc.move_to(voice_channel)
+            player.vc = vc
+        else:
+            player.vc = vc
+    except Exception as e:
+        playLogger.warning(f"[RECONNECT] voice connect failed: {e}")
+        return False, f"no pude conectarme a voz: {e}"
+
+    try:
+        await player._enqueueAndMaybeStart([song], source="reconnect")
+    except Exception as e:
+        playLogger.exception("[RECONNECT] enqueue/start failed")
+        return False, f"falló el inicio: {e}"
+
+    return True, song["title"]
 
 
 async def playSoundFromIndio(bot, guild_id: int, sound_query: str) -> tuple[bool, str]:
