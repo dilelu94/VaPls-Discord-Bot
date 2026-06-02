@@ -226,11 +226,22 @@ _INDIO_TOOLS = [
         "description": (
             "Reproducir un clip corto del soundpad (audio meme/efecto) en "
             "el canal de voz. \n"
-            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
+            "Hay DOS casos válidos para llamarla:\n"
+            "CASO A (orden explícita): el mensaje tiene (1) un verbo "
             "explícito de orden — tirá, tirate, tirame, pone, poné, ponete, "
             "ponela, ponelo, mete, metele, hacé sonar, hacelo sonar, "
             "traete, queremos escuchar — Y (2) un nombre/keyword concreto "
-            "del clip a reproducir. 'Dale' suelto NO cuenta como verbo de "
+            "del clip. Acá el clip es la respuesta principal.\n"
+            "CASO B (lo nombran sin pedirlo): alguien dice TEXTUALMENTE el "
+            "nombre/keyword de un clip que existe pero sin verbo de orden. "
+            "Acá PRIMERO respondé normal a lo que dijeron (tu texto de "
+            "siempre) y ADEMÁS llamás play_sound para que el clip salga como "
+            "yapa/extra. Nunca reemplaces tu respuesta por el clip en este "
+            "caso. \n"
+            "FUERA DE ESOS DOS CASOS NO la llames: si no hay verbo de orden y "
+            "tampoco nombran un clip que exista, NO inventes un audio para "
+            "'comentar' la charla — solo respondé texto. \n"
+            "'Dale' suelto NO cuenta como verbo de "
             "orden: es muletilla ambigua que se usa para todo (asentir, "
             "pedir, animar). Solo si 'dale' viene seguido de OTRO verbo "
             "concreto ('dale, tirate ese audio', 'dale, pone el de las "
@@ -1194,6 +1205,104 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
             continue
         actions.append((action, arg))
     return actions
+
+
+# --- play_sound anti-misfire gate -----------------------------------------
+# El modelo a veces dispara play_sound sin que nadie lo haya pedido (free-
+# association de un meme con la charla). Para evitarlo SIN sumar otra llamada a
+# Gemini, clasificamos el mensaje crudo con regex/strings (costo cero):
+#   1. Hay un verbo de orden explícito (tirá/pone/reproducí/…) → "comandado":
+#      suena el clip ya (comportamiento de siempre).
+#   2. No hay verbo pero el NOMBRE del clip aparece textual en el mensaje →
+#      "espontáneo": el Indio igual responde su texto (se postea antes que el
+#      audio) y el clip sale como extra atrás.
+#   3. Ni verbo ni nombre en el mensaje → se DESCARTA solo el play_sound; la
+#      respuesta de texto se manda igual.
+
+_PLAY_SOUND_ORDER_RE = re.compile(
+    r"\b("
+    r"tira(te|me|le|lo|la|nos)?|"
+    r"pone(la|lo|le|me|nos)?|"
+    r"mete(le|lo|la)?|"
+    r"reproduci(lo|la|me)?|"
+    r"hace(lo|la)?\s+sonar|"
+    r"traete|"
+    r"queremos\s+(escuchar|oir)"
+    r")\b"
+)
+
+# Palabras genéricas que pueden estar en el nombre de un clip pero que NO deben
+# servir para "anclar" el nombre en el mensaje (si no, cualquier 'de'/'que'
+# matchearía). Solo se usan para el grounding del modo espontáneo.
+_NAME_STOPWORDS = frozenset({
+    "de", "del", "la", "las", "el", "los", "un", "una", "unos", "unas",
+    "y", "o", "a", "en", "que", "con", "por", "para", "es", "lo", "al",
+    "ser", "muy", "the", "se", "su", "mi", "tu",
+})
+
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _strip_accents_lower(s: str) -> str:
+    """Normaliza para comparar: minúsculas y sin tildes (tirá→tira)."""
+    norm = unicodedata.normalize("NFD", (s or "").lower())
+    return "".join(c for c in norm if unicodedata.category(c) != "Mn")
+
+
+def _has_play_sound_order(text: str) -> bool:
+    """True si el mensaje del usuario tiene un verbo imperativo de
+    reproducción (tirá, pone, metele, reproducí, hacé sonar, traete…)."""
+    if not text:
+        return False
+    return bool(_PLAY_SOUND_ORDER_RE.search(_strip_accents_lower(text)))
+
+
+def _name_grounded_in_message(name: str, text: str) -> bool:
+    """True si el nombre/keyword del clip elegido por el modelo aparece
+    textualmente en el mensaje del usuario (match por token/substring, sin
+    stopwords). Sirve para permitir el clip 'como extra' cuando alguien nombra
+    un audio sin dar la orden explícita."""
+    if not name or not text:
+        return False
+    msg = _strip_accents_lower(text)
+    msg_tokens = set(_NAME_TOKEN_RE.findall(msg))
+    if not msg_tokens:
+        return False
+    name_norm = _strip_accents_lower(name)
+    tokens = _NAME_TOKEN_RE.findall(name_norm)
+    meaningful = [t for t in tokens if len(t) >= 3 and t not in _NAME_STOPWORDS]
+    # Nombre todo-stopwords o muy corto: caemos a los tokens crudos para no
+    # quedarnos sin nada con qué anclar (ej. 'pez').
+    candidates = meaningful or [t for t in tokens if t not in _NAME_STOPWORDS]
+    for t in candidates:
+        if t in msg_tokens or t in msg:
+            return True
+    return False
+
+
+def _gate_play_sound_actions(actions: list[tuple[str, str]],
+                             raw_text: str) -> list[tuple[str, str]]:
+    """Filtra play_sound espurios. Devuelve la lista de acciones sin los
+    PLAY_SOUND que no cumplen ni verbo de orden ni nombre presente en el
+    mensaje. El resto de las acciones pasa intacto. No toca el texto de la
+    respuesta (que se manda aparte, antes del audio)."""
+    if not actions:
+        return actions
+    commanded = _has_play_sound_order(raw_text)
+    kept: list[tuple[str, str]] = []
+    for action, arg in actions:
+        if action != "PLAY_SOUND":
+            kept.append((action, arg))
+            continue
+        if commanded or _name_grounded_in_message(arg, raw_text):
+            kept.append((action, arg))
+        else:
+            logger.info(
+                "indio PLAY_SOUND suprimido: sin verbo de orden y nombre %r "
+                "no está en el mensaje %r — solo responde texto",
+                arg, (raw_text or "")[:80],
+            )
+    return kept
 
 
 def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
@@ -2479,6 +2588,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
+    pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
         requester_id=int(getattr(getattr(ctx, "author", None), "id", None) or 0),
@@ -2780,6 +2890,7 @@ async def indioFromVoice(
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
+    pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         bot, guild_id, mem_key, pending_actions, reply, _post_choice,
         requester_id=int(user_id or 0),
