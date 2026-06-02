@@ -18,7 +18,7 @@ from playCommand import playLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic
-from suggestionsCommand import sugerenciasLogic
+from suggestionsCommand import sugerenciasLogic, sugerenciasVerLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics
@@ -564,6 +564,29 @@ async def sugerencias(
     await sugerenciasLogic(ctx, idea)
 
 
+@bot.slash_command(name="sugerencias-ver", description="Mirá qué sugerencias ya existen, ordenadas por las más pedidas")
+async def sugerencias_ver(ctx):
+    """Slash command: list existing suggestion groups ranked by demand.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Reads the persisted suggestions and replies ephemerally with the
+        ranked listing.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception:
+        pass
+    _track_command(ctx, "sugerencias-ver", {})
+    await sugerenciasVerLogic(ctx)
+
+
 @bot.slash_command(name="quit", description="Sale del canal de voz")
 async def quit(ctx):
     """Slash command: disconnect the bot from voice.
@@ -744,6 +767,8 @@ async def help_cmd(ctx):
         value=(
             "**/sugerencias** `idea` — mandá una sugerencia o feature; se "
             "agrupa con ideas parecidas.\n"
+            "**/sugerencias-ver** — mirá qué sugerencias ya existen, ordenadas "
+            "por las más pedidas.\n"
             "**/help** — esto."
         ),
         inline=False,

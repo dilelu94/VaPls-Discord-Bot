@@ -1,5 +1,8 @@
-"""Behavior: /sugerencias persists a user's idea, grouping similar ideas via
-Gemini, and never loses the raw text — even when Gemini is unreachable."""
+"""Behavior: /sugerencias persists a user's idea only after Gemini categorizes
+it, grouping similar ideas and telling the user which group it joined.
+/sugerencias-ver shows the existing groups ranked by how many people asked for
+each. When Gemini can't categorize, nothing is persisted and the user is asked
+to retry — categorized-or-nothing."""
 import json
 
 import pytest
@@ -15,6 +18,30 @@ def store(tmp_path, monkeypatch):
     return path
 
 
+_NOW = "2026-06-01T00:00:00Z"
+
+
+def _sub(user_id="1", user_name="anon", text="idea"):
+    return {"user_id": user_id, "user_name": user_name, "text": text, "at": _NOW}
+
+
+def _seed(path, groups):
+    """Write a suggestions.json with the given groups (filesystem boundary)."""
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"groups": groups}, f, ensure_ascii=False)
+
+
+def _group(gid, title, summary, n_subs):
+    return {
+        "id": gid,
+        "title": title,
+        "summary": summary,
+        "created_at": _NOW,
+        "updated_at": _NOW,
+        "submissions": [_sub(user_id=str(i)) for i in range(n_subs)],
+    }
+
+
 def _read(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -24,6 +51,9 @@ def joined(ctx):
     return "\n".join(m for m in ctx.sent_messages if m is not None)
 
 
+# --------------------------------------------------------------------------
+# Submit: a categorized idea is persisted and the user learns where it landed.
+# --------------------------------------------------------------------------
 async def test_first_idea_creates_a_group(ctx_factory, store, patch_generate, reply_factory):
     patch_generate(reply=reply_factory(text='{"new_title":"Comando /eco","new_summary":"Repetir lo que dice el usuario"}'))
     ctx = ctx_factory(display_name="Mati", user_id=42)
@@ -40,35 +70,39 @@ async def test_first_idea_creates_a_group(ctx_factory, store, patch_generate, re
     assert "Comando /eco" in joined(ctx)
 
 
-async def test_similar_idea_joins_existing_group(ctx_factory, store, patch_generate, reply_factory):
-    patch_generate(replies=[
-        reply_factory(text='{"new_title":"Comando /eco","new_summary":"Repetir input"}'),
-        reply_factory(text='{"match_id":"__PLACEHOLDER__"}'),
-    ])
-    ctx1 = ctx_factory(display_name="Mati", user_id=1)
-    await sc.sugerenciasLogic(ctx1, "agrega un /eco")
-    existing_id = _read(store)["groups"][0]["id"]
+async def test_similar_idea_joins_existing_group(ctx_factory, store, monkeypatch):
+    _seed(store, [_group("g_eco", "Comando /eco", "Repetir input", 1)])
 
-    # The second classify call needs the real existing id — re-patch with the
-    # right value injected. Simpler: monkeypatch _classify directly.
     async def _fake(idea, groups):
-        return sc.Classification(match_id=existing_id)
-    import suggestionsCommand as scmod
-    orig = scmod._classify
-    scmod._classify = _fake
-    try:
-        ctx2 = ctx_factory(display_name="Mila", user_id=2)
-        await sc.sugerenciasLogic(ctx2, "hace que repita lo que digo")
-    finally:
-        scmod._classify = orig
+        return sc.Classification(match_id="g_eco")
+    monkeypatch.setattr(sc, "_classify", _fake)
 
-    data = _read(store)
-    assert len(data["groups"]) == 1
-    g = data["groups"][0]
+    ctx = ctx_factory(display_name="Mila", user_id=2)
+    await sc.sugerenciasLogic(ctx, "hace que repita lo que digo")
+
+    g = _read(store)["groups"][0]
     assert len(g["submissions"]) == 2
-    user_names = [s["user_name"] for s in g["submissions"]]
-    assert "Mati" in user_names and "Mila" in user_names
-    assert "Ya teniamos" in joined(ctx2) or "parecida" in joined(ctx2)
+    assert "Mila" in [s["user_name"] for s in g["submissions"]]
+    # User learns it joined that specific group.
+    assert "Comando /eco" in joined(ctx)
+
+
+async def test_matched_reply_reports_count_of_preexisting(ctx_factory, store, monkeypatch):
+    # 3 people already asked for this; the 4th should be told "3 already there".
+    _seed(store, [_group("g_vote", "Mejor sistema de votacion", "Votar mejor", 3)])
+
+    async def _fake(idea, groups):
+        return sc.Classification(match_id="g_vote")
+    monkeypatch.setattr(sc, "_classify", _fake)
+
+    ctx = ctx_factory(user_id=99)
+    await sc.sugerenciasLogic(ctx, "mejoremos la votacion")
+
+    out = joined(ctx)
+    assert "Mejor sistema de votacion" in out
+    assert "3" in out  # count of pre-existing similar suggestions
+    # And it really was appended (now 4 total).
+    assert len(_read(store)["groups"][0]["submissions"]) == 4
 
 
 async def test_different_idea_creates_second_group(ctx_factory, store, patch_generate, reply_factory):
@@ -83,40 +117,34 @@ async def test_different_idea_creates_second_group(ctx_factory, store, patch_gen
     assert titles == {"Comando /eco", "Mute automatico"}
 
 
-async def test_gemini_failure_still_saves_raw_idea(ctx_factory, store, patch_generate):
+# --------------------------------------------------------------------------
+# Categorized-or-nothing: Gemini must succeed for anything to be saved.
+# --------------------------------------------------------------------------
+async def test_gemini_failure_does_not_persist_and_asks_retry(ctx_factory, store, patch_generate):
     from geminiClient import GeminiError
     patch_generate(error=GeminiError("down", kind="timeout"))
     ctx = ctx_factory(display_name="Mati", user_id=7)
     await sc.sugerenciasLogic(ctx, "podes agregar un /clima")
-    data = _read(store)
-    assert len(data["groups"]) == 1
-    g = data["groups"][0]
-    assert g.get("unprocessed") is True
-    assert g["submissions"][0]["text"] == "podes agregar un /clima"
-    assert g["submissions"][0]["user_id"] == "7"
-    # User still gets a confirmation, idea not lost.
-    out = joined(ctx)
-    assert out.strip()
+    # Nothing persisted.
+    assert not store.exists() or _read(store)["groups"] == []
+    # User is told to try again (some message reaches them).
+    assert joined(ctx).strip()
 
 
-async def test_malformed_classifier_response_still_saves(ctx_factory, store, patch_generate, reply_factory):
+async def test_malformed_classifier_response_does_not_persist(ctx_factory, store, patch_generate, reply_factory):
     patch_generate(reply=reply_factory(text="no soy json valido jajaj"))
     ctx = ctx_factory(user_id=9)
     await sc.sugerenciasLogic(ctx, "agrega algo cool")
-    data = _read(store)
-    assert len(data["groups"]) == 1
-    assert data["groups"][0].get("unprocessed") is True
-    assert data["groups"][0]["submissions"][0]["text"] == "agrega algo cool"
+    assert not store.exists() or _read(store)["groups"] == []
+    assert joined(ctx).strip()
 
 
 async def test_empty_idea_does_not_persist(ctx_factory, store, patch_generate, reply_factory):
     patch_generate(reply=reply_factory(text='{"new_title":"x","new_summary":"y"}'))
     ctx = ctx_factory()
     await sc.sugerenciasLogic(ctx, "   ")
-    # Either file does not exist or has no groups.
     assert not store.exists() or _read(store)["groups"] == []
-    out = joined(ctx)
-    assert out.strip()  # user gets some kind of hint
+    assert joined(ctx).strip()  # user gets some kind of hint
 
 
 async def test_unknown_match_id_falls_back_to_create(ctx_factory, store, patch_generate, reply_factory):
@@ -140,3 +168,30 @@ async def test_very_long_idea_is_truncated_but_saved(ctx_factory, store, patch_g
     stored = data["groups"][0]["submissions"][0]["text"]
     assert len(stored) <= sc._MAX_IDEA_CHARS
     assert stored == "x" * sc._MAX_IDEA_CHARS
+
+
+# --------------------------------------------------------------------------
+# /sugerencias-ver: anyone can see the existing groups, busiest first.
+# --------------------------------------------------------------------------
+async def test_ver_lists_groups_ranked_by_demand(ctx_factory, store):
+    _seed(store, [
+        _group("g_poco", "Idea con poca demanda", "x", 1),
+        _group("g_mucho", "Idea muy pedida", "x", 3),
+        _group("g_medio", "Idea pedida a medias", "x", 2),
+    ])
+    ctx = ctx_factory()
+    await sc.sugerenciasVerLogic(ctx)
+    out = joined(ctx)
+    assert "Idea muy pedida" in out
+    assert "Idea pedida a medias" in out
+    assert "Idea con poca demanda" in out
+    # Busiest group is listed before the less-popular ones.
+    assert out.index("Idea muy pedida") < out.index("Idea pedida a medias")
+    assert out.index("Idea pedida a medias") < out.index("Idea con poca demanda")
+
+
+async def test_ver_with_no_suggestions_says_so(ctx_factory, store):
+    ctx = ctx_factory()
+    await sc.sugerenciasVerLogic(ctx)
+    # Friendly non-empty message, no crash.
+    assert joined(ctx).strip()
