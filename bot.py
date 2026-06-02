@@ -389,7 +389,9 @@ def _track_command(ctx, name, extra=None):
     )
 
 
-@bot.slash_command(name="dj", description="Abre el menú del modo DJ en el canal de música")
+@bot.slash_command(
+    name="dj", description="Abre el menú del modo DJ en el canal de música"
+)
 async def dj(ctx):
     """Slash command: open the Auto-DJ menu in the configured music channel.
 
@@ -406,7 +408,9 @@ async def dj(ctx):
     await safe_defer(ctx)
     _track_command(ctx, "dj")
     if ctx.guild is None:
-        await ctx.followup.send("❌ Este comando solo funciona en un servidor.", ephemeral=True)
+        await ctx.followup.send(
+            "❌ Este comando solo funciona en un servidor.", ephemeral=True
+        )
         return
     ok, msg = await openDjMenu(ctx.bot, ctx.guild.id)
     if not ok:
@@ -535,7 +539,7 @@ async def soundpad(
     await soundpadLogic(ctx, query=query)
 
 
-@bot.slash_command(name="vapls", description="Preguntale al bot del server")
+@bot.slash_command(name="vapls", description="consulta rápida, sin memoria")
 async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
     """Slash command: ask the Gemini-backed VaPls persona.
 
@@ -554,7 +558,9 @@ async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
     await vaplsLogic(ctx, pregunta)
 
 
-@bot.slash_command(name="indio", description="Charla con el indio")
+@bot.slash_command(
+    name="indio", description="integrante más del grupo, recuerda la charla"
+)
 async def indio(
     ctx,
     charla: discord.Option(str, description="Qué le decís al indio"),
