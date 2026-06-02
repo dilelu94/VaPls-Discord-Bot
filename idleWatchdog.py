@@ -79,6 +79,14 @@ async def _disconnect_idle(bot, guild_id: int) -> None:
 
     player = guildPlayers.get(guild_id)
     if player is not None:
+        # Neutralize the control panel BEFORE clearing the player: edit the
+        # live message into a "💤 Desconectado por inactividad" state with
+        # disabled playback buttons + a Reconnect button. Otherwise the panel
+        # keeps live buttons that silently do nothing ("ghost buttons").
+        try:
+            await player.showIdleDisconnect()
+        except Exception:
+            logger.exception("idle watchdog: showIdleDisconnect failed")
         try:
             clearGuildPlayer(guild_id)
         except Exception:

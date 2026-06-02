@@ -21,6 +21,8 @@ Suite de comportamiento (Tier 1 lógica pura, Tier 2 lógica con un borde mockea
 - `test_long_term_memory.py` — memoria de largo plazo del Indio.
 - `test_greeting.py` — saludos al unirse a voz (throttle, skips).
 - `test_idle_watchdog.py` — auto-desconexión por inactividad.
+- `test_play_idle_disconnect.py` — panel "desconectado" + botón ▶️ Reconectar
+  al echar el watchdog (sin botones fantasma).
 - `test_recording.py` — captura de voice-reply del userbot.
 - `test_soundpad_clip_search.py` — búsqueda de clips.
 - `testSoundpad.py` — suite legacy de navegación del Soundpad (`unittest`,

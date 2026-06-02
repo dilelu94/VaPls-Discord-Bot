@@ -54,6 +54,10 @@ dict global `guildPlayers`).
   canción, va bajando las siguientes para que no haya cortes.
 - **Panel de control** (`PlayerControlView`): embed con botones ⏮️ Anterior /
   ⏸️ Pausar / ⏭️ Siguiente / ⏹️ Stop, que se actualiza solo.
+- **Panel "desconectado"** (`DisconnectedControlView`): cuando el watchdog de
+  inactividad echa al bot, ese mismo mensaje se edita a `💤 Desconectado por
+  inactividad` con los botones de playback grises (sin "botones fantasma") y un
+  ▶️ Reconectar que vuelve a poner la última canción (`reconnectLastSong`).
 - **Botón Cancelar** durante la descarga inicial (`CancelDownloadView`).
 - **Diagnóstico de errores** (`_diagnoseYtDlpFailure`): traduce errores de yt-dlp
   a mensajes claros en español (video privado, restricción de edad, rate-limit
@@ -181,7 +185,9 @@ Cuando el bot entra a un canal de voz reproduce un audio de saludo:
 
 Tarea por servidor que desconecta al bot tras `VOICE_IDLE_TIMEOUT_SECONDS` (60 s
 por defecto) sin reproducir ni estar pausado. Avisa en el canal de texto antes de
-irse.
+irse. Si había un panel de música abierto, lo deja en estado "desconectado"
+(`showIdleDisconnect`) para que los botones ya no sean clickeables y se pueda
+reconectar con un toque.
 
 ---
 
