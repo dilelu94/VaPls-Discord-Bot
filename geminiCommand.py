@@ -9,6 +9,7 @@ discarded — so the indio feels like a friend that remembers the group.
 
 Depends on geminiClient and analytics.
 """
+
 import asyncio
 import json
 import logging
@@ -338,7 +339,7 @@ _HISTORY_KEEP_AFTER_COMPRESS = 14  # se queda con los ~7 más recientes user+mod
 _HISTORY_HARD_CAP = 50
 
 # Long-term memory bounds.
-_LONG_TERM_MAX_CHARS = 8000        # JSON dumpeado no debe pasar de esto
+_LONG_TERM_MAX_CHARS = 8000  # JSON dumpeado no debe pasar de esto
 _LT_TRAITS_PER_USER = 5
 _LT_QUESTIONS_PER_USER = 5
 _LT_ANECDOTES_PER_USER = 5
@@ -353,7 +354,7 @@ _indio_last_seen: dict[str, float] = {}
 # cue and confuses last week's "te pasé esta lista" with the current convo.
 # Parens (not brackets) intentional — brackets in the prompt teach the model
 # to echo "[Name]:" speaker-tag patterns in its own replies.
-_HISTORY_AGE_TAG_THRESHOLD_SEC = 15 * 60   # 15 minutes
+_HISTORY_AGE_TAG_THRESHOLD_SEC = 15 * 60  # 15 minutes
 
 
 def _humanize_age(seconds: float) -> str:
@@ -405,9 +406,12 @@ def _stamp_history_for_prompt(history: list[dict], now: float) -> list[dict]:
                 new_parts.append({"text": tag + str(part["text"])})
             else:
                 new_parts.append(part)
-        out.append({"role": turn.get("role"),
-                    "parts": new_parts or turn.get("parts", [])})
+        out.append(
+            {"role": turn.get("role"), "parts": new_parts or turn.get("parts", [])}
+        )
     return out
+
+
 _indio_long_term: dict[str, dict] = {}
 _indio_locks: dict[str, asyncio.Lock] = {}
 _persist_lock = asyncio.Lock()
@@ -453,7 +457,7 @@ def _load_indio_state() -> None:
         long_term = val.get("long_term") or {}
         current_members = val.get("current_members") or []
         current_members_at = float(val.get("current_members_refreshed_at", 0) or 0)
-        keep_short_term = (now - last_seen <= _HISTORY_TTL_SEC)
+        keep_short_term = now - last_seen <= _HISTORY_TTL_SEC
         if keep_short_term:
             if isinstance(history, list) and history:
                 _indio_history[key] = [_sanitize_turn_on_load(t) for t in history]
@@ -465,8 +469,13 @@ def _load_indio_state() -> None:
             _indio_current_members[key] = [str(n) for n in current_members if n]
             _indio_members_refreshed_at[key] = current_members_at
     if loaded or _indio_long_term or _indio_current_members:
-        logger.info("indio memory: loaded %d entries (long_term=%d, roster=%d) from %s",
-                    loaded, len(_indio_long_term), len(_indio_current_members), path)
+        logger.info(
+            "indio memory: loaded %d entries (long_term=%d, roster=%d) from %s",
+            loaded,
+            len(_indio_long_term),
+            len(_indio_current_members),
+            path,
+        )
 
 
 def _sanitize_turn_on_load(turn: dict) -> dict:
@@ -497,7 +506,9 @@ async def _persist_indio_state() -> None:
                     "last_seen": _indio_last_seen.get(k, 0.0),
                     "long_term": _indio_long_term.get(k, {}),
                     "current_members": _indio_current_members.get(k, []),
-                    "current_members_refreshed_at": _indio_members_refreshed_at.get(k, 0.0),
+                    "current_members_refreshed_at": _indio_members_refreshed_at.get(
+                        k, 0.0
+                    ),
                 }
                 for k in keys
             }
@@ -575,7 +586,7 @@ def _split_for_discord(text: str) -> list[str]:
         last = chunks[_MAX_CHUNKS - 1]
         if len(last) + len(marker) > _DISCORD_CHUNK_LIMIT:
             last = last[: _DISCORD_CHUNK_LIMIT - len(marker)]
-        chunks = chunks[:_MAX_CHUNKS - 1] + [last + marker]
+        chunks = chunks[: _MAX_CHUNKS - 1] + [last + marker]
 
     return chunks
 
@@ -630,13 +641,18 @@ def _make_retry_notifier(ctx: discord.ApplicationContext):
             return
         state["had_retry"] = True
         from bot import safeEdit
+
         await safeEdit(ctx, AVISO_ROTACION_GEMINI)
 
     return _notify, state
 
 
 async def _send_reply(
-    ctx: discord.ApplicationContext, text: str, *, edit_first: bool = False,
+    ctx: discord.ApplicationContext,
+    text: str,
+    *,
+    edit_first: bool = False,
+    ephemeral: bool = False,
 ) -> int:
     """Send a possibly multi-part reply to Discord.
 
@@ -648,6 +664,10 @@ async def _send_reply(
             ``AVISO_ROTACION_GEMINI`` notice with the real reply). Subsequent
             chunks always go through ``followup.send``. Falls back to
             ``followup.send`` if the edit fails.
+        ephemeral: When True, the reply is visible only to the invoker. A
+            deferred-public response cannot be edited into an ephemeral one, so
+            ``edit_first`` is ignored in that case and every chunk goes out as
+            an ephemeral followup.
 
     Returns:
         Number of chunks sent.
@@ -660,14 +680,16 @@ async def _send_reply(
     """
     chunks = _split_for_discord(text)
     for i, c in enumerate(chunks):
-        if edit_first and i == 0:
+        if edit_first and i == 0 and not ephemeral:
             try:
                 await ctx.interaction.edit_original_response(content=c)
                 continue
             except Exception:
-                logger.debug("edit_original_response failed, falling back to followup",
-                             exc_info=True)
-        await ctx.followup.send(c)
+                logger.debug(
+                    "edit_original_response failed, falling back to followup",
+                    exc_info=True,
+                )
+        await ctx.followup.send(c, ephemeral=ephemeral)
     return len(chunks)
 
 
@@ -681,7 +703,9 @@ def _format_user_header(ctx: discord.ApplicationContext, pregunta: str) -> str:
     Returns:
         A formatted header string for the reply.
     """
-    name = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
+    name = getattr(ctx.author, "display_name", None) or getattr(
+        ctx.author, "name", "alguien"
+    )
     lines = (pregunta or "").splitlines() or [""]
     quoted = "\n".join(f"> {ln}" for ln in lines)
     return f"**{name}** preguntó:\n{quoted}\n\n"
@@ -702,6 +726,7 @@ def _format_player_state(bot, guild_id) -> str:
         return ""
     try:
         import playCommand
+
         player = playCommand.guildPlayers.get(int(guild_id))
     except Exception:
         return ""
@@ -715,8 +740,11 @@ def _format_player_state(bot, guild_id) -> str:
     # but we kept the song and queue in memory. The indio should steer
     # ambiguous play requests to resume_music here too.
     if getattr(player, "interrupted", False) and cur is not None:
-        head = (f'música INTERRUMPIDA por desconexión — "{title}"'
-                if title else "música interrumpida por desconexión")
+        head = (
+            f'música INTERRUMPIDA por desconexión — "{title}"'
+            if title
+            else "música interrumpida por desconexión"
+        )
         return (
             f"[Estado del reproductor]: {head}. Si piden 'play' / "
             f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
@@ -750,7 +778,7 @@ def _format_player_state(bot, guild_id) -> str:
 def _find_emoji_code(guild, name: str) -> Optional[str]:
     """Return the Discord render code (``<:name:id>`` or ``<a:name:id>``)
     for the guild's custom emoji ``name``, or None if it isn't available."""
-    for e in (getattr(guild, "emojis", None) or []):
+    for e in getattr(guild, "emojis", None) or []:
         if getattr(e, "name", "") == name and getattr(e, "available", True):
             eid = getattr(e, "id", None)
             if eid is None:
@@ -778,7 +806,9 @@ def _format_guild_emojis(guild) -> str:
             break
     if not lines:
         return ""
-    return "Emojis custom del server (pegá el código completo tal cual):\n" + "\n".join(lines)
+    return "Emojis custom del server (pegá el código completo tal cual):\n" + "\n".join(
+        lines
+    )
 
 
 _ROSTER_REFRESH_INTERVAL_SEC = 24 * 3600  # refresh from users.py once per day
@@ -790,7 +820,11 @@ def _names_from_users_py() -> list[str]:
     the source of truth because discord.py-self can't reliably enumerate every
     guild member from a user account (the cache is partial and fetch_members
     only returns members the gateway has surfaced)."""
-    return [info["name"] for info in _USERS.values() if isinstance(info, dict) and info.get("name")]
+    return [
+        info["name"]
+        for info in _USERS.values()
+        if isinstance(info, dict) and info.get("name")
+    ]
 
 
 async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) -> None:
@@ -809,22 +843,23 @@ async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) 
     current = _indio_current_members.get(mem_key)
     # Refresh if (a) the TTL elapsed, (b) we never refreshed, or
     # (c) users.py was edited and the stored list no longer matches.
-    if (now - last < _ROSTER_REFRESH_INTERVAL_SEC
-            and current == expected):
+    if now - last < _ROSTER_REFRESH_INTERVAL_SEC and current == expected:
         return
     async with _roster_lock:
         last = _indio_members_refreshed_at.get(mem_key, 0.0)
         current = _indio_current_members.get(mem_key)
-        if (now - last < _ROSTER_REFRESH_INTERVAL_SEC
-                and current == expected):
+        if now - last < _ROSTER_REFRESH_INTERVAL_SEC and current == expected:
             return
         previous = current
         _indio_current_members[mem_key] = expected
         _indio_members_refreshed_at[mem_key] = time.time()
     if previous != expected:
         await _persist_indio_state()
-        logger.info("indio: refreshed current_members for %s (%d names from users.py)",
-                    mem_key, len(expected))
+        logger.info(
+            "indio: refreshed current_members for %s (%d names from users.py)",
+            mem_key,
+            len(expected),
+        )
 
 
 # Campos del dict de usuario en users.py que SÍ se exponen al prompt del Indio.
@@ -888,7 +923,7 @@ def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
             bucket = merged.setdefault(name_str, {f: [] for f in _INDIO_USER_FIELDS})
             for key in _INDIO_USER_FIELDS:
                 existing = bucket.setdefault(key, [])
-                for item in (data.get(key) or []):
+                for item in data.get(key) or []:
                     s = str(item)
                     if not s or s in existing:
                         continue
@@ -909,9 +944,7 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
     distilled long-term data."""
     sections: list[str] = []
     if current_members:
-        sections.append(
-            "Mis amigos son: " + ", ".join(current_members) + "."
-        )
+        sections.append("Mis amigos son: " + ", ".join(current_members) + ".")
     lt = lt or {}
     user_dossiers = _merge_user_dossiers(lt.get("users") or {})
     if user_dossiers:
@@ -941,7 +974,9 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
         if e not in events:
             events.append(e)
     if events:
-        sections.append("Cosas que pasaron en el grupo:\n" + "\n".join(f"- {e}" for e in events))
+        sections.append(
+            "Cosas que pasaron en el grupo:\n" + "\n".join(f"- {e}" for e in events)
+        )
 
     static_jokes = [str(x) for x in (_GROUP_LORE.get("chistes_internos") or []) if x]
     lt_jokes = [str(x) for x in (lt.get("chistes_internos") or []) if x]
@@ -950,7 +985,9 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
         if j not in jokes:
             jokes.append(j)
     if jokes:
-        sections.append("Chistes internos del grupo:\n" + "\n".join(f"- {j}" for j in jokes))
+        sections.append(
+            "Chistes internos del grupo:\n" + "\n".join(f"- {j}" for j in jokes)
+        )
     return "\n\n".join(sections)
 
 
@@ -990,8 +1027,13 @@ Reglas estrictas:
 - No incluyas al "indio" como usuario (es el bot, no un miembro del grupo).
 - Español rioplatense, casual, conciso.
 - Devolvé SOLO el JSON. Sin ```json ni explicación.
-""" % (_LT_TRAITS_PER_USER, _LT_QUESTIONS_PER_USER, _LT_ANECDOTES_PER_USER,
-       _LT_GROUP_EVENTS, _LT_JOKES)
+""" % (
+    _LT_TRAITS_PER_USER,
+    _LT_QUESTIONS_PER_USER,
+    _LT_ANECDOTES_PER_USER,
+    _LT_GROUP_EVENTS,
+    _LT_JOKES,
+)
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -1012,7 +1054,7 @@ def _extract_json(text: str) -> Optional[dict]:
     if start == -1 or end == -1 or end <= start:
         return None
     try:
-        obj = json.loads(s[start:end + 1])
+        obj = json.loads(s[start : end + 1])
     except Exception:
         return None
     return obj if isinstance(obj, dict) else None
@@ -1030,9 +1072,15 @@ def _clamp_long_term(lt: dict) -> dict:
             name = str(name)[:60]
             if name.lower() == "indio":
                 continue
-            traits = [str(t)[:120] for t in (data.get("traits") or []) if t][:_LT_TRAITS_PER_USER]
-            qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t][:_LT_QUESTIONS_PER_USER]
-            anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t][:_LT_ANECDOTES_PER_USER]
+            traits = [str(t)[:120] for t in (data.get("traits") or []) if t][
+                :_LT_TRAITS_PER_USER
+            ]
+            qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t][
+                :_LT_QUESTIONS_PER_USER
+            ]
+            anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t][
+                :_LT_ANECDOTES_PER_USER
+            ]
             if traits or qs or anec:
                 out["users"][name] = {
                     "traits": traits,
@@ -1041,7 +1089,9 @@ def _clamp_long_term(lt: dict) -> dict:
                 }
     events = lt.get("eventos_del_grupo") if isinstance(lt, dict) else None
     if isinstance(events, list):
-        out["eventos_del_grupo"] = [str(e)[:120] for e in events if e][:_LT_GROUP_EVENTS]
+        out["eventos_del_grupo"] = [str(e)[:120] for e in events if e][
+            :_LT_GROUP_EVENTS
+        ]
     jokes = lt.get("chistes_internos") if isinstance(lt, dict) else None
     if isinstance(jokes, list):
         out["chistes_internos"] = [str(j)[:120] for j in jokes if j][:_LT_JOKES]
@@ -1075,7 +1125,9 @@ def _turns_to_text(turns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def _compress_long_term(current_lt: dict, old_turns: list[dict]) -> Optional[dict]:
+async def _compress_long_term(
+    current_lt: dict, old_turns: list[dict]
+) -> Optional[dict]:
     """Run a Gemini call to fold old verbatim turns into the long-term notes.
     Returns the new long-term dict on success, None on any failure."""
     if not old_turns:
@@ -1098,7 +1150,9 @@ async def _compress_long_term(current_lt: dict, old_turns: list[dict]) -> Option
             max_output_tokens=2048,
         )
     except geminiClient.GeminiError as e:
-        logger.warning("indio compress: gemini failed (%s, status=%s)", e.kind, e.status)
+        logger.warning(
+            "indio compress: gemini failed (%s, status=%s)", e.kind, e.status
+        )
         return None
     except Exception:
         logger.exception("indio compress: unexpected error")
@@ -1145,8 +1199,12 @@ async def _maybe_compress(mem_key: str) -> None:
                 _indio_history[mem_key] = history[drop_count:]
             _indio_long_term[mem_key] = new_lt
         await _persist_indio_state()
-        logger.info("indio compress: ok for %s (dropped %d turns, users=%d)",
-                    mem_key, drop_count, len(new_lt.get("users", {})))
+        logger.info(
+            "indio compress: ok for %s (dropped %d turns, users=%d)",
+            mem_key,
+            drop_count,
+            len(new_lt.get("users", {})),
+        )
     finally:
         _indio_compressing.discard(mem_key)
 
@@ -1186,7 +1244,9 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
         name = str(call.get("name") or "")
         mapping = _FUNCTION_CALL_TO_ACTION.get(name.lower())
         if mapping is None:
-            logger.warning("indio: unknown tool call '%s' (args=%r)", name, call.get("args"))
+            logger.warning(
+                "indio: unknown tool call '%s' (args=%r)", name, call.get("args")
+            )
             continue
         action, arg_key = mapping
         if arg_key is None:
@@ -1196,8 +1256,9 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
         args = call.get("args") or {}
         raw = args.get(arg_key) if isinstance(args, dict) else None
         if not isinstance(raw, str):
-            logger.warning("indio: tool %s missing string arg '%s' (got %r)",
-                           name, arg_key, raw)
+            logger.warning(
+                "indio: tool %s missing string arg '%s' (got %r)", name, arg_key, raw
+            )
             continue
         arg = raw.strip()[:_ACTION_ARG_MAX_CHARS]
         if not arg:
@@ -1234,11 +1295,38 @@ _PLAY_SOUND_ORDER_RE = re.compile(
 # Palabras genéricas que pueden estar en el nombre de un clip pero que NO deben
 # servir para "anclar" el nombre en el mensaje (si no, cualquier 'de'/'que'
 # matchearía). Solo se usan para el grounding del modo espontáneo.
-_NAME_STOPWORDS = frozenset({
-    "de", "del", "la", "las", "el", "los", "un", "una", "unos", "unas",
-    "y", "o", "a", "en", "que", "con", "por", "para", "es", "lo", "al",
-    "ser", "muy", "the", "se", "su", "mi", "tu",
-})
+_NAME_STOPWORDS = frozenset(
+    {
+        "de",
+        "del",
+        "la",
+        "las",
+        "el",
+        "los",
+        "un",
+        "una",
+        "unos",
+        "unas",
+        "y",
+        "o",
+        "a",
+        "en",
+        "que",
+        "con",
+        "por",
+        "para",
+        "es",
+        "lo",
+        "al",
+        "ser",
+        "muy",
+        "the",
+        "se",
+        "su",
+        "mi",
+        "tu",
+    }
+)
 
 _NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -1280,8 +1368,9 @@ def _name_grounded_in_message(name: str, text: str) -> bool:
     return False
 
 
-def _gate_play_sound_actions(actions: list[tuple[str, str]],
-                             raw_text: str) -> list[tuple[str, str]]:
+def _gate_play_sound_actions(
+    actions: list[tuple[str, str]], raw_text: str
+) -> list[tuple[str, str]]:
     """Filtra play_sound espurios. Devuelve la lista de acciones sin los
     PLAY_SOUND que no cumplen ni verbo de orden ni nombre presente en el
     mensaje. El resto de las acciones pasa intacto. No toca el texto de la
@@ -1300,7 +1389,8 @@ def _gate_play_sound_actions(actions: list[tuple[str, str]],
             logger.info(
                 "indio PLAY_SOUND suprimido: sin verbo de orden y nombre %r "
                 "no está en el mensaje %r — solo responde texto",
-                arg, (raw_text or "")[:80],
+                arg,
+                (raw_text or "")[:80],
             )
     return kept
 
@@ -1317,15 +1407,17 @@ def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
     return fallback
 
 
-async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
-                                    query: str) -> tuple[bool, str]:
+async def _invoke_slash_via_userbot(
+    endpoint: str, channel_id: int, query: str
+) -> tuple[bool, str]:
     """Ask the userbot to invoke a VaPls slash command (`/play` or
     `/soundpad`) from the real user account, so Discord shows the full
     "Indio used /play" interaction. Returns (ok, message)."""
     if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
         logger.warning(
             "indio %s relay disabled: INDIO_RELAY_URL/SECRET missing — "
-            "cayendo a playFromIndio (bot principal)", endpoint,
+            "cayendo a playFromIndio (bot principal)",
+            endpoint,
         )
         return False, "relay not configured"
     if not channel_id:
@@ -1335,7 +1427,8 @@ async def _invoke_slash_via_userbot(endpoint: str, channel_id: int,
         # its own channel-picking logic).
         logger.warning(
             "indio %s relay disabled: INDIO_PLAY_CHANNEL_ID=0 — cayendo a "
-            "playFromIndio (bot principal)", endpoint,
+            "playFromIndio (bot principal)",
+            endpoint,
         )
         return False, "play channel not configured"
     invoke_url = urljoin(config.INDIO_RELAY_URL, "/" + endpoint)
@@ -1359,14 +1452,10 @@ _ACTION_FAILURE_MESSAGES = {
     # indio already promised "dale, va" optimistically *before* the tool ran;
     # these messages get posted **after** the tool fails so the user finds out
     # instead of waiting forever for music that's not coming.
-    "resume: not paused":
-        "uh, no había nada pausado para reanudar",
-    "resume: no voice channel to rejoin":
-        "no hay nadie en voz al que pueda conectarme",
-    "resume: nothing to resume":
-        "no me acuerdo qué estaba sonando, decime qué pongo",
-    "pause: not playing":
-        "no estaba sonando nada, no tengo qué pausar",
+    "resume: not paused": "uh, no había nada pausado para reanudar",
+    "resume: no voice channel to rejoin": "no hay nadie en voz al que pueda conectarme",
+    "resume: nothing to resume": "no me acuerdo qué estaba sonando, decime qué pongo",
+    "pause: not playing": "no estaba sonando nada, no tengo qué pausar",
 }
 
 
@@ -1387,12 +1476,16 @@ def _failure_feedback(status: str) -> Optional[str]:
     if status.startswith("music: fail"):
         # Extract the inner reason after " — " when present.
         _, _, reason = status.partition(" — ")
-        return (f"no pude poner la música ({reason})"
-                if reason else "no pude poner la música")
+        return (
+            f"no pude poner la música ({reason})"
+            if reason
+            else "no pude poner la música"
+        )
     if status.startswith("sound: fail"):
         _, _, reason = status.partition(" — ")
-        return (f"no encontré el sonido ({reason})"
-                if reason else "no encontré ese sonido")
+        return (
+            f"no encontré el sonido ({reason})" if reason else "no encontré ese sonido"
+        )
     if status.startswith("resume: reconnect failed"):
         return "no pude reconectarme al canal para retomar la música"
     return None
@@ -1442,13 +1535,24 @@ def _dispatch_lock_for(guild_id: int) -> asyncio.Lock:
 # desde Telegram (vía HTTP /indio sin user_id de Discord) llegan con
 # requester_member=None y caen en "no requester"; texto sin voz cae en
 # "no voice". Cualquier acción no incluida acá no se gatea.
-_MUSIC_ACTIONS = frozenset({"PLAY_MUSIC", "PLAY_SOUND", "SKIP_MUSIC",
-                            "PAUSE_MUSIC", "RESUME_MUSIC", "STOP_MUSIC"})
+_MUSIC_ACTIONS = frozenset(
+    {
+        "PLAY_MUSIC",
+        "PLAY_SOUND",
+        "SKIP_MUSIC",
+        "PAUSE_MUSIC",
+        "RESUME_MUSIC",
+        "STOP_MUSIC",
+    }
+)
 
 _MUSIC_STATUS_PREFIX = {
-    "PLAY_MUSIC": "music", "PLAY_SOUND": "sound",
-    "SKIP_MUSIC": "skip", "PAUSE_MUSIC": "pause",
-    "RESUME_MUSIC": "resume", "STOP_MUSIC": "stop",
+    "PLAY_MUSIC": "music",
+    "PLAY_SOUND": "sound",
+    "SKIP_MUSIC": "skip",
+    "PAUSE_MUSIC": "pause",
+    "RESUME_MUSIC": "resume",
+    "STOP_MUSIC": "stop",
 }
 
 
@@ -1465,13 +1569,14 @@ def _gate_music_action(action: str, member) -> Optional[str]:
     return None
 
 
-async def _dispatch_indio_actions(bot: "discord.Bot",
-                                   guild_id: Optional[int],
-                                   actions: list[tuple[str, str]],
-                                   reply_handle=None,
-                                   reply_text: str = "",
-                                   requester_member: "Optional[discord.Member]" = None,
-                                   ) -> list[str]:
+async def _dispatch_indio_actions(
+    bot: "discord.Bot",
+    guild_id: Optional[int],
+    actions: list[tuple[str, str]],
+    reply_handle=None,
+    reply_text: str = "",
+    requester_member: "Optional[discord.Member]" = None,
+) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
     real "/play" / "/soundpad" slash commands in the chat. Both land in
@@ -1533,7 +1638,9 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                             "indio PLAY_MUSIC relay failed (%s); falling back to playFromIndio",
                             msg,
                         )
-                        ok, msg = await playCommand.playFromIndio(bot, int(guild_id), arg)
+                        ok, msg = await playCommand.playFromIndio(
+                            bot, int(guild_id), arg
+                        )
                     statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "PLAY_SOUND":
@@ -1552,20 +1659,29 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                         try:
                             from soundpadCommand import play_clip_by_query
                         except Exception:
-                            logger.exception("indio PLAY_SOUND: soundpadCommand import failed")
+                            logger.exception(
+                                "indio PLAY_SOUND: soundpadCommand import failed"
+                            )
                             statuses.append("sound: fail — import error")
                             continue
                         guild = bot.get_guild(int(guild_id))
                         if guild is None:
                             statuses.append(f"sound: fail — guild {guild_id} not found")
-                            logger.warning("indio PLAY_SOUND: guild %s not found", guild_id)
+                            logger.warning(
+                                "indio PLAY_SOUND: guild %s not found", guild_id
+                            )
                             continue
                         played_path = await play_clip_by_query(bot, guild, query=arg)
                         ok = played_path is not None
                         msg = played_path or "no match"
                     statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
-                elif action in ("SKIP_MUSIC", "PAUSE_MUSIC", "RESUME_MUSIC", "STOP_MUSIC"):
+                elif action in (
+                    "SKIP_MUSIC",
+                    "PAUSE_MUSIC",
+                    "RESUME_MUSIC",
+                    "STOP_MUSIC",
+                ):
                     # Pure playback controls don't have a slash command equivalent —
                     # they only exist as UI buttons on the player. We talk to the
                     # GuildPlayer directly. If no player exists for this guild it
@@ -1574,7 +1690,9 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     player = playCommand.guildPlayers.get(int(guild_id))
                     if player is None:
                         statuses.append(f"{action.lower()}: no active player")
-                        logger.info("indio %s: no active player for guild %s", action, guild_id)
+                        logger.info(
+                            "indio %s: no active player for guild %s", action, guild_id
+                        )
                         continue
                     vc = getattr(player, "vc", None)
                     control_ok = False
@@ -1598,13 +1716,16 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                             await player.togglePausePlay()
                             statuses.append("resume: ok")
                             control_ok = True
-                        elif getattr(player, "interrupted", False) and player.currentSong:
+                        elif (
+                            getattr(player, "interrupted", False) and player.currentSong
+                        ):
                             # Bot was kicked / lost connection while a song was
                             # playing. Reconnect to the most-populated voice
                             # channel and pick up where we left off.
                             try:
                                 voice_channel = playCommand._pick_voice_channel(
-                                    bot, int(guild_id),
+                                    bot,
+                                    int(guild_id),
                                 )
                             except Exception:
                                 voice_channel = None
@@ -1613,14 +1734,18 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                             else:
                                 try:
                                     new_vc = await voice_channel.connect(reconnect=True)
-                                    resumed = await player.resumeFromInterruption(new_vc)
+                                    resumed = await player.resumeFromInterruption(
+                                        new_vc
+                                    )
                                     if resumed:
                                         statuses.append("resume: reconnected & resumed")
                                         control_ok = True
                                     else:
                                         statuses.append("resume: nothing to resume")
                                 except Exception as e:
-                                    logger.exception("indio RESUME_MUSIC reconnect failed")
+                                    logger.exception(
+                                        "indio RESUME_MUSIC reconnect failed"
+                                    )
                                     statuses.append(f"resume: reconnect failed ({e})")
                         else:
                             statuses.append("resume: not paused")
@@ -1667,8 +1792,12 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
                     ch_id = getattr(reply_handle, "channel_id", None)
                     msg_obj = getattr(reply_handle, "message", None)
                     single = getattr(reply_handle, "single", True)
-                    logger.info("indio dispatch result: %r single=%s via_relay=%s",
-                                result_line, single, via_relay)
+                    logger.info(
+                        "indio dispatch result: %r single=%s via_relay=%s",
+                        result_line,
+                        single,
+                        via_relay,
+                    )
                     edited = False
                     if single:
                         new_content = f"{reply_text} — {result_line}"
@@ -1699,23 +1828,67 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
 # ---------------------------------------------------------------------------
 
 _CHOICE_CANCEL_WORDS = (
-    "ninguna", "ninguno", "ningun", "nada", "deja", "dejalo", "dejala",
-    "cancela", "cancelar", "olvidate", "olvidalo", "no quiero", "ni una",
+    "ninguna",
+    "ninguno",
+    "ningun",
+    "nada",
+    "deja",
+    "dejalo",
+    "dejala",
+    "cancela",
+    "cancelar",
+    "olvidate",
+    "olvidalo",
+    "no quiero",
+    "ni una",
 )
 # Ordinal/number words → 0-based index. Matched by prefix against each token so
 # "primera"/"primero"/"primer" all resolve, etc.
 _ORDINAL_STEMS = {
-    "primer": 0, "uno": 0,
-    "segund": 1, "dos": 1,
-    "tercer": 2, "tres": 2,
-    "cuart": 3, "cuatro": 3,
-    "quint": 4, "cinco": 4,
+    "primer": 0,
+    "uno": 0,
+    "segund": 1,
+    "dos": 1,
+    "tercer": 2,
+    "tres": 2,
+    "cuart": 3,
+    "cuatro": 3,
+    "quint": 4,
+    "cinco": 4,
 }
 _CHOICE_STOPWORDS = {
-    "la", "el", "los", "las", "un", "una", "de", "del", "version", "tema",
-    "cancion", "quiero", "poneme", "pone", "poné", "dale", "esa", "ese",
-    "esta", "este", "che", "indio", "opcion", "numero", "que", "me", "y", "o",
-    "a", "porfa", "porfavor", "mejor",
+    "la",
+    "el",
+    "los",
+    "las",
+    "un",
+    "una",
+    "de",
+    "del",
+    "version",
+    "tema",
+    "cancion",
+    "quiero",
+    "poneme",
+    "pone",
+    "poné",
+    "dale",
+    "esa",
+    "ese",
+    "esta",
+    "este",
+    "che",
+    "indio",
+    "opcion",
+    "numero",
+    "que",
+    "me",
+    "y",
+    "o",
+    "a",
+    "porfa",
+    "porfavor",
+    "mejor",
 }
 
 
@@ -1727,8 +1900,9 @@ def _normalize_choice(s: str) -> str:
 
 def _looks_like_url(query: str) -> bool:
     q = (query or "").strip()
-    return (q.startswith("http://") or q.startswith("https://")
-            or q.startswith("ytsearch:"))
+    return (
+        q.startswith("http://") or q.startswith("https://") or q.startswith("ytsearch:")
+    )
 
 
 # Words that, when adjacent to an ordinal/number token, signal "this is a
@@ -1739,13 +1913,37 @@ def _looks_like_url(query: str) -> bool:
 # Stored without accents — _parse_choice normalizes input the same way via
 # _normalize_choice, so the lookup just needs the accent-stripped form.
 _SELECTION_CONTEXT_WORDS = {
-    "la", "el", "los", "las",
-    "ponela", "ponelo", "poneme", "ponete", "pone",
-    "metele", "mete", "tirate", "tira", "tirame",
-    "dame", "dale", "elegi", "elegime", "elige",
-    "vota", "voto", "votala", "votalo",
-    "quiero", "ese", "esa", "este", "esta",
-    "opcion", "numero", "n",
+    "la",
+    "el",
+    "los",
+    "las",
+    "ponela",
+    "ponelo",
+    "poneme",
+    "ponete",
+    "pone",
+    "metele",
+    "mete",
+    "tirate",
+    "tira",
+    "tirame",
+    "dame",
+    "dale",
+    "elegi",
+    "elegime",
+    "elige",
+    "vota",
+    "voto",
+    "votala",
+    "votalo",
+    "quiero",
+    "ese",
+    "esa",
+    "este",
+    "esta",
+    "opcion",
+    "numero",
+    "n",
 }
 
 
@@ -1800,9 +1998,7 @@ def _parse_choice(text: str, candidates: list[dict]):
     return None
 
 
-_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
-              "5️⃣", "6️⃣", "7️⃣", "8️⃣",
-              "9️⃣", "\U0001f51f"]
+_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "\U0001f51f"]
 
 
 def _num_emoji(i: int) -> str:
@@ -1849,14 +2045,14 @@ def _voter_id_from(user_id, speaker: str) -> int:
     return -(hash(name) & 0xFFFFFFFF) or -1
 
 
-def _try_register_chat_vote(guild_id: Optional[int], user_id: int,
-                            text: str) -> bool:
+def _try_register_chat_vote(guild_id: Optional[int], user_id: int, text: str) -> bool:
     """Bridge for typed-chat votes ("indio ponela 4" in text). Same idea as
     ``try_register_voice_vote`` but doesn't close immediately — typing is more
     deliberate, but we still want to give the group its sliding window."""
     if not guild_id or not text:
         return False
     import playCommand
+
     vote = playCommand.get_active_vote(int(guild_id))
     if vote is None:
         return False
@@ -1866,8 +2062,9 @@ def _try_register_chat_vote(guild_id: Optional[int], user_id: int,
     return vote.register_vote(int(user_id), decision)
 
 
-def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
-                            speaker_name: str, text: str) -> bool:
+def try_register_voice_vote(
+    *, guild_id: Optional[int], user_id: int, speaker_name: str, text: str
+) -> bool:
     """Try to register a voice utterance as a vote on the guild's open music
     poll. Returns True when ``text`` parses as a choice and a vote is recorded;
     False when there's no open vote, no guild context, or ``text`` doesn't name
@@ -1882,6 +2079,7 @@ def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
     if not guild_id or not text:
         return False
     import playCommand
+
     vote = playCommand.get_active_vote(int(guild_id))
     if vote is None:
         return False
@@ -1899,8 +2097,9 @@ def try_register_voice_vote(*, guild_id: Optional[int], user_id: int,
     return vote.register_vote(voter, decision, close_now=True)
 
 
-def register_reaction_vote(*, channel_id: int, message_id: int,
-                           emoji: str, user_id: int) -> bool:
+def register_reaction_vote(
+    *, channel_id: int, message_id: int, emoji: str, user_id: int
+) -> bool:
     """Count an emoji reaction on a vote's options message as a vote.
 
     Called from the main bot's ``on_raw_reaction_add``. Looks up the open vote
@@ -1910,6 +2109,7 @@ def register_reaction_vote(*, channel_id: int, message_id: int,
     to give them a window.
     """
     import playCommand
+
     idx = playCommand.emoji_to_index((emoji or "").strip())
     if idx is None:
         # Some clients drop the variation selector — try the bare keycap too.
@@ -1979,8 +2179,9 @@ async def _relay_say(channel_id: int, content: str) -> Optional[int]:
         return None
 
 
-async def _attach_vote_reactions(bot, vote, channel_id: int,
-                                 message_id: int, n: int) -> None:
+async def _attach_vote_reactions(
+    bot, vote, channel_id: int, message_id: int, n: int
+) -> None:
     """Remember which message carries this vote and seed it with the number
     reactions (1️⃣…N) so people can vote by reacting. Best-effort.
 
@@ -2013,17 +2214,21 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
     yt-dlp result we got when building the options list, so there is no second
     search and no Gemini call — we just hand the song to the player."""
     import playCommand
+
     try:
         await playCommand.playFromIndio(
-            bot, guild_id, song.get("title") or "tema", songs=[song],
+            bot,
+            guild_id,
+            song.get("title") or "tema",
+            songs=[song],
         )
     except Exception:
         logger.exception("indio: play chosen song failed")
 
 
-async def _maybe_disambiguate_music(bot, guild_id, mem_key,
-                                    pending_actions, reply, post,
-                                    *, requester_id: int = 0):
+async def _maybe_disambiguate_music(
+    bot, guild_id, mem_key, pending_actions, reply, post, *, requester_id: int = 0
+):
     """Intercept a single free-text ``play_music`` so the indio lists the
     matches and opens a group vote, instead of playing the first hit.
 
@@ -2049,7 +2254,10 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
         return pending_actions, clean
 
     import playCommand
-    candidates = await playCommand._yt_dlp_search(query, max_results=_MUSIC_CHOICE_COUNT)
+
+    candidates = await playCommand._yt_dlp_search(
+        query, max_results=_MUSIC_CHOICE_COUNT
+    )
     if not candidates:
         return [], "no encontré nada en YouTube con eso, decímelo de otra forma"
     # Re-rank by fuzzy similarity against the user's query so the option the
@@ -2082,8 +2290,10 @@ async def _maybe_disambiguate_music(bot, guild_id, mem_key,
         await _play_chosen_song(bot, guild_id, winner)
 
     playCommand.open_music_vote(
-        bot=bot, guild_id=int(guild_id),
-        candidates=candidates, on_resolve=_on_resolve,
+        bot=bot,
+        guild_id=int(guild_id),
+        candidates=candidates,
+        on_resolve=_on_resolve,
         requester_id=int(requester_id or 0),
     )
     return [], _format_choices(candidates)
@@ -2168,8 +2378,9 @@ def _sanitize_for_history(text: str) -> str:
     return out.strip()
 
 
-async def _relay_to_userbot(channel_id: int, content: str,
-                            reply_to_id: Optional[int]) -> Optional[list[int]]:
+async def _relay_to_userbot(
+    channel_id: int, content: str, reply_to_id: Optional[int]
+) -> Optional[list[int]]:
     """POST the indio reply to the userbot's local /say endpoint so it gets
     posted by the real user account.
 
@@ -2212,8 +2423,7 @@ async def _relay_to_userbot(channel_id: int, content: str,
         return None
 
 
-async def _edit_via_userbot(channel_id: int, message_id: int,
-                             content: str) -> bool:
+async def _edit_via_userbot(channel_id: int, message_id: int, content: str) -> bool:
     """Ask the userbot to edit a previously-posted message in place.
 
     Mirrors ``_relay_to_userbot`` but POSTs to the ``/edit`` endpoint.
@@ -2227,27 +2437,30 @@ async def _edit_via_userbot(channel_id: int, message_id: int,
     if not url or not secret:
         return False
     edit_url = urljoin(url, "/edit")
-    payload = {"channel_id": int(channel_id), "message_id": int(message_id),
-               "content": content}
+    payload = {
+        "channel_id": int(channel_id),
+        "message_id": int(message_id),
+        "content": content,
+    }
     headers = {"X-API-Secret": secret}
     timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(edit_url, json=payload,
-                                    headers=headers) as resp:
+            async with session.post(edit_url, json=payload, headers=headers) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
-                    logger.warning("indio relay edit HTTP %d: %s",
-                                   resp.status, body[:200])
+                    logger.warning(
+                        "indio relay edit HTTP %d: %s", resp.status, body[:200]
+                    )
                     return False
                 return True
     except asyncio.TimeoutError:
-        logger.warning("indio relay edit timeout after %.1fs",
-                       config.INDIO_RELAY_TIMEOUT)
+        logger.warning(
+            "indio relay edit timeout after %.1fs", config.INDIO_RELAY_TIMEOUT
+        )
         return False
     except Exception:
-        logger.warning("indio relay edit failed: %s", "see traceback",
-                       exc_info=True)
+        logger.warning("indio relay edit failed: %s", "see traceback", exc_info=True)
         return False
 
 
@@ -2272,14 +2485,17 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
     if kind == "config":
         return "⚙️ Gemini no está configurado. Avisale al admin."
     if kind == "timeout":
-        return "⏱️ Che, me colgué. Mandalo de nuevo." if is_indio \
+        return (
+            "⏱️ Che, me colgué. Mandalo de nuevo."
+            if is_indio
             else "⏱️ Gemini tardó demasiado. Probá de nuevo."
+        )
     if kind == "http":
         if status == 429:
             base = (
                 f"⏳ Me quedé sin cupo de IA por ahora. Si querés que "
                 f"siga respondiendo, conseguite una key gratis en "
-                f"{config.GEMINI_KEYS_DONATION_URL} (botón \"Create API key\") "
+                f'{config.GEMINI_KEYS_DONATION_URL} (botón "Create API key") '
                 f"y mandámela por DM al bot — la sumo al pool al toque."
             )
             credits = _format_contributors_line()
@@ -2287,16 +2503,28 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
         if status == 503:
             # Gemini sobrecargado / caído: outage transitorio del lado de Google,
             # no un bug nuestro. Pedimos reintentar en un rato.
-            return "😵 La IA está caída ahora mismo (sobrecargada). Probá en un rato." if is_indio \
+            return (
+                "😵 La IA está caída ahora mismo (sobrecargada). Probá en un rato."
+                if is_indio
                 else "😵 Gemini no está disponible en este momento (servicio sobrecargado). Probá en un rato."
-        return f"🌐 Algo se rompió (HTTP {status}). Probá de nuevo." if is_indio \
+            )
+        return (
+            f"🌐 Algo se rompió (HTTP {status}). Probá de nuevo."
+            if is_indio
             else f"❌ Gemini falló (HTTP {status})."
+        )
     if kind == "blocked":
-        return "🤐 No, eso no lo contesto acá. ¿Cambiamos de tema?" if is_indio \
+        return (
+            "🤐 No, eso no lo contesto acá. ¿Cambiamos de tema?"
+            if is_indio
             else "🤐 No puedo responder esto (filtros de seguridad). Reformulá."
+        )
     if kind == "empty":
-        return "🤐 Eh, me quedé en blanco. Probá de nuevo." if is_indio \
+        return (
+            "🤐 Eh, me quedé en blanco. Probá de nuevo."
+            if is_indio
             else "🤐 Gemini no devolvió texto. Probá de nuevo."
+        )
     if kind == "parse":
         return "❌ Respuesta rara de Gemini. Probá de nuevo."
     return "❌ Algo se rompió. Probá de nuevo."
@@ -2319,6 +2547,13 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         This function is a coroutine and must be awaited.
     """
     t0 = time.monotonic()
+    # /vapls solo postea publico en los canales permitidos; en cualquier otro
+    # canal la respuesta sale ephemeral (solo la ve el invocador) para no
+    # ensuciar canales ajenos al bot.
+    _chan_id = getattr(ctx, "channel_id", None) or getattr(
+        getattr(ctx, "channel", None), "id", None
+    )
+    public_allowed = _chan_id in config.PUBLIC_ALLOWED_CHANNEL_IDS
     notifier, retry_state = _make_retry_notifier(ctx)
     try:
         reply = await geminiClient.generate(
@@ -2339,53 +2574,78 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
             # queda público, igual que el aviso — no hay forma de hacer un edit
             # del original a "ephemeral", así que sacrificamos el ephemeral
             # del rate limit para no dejar mensajes huérfanos.
-            if retry_state["had_retry"]:
+            # En canal no permitido el error tambien sale ephemeral. El edit
+            # del deferred no puede ser ephemeral, asi que en ese caso saltamos
+            # el edit y mandamos un followup ephemeral.
+            err_ephemeral = is_rate_limited or not public_allowed
+            if retry_state["had_retry"] and not err_ephemeral:
                 from bot import safeEdit
+
                 await safeEdit(ctx, msg)
             else:
-                await ctx.followup.send(msg, ephemeral=is_rate_limited)
+                await ctx.followup.send(msg, ephemeral=err_ephemeral)
         except Exception:
             pass
-        analytics.capture("vapls failed", user=ctx.author, guild=ctx.guild, properties={
-            "error_kind": e.kind,
-            "http_status": e.status,
-            "finish_reason": e.finish_reason,
-            "prompt_length": len(pregunta or ""),
-        })
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "vapls_generate"})
+        analytics.capture(
+            "vapls failed",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={
+                "error_kind": e.kind,
+                "http_status": e.status,
+                "finish_reason": e.finish_reason,
+                "prompt_length": len(pregunta or ""),
+            },
+        )
+        analytics.capture_exception(
+            e, user=ctx.author, guild=ctx.guild, properties={"action": "vapls_generate"}
+        )
         return
     except Exception as e:
         logger.exception("vapls unexpected error")
         try:
-            await ctx.followup.send("❌ Algo se rompió. Probá de nuevo.")
+            await ctx.followup.send(
+                "❌ Algo se rompió. Probá de nuevo.", ephemeral=not public_allowed
+            )
         except Exception:
             pass
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "vapls_unexpected"})
+        analytics.capture_exception(
+            e,
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"action": "vapls_unexpected"},
+        )
         return
 
     try:
         n_chunks = await _send_reply(
-            ctx, _format_user_header(ctx, pregunta) + reply.text,
+            ctx,
+            _format_user_header(ctx, pregunta) + reply.text,
             edit_first=retry_state["had_retry"],
+            ephemeral=not public_allowed,
         )
     except Exception as e:
         logger.exception("vapls send failed")
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "vapls_send"})
+        analytics.capture_exception(
+            e, user=ctx.author, guild=ctx.guild, properties={"action": "vapls_send"}
+        )
         return
 
-    analytics.capture("vapls invoked", user=ctx.author, guild=ctx.guild, properties={
-        "prompt_length": len(pregunta or ""),
-        "response_length": len(reply.text),
-        "response_chunks": n_chunks,
-        "finish_reason": reply.finish_reason,
-        "prompt_tokens": reply.prompt_tokens,
-        "response_tokens": reply.response_tokens,
-        "model": reply.model,
-        "latency_ms": int((time.monotonic() - t0) * 1000),
-    })
+    analytics.capture(
+        "vapls invoked",
+        user=ctx.author,
+        guild=ctx.guild,
+        properties={
+            "prompt_length": len(pregunta or ""),
+            "response_length": len(reply.text),
+            "response_chunks": n_chunks,
+            "finish_reason": reply.finish_reason,
+            "prompt_tokens": reply.prompt_tokens,
+            "response_tokens": reply.response_tokens,
+            "model": reply.model,
+            "latency_ms": int((time.monotonic() - t0) * 1000),
+        },
+    )
 
 
 async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool):
@@ -2408,7 +2668,9 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     _evict_stale_indio()
     mem_key = _indio_memory_key(ctx)
     lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
-    speaker = getattr(ctx.author, "display_name", None) or getattr(ctx.author, "name", "alguien")
+    speaker = getattr(ctx.author, "display_name", None) or getattr(
+        ctx.author, "name", "alguien"
+    )
     tagged_message = f"{speaker}: {pregunta or ''}"
 
     # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todos los
@@ -2419,7 +2681,8 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     if override_id and target_channel is None:
         logger.warning(
             "indioLogic: INDIO_REPLY_CHANNEL_ID=%s no resuelve a canal — caigo "
-            "al canal del slash", override_id,
+            "al canal del slash",
+            override_id,
         )
 
     async def _post(content, **kw):
@@ -2434,15 +2697,19 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         if target_channel is not None:
             return target_channel.id
         return getattr(ctx, "channel_id", None) or getattr(
-            getattr(ctx, "channel", None), "id", None)
+            getattr(ctx, "channel", None), "id", None
+        )
 
     # How the winner gets announced when the vote closes (relay as the real
     # indio when configured, else via this command's response).
     async def _post_choice(text):
         channel_id = _reply_channel_id()
         relayed = False
-        if (channel_id is not None
-                and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        if (
+            channel_id is not None
+            and config.INDIO_RELAY_URL
+            and config.INDIO_RELAY_SECRET
+        ):
             relayed = await _relay_to_userbot(channel_id, text, None)
         if not relayed:
             await _post(text)
@@ -2452,13 +2719,17 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     # the Discord user id so each person gets one vote.
     _choice_guild_id = getattr(getattr(ctx, "guild", None), "id", None)
     _choice_identity_val = _choice_identity(
-        getattr(getattr(ctx, "author", None), "id", None) or 0, speaker)
-    if (not nuevo and _choice_guild_id is not None
-            and _try_register_chat_vote(
-                int(_choice_guild_id),
-                int(getattr(getattr(ctx, "author", None), "id", None) or 0),
-                pregunta or "",
-            )):
+        getattr(getattr(ctx, "author", None), "id", None) or 0, speaker
+    )
+    if (
+        not nuevo
+        and _choice_guild_id is not None
+        and _try_register_chat_vote(
+            int(_choice_guild_id),
+            int(getattr(getattr(ctx, "author", None), "id", None) or 0),
+            pregunta or "",
+        )
+    ):
         return
 
     # Conversation is paused while a music vote is open in the guild. The
@@ -2468,6 +2739,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     # — or, worse, a brand-new vote — on top of the open one.
     if not nuevo and _choice_guild_id is not None:
         import playCommand
+
         _open_vote = playCommand.get_active_vote(int(_choice_guild_id))
         if _open_vote is not None:
             try:
@@ -2483,14 +2755,20 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     async with lock:
         history_reset = False
         if nuevo:
-            had_state = bool(_indio_history.get(mem_key)) or bool(_indio_long_term.get(mem_key))
+            had_state = bool(_indio_history.get(mem_key)) or bool(
+                _indio_long_term.get(mem_key)
+            )
             _indio_history.pop(mem_key, None)
             _indio_last_seen.pop(mem_key, None)
             _indio_long_term.pop(mem_key, None)
             if had_state:
                 history_reset = True
-                analytics.capture("indio history reset", user=ctx.author, guild=ctx.guild,
-                                  properties={"trigger": "nuevo_param", "scope": "guild"})
+                analytics.capture(
+                    "indio history reset",
+                    user=ctx.author,
+                    guild=ctx.guild,
+                    properties={"trigger": "nuevo_param", "scope": "guild"},
+                )
         history_snapshot = list(_indio_history.get(mem_key, []))
         long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
     if history_reset:
@@ -2505,15 +2783,20 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
     emoji_block = _format_guild_emojis(guild_for_extras)
     player_block = _format_player_state(getattr(ctx, "bot", None), guild_id)
-    logger.info("indio: roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
-                len(current_members),
-                len((long_term_snapshot.get("users") or {})),
-                emoji_count, mem_key)
+    logger.info(
+        "indio: roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
+        len(current_members),
+        len((long_term_snapshot.get("users") or {})),
+        emoji_count,
+        mem_key,
+    )
     # Stable cache prefix: persona + long-term notes + emojis (change rarely
     # within a session). Player state is volatile (current track/queue) so it
     # rides in volatile_context, out of the cached system prompt.
     stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (f"\n\n{stable_extras}" if stable_extras else "")
+    system_instruction = INDIO_SYSTEM + (
+        f"\n\n{stable_extras}" if stable_extras else ""
+    )
 
     t0 = time.monotonic()
     # Solo activamos el aviso de rotación cuando el Indio responde en el canal
@@ -2546,14 +2829,17 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 # va al slot del deferred (sobrescribe el aviso).
                 if retry_state["had_retry"] and target_channel is None:
                     from bot import safeEdit
+
                     await safeEdit(ctx, header)
                 else:
                     await _post(header)
                 channel_id = _reply_channel_id()
                 relayed = False
-                if (channel_id is not None
-                        and config.INDIO_RELAY_URL
-                        and config.INDIO_RELAY_SECRET):
+                if (
+                    channel_id is not None
+                    and config.INDIO_RELAY_URL
+                    and config.INDIO_RELAY_SECRET
+                ):
                     relayed = await _relay_to_userbot(channel_id, msg, None)
                 if not relayed:
                     await _post(msg)
@@ -2561,21 +2847,28 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
                 # Sobrescribir el aviso con el mensaje de error en vez de
                 # acumular dos mensajes (aviso + error).
                 from bot import safeEdit
+
                 await safeEdit(ctx, msg)
             else:
                 await _post(msg)
         except Exception:
             pass
-        analytics.capture("indio failed", user=ctx.author, guild=ctx.guild, properties={
-            "error_kind": e.kind,
-            "http_status": e.status,
-            "finish_reason": e.finish_reason,
-            "prompt_length": len(pregunta or ""),
-            "history_size_before": len(history_snapshot),
-            "nuevo": nuevo,
-        })
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "indio_generate"})
+        analytics.capture(
+            "indio failed",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={
+                "error_kind": e.kind,
+                "http_status": e.status,
+                "finish_reason": e.finish_reason,
+                "prompt_length": len(pregunta or ""),
+                "history_size_before": len(history_snapshot),
+                "nuevo": nuevo,
+            },
+        )
+        analytics.capture_exception(
+            e, user=ctx.author, guild=ctx.guild, properties={"action": "indio_generate"}
+        )
         return
     except Exception as e:
         logger.exception("indio unexpected error")
@@ -2583,25 +2876,34 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             await _post("❌ Algo se rompió. Probá de nuevo.")
         except Exception:
             pass
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "indio_unexpected"})
+        analytics.capture_exception(
+            e,
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"action": "indio_unexpected"},
+        )
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
-        ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
+        ctx.bot,
+        _choice_guild_id,
+        mem_key,
+        pending_actions,
+        reply,
+        _post_choice,
         requester_id=int(getattr(getattr(ctx, "author", None), "id", None) or 0),
     )
     relayed_via_userbot = False
     import playCommand
+
     _active_vote = playCommand.get_active_vote(int(getattr(ctx.guild, "id", 0) or 0))
     # "vote_open" here means "this turn just opened a vote and the reply IS
     # the options listing". A vote that already has a reaction_message_id
     # belongs to a previous turn — don't treat the current reply as its
     # surface (otherwise unrelated chat replies get 1-5 reactions slapped on).
-    vote_open = (_active_vote is not None
-                 and _active_vote.reaction_message_id is None)
+    vote_open = _active_vote is not None and _active_vote.reaction_message_id is None
     opts_channel_id = None
     opts_msg_id = None
     reply_handle = None
@@ -2614,17 +2916,24 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         if retry_state["had_retry"] and target_channel is None:
             try:
                 question_msg = await ctx.interaction.edit_original_response(
-                    content=question_header)
+                    content=question_header
+                )
             except Exception:
-                logger.debug("indio: edit header onto aviso failed, falling back",
-                             exc_info=True)
+                logger.debug(
+                    "indio: edit header onto aviso failed, falling back", exc_info=True
+                )
                 question_msg = None
         if question_msg is None:
             question_msg = await _post(question_header)
         question_msg_id = getattr(question_msg, "id", None)
         channel_id = _reply_channel_id()
         opts_channel_id = channel_id
-        if vote_open and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET and channel_id is not None:
+        if (
+            vote_open
+            and config.INDIO_RELAY_URL
+            and config.INDIO_RELAY_SECRET
+            and channel_id is not None
+        ):
             # Vote options: post via relay but capture the message id so we can
             # add the number reactions to it.
             opts_msg_id = await _relay_say(channel_id, clean_reply)
@@ -2633,20 +2942,27 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             if not relayed_via_userbot:
                 sent = await _post(clean_reply)
                 opts_msg_id = getattr(sent, "id", None)
-                opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
+                opts_channel_id = (
+                    getattr(getattr(sent, "channel", None), "id", None) or channel_id
+                )
                 n_chunks = 1
         elif vote_open:
             sent = await _post(clean_reply)
             opts_msg_id = getattr(sent, "id", None)
-            opts_channel_id = getattr(getattr(sent, "channel", None), "id", None) or channel_id
+            opts_channel_id = (
+                getattr(getattr(sent, "channel", None), "id", None) or channel_id
+            )
             n_chunks = 1
-        elif channel_id is not None and config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+        elif (
+            channel_id is not None
+            and config.INDIO_RELAY_URL
+            and config.INDIO_RELAY_SECRET
+        ):
             import types as _types
+
             # No reply-to: el question_msg lo posteo el bot mismo, hacer reply
             # ahi queda como auto-reply (Indio respondiendose a si mismo).
-            relay_ids = await _relay_to_userbot(
-                channel_id, clean_reply, None
-            )
+            relay_ids = await _relay_to_userbot(channel_id, clean_reply, None)
             relayed_via_userbot = bool(relay_ids)
             if relayed_via_userbot:
                 relay_msg_id = relay_ids[0] if relay_ids else None
@@ -2674,6 +2990,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         else:
             # Fallback: post the reply via vapls if relay is disabled or failed.
             import types as _types
+
             chunks = _split_for_discord(clean_reply)
             sent_msg = None
             for c in chunks:
@@ -2688,33 +3005,48 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             n_chunks = len(chunks)
     except Exception as e:
         logger.exception("indio send failed")
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "indio_send"})
+        analytics.capture_exception(
+            e, user=ctx.author, guild=ctx.guild, properties={"action": "indio_send"}
+        )
         return
 
     if vote_open and opts_msg_id and opts_channel_id and _active_vote is not None:
         n = len(_active_vote.candidates)
         await _attach_vote_reactions(
-            ctx.bot, _active_vote, opts_channel_id, opts_msg_id, n,
+            ctx.bot,
+            _active_vote,
+            opts_channel_id,
+            opts_msg_id,
+            n,
         )
 
     if pending_actions:
-        _spawn(_dispatch_indio_actions(
-            ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
-            reply_handle=reply_handle,
-            reply_text=clean_reply,
-            requester_member=ctx.author,
-        ))
+        _spawn(
+            _dispatch_indio_actions(
+                ctx.bot,
+                getattr(ctx.guild, "id", None),
+                pending_actions,
+                reply_handle=reply_handle,
+                reply_text=clean_reply,
+                requester_member=ctx.author,
+            )
+        )
 
     _turn_ts = time.time()
     # Persisted history scrubs emojis/legacy-brackets; visible reply already
     # went to Discord above with the emojis intact.
-    user_turn = {"role": "user",
-                 "parts": [{"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}],
-                 "ts": _turn_ts}
-    model_turn = {"role": "model",
-                  "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
-                  "ts": _turn_ts}
+    user_turn = {
+        "role": "user",
+        "parts": [
+            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
+        ],
+        "ts": _turn_ts,
+    }
+    model_turn = {
+        "role": "model",
+        "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
+        "ts": _turn_ts,
+    }
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -2730,21 +3062,26 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
         _spawn(_maybe_compress(mem_key))
 
-    analytics.capture("indio invoked", user=ctx.author, guild=ctx.guild, properties={
-        "prompt_length": len(pregunta or ""),
-        "response_length": len(reply.text),
-        "response_chunks": n_chunks,
-        "finish_reason": reply.finish_reason,
-        "prompt_tokens": reply.prompt_tokens,
-        "response_tokens": reply.response_tokens,
-        "model": reply.model,
-        "latency_ms": int((time.monotonic() - t0) * 1000),
-        "history_size_before": len(history_snapshot),
-        "history_size_after": history_size_after,
-        "long_term_users": len(long_term_snapshot.get("users", {}) or {}),
-        "nuevo": nuevo,
-        "relayed_via_userbot": relayed_via_userbot,
-    })
+    analytics.capture(
+        "indio invoked",
+        user=ctx.author,
+        guild=ctx.guild,
+        properties={
+            "prompt_length": len(pregunta or ""),
+            "response_length": len(reply.text),
+            "response_chunks": n_chunks,
+            "finish_reason": reply.finish_reason,
+            "prompt_tokens": reply.prompt_tokens,
+            "response_tokens": reply.response_tokens,
+            "model": reply.model,
+            "latency_ms": int((time.monotonic() - t0) * 1000),
+            "history_size_before": len(history_snapshot),
+            "history_size_after": history_size_after,
+            "long_term_users": len(long_term_snapshot.get("users", {}) or {}),
+            "nuevo": nuevo,
+            "relayed_via_userbot": relayed_via_userbot,
+        },
+    )
 
 
 async def indioFromVoice(
@@ -2789,7 +3126,8 @@ async def indioFromVoice(
             logger.warning(
                 "indioFromVoice: INDIO_REPLY_CHANNEL_ID=%s no resuelve a canal — "
                 "caigo al canal original %s",
-                config.INDIO_REPLY_CHANNEL_ID, channel_id,
+                config.INDIO_REPLY_CHANNEL_ID,
+                channel_id,
             )
     guild = bot.get_guild(guild_id)
     if guild is None:
@@ -2806,9 +3144,7 @@ async def indioFromVoice(
     # clean_reply, para que la cuenta-real (userbot) se lo mande.
     redirected = bool(original_channel_id and original_channel_id != channel_id)
     member = guild.get_member(user_id)
-    speaker = (speaker_name
-               or (member.display_name if member else None)
-               or "alguien")
+    speaker = speaker_name or (member.display_name if member else None) or "alguien"
 
     _evict_stale_indio()
     mem_key = f"guild-{guild_id}"
@@ -2831,8 +3167,9 @@ async def indioFromVoice(
     # vote (anyone can vote) instead of starting a fresh turn. This is the
     # voice path — treated as decisive (close_now=True) since the user just
     # spoke the choice out loud.
-    if try_register_voice_vote(guild_id=guild_id, user_id=user_id,
-                               speaker_name=speaker, text=pregunta):
+    if try_register_voice_vote(
+        guild_id=guild_id, user_id=user_id, speaker_name=speaker, text=pregunta
+    ):
         return
 
     async with lock:
@@ -2848,7 +3185,9 @@ async def indioFromVoice(
     # within a session). Player state is volatile (current track/queue) so it
     # rides in volatile_context, out of the cached system prompt.
     stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (f"\n\n{stable_extras}" if stable_extras else "")
+    system_instruction = INDIO_SYSTEM + (
+        f"\n\n{stable_extras}" if stable_extras else ""
+    )
 
     t0 = time.monotonic()
     try:
@@ -2873,11 +3212,16 @@ async def indioFromVoice(
                 await channel.send(msg)
         except Exception:
             logger.exception("indioFromVoice error-send failed")
-        analytics.capture("indio voice failed", user=member, guild=guild, properties={
-            "error_kind": e.kind,
-            "http_status": e.status,
-            "prompt_length": len(pregunta),
-        })
+        analytics.capture(
+            "indio voice failed",
+            user=member,
+            guild=guild,
+            properties={
+                "error_kind": e.kind,
+                "http_status": e.status,
+                "prompt_length": len(pregunta),
+            },
+        )
         return
     except Exception as e:
         logger.exception("indioFromVoice unexpected error")
@@ -2885,24 +3229,30 @@ async def indioFromVoice(
             await channel.send("❌ Algo se rompió. Probá de nuevo.")
         except Exception:
             pass
-        analytics.capture_exception(e, user=member, guild=guild,
-                                    properties={"action": "indio_voice_unexpected"})
+        analytics.capture_exception(
+            e, user=member, guild=guild, properties={"action": "indio_voice_unexpected"}
+        )
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
-        bot, guild_id, mem_key, pending_actions, reply, _post_choice,
+        bot,
+        guild_id,
+        mem_key,
+        pending_actions,
+        reply,
+        _post_choice,
         requester_id=int(user_id or 0),
     )
     relayed_via_userbot = False
     import playCommand
+
     _active_vote = playCommand.get_active_vote(int(guild_id) if guild_id else 0)
     # Same gate as indioLogic: only treat this turn's reply as the options
     # surface when the live vote is the one we just opened (no message bound
     # yet). Avoids the "unrelated chat reply gets 1-5 reactions" bug.
-    vote_open = (_active_vote is not None
-                 and _active_vote.reaction_message_id is None)
+    vote_open = _active_vote is not None and _active_vote.reaction_message_id is None
     opts_msg_id = None
     reply_handle = None
     # Id del primer mensaje que aterriza en el target — sirve como anchor
@@ -2958,6 +3308,7 @@ async def indioFromVoice(
                 opts_msg_id = getattr(sent, "id", None)
         else:
             import types as _types
+
             if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
                 relay_ids = await _relay_to_userbot(
                     channel_id, clean_reply, reply_anchor_id
@@ -2995,20 +3346,30 @@ async def indioFromVoice(
         await _attach_vote_reactions(bot, _active_vote, channel_id, opts_msg_id, n)
 
     if pending_actions:
-        _spawn(_dispatch_indio_actions(
-            bot, guild_id, pending_actions,
-            reply_handle=reply_handle,
-            reply_text=clean_reply,
-            requester_member=member,
-        ))
+        _spawn(
+            _dispatch_indio_actions(
+                bot,
+                guild_id,
+                pending_actions,
+                reply_handle=reply_handle,
+                reply_text=clean_reply,
+                requester_member=member,
+            )
+        )
 
     _turn_ts = time.time()
-    user_turn = {"role": "user",
-                 "parts": [{"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}],
-                 "ts": _turn_ts}
-    model_turn = {"role": "model",
-                  "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
-                  "ts": _turn_ts}
+    user_turn = {
+        "role": "user",
+        "parts": [
+            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
+        ],
+        "ts": _turn_ts,
+    }
+    model_turn = {
+        "role": "model",
+        "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
+        "ts": _turn_ts,
+    }
     async with lock:
         existing = _indio_history.get(mem_key, history_snapshot)
         new_hist = list(existing) + [user_turn, model_turn]
@@ -3026,8 +3387,9 @@ async def indioFromVoice(
     # del Indio en el target como landing point del link cuando no hubo header.
     if redirected and landing_msg_id is None:
         if reply_handle is not None:
-            landing_msg_id = (getattr(reply_handle, "message_id", None)
-                              or getattr(getattr(reply_handle, "message", None), "id", None))
+            landing_msg_id = getattr(reply_handle, "message_id", None) or getattr(
+                getattr(reply_handle, "message", None), "id", None
+            )
         elif opts_msg_id:
             landing_msg_id = opts_msg_id
 
@@ -3042,7 +3404,8 @@ async def indioFromVoice(
             except Exception:
                 logger.info(
                     "indioFromVoice: could not delete source message %s "
-                    "(missing Manage Messages perm?)", source_message_id,
+                    "(missing Manage Messages perm?)",
+                    source_message_id,
                 )
 
     # DM al user via userbot (cuenta-real): solo el link al mensaje en el
@@ -3050,35 +3413,43 @@ async def indioFromVoice(
     # contextos fuera del guild (DM), aparece literal y queda feo.
     if redirected and user_id:
         if landing_msg_id:
-            link = (f"https://discord.com/channels/{guild_id}"
-                    f"/{channel_id}/{landing_msg_id}")
+            link = (
+                f"https://discord.com/channels/{guild_id}/{channel_id}/{landing_msg_id}"
+            )
             dm_text = f"te respondi en este canal {link}"
         else:
             dm_text = f"te respondi en <#{channel_id}>"
         _spawn(_relay_dm_user(int(user_id), dm_text))
 
-    analytics.capture("indio voice invoked", user=member, guild=guild, properties={
-        "prompt_length": len(pregunta),
-        "response_length": len(clean_reply),
-        "latency_ms": int((time.monotonic() - t0) * 1000),
-        "relayed_via_userbot": relayed_via_userbot,
-        "history_size_after": history_size_after,
-    })
+    analytics.capture(
+        "indio voice invoked",
+        user=member,
+        guild=guild,
+        properties={
+            "prompt_length": len(pregunta),
+            "response_length": len(clean_reply),
+            "latency_ms": int((time.monotonic() - t0) * 1000),
+            "relayed_via_userbot": relayed_via_userbot,
+            "history_size_after": history_size_after,
+        },
+    )
 
 
 _BOT_TESTING_CHANNEL_NAME = "bot-testing"
 
 
-async def askIndio(bot: "discord.Bot",
-                   text: str,
-                   speaker_name: str = "alguien",
-                   *,
-                   guild_id: Optional[int] = None,
-                   channel_id: Optional[int] = None,
-                   channel_name: Optional[str] = None,
-                   user_id: int = 0,
-                   source_message_id: Optional[int] = None,
-                   is_voice: bool = False) -> bool:
+async def askIndio(
+    bot: "discord.Bot",
+    text: str,
+    speaker_name: str = "alguien",
+    *,
+    guild_id: Optional[int] = None,
+    channel_id: Optional[int] = None,
+    channel_name: Optional[str] = None,
+    user_id: int = 0,
+    source_message_id: Optional[int] = None,
+    is_voice: bool = False,
+) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
     Args:
@@ -3111,19 +3482,25 @@ async def askIndio(bot: "discord.Bot",
         target_guild_id = guild_id
         if channel_name is None:
             channel_name = _BOT_TESTING_CHANNEL_NAME
-        guilds = [bot.get_guild(target_guild_id)] if target_guild_id else list(bot.guilds)
+        guilds = (
+            [bot.get_guild(target_guild_id)] if target_guild_id else list(bot.guilds)
+        )
         for guild in guilds:
             if guild is None:
                 continue
-            chan = discord.utils.get(getattr(guild, "text_channels", []) or [],
-                                     name=channel_name)
+            chan = discord.utils.get(
+                getattr(guild, "text_channels", []) or [], name=channel_name
+            )
             if chan is not None:
                 target_channel_id = chan.id
                 target_guild_id = guild.id
                 break
     if target_channel_id is None or target_guild_id is None:
-        logger.warning("askIndio: could not resolve channel (guild=%s, name=%s)",
-                       guild_id, channel_name)
+        logger.warning(
+            "askIndio: could not resolve channel (guild=%s, name=%s)",
+            guild_id,
+            channel_name,
+        )
         return False
     await indioFromVoice(
         bot,

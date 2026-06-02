@@ -48,7 +48,7 @@ def stub_analytics(request, monkeypatch):
 # talks to the user. `ctx.followup.send` records every message sent.
 # --------------------------------------------------------------------------
 def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100,
-             in_voice=True, voice_channel_id=99):
+             in_voice=True, voice_channel_id=99, channel_id=42):
     """Build a fake ApplicationContext.
 
     `display_name`/`name` may be None to exercise fall-through in the header
@@ -57,6 +57,12 @@ def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100,
     `in_voice=True` (default) puts the author in a voice channel so music
     actions pass the requester-in-voice gate in ``_dispatch_indio_actions``.
     Pass `in_voice=False` to model a requester outside voice (gated).
+
+    `channel_id=42` (default) is a NON-allowed text channel, so existing tests
+    keep modeling "some arbitrary channel". Pass a channel in
+    ``config.PUBLIC_ALLOWED_CHANNEL_IDS`` to model an allowed channel. The
+    ephemeral flag of every sent message is recorded, index-aligned with
+    ``ctx.sent_messages``, in ``ctx.sent_ephemeral``.
     """
     author = types.SimpleNamespace(id=user_id)
     if display_name is not None:
@@ -76,7 +82,11 @@ def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100,
     else:
         ctx.guild = types.SimpleNamespace(id=guild_id)
 
+    ctx.channel_id = channel_id
+    ctx.channel = types.SimpleNamespace(id=channel_id)
+
     sent: list[str] = []
+    sent_ephemeral: list[bool] = []
     _msg_id_counter = [1000]
 
     def _make_fake_message(content, sent_list):
@@ -100,11 +110,13 @@ def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100,
     async def _send(content=None, **kwargs):
         msg = _make_fake_message(content, sent)
         sent.append(content)
+        sent_ephemeral.append(bool(kwargs.get("ephemeral", False)))
         return msg
 
     ctx.followup = MagicMock()
     ctx.followup.send = AsyncMock(side_effect=_send)
     ctx.sent_messages = sent
+    ctx.sent_ephemeral = sent_ephemeral
 
     # Discord interaction surface: defer() ya ocurrió por safe_defer en los
     # comandos reales. Modelamos ctx.response.is_done() => True y exponemos
@@ -122,8 +134,11 @@ def make_ctx(*, display_name="Tester", name="tester", user_id=1, guild_id=100,
         msg = _make_fake_message(content, sent)
         if sent:
             sent[0] = content
+            if sent_ephemeral:
+                sent_ephemeral[0] = False  # deferred-publico no puede ser ephemeral
         else:
             sent.append(content)
+            sent_ephemeral.append(False)
         deferred_history.append(content)
         return msg
 
@@ -141,6 +156,19 @@ def ctx_factory():
 def sent_text(ctx) -> str:
     """All text the user would have seen, concatenated."""
     return "\n".join(m for m in ctx.sent_messages if m is not None)
+
+
+def ephemeral_for(ctx, substring) -> bool:
+    """Ephemeral flag of the first sent message containing ``substring``.
+
+    Raises AssertionError if no sent message contains it, so the test fails
+    loudly instead of silently passing on a wrong assumption.
+    """
+    for content, eph in zip(ctx.sent_messages, ctx.sent_ephemeral):
+        if content is not None and substring in content:
+            return eph
+    raise AssertionError(
+        f"no sent message contained {substring!r}; sent={ctx.sent_messages!r}")
 
 
 # --------------------------------------------------------------------------

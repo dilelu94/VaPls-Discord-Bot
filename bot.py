@@ -4,6 +4,7 @@ Handles slash commands, voice playback, greeting triggers, analytics, and the
 HTTP API server. Voice receive/transcription is delegated to the userbot in
 ./userbot/.
 """
+
 import sys
 import os
 import logging
@@ -39,11 +40,12 @@ import webhookLogger
 logging.basicConfig(
     level=logging.INFO,
     stream=sys.stdout,
-    format='%(levelname)s:%(name)s: %(message)s',
+    format="%(levelname)s:%(name)s: %(message)s",
 )
 log = logging.getLogger("bot")
 
 import posthog_client
+
 posthog_client.init_observability(service_name="vapls-main-bot")
 
 # Forward logs to a Discord thread via webhook (LOG_WEBHOOK_URL env var).
@@ -51,7 +53,7 @@ posthog_client.init_observability(service_name="vapls-main-bot")
 _webhook_log_handler = webhookLogger.install_from_env("bot")
 
 if not discord.opus.is_loaded():
-    for lib in ['libopus.so.0', 'libopus.so', 'opus']:
+    for lib in ["libopus.so.0", "libopus.so", "opus"]:
         try:
             discord.opus.load_opus(lib)
             break
@@ -248,6 +250,7 @@ async def on_voice_state_update(member, before, after):
         # restart from where we left off.
         try:
             from playCommand import guildPlayers
+
             _player = guildPlayers.get(before.channel.guild.id)
             if _player is not None and _player.currentSong is not None:
                 _player.mark_interrupted()
@@ -276,14 +279,18 @@ async def on_message(message):
     if not found:
         return
     owner_id = str(message.author.id)
-    owner_name = getattr(message.author, "display_name", None) \
-        or getattr(message.author, "name", "unknown")
+    owner_name = getattr(message.author, "display_name", None) or getattr(
+        message.author, "name", "unknown"
+    )
     added: list[str] = []
     dupes: list[str] = []
     failed: list[tuple[str, str]] = []
     for k in found:
         ok, reason = await geminiKeys.add_key(
-            k, owner_id=owner_id, owner_name=owner_name, source="dm:bot",
+            k,
+            owner_id=owner_id,
+            owner_name=owner_name,
+            source="dm:bot",
         )
         if ok:
             added.append(k)
@@ -297,8 +304,9 @@ async def on_message(message):
     if dupes:
         lines.append(f"ℹ️ {len(dupes)} key(s) ya estaban cargadas.")
     if failed:
-        lines.append("❌ Algunas no pude sumarlas:\n" +
-                     "\n".join(f"- {r}" for _, r in failed))
+        lines.append(
+            "❌ Algunas no pude sumarlas:\n" + "\n".join(f"- {r}" for _, r in failed)
+        )
     if lines:
         try:
             await message.channel.send("\n".join(lines))
@@ -306,7 +314,11 @@ async def on_message(message):
             log.exception("on_message: reply failed")
     log.info(
         "gemini key DM from %s (%s): added=%d dupes=%d failed=%d",
-        owner_name, owner_id, len(added), len(dupes), len(failed),
+        owner_name,
+        owner_id,
+        len(added),
+        len(dupes),
+        len(failed),
     )
 
 
@@ -324,6 +336,7 @@ async def on_raw_reaction_add(payload):
         if bot.user is not None and payload.user_id == bot.user.id:
             return
         import geminiCommand
+
         geminiCommand.register_reaction_vote(
             channel_id=payload.channel_id,
             message_id=payload.message_id,
@@ -331,6 +344,7 @@ async def on_raw_reaction_add(payload):
             user_id=payload.user_id,
         )
         import decifrarVoting
+
         await decifrarVoting.handle_reaction_vote(
             bot,
             channel_id=payload.channel_id,
@@ -370,7 +384,9 @@ def _track_command(ctx, name, extra=None):
     props = {"command": name, "channel_id": str(getattr(ctx.channel, "id", "") or "")}
     if extra:
         props.update(extra)
-    analytics.capture("command invoked", user=ctx.author, guild=ctx.guild, properties=props)
+    analytics.capture(
+        "command invoked", user=ctx.author, guild=ctx.guild, properties=props
+    )
 
 
 @bot.slash_command(name="parar")
@@ -395,13 +411,16 @@ async def parar(ctx):
 async def queueCommand(ctx):
     """Slash command: render the current queue as an ephemeral embed."""
     from playCommand import guildPlayers, build_queue_embed
+
     _track_command(ctx, "queue")
     player = guildPlayers.get(ctx.guild.id) if ctx.guild else None
     embed = build_queue_embed(player)
     await ctx.respond(embed=embed, ephemeral=True)
 
 
-@bot.slash_command(name="play", description="Reproduce una canción o playlist de YouTube")
+@bot.slash_command(
+    name="play", description="Reproduce una canción o playlist de YouTube"
+)
 async def play(
     ctx,
     query: discord.Option(
@@ -432,7 +451,9 @@ async def play(
     await playLogic(ctx, query)
 
 
-@bot.slash_command(name="soundpad", description="Abre el panel o reproduce un clip por nombre")
+@bot.slash_command(
+    name="soundpad", description="Abre el panel o reproduce un clip por nombre"
+)
 async def soundpad(
     ctx,
     query: discord.Option(
@@ -471,8 +492,12 @@ async def soundpad(
         )
         if contributors:
             msg = f"{msg}\n\n{contributors}"
-        analytics.capture("soundpad gated", user=ctx.author, guild=ctx.guild,
-                          properties={"reason": "no_user_key"})
+        analytics.capture(
+            "soundpad gated",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"reason": "no_user_key"},
+        )
         await ctx.respond(msg, ephemeral=True)
         return
 
@@ -522,7 +547,8 @@ async def indio(
     # que la respuesta va al target. El defer también va ephemeral, porque si
     # no Discord ignora el ephemeral=True del followup.
     source_id = getattr(ctx, "channel_id", None) or getattr(
-        getattr(ctx, "channel", None), "id", None)
+        getattr(ctx, "channel", None), "id", None
+    )
     target_id = config.INDIO_REPLY_CHANNEL_ID
     will_redirect = bool(target_id and source_id and source_id != target_id)
     await safe_defer(ctx, ephemeral=will_redirect)
@@ -530,14 +556,18 @@ async def indio(
     if will_redirect:
         try:
             await ctx.followup.send(
-                f"te respondo en <#{target_id}>", ephemeral=True,
+                f"te respondo en <#{target_id}>",
+                ephemeral=True,
             )
         except Exception:
             log.exception("indio: source-channel ack failed")
     await indioLogic(ctx, charla, False)
 
 
-@bot.slash_command(name="sugerencias", description="Sugerile algo al bot — se agrupa con ideas similares")
+@bot.slash_command(
+    name="sugerencias",
+    description="Sugerile algo al bot — se agrupa con ideas similares",
+)
 async def sugerencias(
     ctx,
     idea: discord.Option(str, description="Tu idea, cambio o feature deseado"),
@@ -564,7 +594,10 @@ async def sugerencias(
     await sugerenciasLogic(ctx, idea)
 
 
-@bot.slash_command(name="sugerencias-ver", description="Mirá qué sugerencias ya existen, ordenadas por las más pedidas")
+@bot.slash_command(
+    name="sugerencias-ver",
+    description="Mirá qué sugerencias ya existen, ordenadas por las más pedidas",
+)
 async def sugerencias_ver(ctx):
     """Slash command: list existing suggestion groups ranked by demand.
 
@@ -635,7 +668,9 @@ async def quit(ctx):
                 },
             )
             try:
-                await ctx.followup.send(f"👋 Desconectado correctamente de {channel_name}.")
+                await ctx.followup.send(
+                    f"👋 Desconectado correctamente de {channel_name}."
+                )
             except discord.NotFound:
                 pass
         except Exception as e:
@@ -656,7 +691,9 @@ async def quit(ctx):
             pass
 
 
-@bot.slash_command(name="entraindio", description="Hace que el indio entre a tu canal de voz")
+@bot.slash_command(
+    name="entraindio", description="Hace que el indio entre a tu canal de voz"
+)
 async def entraindio(ctx):
     """Slash command: ask the userbot to join the caller's voice channel.
 
@@ -676,7 +713,9 @@ async def entraindio(ctx):
     voice_state = getattr(ctx.author, "voice", None)
     voice_channel = getattr(voice_state, "channel", None) if voice_state else None
     if voice_channel is None:
-        await safe_respond(ctx, "❌ Tenés que estar en un canal de voz para que el indio entre.")
+        await safe_respond(
+            ctx, "❌ Tenés que estar en un canal de voz para que el indio entre."
+        )
         return
 
     if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
@@ -705,7 +744,10 @@ async def entraindio(ctx):
     await safe_respond(ctx, f"🪶 El indio va para **{voice_channel.name}**.")
 
 
-@bot.slash_command(name="sensibilidad", description="Cambia la sensibilidad del wake-word del indio (presets 1-3)")
+@bot.slash_command(
+    name="sensibilidad",
+    description="Cambia la sensibilidad del wake-word del indio (presets 1-3)",
+)
 async def sensibilidad(
     ctx,
     preset: discord.Option(
@@ -743,8 +785,12 @@ async def sensibilidad(
             async with sess.post(url, json=payload, headers=headers) as resp:
                 body = await resp.text()
                 if resp.status >= 400:
-                    log.warning("sensibilidad relay HTTP %s: %s", resp.status, body[:200])
-                    await safe_respond(ctx, f"⚠️ No pude cambiar la sensibilidad (HTTP {resp.status}).")
+                    log.warning(
+                        "sensibilidad relay HTTP %s: %s", resp.status, body[:200]
+                    )
+                    await safe_respond(
+                        ctx, f"⚠️ No pude cambiar la sensibilidad (HTTP {resp.status})."
+                    )
                     return
     except Exception as e:
         log.exception("sensibilidad relay failed")
@@ -753,13 +799,49 @@ async def sensibilidad(
 
     _PRESET_DESCRIPTIONS = {
         1: "**Preset 1** — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
-        2: "**Preset 2** — menos sensible (default): solo `che indio` + verbos. Reduce falsos positivos de \"que\".",
+        2: '**Preset 2** — menos sensible (default): solo `che indio` + verbos. Reduce falsos positivos de "que".',
         3: "**Preset 3** — (placeholder / WIP): igual al preset 2 por ahora.",
     }
-    await safe_respond(ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}")
+    await safe_respond(
+        ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"
+    )
 
 
-@bot.slash_command(name="help", description="Lista los comandos del bot y cómo funciona")
+@bot.slash_command(
+    name="huh",
+    description="Activa/desactiva el sonido de confirmación al detectar wake-word",
+)
+async def huh(ctx):
+    await safe_defer(ctx)
+    _track_command(ctx, "huh")
+
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+        return
+
+    url = urljoin(config.INDIO_RELAY_URL, "/toggle_wake_sound")
+    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json={}, headers=headers) as resp:
+                body = await resp.json()
+                if resp.status >= 400:
+                    await safe_respond(ctx, "⚠️ No pude cambiar el estado del sonido.")
+                    return
+                enabled = body.get("enabled", False)
+    except Exception as e:
+        log.exception("huh relay failed")
+        await safe_respond(ctx, f"⚠️ Error llamando al indio: {e}")
+        return
+
+    status = "✅ Activado" if enabled else "❌ Desactivado"
+    await safe_respond(ctx, f"🎵 Sonido de wake-word: {status}")
+
+
+@bot.slash_command(
+    name="help", description="Lista los comandos del bot y cómo funciona"
+)
 async def help_cmd(ctx):
     """Slash command: list available commands and bot/userbot info.
 

@@ -29,7 +29,9 @@ from discord.ext import voice_recv
 
 import config
 import greeting
-from transcript_channel import resolve_transcript_channel as _resolve_transcript_channel_impl
+from transcript_channel import (
+    resolve_transcript_channel as _resolve_transcript_channel_impl,
+)
 from recording import (
     INPUT_SAMPLE_RATE as _REC_INPUT_SAMPLE_RATE,
     INPUT_WIDTH as _REC_INPUT_WIDTH,
@@ -213,6 +215,7 @@ logging.basicConfig(
 log = logging.getLogger("userbot")
 
 import posthog_client
+
 posthog_client.init_observability(service_name="vapls-userbot")
 
 # Webhook forwarding (LOG_WEBHOOK_URL). Installed *after* basicConfig so the
@@ -263,9 +266,11 @@ from collections import defaultdict, deque
 import numpy as np
 from faster_whisper import WhisperModel
 
-log.info(f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
-        f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
-        f"cpu_threads={config.WHISPER_CPU_THREADS}) ...")
+log.info(
+    f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
+    f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
+    f"cpu_threads={config.WHISPER_CPU_THREADS}) ..."
+)
 whisper_model = WhisperModel(
     config.WHISPER_MODEL,
     device="cpu",
@@ -289,13 +294,20 @@ def _normalize(s: str) -> str:
 # ``_has_text_beyond_wake_word`` to strip the wake-word out of the
 # transcript when deciding whether anything substantive is left to dispatch.
 _WAKE_WORD_TOKENS = (
-    "indio", "indyo",
-    "endio", "endyo",
-    "yndio", "yndyo",
-    "yendio", "yendyo",
-    "seinio", "seindio",
-    "cendio", "ceindio",
-    "sendio", "sendyo",
+    "indio",
+    "indyo",
+    "endio",
+    "endyo",
+    "yndio",
+    "yndyo",
+    "yendio",
+    "yendyo",
+    "seinio",
+    "seindio",
+    "cendio",
+    "ceindio",
+    "sendio",
+    "sendyo",
 )
 
 
@@ -379,17 +391,22 @@ class TranscriberSink(voice_recv.AudioSink):
                 now = time.time()
                 for uid in list(self.last_voice_ts.keys()):
                     last = self.last_voice_ts.get(uid)
-                    if (last and self.had_voice.get(uid)
-                            and (now - last) > self.SILENCE_FINAL_SECONDS):
+                    if (
+                        last
+                        and self.had_voice.get(uid)
+                        and (now - last) > self.SILENCE_FINAL_SECONDS
+                    ):
                         self._finalize_user(uid)
             except Exception:
                 log.exception("[WHISPER] idle watcher error")
 
     def _concurrency_limit(self) -> int:
         """Pick 3 while the main bot plays audio, else 5."""
-        return (config.MAX_CONCURRENT_WHILE_PLAYING
-                if _main_bot_is_playing()
-                else config.MAX_CONCURRENT_IDLE)
+        return (
+            config.MAX_CONCURRENT_WHILE_PLAYING
+            if _main_bot_is_playing()
+            else config.MAX_CONCURRENT_IDLE
+        )
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
         user_id = getattr(source, "id", None)
@@ -405,8 +422,10 @@ class TranscriberSink(voice_recv.AudioSink):
 
         self.packet_count += 1
         if self.packet_count == 1:
-            log.info(f"[WHISPER] First packet received "
-                     f"(user_id={user_id}, bytes={len(pcm_data)})")
+            log.info(
+                f"[WHISPER] First packet received "
+                f"(user_id={user_id}, bytes={len(pcm_data)})"
+            )
             self._start_idle_watcher_once()
         elif self.packet_count % 1000 == 0:
             elapsed = time.time() - self.start_time
@@ -420,15 +439,20 @@ class TranscriberSink(voice_recv.AudioSink):
             # Diagnostic: log RMS for first few packets per user.
             seen = self._rms_seen.get(user_id, 0)
             if seen < 20:
-                log.info(f"[WHISPER-RMS] user={user_id} rms={rms} "
-                         f"threshold={self.SILENCE_RMS_THRESHOLD}")
+                log.info(
+                    f"[WHISPER-RMS] user={user_id} rms={rms} "
+                    f"threshold={self.SILENCE_RMS_THRESHOLD}"
+                )
                 self._rms_seen[user_id] = seen + 1
 
             if rms < self.SILENCE_RMS_THRESHOLD:
                 # Silence frame: check if we should finalize a pending utterance.
                 last = self.last_voice_ts.get(user_id)
-                if (last and self.had_voice.get(user_id)
-                        and (now - last) > self.SILENCE_FINAL_SECONDS):
+                if (
+                    last
+                    and self.had_voice.get(user_id)
+                    and (now - last) > self.SILENCE_FINAL_SECONDS
+                ):
                     self._finalize_user(user_id)
                 return
 
@@ -459,16 +483,20 @@ class TranscriberSink(voice_recv.AudioSink):
             return
         secs = len(buf) / (16000 * 2)
         if secs < self.MIN_SPEECH_SECONDS:
-            log.info(f"[WHISPER-FINAL] user={user_id} too short ({secs:.2f}s "
-                     f"< {self.MIN_SPEECH_SECONDS}s), skip")
+            log.info(
+                f"[WHISPER-FINAL] user={user_id} too short ({secs:.2f}s "
+                f"< {self.MIN_SPEECH_SECONDS}s), skip"
+            )
             return
         log.info(f"[WHISPER-FINAL] user={user_id} finalizing {secs:.2f}s")
 
         with self._active_lock:
             limit = self._concurrency_limit()
             if self._active_count >= limit:
-                log.info(f"[WHISPER] capacity full ({self._active_count}/"
-                         f"{limit}); dropping {secs:.1f}s from user {user_id}")
+                log.info(
+                    f"[WHISPER] capacity full ({self._active_count}/"
+                    f"{limit}); dropping {secs:.1f}s from user {user_id}"
+                )
                 return
             self._active_count += 1
 
@@ -477,16 +505,19 @@ class TranscriberSink(voice_recv.AudioSink):
             self._client_ref.loop,
         )
 
-    async def _transcribe_and_dispatch(self, user_id: int, pcm_16k: bytes,
-                                       duration: float) -> None:
+    async def _transcribe_and_dispatch(
+        self, user_id: int, pcm_16k: bytes, duration: float
+    ) -> None:
         try:
             t0 = time.monotonic()
             text = await asyncio.to_thread(_run_whisper, pcm_16k)
             dt = time.monotonic() - t0
             if not text:
                 return
-            log.info(f"[WHISPER][es] user_id={user_id} "
-                     f"({duration:.1f}s audio, {dt*1000:.0f}ms transcribe): {text}")
+            log.info(
+                f"[WHISPER][es] user_id={user_id} "
+                f"({duration:.1f}s audio, {dt * 1000:.0f}ms transcribe): {text}"
+            )
             await on_transcript(user_id, text)
         except Exception:
             log.exception("[WHISPER] transcribe failed")
@@ -497,8 +528,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
 def _run_whisper(pcm_16k_bytes: bytes) -> str:
     """Run Whisper on s16le 16k mono bytes. Returns concatenated text."""
-    audio = (np.frombuffer(pcm_16k_bytes, dtype=np.int16)
-             .astype(np.float32) / 32768.0)
+    audio = np.frombuffer(pcm_16k_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     segments, _info = whisper_model.transcribe(
         audio,
         language="es",
@@ -539,15 +569,15 @@ _vosk_load_lock = threading.Lock()
 # Preset 1: all invocation particles + all command verbs (current behavior).
 _PRESET_1_PATTERNS: tuple[tuple[str, str], ...] = (
     ("che", "indio"),
-    ("que", "indio"),       # VOSK-small often hears "che" as "que"
-    ("eh", "indio"),        # seen on speakers where "che" comes out as "eh"
+    ("que", "indio"),  # VOSK-small often hears "che" as "que"
+    ("eh", "indio"),  # seen on speakers where "che" comes out as "eh"
     ("indio", "ponete"),
     ("indio", "poneme"),
-    ("indio", "por"),       # VOSK-small collapses "ponete"/"poneme" → "por"
+    ("indio", "por"),  # VOSK-small collapses "ponete"/"poneme" → "por"
     ("indio", "reproduci"),
     ("indio", "reproduce"),
     ("indio", "tirate"),
-    ("indio", "tira"),      # VOSK-small drops trailing "te" → "tira"
+    ("indio", "tira"),  # VOSK-small drops trailing "te" → "tira"
     ("indio", "dale"),
 )
 
@@ -608,28 +638,52 @@ def _build_vosk_grammar() -> str:
     # Base phrase set shared by all presets.
     phrases = [
         # Command-verb wake phrases (always active).
-        "indio ponete", "indio poneme",
-        "indio reproduci", "indio reproducí", "indio reproduce",
-        "indio tirate", "indio dale",
-        "indio por",   # collapsed "indio ponete/poneme"
+        "indio ponete",
+        "indio poneme",
+        "indio reproduci",
+        "indio reproducí",
+        "indio reproduce",
+        "indio tirate",
+        "indio dale",
+        "indio por",  # collapsed "indio ponete/poneme"
         "indio tira",  # collapsed "indio tirate"
         # Third-person mentions ("el/él indio") — kept so VOSK doesn't
         # collapse them into a wake-word; the matcher vetoes them via
         # _WAKE_ANTI_PATTERNS.
-        "el indio", "él indio",
+        "el indio",
+        "él indio",
         # Lone tokens.
         "indio",
-        "che", "ey", "hola", "el", "él",
-        "ponete", "poneme",
-        "reproduci", "reproducí", "reproduce",
-        "tirate", "tira", "dale", "por",
-        "y", "i", "o", "a", "si", "no",
+        "che",
+        "ey",
+        "hola",
+        "el",
+        "él",
+        "ponete",
+        "poneme",
+        "reproduci",
+        "reproducí",
+        "reproduce",
+        "tirate",
+        "tira",
+        "dale",
+        "por",
+        "y",
+        "i",
+        "o",
+        "a",
+        "si",
+        "no",
         "[unk]",
     ]
     # Invocation phrases — added only for presets that include them.
     if preset == 1:
         phrases = [
-            "che indio", "que indio", "eh indio", "ey indio", "hola indio",
+            "che indio",
+            "que indio",
+            "eh indio",
+            "ey indio",
+            "hola indio",
         ] + phrases
         phrases.insert(phrases.index("che"), "que")
         phrases.insert(phrases.index("che") + 1, "eh")
@@ -654,9 +708,7 @@ _WAKE_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 # similar to "eh/che indio" — when VOSK's N-best contains the anti-pattern,
 # we trust that the speaker was talking ABOUT the indio, not TO it.
 # Compared against accent-stripped lowercase tokens (so "él" → "el").
-_WAKE_ANTI_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("el", "indio"),
-)
+_WAKE_ANTI_PATTERNS: tuple[tuple[str, str], ...] = (("el", "indio"),)
 
 
 def _load_vosk_model():
@@ -673,11 +725,14 @@ def _load_vosk_model():
             log.warning("[VOSK] VOSK_MODEL_PATH is empty; wake-word disabled.")
             return None
         if not os.path.isdir(config.VOSK_MODEL_PATH):
-            log.warning("[VOSK] model dir not found at %s; wake-word disabled.",
-                        config.VOSK_MODEL_PATH)
+            log.warning(
+                "[VOSK] model dir not found at %s; wake-word disabled.",
+                config.VOSK_MODEL_PATH,
+            )
             return None
         try:
             import vosk
+
             vosk.SetLogLevel(-1)  # silence VOSK's own stdout chatter
             log.info(f"Loading VOSK model from {config.VOSK_MODEL_PATH} ...")
             _vosk_model = vosk.Model(config.VOSK_MODEL_PATH)
@@ -696,6 +751,7 @@ def _new_vosk_recognizer():
         return None
     try:
         import vosk
+
         rec = vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
         # Tag the recognizer with the grammar generation it was built from.
         rec._grammar_generation = _vosk_grammar_generation
@@ -725,8 +781,11 @@ def _set_sensitivity(preset: int) -> None:
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
     _vosk_grammar_generation += 1
-    log.info("[VOSK] sensitivity preset set to %d (grammar generation %d)",
-             preset, _vosk_grammar_generation)
+    log.info(
+        "[VOSK] sensitivity preset set to %d (grammar generation %d)",
+        preset,
+        _vosk_grammar_generation,
+    )
 
 
 def _active_wake_patterns() -> tuple[tuple[str, str], ...]:
@@ -789,14 +848,18 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> tuple[bool, Optional[dict]]:
         # speaker was talking ABOUT the indio, not TO it. Veto the match.
         for text in candidates:
             if text and _text_has_anti_pattern(text):
-                log.info(f"[VOSK] vetoed by anti-pattern: {text!r} "
-                         f"(top-1 was {candidates[0]!r})")
+                log.info(
+                    f"[VOSK] vetoed by anti-pattern: {text!r} "
+                    f"(top-1 was {candidates[0]!r})"
+                )
                 return False, None
         for idx, text in enumerate(candidates):
             if text and _text_matches_wake_pattern(text):
                 if idx > 0:
-                    log.info(f"[VOSK] matched via alternative #{idx+1}: "
-                             f"{text!r} (top-1 was {candidates[0]!r})")
+                    log.info(
+                        f"[VOSK] matched via alternative #{idx + 1}: "
+                        f"{text!r} (top-1 was {candidates[0]!r})"
+                    )
                 return True, result
         top1 = candidates[0] if candidates else ""
         if top1 and "indio" in _normalize(top1).split():
@@ -867,8 +930,10 @@ class WakeWordSink(voice_recv.AudioSink):
         return False
 
     def cleanup(self) -> None:
-        log.info(f"[WAKE] Sink cleanup. Total packets: {self.packet_count}, "
-                 f"active captures: {len(self.captures)}")
+        log.info(
+            f"[WAKE] Sink cleanup. Total packets: {self.packet_count}, "
+            f"active captures: {len(self.captures)}"
+        )
         self._stopped = True
         self.recognizers.clear()
         self.resample_states.clear()
@@ -898,13 +963,17 @@ class WakeWordSink(voice_recv.AudioSink):
 
         self.packet_count += 1
         if self.packet_count == 1:
-            log.info(f"[WAKE] First packet received "
-                     f"(user_id={user_id}, bytes={len(pcm_data)})")
+            log.info(
+                f"[WAKE] First packet received "
+                f"(user_id={user_id}, bytes={len(pcm_data)})"
+            )
             self._start_idle_watcher_once()
         elif self.packet_count % 1000 == 0:
             elapsed = time.time() - self.start_time
-            log.info(f"[WAKE] {self.packet_count} packets in {elapsed:.1f}s, "
-                     f"active_captures={len(self.captures)}")
+            log.info(
+                f"[WAKE] {self.packet_count} packets in {elapsed:.1f}s, "
+                f"active_captures={len(self.captures)}"
+            )
 
         try:
             mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
@@ -944,9 +1013,11 @@ class WakeWordSink(voice_recv.AudioSink):
             accepted = rec.AcceptWaveform(data_16k)
             matched, vosk_result = _vosk_heard_wake_word(rec, accepted)
             if matched:
-                log.info(f"[WAKE] user={user_id} VOSK detected wake word, "
-                         f"starting capture (prebuf_chunks="
-                         f"{len(self.prebuffers.get(user_id, ()))})")
+                log.info(
+                    f"[WAKE] user={user_id} VOSK detected wake word, "
+                    f"starting capture (prebuf_chunks="
+                    f"{len(self.prebuffers.get(user_id, ()))})"
+                )
                 self._wake_triggerer_id = user_id
                 self._wake_in_progress = True
                 self._start_capture(user_id, now, vosk_result)
@@ -998,8 +1069,14 @@ class WakeWordSink(voice_recv.AudioSink):
         rec = self.recognizers.get(user_id)
         # Discard recognizer if it was built with a different grammar generation
         # (i.e. the sensitivity preset was switched via /sensibilidad).
-        if rec is not None and getattr(rec, "_grammar_generation", -1) != _vosk_grammar_generation:
-            log.debug("[VOSK] rebuilding stale recognizer for user %s (preset changed)", user_id)
+        if (
+            rec is not None
+            and getattr(rec, "_grammar_generation", -1) != _vosk_grammar_generation
+        ):
+            log.debug(
+                "[VOSK] rebuilding stale recognizer for user %s (preset changed)",
+                user_id,
+            )
             rec = None
             self.recognizers.pop(user_id, None)
         if rec is None:
@@ -1008,7 +1085,9 @@ class WakeWordSink(voice_recv.AudioSink):
                 self.recognizers[user_id] = rec
         return rec
 
-    def _start_capture(self, user_id: int, now: float, vosk_result: Optional[dict] = None) -> None:
+    def _start_capture(
+        self, user_id: int, now: float, vosk_result: Optional[dict] = None
+    ) -> None:
         # Seed the capture buffer with the prebuffer contents so Whisper sees
         # whatever the user said leading up to and including the wake word.
         seed = bytearray()
@@ -1021,8 +1100,9 @@ class WakeWordSink(voice_recv.AudioSink):
             "vosk_result": vosk_result,
         }
 
-    def _extend_capture(self, user_id: int, capture: dict, chunk: bytes,
-                        rms: int, now: float) -> None:
+    def _extend_capture(
+        self, user_id: int, capture: dict, chunk: bytes, rms: int, now: float
+    ) -> None:
         capture["buf"].extend(chunk)
         if rms >= TranscriberSink.SILENCE_RMS_THRESHOLD:
             capture["last_voice_ts"] = now
@@ -1031,18 +1111,23 @@ class WakeWordSink(voice_recv.AudioSink):
         silence_for = now - capture["last_voice_ts"]
         duration = now - capture["started_at"]
         if silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS:
-            log.info(f"[WAKE] user={user_id} closing capture on silence "
-                     f"({silence_for:.2f}s, dur={duration:.2f}s)")
+            log.info(
+                f"[WAKE] user={user_id} closing capture on silence "
+                f"({silence_for:.2f}s, dur={duration:.2f}s)"
+            )
             self._finalize_capture(user_id)
         elif duration >= config.WAKE_WORD_MAX_CAPTURE_SECONDS:
-            log.info(f"[WAKE] user={user_id} closing capture on timeout "
-                     f"({duration:.2f}s)")
+            log.info(
+                f"[WAKE] user={user_id} closing capture on timeout ({duration:.2f}s)"
+            )
             self._finalize_capture(user_id)
 
     def _schedule_wake_sound(self, user_id: int) -> None:
         """Hand off wake-sound playback to the main loop. Sink runs in a
         background thread; play_wake_sound() needs to interact with the
         VoiceClient via the event loop."""
+        if not _wake_sound_enabled:
+            return
         try:
             asyncio.run_coroutine_threadsafe(
                 greeting.play_wake_sound(self._client_ref, user_id=user_id),
@@ -1065,12 +1150,16 @@ class WakeWordSink(voice_recv.AudioSink):
         secs = len(pcm) / (16000 * 2)
         vosk_result = capture.get("vosk_result")
         with self._active_lock:
-            limit = (config.MAX_CONCURRENT_WHILE_PLAYING
-                     if _main_bot_is_playing()
-                     else config.MAX_CONCURRENT_IDLE)
+            limit = (
+                config.MAX_CONCURRENT_WHILE_PLAYING
+                if _main_bot_is_playing()
+                else config.MAX_CONCURRENT_IDLE
+            )
             if self._active_count >= limit:
-                log.info(f"[WAKE] capacity full ({self._active_count}/"
-                         f"{limit}); dropping {secs:.1f}s from user {user_id}")
+                log.info(
+                    f"[WAKE] capacity full ({self._active_count}/"
+                    f"{limit}); dropping {secs:.1f}s from user {user_id}"
+                )
                 self._wake_in_progress = False
                 self._wake_triggerer_id = None
                 return
@@ -1107,29 +1196,42 @@ class WakeWordSink(voice_recv.AudioSink):
                         continue
                     silence_for = now - cap["last_voice_ts"]
                     duration = now - cap["started_at"]
-                    if (silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS
-                            or duration >= config.WAKE_WORD_MAX_CAPTURE_SECONDS):
-                        log.info(f"[WAKE] idle-watcher closing capture for "
-                                 f"user={uid} (silence={silence_for:.2f}s, "
-                                 f"dur={duration:.2f}s)")
+                    if (
+                        silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS
+                        or duration >= config.WAKE_WORD_MAX_CAPTURE_SECONDS
+                    ):
+                        log.info(
+                            f"[WAKE] idle-watcher closing capture for "
+                            f"user={uid} (silence={silence_for:.2f}s, "
+                            f"dur={duration:.2f}s)"
+                        )
                         self._finalize_capture(uid)
             except Exception:
                 log.exception("[WAKE] idle watcher error")
 
     # ---- Whisper handoff --------------------------------------------------
 
-    async def _transcribe_and_dispatch(self, user_id: int, pcm_16k: bytes,
-                                       duration: float, vosk_result: Optional[dict] = None) -> None:
+    async def _transcribe_and_dispatch(
+        self,
+        user_id: int,
+        pcm_16k: bytes,
+        duration: float,
+        vosk_result: Optional[dict] = None,
+    ) -> None:
         try:
             t0 = time.monotonic()
             text = await asyncio.to_thread(_run_whisper, pcm_16k)
             dt = time.monotonic() - t0
             if not text:
-                log.info(f"[WAKE] user={user_id} Whisper returned empty "
-                         f"({duration:.1f}s audio, {dt*1000:.0f}ms); skip")
+                log.info(
+                    f"[WAKE] user={user_id} Whisper returned empty "
+                    f"({duration:.1f}s audio, {dt * 1000:.0f}ms); skip"
+                )
                 return
-            log.info(f"[WAKE][es] user_id={user_id} "
-                     f"({duration:.1f}s audio, {dt*1000:.0f}ms): {text}")
+            log.info(
+                f"[WAKE][es] user_id={user_id} "
+                f"({duration:.1f}s audio, {dt * 1000:.0f}ms): {text}"
+            )
             # VOSK already matched a restrictive _WAKE_PATTERNS pair before we
             # got here, so we trust the trigger and forward whatever Whisper
             # transcribed — typically the verb + object ("ponete un tema de
@@ -1137,10 +1239,11 @@ class WakeWordSink(voice_recv.AudioSink):
             # prebuffer window. Only drop when Whisper produced nothing
             # substantive (empty or pure filler).
             if not _has_text_beyond_wake_word(text):
-                log.info(f"[WAKE] user={user_id} only wake word / no question; "
-                         f"skip")
+                log.info(f"[WAKE] user={user_id} only wake word / no question; skip")
                 return
-            await on_transcript(user_id, text, via_wake_word=True, vosk_result=vosk_result)
+            await on_transcript(
+                user_id, text, via_wake_word=True, vosk_result=vosk_result
+            )
         except Exception:
             log.exception("[WAKE] transcribe failed")
         finally:
@@ -1170,6 +1273,11 @@ def _has_text_beyond_wake_word(text: str) -> bool:
 
 
 # Cached "is the main bot playing audio" check — polled cheaply.
+# Runtime toggle for the wake-word confirmation sound ("huh").
+# Controlled via POST /toggle_wake_sound relay endpoint. Starts at the
+# config default and resets on restart (no persistence).
+_wake_sound_enabled = getattr(config, "WAKE_SOUND_ENABLED", True)
+
 _play_state = {"is_playing": False, "checked_at": 0.0}
 _play_state_lock = threading.Lock()
 
@@ -1226,9 +1334,12 @@ class RecorderSink(voice_recv.AudioSink):
     so it's safe to invoke it from multiple paths.
     """
 
-    def __init__(self, max_seconds: float,
-                 ignore_user_ids: Optional[set[int]] = None,
-                 rms_threshold: Optional[int] = None):
+    def __init__(
+        self,
+        max_seconds: float,
+        ignore_user_ids: Optional[set[int]] = None,
+        rms_threshold: Optional[int] = None,
+    ):
         """Initialize the recorder.
 
         Args:
@@ -1243,8 +1354,9 @@ class RecorderSink(voice_recv.AudioSink):
         super().__init__()
         self.max_seconds = max_seconds
         self.ignore_user_ids = ignore_user_ids or set()
-        self.rms_threshold = (rms_threshold if rms_threshold is not None
-                              else config.RECORD_RMS_THRESHOLD)
+        self.rms_threshold = (
+            rms_threshold if rms_threshold is not None else config.RECORD_RMS_THRESHOLD
+        )
         self.start_time = time.monotonic()
         self._frames: list[tuple[float, bytes]] = []
         self._lock = threading.Lock()
@@ -1327,7 +1439,13 @@ def _resolve_transcript_channel():
     return _resolve_transcript_channel_impl(client, config)
 
 
-async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False, vosk_result: Optional[dict] = None):
+async def on_transcript(
+    user_id: int,
+    text: str,
+    *,
+    via_wake_word: bool = False,
+    vosk_result: Optional[dict] = None,
+):
     """Handle a completed transcription: post to transcript channel + optionally
     forward to the main bot and trigger the indio on wake word.
 
@@ -1338,9 +1456,9 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False,
     the indio's reply, but we never post anything that didn't pass the
     wake-word gate.
     """
-    should_post = (via_wake_word
-                   or config.DEBUG_TRANSCRIBE_ALL
-                   or not config.WAKE_WORD_ENABLED)
+    should_post = (
+        via_wake_word or config.DEBUG_TRANSCRIBE_ALL or not config.WAKE_WORD_ENABLED
+    )
     posted_channel_id: Optional[int] = None
     posted_guild_id: Optional[int] = None
     posted_message_id: Optional[int] = None
@@ -1376,19 +1494,19 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False,
     # matched a restrictive _WAKE_PATTERNS pair upstream), hand the entire raw
     # transcript to the main bot's /indio endpoint. The server prefixes the
     # text with "[voz] " so the indio knows to tolerate ASR errors.
-    if (via_wake_word
-            and posted_channel_id is not None
-            and posted_guild_id is not None):
+    if via_wake_word and posted_channel_id is not None and posted_guild_id is not None:
         log.info(f"[INDIO-WAKE] user_id={user_id} raw={text!r}")
-        asyncio.create_task(_dispatch_to_indio(
-            guild_id=posted_guild_id,
-            channel_id=posted_channel_id,
-            pregunta=text,
-            speaker_name=speaker_name,
-            user_id=user_id,
-            transcript_message_id=posted_message_id,
-            vosk_result=vosk_result,
-        ))
+        asyncio.create_task(
+            _dispatch_to_indio(
+                guild_id=posted_guild_id,
+                channel_id=posted_channel_id,
+                pregunta=text,
+                speaker_name=speaker_name,
+                user_id=user_id,
+                transcript_message_id=posted_message_id,
+                vosk_result=vosk_result,
+            )
+        )
 
     if config.ENABLE_HTTP_FORWARD:
         try:
@@ -1406,12 +1524,18 @@ async def on_transcript(user_id: int, text: str, *, via_wake_word: bool = False,
             log.warning(f"HTTP forward failed: {e}")
 
 
-async def _dispatch_to_indio(*, guild_id: int, channel_id: int,
-                             pregunta: str, speaker_name: Optional[str],
-                             is_voice: bool = True, user_id: int = 0,
-                             transcript_message_id: Optional[int] = None,
-                             source_message_id: Optional[int] = None,
-                             vosk_result: Optional[dict] = None) -> None:
+async def _dispatch_to_indio(
+    *,
+    guild_id: int,
+    channel_id: int,
+    pregunta: str,
+    speaker_name: Optional[str],
+    is_voice: bool = True,
+    user_id: int = 0,
+    transcript_message_id: Optional[int] = None,
+    source_message_id: Optional[int] = None,
+    vosk_result: Optional[dict] = None,
+) -> None:
     """POST the raw transcript to the main bot's /indio endpoint.
 
     Voice wake-word callers leave ``is_voice=True`` so the main bot prefixes
@@ -1565,8 +1689,9 @@ def _channel_has_humans(channel, *, self_id: Optional[int] = None) -> bool:
     return False
 
 
-def _should_follow_user(current_channel, target_channel,
-                       *, self_id: Optional[int] = None) -> bool:
+def _should_follow_user(
+    current_channel, target_channel, *, self_id: Optional[int] = None
+) -> bool:
     """Decide whether the userbot should move to ``target_channel`` when a
     user just joined/switched there.
 
@@ -1665,8 +1790,9 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
         return
     await asyncio.sleep(1.0)
     sink = _make_voice_sink()
-    log.info(f"[VOICE] Starting listener in {vc.channel.name} "
-             f"(sink={type(sink).__name__})")
+    log.info(
+        f"[VOICE] Starting listener in {vc.channel.name} (sink={type(sink).__name__})"
+    )
     try:
         vc.listen(sink)
     except Exception as e:
@@ -1683,8 +1809,10 @@ def _make_voice_sink() -> voice_recv.AudioSink:
     if config.WAKE_WORD_ENABLED and not config.DEBUG_TRANSCRIBE_ALL:
         if _load_vosk_model() is not None:
             return WakeWordSink(client)
-        log.warning("[VOICE] WAKE_WORD_ENABLED but VOSK unavailable; "
-                    "falling back to TranscriberSink")
+        log.warning(
+            "[VOICE] WAKE_WORD_ENABLED but VOSK unavailable; "
+            "falling back to TranscriberSink"
+        )
     return TranscriberSink(client)
 
 
@@ -1705,7 +1833,9 @@ async def _join_channel(channel: discord.VoiceChannel):
             if existing.channel.id == channel.id and existing.is_connected():
                 vc = existing
             else:
-                log.info(f"[VOICE] Reconnecting: {existing.channel.name} → {channel.name}")
+                log.info(
+                    f"[VOICE] Reconnecting: {existing.channel.name} → {channel.name}"
+                )
                 try:
                     if existing.is_listening():
                         existing.stop_listening()
@@ -1772,8 +1902,7 @@ async def on_ready():
             continue
         for channel in guild.voice_channels:
             humans = [
-                m for m in channel.members
-                if not m.bot and m.id != client.user.id
+                m for m in channel.members if not m.bot and m.id != client.user.id
             ]
             if humans:
                 await _join_channel(channel)
@@ -1802,7 +1931,9 @@ async def on_voice_state_update(member, before, after):
             log.info(
                 "[VOICE] staying in %s — not following %s to %s "
                 "(current channel still has humans)",
-                current_channel.name, member.display_name, after.channel.name,
+                current_channel.name,
+                member.display_name,
+                after.channel.name,
             )
         else:
             await _join_channel(after.channel)
@@ -1811,9 +1942,13 @@ async def on_voice_state_update(member, before, after):
             try:
                 vc = _vc_for_guild(guild)
                 if vc is not None and vc.channel.id == after.channel.id:
-                    asyncio.create_task(greeting.play_user_greeting(
-                        vc, user_id=member.id, channel_id=after.channel.id,
-                    ))
+                    asyncio.create_task(
+                        greeting.play_user_greeting(
+                            vc,
+                            user_id=member.id,
+                            channel_id=after.channel.id,
+                        )
+                    )
             except Exception:
                 log.exception("[GREETING] schedule failed")
 
@@ -1826,7 +1961,7 @@ async def on_voice_state_update(member, before, after):
 import re as _re
 
 _INDIO_TEXT_WAKE_RE = _re.compile(r"\bindio\b", _re.IGNORECASE)
-_INDIO_AUTO_COOLDOWN: dict[int, float] = {}     # channel_id -> last fired ts
+_INDIO_AUTO_COOLDOWN: dict[int, float] = {}  # channel_id -> last fired ts
 _INDIO_AUTO_HOURLY: dict[int, list[float]] = {}  # guild_id -> recent fire ts
 
 
@@ -1854,9 +1989,7 @@ def _autoreply_mark_fired(guild_id: int, channel_id: int) -> None:
     _INDIO_AUTO_HOURLY.setdefault(guild_id, []).append(now)
 
 
-_GEMINI_KEY_DM_RE = _re.compile(
-    r"\b(?:AIza[\w-]{20,80}|AQ\.[A-Za-z0-9_\-]{20,120})"
-)
+_GEMINI_KEY_DM_RE = _re.compile(r"\b(?:AIza[\w-]{20,80}|AQ\.[A-Za-z0-9_\-]{20,120})")
 
 
 async def _handle_gemini_key_dm(message) -> bool:
@@ -1867,15 +2000,16 @@ async def _handle_gemini_key_dm(message) -> bool:
     guild = getattr(message, "guild", None)
     if guild is not None:
         return False
-    text = (message.content or "")
+    text = message.content or ""
     if not _GEMINI_KEY_DM_RE.search(text):
         return False
     if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
         log.warning("[GEMINI-KEY-DM] main bot API not configured, can't forward")
         return True  # handled (silenciamos al user, no le pedimos retry)
     owner_id = str(message.author.id)
-    owner_name = (getattr(message.author, "display_name", None)
-                  or getattr(message.author, "name", "unknown"))
+    owner_name = getattr(message.author, "display_name", None) or getattr(
+        message.author, "name", "unknown"
+    )
     payload = {
         "text": text,
         "owner_id": owner_id,
@@ -1900,8 +2034,9 @@ async def _handle_gemini_key_dm(message) -> bool:
         return True
     results = (data or {}).get("results") or []
     added = sum(1 for r in results if r.get("ok"))
-    dupes = sum(1 for r in results
-                if not r.get("ok") and r.get("reason") == "already in pool")
+    dupes = sum(
+        1 for r in results if not r.get("ok") and r.get("reason") == "already in pool"
+    )
     failed = len(results) - added - dupes
     lines: list[str] = []
     if added:
@@ -1965,17 +2100,21 @@ async def on_message(message):
         return
     _autoreply_mark_fired(guild.id, channel_id)
     speaker_name = _name_for(message.author.id, message.author)
-    log.info(f"[INDIO-AUTO] match in #{getattr(message.channel, 'name', '?')}"
-             f" by {speaker_name}: {content[:100]!r}")
-    asyncio.create_task(_dispatch_to_indio(
-        guild_id=guild.id,
-        channel_id=channel_id,
-        pregunta=content,
-        speaker_name=speaker_name,
-        is_voice=False,
-        user_id=message.author.id,
-        source_message_id=message.id,
-    ))
+    log.info(
+        f"[INDIO-AUTO] match in #{getattr(message.channel, 'name', '?')}"
+        f" by {speaker_name}: {content[:100]!r}"
+    )
+    asyncio.create_task(
+        _dispatch_to_indio(
+            guild_id=guild.id,
+            channel_id=channel_id,
+            pregunta=content,
+            speaker_name=speaker_name,
+            is_voice=False,
+            user_id=message.author.id,
+            source_message_id=message.id,
+        )
+    )
 
 
 # ---------- Local relay HTTP server ---------------------------------------
@@ -2125,11 +2264,13 @@ def _record_lock_for(guild_id: int) -> asyncio.Lock:
     return lock
 
 
-async def _run_recording(channel: discord.VoiceChannel,
-                         duration: float,
-                         callback_url: Optional[str],
-                         callback_secret: Optional[str],
-                         callback_metadata: Any) -> None:
+async def _run_recording(
+    channel: discord.VoiceChannel,
+    duration: float,
+    callback_url: Optional[str],
+    callback_secret: Optional[str],
+    callback_metadata: Any,
+) -> None:
     """Move into ``channel``, capture audio, then POST it to ``callback_url``.
 
     The transcriber sink is detached for the duration of the recording and
@@ -2227,10 +2368,11 @@ async def _run_recording(channel: discord.VoiceChannel,
                 form.add_field("metadata", callback_metadata)
             form.add_field("guild_id", str(guild.id))
             form.add_field("channel_id", str(channel.id))
-            form.add_field("duration_seconds",
-                           f"{len(trimmed) / (_REC_INPUT_SAMPLE_RATE * _REC_INPUT_WIDTH):.2f}")
-            form.add_field("file", ogg,
-                           filename="reply.ogg", content_type="audio/ogg")
+            form.add_field(
+                "duration_seconds",
+                f"{len(trimmed) / (_REC_INPUT_SAMPLE_RATE * _REC_INPUT_WIDTH):.2f}",
+            )
+            form.add_field("file", ogg, filename="reply.ogg", content_type="audio/ogg")
             headers = {}
             if callback_secret:
                 headers["X-API-Secret"] = callback_secret
@@ -2242,9 +2384,7 @@ async def _run_recording(channel: discord.VoiceChannel,
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
-                    log.warning(
-                        f"[REC] callback HTTP {resp.status}: {body[:200]}"
-                    )
+                    log.warning(f"[REC] callback HTTP {resp.status}: {body[:200]}")
                 else:
                     log.info(f"[REC] callback delivered ({len(ogg)}B)")
         except Exception:
@@ -2297,8 +2437,9 @@ async def _relay_record(request: web.Request) -> web.Response:
         )
 
     asyncio.create_task(
-        _run_recording(channel, duration, callback_url,
-                       callback_secret, callback_metadata)
+        _run_recording(
+            channel, duration, callback_url, callback_secret, callback_metadata
+        )
     )
     return web.json_response({"started": True, "duration": duration})
 
@@ -2337,7 +2478,8 @@ async def _relay_members(request: web.Request) -> web.Response:
 
     if role_name:
         members = [
-            m for m in members
+            m
+            for m in members
             if any((r.name or "").lower() == role_name for r in (m.roles or []))
         ]
 
@@ -2354,15 +2496,19 @@ async def _relay_members(request: web.Request) -> web.Response:
             "global_name": getattr(m, "global_name", None) or "",
             "display_name": getattr(m, "display_name", None) or "",
             "is_bot": bool(getattr(m, "bot", False)),
-            "roles": [r.name for r in (m.roles or []) if r.name and r.name != "@everyone"],
+            "roles": [
+                r.name for r in (m.roles or []) if r.name and r.name != "@everyone"
+            ],
         }
         for m in members
     ]
-    return web.json_response({
-        "guild_id": guild_id,
-        "role_filter": role_name or None,
-        "members": payload,
-    })
+    return web.json_response(
+        {
+            "guild_id": guild_id,
+            "role_filter": role_name or None,
+            "members": payload,
+        }
+    )
 
 
 def _command_owner_id(cmd) -> Optional[int]:
@@ -2404,7 +2550,8 @@ def _pick_vapls_command(cmds, name: str):
         log.error(
             "[RELAY] /%s exists in channel but no instance is owned by VaPls "
             "bot %s (candidates: %s)",
-            name, config.VAPLS_BOT_ID,
+            name,
+            config.VAPLS_BOT_ID,
             [_command_owner_id(c) for c in matches_by_name],
         )
     return None
@@ -2427,6 +2574,7 @@ async def _resolve_slash_commands(channel, name: str, timeout: float):
     rate-limit o un fetch lento de cache, así que envolvemos en
     ``asyncio.wait_for``: TimeoutError sube al caller que decide cancelar.
     """
+
     async def _fetch():
         if hasattr(channel, "application_commands"):
             all_cmds = await channel.application_commands()
@@ -2468,18 +2616,24 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
             channel = await client.fetch_channel(channel_id)
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not (hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")):
-        return web.json_response({"error": "channel has no slash command API"}, status=400)
+    if not (
+        hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
+    ):
+        return web.json_response(
+            {"error": "channel has no slash command API"}, status=400
+        )
 
     try:
         cmds = await _resolve_slash_commands(
-            channel, "play", timeout=config.INDIO_RELAY_TIMEOUT,
+            channel,
+            "play",
+            timeout=config.INDIO_RELAY_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        log.warning("[RELAY-PLAY] slash_commands() timed out for channel %s",
-                    channel_id)
-        return web.json_response({"error": "slash_commands() timed out"},
-                                 status=504)
+        log.warning(
+            "[RELAY-PLAY] slash_commands() timed out for channel %s", channel_id
+        )
+        return web.json_response({"error": "slash_commands() timed out"}, status=504)
     except Exception as e:
         log.exception("[RELAY-PLAY] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
@@ -2488,9 +2642,12 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
     if play_cmd is None:
         log.warning(
             "[RELAY-PLAY] VaPls /play not found in channel %s (saw %d candidates)",
-            channel_id, len(cmds),
+            channel_id,
+            len(cmds),
         )
-        return web.json_response({"error": "play command not found in channel"}, status=404)
+        return web.json_response(
+            {"error": "play command not found in channel"}, status=404
+        )
 
     try:
         await play_cmd(query=query)
@@ -2537,18 +2694,24 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
             channel = await client.fetch_channel(channel_id)
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not (hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")):
-        return web.json_response({"error": "channel has no slash command API"}, status=400)
+    if not (
+        hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
+    ):
+        return web.json_response(
+            {"error": "channel has no slash command API"}, status=400
+        )
 
     try:
         cmds = await _resolve_slash_commands(
-            channel, "soundpad", timeout=config.INDIO_RELAY_TIMEOUT,
+            channel,
+            "soundpad",
+            timeout=config.INDIO_RELAY_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        log.warning("[RELAY-SOUNDPAD] slash_commands() timed out for channel %s",
-                    channel_id)
-        return web.json_response({"error": "slash_commands() timed out"},
-                                 status=504)
+        log.warning(
+            "[RELAY-SOUNDPAD] slash_commands() timed out for channel %s", channel_id
+        )
+        return web.json_response({"error": "slash_commands() timed out"}, status=504)
     except Exception as e:
         log.exception("[RELAY-SOUNDPAD] slash_commands() failed")
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
@@ -2557,17 +2720,24 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
     if sp_cmd is None:
         log.warning(
             "[RELAY-SOUNDPAD] VaPls /soundpad not found in channel %s (saw %d candidates)",
-            channel_id, len(cmds),
+            channel_id,
+            len(cmds),
         )
-        return web.json_response({"error": "soundpad command not found in channel"}, status=404)
+        return web.json_response(
+            {"error": "soundpad command not found in channel"}, status=404
+        )
 
     try:
         await sp_cmd(query=query)
-        log.info(f"[RELAY-SOUNDPAD] invoked /soundpad query={query!r} in channel={channel_id}")
+        log.info(
+            f"[RELAY-SOUNDPAD] invoked /soundpad query={query!r} in channel={channel_id}"
+        )
         return web.json_response({"invoked": True, "query": query})
     except discord.HTTPException as e:
         if getattr(e, "status", None) == 429:
-            log.warning("[RELAY-SOUNDPAD] Discord rate-limited /soundpad invocation: %s", e)
+            log.warning(
+                "[RELAY-SOUNDPAD] Discord rate-limited /soundpad invocation: %s", e
+            )
             return web.json_response({"error": f"rate-limited: {e}"}, status=429)
         log.exception("[RELAY-SOUNDPAD] invocation failed")
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
@@ -2601,7 +2771,9 @@ async def _relay_join(request: web.Request) -> web.Response:
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
     if not isinstance(channel, discord.VoiceChannel):
-        return web.json_response({"error": "channel is not a voice channel"}, status=400)
+        return web.json_response(
+            {"error": "channel is not a voice channel"}, status=400
+        )
     if not _guild_allowed(channel.guild.id):
         return web.json_response({"error": "guild not allowed"}, status=403)
 
@@ -2610,11 +2782,13 @@ async def _relay_join(request: web.Request) -> web.Response:
     except Exception as e:
         log.exception("[RELAY-JOIN] join failed")
         return web.json_response({"error": f"join failed: {e}"}, status=500)
-    return web.json_response({
-        "joined": True,
-        "channel_id": channel_id,
-        "channel_name": channel.name,
-    })
+    return web.json_response(
+        {
+            "joined": True,
+            "channel_id": channel_id,
+            "channel_name": channel.name,
+        }
+    )
 
 
 async def _relay_edit(request: web.Request) -> web.Response:
@@ -2649,8 +2823,7 @@ async def _relay_edit(request: web.Request) -> web.Response:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
 
     if not hasattr(channel, "fetch_message"):
-        return web.json_response(
-            {"error": "channel not messageable"}, status=400)
+        return web.json_response({"error": "channel not messageable"}, status=400)
 
     try:
         msg = await channel.fetch_message(message_id)
@@ -2766,6 +2939,23 @@ async def _relay_sensibilidad(request: web.Request) -> web.Response:
     return web.json_response({"preset": preset})
 
 
+async def _relay_toggle_wake_sound(request: web.Request) -> web.Response:
+    """Toggle the wake-word confirmation sound (the "huh" audio) on/off.
+
+    Body is ignored — the endpoint simply flips the in-memory
+    ``_wake_sound_enabled`` flag and returns the new state.
+    Auth: ``X-API-Secret`` header must equal ``config.RELAY_SECRET``.
+    """
+    global _wake_sound_enabled
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    _wake_sound_enabled = not _wake_sound_enabled
+    log.info("[WAKE-SOUND] toggle → %s", _wake_sound_enabled)
+    return web.json_response({"enabled": _wake_sound_enabled})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -2781,11 +2971,14 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
+    app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)
     await site.start()
-    log.info(f"[RELAY] HTTP listening on http://{config.RELAY_HOST}:{config.RELAY_PORT}")
+    log.info(
+        f"[RELAY] HTTP listening on http://{config.RELAY_HOST}:{config.RELAY_PORT}"
+    )
     return runner
 
 
