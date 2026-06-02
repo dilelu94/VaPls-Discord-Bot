@@ -4,6 +4,7 @@ Defines the GuildPlayer lifecycle, handles yt-dlp downloads, FFmpeg playback,
 and interactive UI controls for queue management. Depends on py-cord, yt-dlp,
 FFmpeg, config, analytics, and greeting triggers.
 """
+
 import os
 import asyncio
 import difflib
@@ -26,14 +27,18 @@ from greeting import set_pending_trigger
 playLogger = logging.getLogger("play_logger")
 playLogger.setLevel(logging.INFO)
 playLogPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "play.log")
-handler = RotatingFileHandler(playLogPath, maxBytes=2 * 1024 * 1024, backupCount=1, encoding="utf-8")
-formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+handler = RotatingFileHandler(
+    playLogPath, maxBytes=2 * 1024 * 1024, backupCount=1, encoding="utf-8"
+)
+formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 handler.setFormatter(formatter)
 playLogger.addHandler(handler)
 playLogger.propagate = True
 
 # Clean up downloads directory on load to remove stale files
-_downloadsDirInit = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+_downloadsDirInit = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "downloads"
+)
 if os.path.exists(_downloadsDirInit):
     for _f in os.listdir(_downloadsDirInit):
         if _f.endswith(".mp3") or _f.endswith(".webm"):
@@ -58,7 +63,7 @@ _MUSIC_VOTE_WINDOW_SEC = 5.0
 # Hard cap from the moment the picker is shown. If nobody votes within this
 # window, the vote resolves automatically to candidates[0] (the top fuzzy match
 # against the query).
-_MUSIC_VOTE_MAX_SEC = 60.0
+_MUSIC_VOTE_MAX_SEC = 30.0
 
 # How many search candidates to offer when /play (or the indio) finds several
 # matches for a free-text query. Keeps the "¿cuál querés?" list readable.
@@ -114,15 +119,16 @@ def _query_title_ratio(query: str, title: str) -> float:
     best = 0.0
     for block in sm.get_matching_blocks():
         start = max(0, block.b - block.a)
-        window = t[start:start + len(q)]
+        window = t[start : start + len(q)]
         score = difflib.SequenceMatcher(None, q, window).ratio()
         if score > best:
             best = score
     return best
 
 
-def _should_autoplay_top(query: str, title: str,
-                         threshold: float = _PLAY_AUTOPLAY_RATIO) -> bool:
+def _should_autoplay_top(
+    query: str, title: str, threshold: float = _PLAY_AUTOPLAY_RATIO
+) -> bool:
     """Return True when the top search hit looks like a clear winner for the
     user's query — i.e. we can queue it directly without showing the picker.
 
@@ -138,9 +144,7 @@ def _should_autoplay_top(query: str, title: str,
 
 # Keycap number emojis used to label the options (display only; the user still
 # picks the same way). Index is 1-based via _num_emoji.
-_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣",
-              "5️⃣", "6️⃣", "7️⃣", "8️⃣",
-              "9️⃣", "\U0001f51f"]
+_NUM_EMOJI = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "\U0001f51f"]
 
 
 def _num_emoji(i: int) -> str:
@@ -175,19 +179,26 @@ class MusicVote:
     Closing is idempotent: once it fires, further votes are ignored.
     """
 
-    def __init__(self, *, bot, guild_id: int, candidates: list[dict],
-                 on_resolve, vote_window_sec: float = _MUSIC_VOTE_WINDOW_SEC,
-                 vote_max_sec: float = _MUSIC_VOTE_MAX_SEC,
-                 requester_id: int = 0):
+    def __init__(
+        self,
+        *,
+        bot,
+        guild_id: int,
+        candidates: list[dict],
+        on_resolve,
+        vote_window_sec: float = _MUSIC_VOTE_WINDOW_SEC,
+        vote_max_sec: float = _MUSIC_VOTE_MAX_SEC,
+        requester_id: int = 0,
+    ):
         self.bot = bot
         self.guild_id = guild_id
         self.candidates = candidates
         self.vote_window_sec = vote_window_sec
         self.vote_max_sec = vote_max_sec
-        self.votes: dict[int, int] = {}        # user_id -> option index (0-based)
+        self.votes: dict[int, int] = {}  # user_id -> option index (0-based)
         self._closed = False
         self._close_task: Optional[asyncio.Task] = None
-        self._on_resolve = on_resolve          # async fn(MusicVote, winner_dict)
+        self._on_resolve = on_resolve  # async fn(MusicVote, winner_dict)
         # Discord id of the user who triggered the vote (via /play or via the
         # indio's voice/chat request). Voice votes are restricted to this id
         # so a music poll doesn't keep spawning while the requester deliberates.
@@ -212,8 +223,7 @@ class MusicVote:
             self._close_task.cancel()
         self._close_task = asyncio.create_task(self._close_after(self.vote_max_sec))
 
-    def register_vote(self, user_id: int, idx: int, *,
-                      close_now: bool = False) -> bool:
+    def register_vote(self, user_id: int, idx: int, *, close_now: bool = False) -> bool:
         """Record one user's vote. Returns True if the vote was accepted.
 
         ``close_now=True`` is the "voice override": the indio gets a verbal
@@ -266,7 +276,9 @@ class MusicVote:
             try:
                 channel = self.bot.get_channel(int(self.reaction_channel_id))
                 if channel is None:
-                    channel = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                    channel = await self.bot.fetch_channel(
+                        int(self.reaction_channel_id)
+                    )
                 msg = await channel.fetch_message(int(self.reaction_message_id))
                 await msg.clear_reactions()
             except Exception:
@@ -288,11 +300,16 @@ class MusicVote:
         return self.candidates[winner_idx]
 
 
-def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
-                    on_resolve,
-                    vote_window_sec: Optional[float] = None,
-                    vote_max_sec: Optional[float] = None,
-                    requester_id: int = 0) -> MusicVote:
+def open_music_vote(
+    *,
+    bot,
+    guild_id: int,
+    candidates: list[dict],
+    on_resolve,
+    vote_window_sec: Optional[float] = None,
+    vote_max_sec: Optional[float] = None,
+    requester_id: int = 0,
+) -> MusicVote:
     """Open a fresh music vote for ``guild_id``. If another vote is currently
     active in the same guild it's cancelled — only one live picker at a time.
 
@@ -314,9 +331,15 @@ def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
         vote_window_sec = _MUSIC_VOTE_WINDOW_SEC
     if vote_max_sec is None:
         vote_max_sec = _MUSIC_VOTE_MAX_SEC
-    vote = MusicVote(bot=bot, guild_id=guild_id, candidates=candidates,
-                     on_resolve=on_resolve, vote_window_sec=vote_window_sec,
-                     vote_max_sec=vote_max_sec, requester_id=requester_id)
+    vote = MusicVote(
+        bot=bot,
+        guild_id=guild_id,
+        candidates=candidates,
+        on_resolve=on_resolve,
+        vote_window_sec=vote_window_sec,
+        vote_max_sec=vote_max_sec,
+        requester_id=requester_id,
+    )
     active_votes[guild_id] = vote
     # Tell the userbot to only feed voice from the requester until the vote
     # closes. Fire-and-forget; if the relay is off or fails, the apiServer's
@@ -325,8 +348,9 @@ def open_music_vote(*, bot, guild_id: int, candidates: list[dict],
     return vote
 
 
-async def _notify_userbot_vote_restriction(guild_id: int,
-                                           requester_id: Optional[int]) -> None:
+async def _notify_userbot_vote_restriction(
+    guild_id: int, requester_id: Optional[int]
+) -> None:
     """Tell the userbot which speaker is "the requester" for this guild's
     open music vote (or that no vote is active, when ``requester_id`` is None).
 
@@ -342,9 +366,11 @@ async def _notify_userbot_vote_restriction(guild_id: int,
     url = urljoin(base, "/restrict_speaker")
     payload = {
         "guild_id": str(int(guild_id)),
-        "user_id": (str(int(requester_id))
-                    if requester_id is not None and int(requester_id) > 0
-                    else None),
+        "user_id": (
+            str(int(requester_id))
+            if requester_id is not None and int(requester_id) > 0
+            else None
+        ),
     }
     headers = {"X-API-Secret": secret}
     timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
@@ -354,11 +380,15 @@ async def _notify_userbot_vote_restriction(guild_id: int,
                 if resp.status >= 400:
                     playLogger.warning(
                         "[VOTE-RESTRICT] userbot relay rc=%s for guild=%s requester=%s",
-                        resp.status, guild_id, requester_id,
+                        resp.status,
+                        guild_id,
+                        requester_id,
                     )
     except Exception as e:
         playLogger.warning(
-            "[VOTE-RESTRICT] userbot relay failed (%s): %s", type(e).__name__, e,
+            "[VOTE-RESTRICT] userbot relay failed (%s): %s",
+            type(e).__name__,
+            e,
         )
 
 
@@ -378,6 +408,7 @@ class YtDlpDiagnosis(NamedTuple):
     ``admin_step`` son los próximos pasos accionables; uno o los dos pueden ser
     ``None`` cuando no aplican.
     """
+
     audience: str
     summary: str
     user_step: Optional[str]
@@ -392,8 +423,12 @@ class YtDlpDiagnosis(NamedTuple):
         return " · ".join(parts) if parts else self.summary
 
 
-def _diag(audience: str, summary: str, user_step: Optional[str] = None,
-          admin_step: Optional[str] = None) -> YtDlpDiagnosis:
+def _diag(
+    audience: str,
+    summary: str,
+    user_step: Optional[str] = None,
+    admin_step: Optional[str] = None,
+) -> YtDlpDiagnosis:
     return YtDlpDiagnosis(audience, summary, user_step, admin_step)
 
 
@@ -406,68 +441,129 @@ def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> YtDlpDiagnosis:
     """
     if not stderr:
         if returncode == 2 or "No such file" in str(returncode):
-            return _diag("admin", "yt-dlp no está instalado en el server.",
-                         admin_step="yt-dlp no está instalado en el server.")
-        return _diag("admin", f"yt-dlp falló (returncode={returncode}) sin output.",
-                     admin_step=f"yt-dlp falló (returncode={returncode}) sin output. Revisá play.log.")
+            return _diag(
+                "admin",
+                "yt-dlp no está instalado en el server.",
+                admin_step="yt-dlp no está instalado en el server.",
+            )
+        return _diag(
+            "admin",
+            f"yt-dlp falló (returncode={returncode}) sin output.",
+            admin_step=f"yt-dlp falló (returncode={returncode}) sin output. Revisá play.log.",
+        )
 
     s = stderr.lower()
     # Discord/UX-friendly diagnostics ordered by specificity.
     if "sign in to confirm you're not a bot" in s or "confirm you're not a bot" in s:
-        return _diag("both", "YouTube pide login (bot-check).",
-                     user_step="YouTube pide login para este video. Probá otro link.",
-                     admin_step="Bot-check de YouTube: las cookies del server pueden estar caducas — re-exportalas y subílas con upload-cookies-discord-bot.sh.")
-    if "sign in to confirm your age" in s or "age-restricted" in s or "age restricted" in s:
-        return _diag("both", "Video con restricción de edad.",
-                     user_step="El video tiene restricción de edad. Probá otro link.",
-                     admin_step="Las cookies del server no tienen login adulto que pase el gate.")
-    if "members-only" in s or "members only" in s or "join this channel to get access" in s:
-        return _diag("user", "Video members-only.",
-                     user_step="El video es members-only del canal — no se puede descargar. Probá otro link.")
+        return _diag(
+            "both",
+            "YouTube pide login (bot-check).",
+            user_step="YouTube pide login para este video. Probá otro link.",
+            admin_step="Bot-check de YouTube: las cookies del server pueden estar caducas — re-exportalas y subílas con upload-cookies-discord-bot.sh.",
+        )
+    if (
+        "sign in to confirm your age" in s
+        or "age-restricted" in s
+        or "age restricted" in s
+    ):
+        return _diag(
+            "both",
+            "Video con restricción de edad.",
+            user_step="El video tiene restricción de edad. Probá otro link.",
+            admin_step="Las cookies del server no tienen login adulto que pase el gate.",
+        )
+    if (
+        "members-only" in s
+        or "members only" in s
+        or "join this channel to get access" in s
+    ):
+        return _diag(
+            "user",
+            "Video members-only.",
+            user_step="El video es members-only del canal — no se puede descargar. Probá otro link.",
+        )
     if "private video" in s or "this video is private" in s:
-        return _diag("user", "Video privado.",
-                     user_step="El video es privado. Probá otro link.")
+        return _diag(
+            "user", "Video privado.", user_step="El video es privado. Probá otro link."
+        )
     if "video unavailable" in s or "this video is unavailable" in s:
-        return _diag("user", "Video no disponible.",
-                     user_step="Video no disponible (eliminado o bloqueado en tu región). Probá otro link.")
+        return _diag(
+            "user",
+            "Video no disponible.",
+            user_step="Video no disponible (eliminado o bloqueado en tu región). Probá otro link.",
+        )
     if "premiere will begin" in s or "premieres in" in s:
-        return _diag("user", "Premiere todavía no empezó.",
-                     user_step="Es un premiere que todavía no empezó — esperá a que arranque.")
+        return _diag(
+            "user",
+            "Premiere todavía no empezó.",
+            user_step="Es un premiere que todavía no empezó — esperá a que arranque.",
+        )
     if "live event will begin" in s or "this live event" in s:
-        return _diag("user", "Live todavía no empezó.",
-                     user_step="Es un live que todavía no empezó — esperá a que arranque.")
+        return _diag(
+            "user",
+            "Live todavía no empezó.",
+            user_step="Es un live que todavía no empezó — esperá a que arranque.",
+        )
     if "video is no longer available" in s or "copyright" in s:
-        return _diag("user", "Video bloqueado por copyright.",
-                     user_step="Video bloqueado por copyright. Probá otro link.")
+        return _diag(
+            "user",
+            "Video bloqueado por copyright.",
+            user_step="Video bloqueado por copyright. Probá otro link.",
+        )
     if "http error 429" in s or "too many requests" in s:
-        return _diag("admin", "Rate-limit (HTTP 429) de YouTube.",
-                     user_step="YouTube nos rate-limiteó. Esperá unos minutos y reintentá.",
-                     admin_step="HTTP 429: bajar concurrencia o esperar a que YouTube nos libere.")
+        return _diag(
+            "admin",
+            "Rate-limit (HTTP 429) de YouTube.",
+            user_step="YouTube nos rate-limiteó. Esperá unos minutos y reintentá.",
+            admin_step="HTTP 429: bajar concurrencia o esperar a que YouTube nos libere.",
+        )
     if "http error 403" in s:
-        return _diag("both", "HTTP 403 de YouTube.",
-                     user_step="YouTube rechazó la descarga (403). Probá otro link.",
-                     admin_step="HTTP 403: probable bot-check o token de stream vencido — revisar cookies / yt-dlp.")
+        return _diag(
+            "both",
+            "HTTP 403 de YouTube.",
+            user_step="YouTube rechazó la descarga (403). Probá otro link.",
+            admin_step="HTTP 403: probable bot-check o token de stream vencido — revisar cookies / yt-dlp.",
+        )
     if "unable to extract" in s and "player response" in s:
-        return _diag("admin", "yt-dlp desactualizado.",
-                     admin_step="yt-dlp no pudo parsear el video, probablemente está desactualizado. Correr `pip install --upgrade --pre yt-dlp` y reiniciar el service.")
+        return _diag(
+            "admin",
+            "yt-dlp desactualizado.",
+            admin_step="yt-dlp no pudo parsear el video, probablemente está desactualizado. Correr `pip install --upgrade --pre yt-dlp` y reiniciar el service.",
+        )
     if "no supported javascript runtime" in s:
-        return _diag("admin", "Falta deno en el server.",
-                     admin_step="Falta `deno` en el server (yt-dlp lo necesita para resolver JS de YouTube).")
+        return _diag(
+            "admin",
+            "Falta deno en el server.",
+            admin_step="Falta `deno` en el server (yt-dlp lo necesita para resolver JS de YouTube).",
+        )
     if "no video formats found" in s or "requested format is not available" in s:
-        return _diag("user", "Sin formato de audio disponible.",
-                     user_step="Ese video no tiene formato de audio descargable. Probá otro link.")
+        return _diag(
+            "user",
+            "Sin formato de audio disponible.",
+            user_step="Ese video no tiene formato de audio descargable. Probá otro link.",
+        )
     if "name or service not known" in s or "temporary failure in name resolution" in s:
-        return _diag("admin", "DNS del server falló.",
-                     admin_step="El server no resuelve DNS (problema de red).")
+        return _diag(
+            "admin",
+            "DNS del server falló.",
+            admin_step="El server no resuelve DNS (problema de red).",
+        )
     if "connection refused" in s or "connection reset" in s:
-        return _diag("admin", "Conexión rechazada/reseteada.",
-                     admin_step="Conexión rechazada/reseteada (red del server o YouTube cayéndose). Reintentar.")
+        return _diag(
+            "admin",
+            "Conexión rechazada/reseteada.",
+            admin_step="Conexión rechazada/reseteada (red del server o YouTube cayéndose). Reintentar.",
+        )
     # Fallback: última línea no vacía de stderr, recortada.
     last = next((ln.strip() for ln in reversed(stderr.splitlines()) if ln.strip()), "")
     tail = last[:300] if last else f"yt-dlp falló (returncode={returncode})."
-    return _diag("both", tail,
-                 user_step="Algo falló al bajar este video. Probá con otro link.",
-                 admin_step=f"Revisar `play.log` para el stderr completo. Último: {tail}")
+    return _diag(
+        "both",
+        tail,
+        user_step="Algo falló al bajar este video. Probá con otro link.",
+        admin_step=f"Revisar `play.log` para el stderr completo. Último: {tail}",
+    )
+
 
 # ---------------------------------------------------------------------------
 # Auto-DJ — constants, helpers, and UI views
@@ -688,6 +784,7 @@ async def openDjMenu(bot, guild_id: int) -> tuple:
 
 class CancelDownloadView(discord.ui.View):
     """UI view that lets a user cancel the initial yt-dlp download."""
+
     def __init__(self, player, videoId: str, videoTitle: str):
         """Initialize the cancel button view.
 
@@ -701,7 +798,9 @@ class CancelDownloadView(discord.ui.View):
         self.videoId = videoId
         self.videoTitle = videoTitle
 
-    @discord.ui.button(label="Cancelar", style=discord.ButtonStyle.danger, custom_id="btn_cancel_dl")
+    @discord.ui.button(
+        label="Cancelar", style=discord.ButtonStyle.danger, custom_id="btn_cancel_dl"
+    )
     async def cancel(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Handle the Cancel button click.
 
@@ -717,6 +816,7 @@ class CancelDownloadView(discord.ui.View):
         """
         await interaction.response.defer()
         await self.player.cancelDownload(self.videoId, self.videoTitle, interaction)
+
 
 class GuildPlayer:
     """Per-guild playback state and queue manager."""
@@ -736,9 +836,9 @@ class GuildPlayer:
         """
         self.guildId = guildId
         self.bot = bot
-        self.queue = []         # List of {"id": str, "title": str}
-        self.history = []       # List of {"id": str, "title": str}
-        self.currentSong = None # {"id": str, "title": str} or None
+        self.queue = []  # List of {"id": str, "title": str}
+        self.history = []  # List of {"id": str, "title": str}
+        self.currentSong = None  # {"id": str, "title": str} or None
         self.vc = None
         self.controlMessage = None
         self.textChannel = None
@@ -753,16 +853,20 @@ class GuildPlayer:
         # Playback-position tracking + interruption state. Used so the bot can
         # resume the current song from where it was after an involuntary
         # disconnect (kick, network drop, /quit) without losing the queue.
-        self.playStartedAt: Optional[float] = None   # monotonic when current playback started/resumed
-        self.pausedAt: Optional[float] = None        # monotonic when current pause started
-        self.pausedAccumSecs: float = 0.0            # accumulated paused seconds across pauses
-        self.interrupted: bool = False               # True between disconnect and next resume
-        self.interruptedAtSeconds: float = 0.0       # snapshot of elapsed at interruption time
+        self.playStartedAt: Optional[float] = (
+            None  # monotonic when current playback started/resumed
+        )
+        self.pausedAt: Optional[float] = None  # monotonic when current pause started
+        self.pausedAccumSecs: float = 0.0  # accumulated paused seconds across pauses
+        self.interrupted: bool = False  # True between disconnect and next resume
+        self.interruptedAtSeconds: float = (
+            0.0  # snapshot of elapsed at interruption time
+        )
         # Deferred-connect state: when /play is invoked while the bot is NOT in
         # voice, we postpone joining the channel until the first song finishes
         # downloading. Joining immediately and sitting silent while yt-dlp runs
         # would let the idle watchdog disconnect us before we ever play a note.
-        self.pendingVoiceChannel = None              # discord.VoiceChannel | None
+        self.pendingVoiceChannel = None  # discord.VoiceChannel | None
         self.pendingTriggerUserId: Optional[int] = None  # for greeting trigger
         # Auto-resume background task: retries reconnecting to the same channel
         # after a transient voice-WS drop (typically a Discord region change),
@@ -1154,9 +1258,7 @@ class GuildPlayer:
         if guild is None or not hasattr(guild, "get_channel"):
             return
         try:
-            self._autoResumeTask = asyncio.create_task(
-                self._autoResumeLoop(channel_id)
-            )
+            self._autoResumeTask = asyncio.create_task(self._autoResumeLoop(channel_id))
         except RuntimeError:
             # No running loop (rare — happens in some non-async test setups).
             self._autoResumeTask = None
@@ -1175,7 +1277,9 @@ class GuildPlayer:
                 await asyncio.sleep(delay)
                 if not self.interrupted or not self.currentSong:
                     return
-                guild = self.bot.get_guild(self.guildId) if self.bot is not None else None
+                guild = (
+                    self.bot.get_guild(self.guildId) if self.bot is not None else None
+                )
                 channel = None
                 if guild is not None:
                     try:
@@ -1193,14 +1297,17 @@ class GuildPlayer:
                 except Exception as exc:
                     playLogger.warning(
                         "[AUTO-RESUME] reconnect attempt %d/%d failed: %s",
-                        attempt + 1, attempts, exc,
+                        attempt + 1,
+                        attempts,
+                        exc,
                     )
                     continue
                 try:
                     ok = await self.resumeFromInterruption(vc)
                 except Exception as exc:
                     playLogger.warning(
-                        "[AUTO-RESUME] resume after reconnect failed: %s", exc,
+                        "[AUTO-RESUME] resume after reconnect failed: %s",
+                        exc,
                     )
                     try:
                         await vc.disconnect(force=True)
@@ -1215,7 +1322,8 @@ class GuildPlayer:
                     return
             playLogger.info(
                 "[AUTO-RESUME] giving up after %d attempts on channel %s",
-                attempts, channel_id,
+                attempts,
+                channel_id,
             )
         finally:
             self._autoResumeTask = None
@@ -1249,8 +1357,9 @@ class GuildPlayer:
         }
         if source:
             props["source"] = source
-        analytics.capture("play songs queued", user=self.lastRequester,
-                          guild=guild, properties=props)
+        analytics.capture(
+            "play songs queued", user=self.lastRequester, guild=guild, properties=props
+        )
 
         if not self.currentSong and self.queue:
             self.currentSong = self.queue.pop(0)
@@ -1280,7 +1389,7 @@ class GuildPlayer:
         self.textChannel = self._resolveMusicChannel(fallback=ctx.channel)
         self.lastRequester = ctx.author
 
-        isFirst = (not self.currentSong and len(self.queue) == 0)
+        isFirst = not self.currentSong and len(self.queue) == 0
         if isFirst:
             # startPlayingCurrent will delete this interaction's original
             # response once playback actually starts.
@@ -1289,20 +1398,32 @@ class GuildPlayer:
         estimatedTime = int(time.time() + 30)
         if len(songs) > 1:
             if isFirst:
-                view = CancelDownloadView(self, songs[0]["id"], f"Playlist ({len(songs)} canciones)")
-                await ctx.interaction.edit_original_response(content=f"✅ Descargando playlist (se añadieron **{len(songs)}** canciones, iniciando con **{songs[0]['title']}**... <t:{estimatedTime}:R>)", view=view)
+                view = CancelDownloadView(
+                    self, songs[0]["id"], f"Playlist ({len(songs)} canciones)"
+                )
+                await ctx.interaction.edit_original_response(
+                    content=f"✅ Descargando playlist (se añadieron **{len(songs)}** canciones, iniciando con **{songs[0]['title']}**... <t:{estimatedTime}:R>)",
+                    view=view,
+                )
             else:
-                await safeEdit(ctx, f"✅ Se añadieron **{len(songs)}** canciones a la cola.")
+                await safeEdit(
+                    ctx, f"✅ Se añadieron **{len(songs)}** canciones a la cola."
+                )
         else:
             if isFirst:
                 view = CancelDownloadView(self, songs[0]["id"], songs[0]["title"])
-                await ctx.interaction.edit_original_response(content=f"✅ Descargando: **{songs[0]['title']}**... <t:{estimatedTime}:R>", view=view)
+                await ctx.interaction.edit_original_response(
+                    content=f"✅ Descargando: **{songs[0]['title']}**... <t:{estimatedTime}:R>",
+                    view=view,
+                )
             else:
                 await safeEdit(ctx, f"✅ Se añadió **{songs[0]['title']}** a la cola.")
 
         await self._enqueueAndMaybeStart(songs)
 
-    async def cancelDownload(self, videoId: str, videoTitle: str, interaction: discord.Interaction):
+    async def cancelDownload(
+        self, videoId: str, videoTitle: str, interaction: discord.Interaction
+    ):
         """Cancel an active download and reset playback state.
 
         Args:
@@ -1316,7 +1437,9 @@ class GuildPlayer:
         Async:
             This function is a coroutine and must be awaited.
         """
-        playLogger.info(f"[DOWNLOAD CANCEL] User cancelled download for '{videoTitle}' (ID: {videoId})")
+        playLogger.info(
+            f"[DOWNLOAD CANCEL] User cancelled download for '{videoTitle}' (ID: {videoId})"
+        )
         if self.activeDownloadProc:
             try:
                 self.activeDownloadProc.kill()
@@ -1337,7 +1460,9 @@ class GuildPlayer:
         self.indioProgressMessage = None
         self.indioProgressMeta = {}
         try:
-            await interaction.edit_original_response(content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None)
+            await interaction.edit_original_response(
+                content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None
+            )
         except Exception:
             pass
         if self.vc:
@@ -1371,7 +1496,9 @@ class GuildPlayer:
         videoId = self.currentSong["id"]
         videoTitle = self.currentSong["title"]
 
-        downloadsDir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+        downloadsDir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "downloads"
+        )
         os.makedirs(downloadsDir, exist_ok=True)
         filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
 
@@ -1381,7 +1508,9 @@ class GuildPlayer:
 
         # Wait if currently downloading in background
         if videoId in self.downloadingIds:
-            playLogger.info(f"[PLAYBACK WAIT] Song '{videoTitle}' (ID: {videoId}) is downloading in background. Waiting...")
+            playLogger.info(
+                f"[PLAYBACK WAIT] Song '{videoTitle}' (ID: {videoId}) is downloading in background. Waiting..."
+            )
             while videoId in self.downloadingIds:
                 await asyncio.sleep(0.5)
 
@@ -1391,28 +1520,37 @@ class GuildPlayer:
             self.downloadingIds.add(videoId)
             if self.controlMessage is not None:
                 await self.updateControlMessage()
-            playLogger.info(f"[DOWNLOAD START] Downloading '{videoTitle}' (ID: {videoId})...")
+            playLogger.info(
+                f"[DOWNLOAD START] Downloading '{videoTitle}' (ID: {videoId})..."
+            )
             startTime = time.time()
             try:
                 ytDlpPath = config.YT_DLP_PATH
                 inputStr = f"https://www.youtube.com/watch?v={videoId}"
-                cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+                cookiesPath = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
+                )
                 ytDlpArgs = [ytDlpPath]
                 if os.path.exists(cookiesPath):
                     ytDlpArgs += ["--cookies", cookiesPath]
                 if config.YT_DLP_POT_BASE_URL:
-                    ytDlpArgs += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+                    ytDlpArgs += [
+                        "--extractor-args",
+                        f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}",
+                    ]
                 ytDlpArgs += [
                     "-x",
-                    "--audio-format", "mp3",
+                    "--audio-format",
+                    "mp3",
                     "--no-playlist",
-                    "-o", os.path.join(downloadsDir, "%(id)s.%(ext)s"),
+                    "-o",
+                    os.path.join(downloadsDir, "%(id)s.%(ext)s"),
                     inputStr,
                 ]
                 proc = await asyncio.create_subprocess_exec(
                     *ytDlpArgs,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 self.activeDownloadProc = proc
                 stdout, stderr = await proc.communicate()
@@ -1424,35 +1562,53 @@ class GuildPlayer:
 
                 if proc.returncode != 0:
                     self.isDownloading = False
-                    stderrStr = stderr.decode('utf-8', errors='replace')
+                    stderrStr = stderr.decode("utf-8", errors="replace")
                     errTail = stderrStr.strip().splitlines()[-5:]
                     errMsg = " | ".join(errTail)
                     diag = _diagnoseYtDlpFailure(stderrStr, proc.returncode)
                     reason = diag.format()
-                    analytics.capture("play song failed", user=self.lastRequester, guild=guild,
-                                      properties={"stage": "download", "video_id": videoId,
-                                                  "title": videoTitle, "returncode": proc.returncode,
-                                                  "stderr_tail": errMsg[:500], "reason": reason,
-                                                  "audience": diag.audience, "summary": diag.summary})
-                    playLogger.error(f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg}")
+                    analytics.capture(
+                        "play song failed",
+                        user=self.lastRequester,
+                        guild=guild,
+                        properties={
+                            "stage": "download",
+                            "video_id": videoId,
+                            "title": videoTitle,
+                            "returncode": proc.returncode,
+                            "stderr_tail": errMsg[:500],
+                            "reason": reason,
+                            "audience": diag.audience,
+                            "summary": diag.summary,
+                        },
+                    )
+                    playLogger.error(
+                        f"[DOWNLOAD FAIL] Failed to download '{videoTitle}' (ID: {videoId}) with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg}"
+                    )
                     if self.initialCtx:
                         try:
                             await self.initialCtx.interaction.edit_original_response(
                                 content=f"❌ Error al descargar **{videoTitle}**: {reason}",
-                                view=None
+                                view=None,
                             )
                         except Exception:
                             pass
                         self.initialCtx = None
                     if self.controlMessage is not None:
-                        await self.updateControlMessage(f"❌ Error al descargar {videoTitle}: {reason}")
+                        await self.updateControlMessage(
+                            f"❌ Error al descargar {videoTitle}: {reason}"
+                        )
                     # Skip to next song
                     self.bot.loop.create_task(self.skipSong())
                     return
                 else:
                     duration = time.time() - startTime
-                    fileSize = os.path.getsize(filepath) if os.path.exists(filepath) else 0
-                    playLogger.info(f"[DOWNLOAD SUCCESS] Successfully downloaded '{videoTitle}' (ID: {videoId}) in {duration:.2f}s. File size: {fileSize} bytes ({fileSize / (1024*1024):.2f} MB)")
+                    fileSize = (
+                        os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                    )
+                    playLogger.info(
+                        f"[DOWNLOAD SUCCESS] Successfully downloaded '{videoTitle}' (ID: {videoId}) in {duration:.2f}s. File size: {fileSize} bytes ({fileSize / (1024 * 1024):.2f} MB)"
+                    )
             except Exception as e:
                 self.activeDownloadProc = None
                 if not self.currentSong:
@@ -1460,29 +1616,44 @@ class GuildPlayer:
                     return
                 self.isDownloading = False
                 if isinstance(e, FileNotFoundError):
-                    diag = _diag("admin",
-                                 f"yt-dlp no encontrado en {config.YT_DLP_PATH}.",
-                                 admin_step=f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.")
+                    diag = _diag(
+                        "admin",
+                        f"yt-dlp no encontrado en {config.YT_DLP_PATH}.",
+                        admin_step=f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.",
+                    )
                 else:
                     diag = _diagnoseYtDlpFailure(str(e))
                 reason = diag.format()
                 print(f"[PLAYER ERROR] Download exception: {e}")
-                analytics.capture_exception(e, user=self.lastRequester, guild=guild,
-                                            properties={"stage": "download", "video_id": videoId,
-                                                        "title": videoTitle, "reason": reason,
-                                                        "audience": diag.audience, "summary": diag.summary})
-                playLogger.error(f"[DOWNLOAD ERROR] Exception downloading '{videoTitle}': {e} → audience: {diag.audience}. summary: {diag.summary}")
+                analytics.capture_exception(
+                    e,
+                    user=self.lastRequester,
+                    guild=guild,
+                    properties={
+                        "stage": "download",
+                        "video_id": videoId,
+                        "title": videoTitle,
+                        "reason": reason,
+                        "audience": diag.audience,
+                        "summary": diag.summary,
+                    },
+                )
+                playLogger.error(
+                    f"[DOWNLOAD ERROR] Exception downloading '{videoTitle}': {e} → audience: {diag.audience}. summary: {diag.summary}"
+                )
                 if self.initialCtx:
                     try:
                         await self.initialCtx.interaction.edit_original_response(
                             content=f"❌ Error al descargar **{videoTitle}**: {reason}",
-                            view=None
+                            view=None,
                         )
                     except Exception:
                         pass
                     self.initialCtx = None
                 if self.controlMessage is not None:
-                    await self.updateControlMessage(f"❌ Error al descargar {videoTitle}: {reason}")
+                    await self.updateControlMessage(
+                        f"❌ Error al descargar {videoTitle}: {reason}"
+                    )
                 self.bot.loop.create_task(self.skipSong())
                 return
             finally:
@@ -1505,9 +1676,14 @@ class GuildPlayer:
             except Exception as e:
                 playLogger.exception("[PLAY] deferred voice connect failed")
                 analytics.capture_exception(
-                    e, user=self.lastRequester, guild=guild,
-                    properties={"stage": "deferred_connect",
-                                "video_id": videoId, "title": videoTitle},
+                    e,
+                    user=self.lastRequester,
+                    guild=guild,
+                    properties={
+                        "stage": "deferred_connect",
+                        "video_id": videoId,
+                        "title": videoTitle,
+                    },
                 )
                 if self.initialCtx:
                     try:
@@ -1540,18 +1716,23 @@ class GuildPlayer:
                 try:
                     await self.initialCtx.interaction.delete_original_response()
                 except Exception as e:
-                    playLogger.warning(f"[PLAYBACK START] Could not delete original response: {e}")
+                    playLogger.warning(
+                        f"[PLAYBACK START] Could not delete original response: {e}"
+                    )
                 self.initialCtx = None
 
             if seek_seconds and seek_seconds > 0:
                 audioSource = discord.FFmpegOpusAudio(
-                    filepath, before_options=f"-ss {seek_seconds:.2f}",
+                    filepath,
+                    before_options=f"-ss {seek_seconds:.2f}",
                 )
             else:
                 audioSource = discord.FFmpegOpusAudio(filepath)
 
             def afterCallback(error):
-                asyncio.run_coroutine_threadsafe(self.onSongFinished(error), self.bot.loop)
+                asyncio.run_coroutine_threadsafe(
+                    self.onSongFinished(error), self.bot.loop
+                )
 
             self.vc.play(audioSource, after=afterCallback)
             # Reset elapsed-time tracking. When resuming from a seek the
@@ -1562,26 +1743,37 @@ class GuildPlayer:
             self.pausedAccumSecs = 0.0
             self.interrupted = False
             self.interruptedAtSeconds = 0.0
-            analytics.capture("play song started", user=self.lastRequester, guild=guild,
-                               properties={"video_id": videoId, "title": videoTitle,
-                                           "queue_length": len(self.queue),
-                                           "seek_seconds": seek_seconds or 0.0})
+            analytics.capture(
+                "play song started",
+                user=self.lastRequester,
+                guild=guild,
+                properties={
+                    "video_id": videoId,
+                    "title": videoTitle,
+                    "queue_length": len(self.queue),
+                    "seek_seconds": seek_seconds or 0.0,
+                },
+            )
             await self.updateControlMessage()
-            playLogger.info(f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId}) seek={seek_seconds:.1f}s")
+            playLogger.info(
+                f"[PLAYBACK START] Started playing '{videoTitle}' (ID: {videoId}) seek={seek_seconds:.1f}s"
+            )
 
             # Editar el mensaje que postea ``playFromIndio`` al texto final.
             # Sólo cuando matchea el currentSong: si entre encolar y arrancar
             # hubo skip/cancel, el meta corresponde a otra canción y se ignora.
-            if (self.indioProgressMessage is not None
-                    and self.indioProgressMeta.get("video_id") == videoId):
+            if (
+                self.indioProgressMessage is not None
+                and self.indioProgressMeta.get("video_id") == videoId
+            ):
                 meta = self.indioProgressMeta
                 duration = meta.get("duration") or ""
                 duration_part = f" *({duration})*" if duration else ""
                 is_first = meta.get("isFirst", False)
                 final_text = (
                     f"🎶 Te puse: **{videoTitle}**{duration_part} — *pedido al indio*"
-                    if is_first else
-                    f"📥 Encolé: **{videoTitle}**{duration_part} — *pedido al indio*"
+                    if is_first
+                    else f"📥 Encolé: **{videoTitle}**{duration_part} — *pedido al indio*"
                 )
                 try:
                     await self.indioProgressMessage.edit(content=final_text)
@@ -1594,9 +1786,15 @@ class GuildPlayer:
             self.startPreDownloading()
         except Exception as e:
             print(f"[PLAYER ERROR] Playback start exception: {e}")
-            analytics.capture_exception(e, user=self.lastRequester, guild=guild,
-                                         properties={"stage": "play", "video_id": videoId, "title": videoTitle})
-            playLogger.error(f"[PLAYBACK ERROR] Playback start exception for '{videoTitle}': {e}")
+            analytics.capture_exception(
+                e,
+                user=self.lastRequester,
+                guild=guild,
+                properties={"stage": "play", "video_id": videoId, "title": videoTitle},
+            )
+            playLogger.error(
+                f"[PLAYBACK ERROR] Playback start exception for '{videoTitle}': {e}"
+            )
             await self.updateControlMessage(f"❌ Error al reproducir {videoTitle}: {e}")
             try:
                 if os.path.exists(filepath):
@@ -1619,18 +1817,22 @@ class GuildPlayer:
         """
         if error:
             print(f"[PLAYER] Playback error: {error}")
-            playLogger.error(f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}")
+            playLogger.error(
+                f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}"
+            )
 
         # Defensive: if the voice client died (kick / network drop / region
         # change) and the caller didn't already flag the interruption via
         # mark_interrupted, detect it here so we don't lose the current song
         # to the cleanup below. ``isStopping`` / ``isPrevious`` are explicit
         # user actions and must continue past this gate.
-        if (not self.interrupted
-                and not self.isStopping
-                and not self.isPrevious
-                and self.currentSong is not None
-                and self.vc is not None):
+        if (
+            not self.interrupted
+            and not self.isStopping
+            and not self.isPrevious
+            and self.currentSong is not None
+            and self.vc is not None
+        ):
             try:
                 connected = bool(self.vc.is_connected())
             except Exception:
@@ -1666,13 +1868,17 @@ class GuildPlayer:
         # Delete the file of the finished song
         if self.currentSong:
             videoId = self.currentSong["id"]
-            downloadsDir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+            downloadsDir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "downloads"
+            )
             filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
             try:
                 if os.path.exists(filepath):
                     fileSize = os.path.getsize(filepath)
                     os.remove(filepath)
-                    playLogger.info(f"[CLEANUP] Deleted temporary file for '{self.currentSong['title']}' (ID: {videoId}). Size: {fileSize} bytes")
+                    playLogger.info(
+                        f"[CLEANUP] Deleted temporary file for '{self.currentSong['title']}' (ID: {videoId}). Size: {fileSize} bytes"
+                    )
             except Exception as e:
                 print(f"[PLAYER] Error deleting file {filepath}: {e}")
                 playLogger.error(f"[CLEANUP ERROR] Error deleting file {filepath}: {e}")
@@ -1695,7 +1901,9 @@ class GuildPlayer:
                 if self.currentSong:
                     self.queue.insert(0, self.currentSong)
                 self.currentSong = self.history.pop()
-                playLogger.info(f"[PLAYBACK PREVIOUS] Loading previous song: '{self.currentSong['title']}'")
+                playLogger.info(
+                    f"[PLAYBACK PREVIOUS] Loading previous song: '{self.currentSong['title']}'"
+                )
                 await self.startPlayingCurrent()
             else:
                 self.currentSong = None
@@ -1704,7 +1912,9 @@ class GuildPlayer:
 
         # Skip or natural finish: add current song to history
         if self.currentSong:
-            playLogger.info(f"[PLAYBACK FINISH] Finished playing '{self.currentSong['title']}' (ID: {self.currentSong['id']})")
+            playLogger.info(
+                f"[PLAYBACK FINISH] Finished playing '{self.currentSong['title']}' (ID: {self.currentSong['id']})"
+            )
             self.history.append(self.currentSong)
 
         # Play next in queue
@@ -1734,58 +1944,85 @@ class GuildPlayer:
             targetSong = None
             for song in self.queue:
                 vid = song["id"]
-                path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads", f"{vid}.mp3")
+                path = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "downloads",
+                    f"{vid}.mp3",
+                )
                 if not os.path.exists(path) and vid not in self.downloadingIds:
                     targetSong = song
                     break
-            
+
             if not targetSong:
                 # All songs in queue are either downloaded or currently downloading
                 break
-                
+
             videoId = targetSong["id"]
             videoTitle = targetSong["title"]
-            downloadsDir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+            downloadsDir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "downloads"
+            )
             filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
-            
+
             self.downloadingIds.add(videoId)
-            playLogger.info(f"[PRE-DOWNLOAD START] Background downloading queue item '{videoTitle}' (ID: {videoId})...")
+            playLogger.info(
+                f"[PRE-DOWNLOAD START] Background downloading queue item '{videoTitle}' (ID: {videoId})..."
+            )
             startTime = time.time()
             try:
                 ytDlpPath = config.YT_DLP_PATH
                 inputStr = f"https://www.youtube.com/watch?v={videoId}"
-                cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+                cookiesPath = os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
+                )
                 ytDlpArgs = [ytDlpPath]
                 if os.path.exists(cookiesPath):
                     ytDlpArgs += ["--cookies", cookiesPath]
                 if config.YT_DLP_POT_BASE_URL:
-                    ytDlpArgs += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+                    ytDlpArgs += [
+                        "--extractor-args",
+                        f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}",
+                    ]
                 ytDlpArgs += [
                     "-x",
-                    "--audio-format", "mp3",
+                    "--audio-format",
+                    "mp3",
                     "--no-playlist",
-                    "-o", os.path.join(downloadsDir, "%(id)s.%(ext)s"),
+                    "-o",
+                    os.path.join(downloadsDir, "%(id)s.%(ext)s"),
                     inputStr,
                 ]
                 proc = await asyncio.create_subprocess_exec(
                     *ytDlpArgs,
                     stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
                 if proc.returncode == 0:
                     duration = time.time() - startTime
-                    fileSize = os.path.getsize(filepath) if os.path.exists(filepath) else 0
-                    playLogger.info(f"[PRE-DOWNLOAD SUCCESS] Background downloaded '{videoTitle}' (ID: {videoId}) in {duration:.2f}s. Size: {fileSize} bytes ({fileSize / (1024*1024):.2f} MB)")
+                    fileSize = (
+                        os.path.getsize(filepath) if os.path.exists(filepath) else 0
+                    )
+                    playLogger.info(
+                        f"[PRE-DOWNLOAD SUCCESS] Background downloaded '{videoTitle}' (ID: {videoId}) in {duration:.2f}s. Size: {fileSize} bytes ({fileSize / (1024 * 1024):.2f} MB)"
+                    )
                 else:
-                    errTail = stderr.decode('utf-8', errors='replace').strip().splitlines()[-5:]
+                    errTail = (
+                        stderr.decode("utf-8", errors="replace")
+                        .strip()
+                        .splitlines()[-5:]
+                    )
                     errMsg = " | ".join(errTail)
-                    playLogger.warning(f"[PRE-DOWNLOAD FAIL] Failed to background download '{videoTitle}' (ID: {videoId}) with code {proc.returncode}. stderr: {errMsg}")
+                    playLogger.warning(
+                        f"[PRE-DOWNLOAD FAIL] Failed to background download '{videoTitle}' (ID: {videoId}) with code {proc.returncode}. stderr: {errMsg}"
+                    )
             except Exception as e:
-                playLogger.error(f"[PRE-DOWNLOAD ERROR] Exception background downloading '{videoTitle}': {e}")
+                playLogger.error(
+                    f"[PRE-DOWNLOAD ERROR] Exception background downloading '{videoTitle}': {e}"
+                )
             finally:
                 self.downloadingIds.discard(videoId)
-                
+
             # Sleep slightly between downloads to avoid high CPU load/network spam
             await asyncio.sleep(1)
 
@@ -1886,7 +2123,9 @@ class GuildPlayer:
         if not self.textChannel:
             return
 
-        embed = discord.Embed(title="🎵 Reproductor de Música", color=discord.Color.blurple())
+        embed = discord.Embed(
+            title="🎵 Reproductor de Música", color=discord.Color.blurple()
+        )
 
         # Determine status text
         if customStatus:
@@ -1912,12 +2151,16 @@ class GuildPlayer:
             for i, song in enumerate(self.queue[:5]):
                 durStr = song.get("duration_string", "")
                 durSuffix = f" `[{durStr}]`" if durStr else ""
-                queueLines.append(f"{i+1}. {song['title']}{durSuffix}")
+                queueLines.append(f"{i + 1}. {song['title']}{durSuffix}")
             if len(self.queue) > 5:
                 queueLines.append(f"... y {len(self.queue) - 5} más.")
-            embed.add_field(name="📋 Siguientes en cola", value="\n".join(queueLines), inline=False)
+            embed.add_field(
+                name="📋 Siguientes en cola", value="\n".join(queueLines), inline=False
+            )
         else:
-            embed.add_field(name="📋 Siguientes en cola", value="La cola está vacía.", inline=False)
+            embed.add_field(
+                name="📋 Siguientes en cola", value="La cola está vacía.", inline=False
+            )
 
         # History footer
         if self.history:
@@ -1929,11 +2172,15 @@ class GuildPlayer:
             if self.controlMessage:
                 await self.controlMessage.edit(embed=embed, view=view)
             else:
-                self.controlMessage = await self.textChannel.send(embed=embed, view=view)
+                self.controlMessage = await self.textChannel.send(
+                    embed=embed, view=view
+                )
         except Exception as e:
             print(f"[PLAYER] Error updating control message: {e}")
             try:
-                self.controlMessage = await self.textChannel.send(embed=embed, view=view)
+                self.controlMessage = await self.textChannel.send(
+                    embed=embed, view=view
+                )
             except Exception:
                 pass
 
@@ -1959,7 +2206,9 @@ class GuildPlayer:
 
         lastSong = self.currentSong or (self.history[-1] if self.history else None)
 
-        embed = discord.Embed(title="🎵 Reproductor de Música", color=discord.Color.greyple())
+        embed = discord.Embed(
+            title="🎵 Reproductor de Música", color=discord.Color.greyple()
+        )
         status = "💤 Desconectado por inactividad."
         if lastSong:
             status += f"\nÚltima canción: **{lastSong['title']}**"
@@ -1969,7 +2218,9 @@ class GuildPlayer:
         try:
             await self.controlMessage.edit(embed=embed, view=view)
         except Exception as e:
-            playLogger.warning(f"[PLAYER] Failed to mark control message disconnected: {e}")
+            playLogger.warning(
+                f"[PLAYER] Failed to mark control message disconnected: {e}"
+            )
 
 
 _QUEUE_EMBED_LIMIT = 15
@@ -2025,7 +2276,9 @@ def build_queue_embed(player: Optional["GuildPlayer"]) -> discord.Embed:
 
     n = len(player.queue)
     if n == 0:
-        embed.add_field(name="📋 Siguientes en cola", value="_Cola vacía._", inline=False)
+        embed.add_field(
+            name="📋 Siguientes en cola", value="_Cola vacía._", inline=False
+        )
     else:
         shown = player.queue[:_QUEUE_EMBED_LIMIT]
         lines = []
@@ -2041,9 +2294,13 @@ def build_queue_embed(player: Optional["GuildPlayer"]) -> discord.Embed:
             inline=False,
         )
 
-    total = sum(_parse_duration_secs(s.get("duration_string", "")) for s in player.queue)
+    total = sum(
+        _parse_duration_secs(s.get("duration_string", "")) for s in player.queue
+    )
     if total > 0:
-        embed.add_field(name="⏱️ Tiempo total de cola", value=_format_secs(total), inline=True)
+        embed.add_field(
+            name="⏱️ Tiempo total de cola", value=_format_secs(total), inline=True
+        )
 
     if player.history:
         embed.set_footer(text=f"Canciones en historial: {len(player.history)}")
@@ -2053,6 +2310,7 @@ def build_queue_embed(player: Optional["GuildPlayer"]) -> discord.Embed:
 
 class PlayerControlView(discord.ui.View):
     """Playback control buttons for the GuildPlayer UI."""
+
     def __init__(self, player: GuildPlayer):
         """Initialize the control view for a player.
 
@@ -2079,26 +2337,42 @@ class PlayerControlView(discord.ui.View):
                 elif child.custom_id == "btn_next":
                     child.disabled = len(self.player.queue) == 0
 
-    @discord.ui.button(label="⏮️ Anterior", style=discord.ButtonStyle.secondary, custom_id="btn_prev")
-    async def previousButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="⏮️ Anterior", style=discord.ButtonStyle.secondary, custom_id="btn_prev"
+    )
+    async def previousButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Handle the Previous button click."""
         await interaction.response.defer()
         await self.player.playPrevious()
 
-    @discord.ui.button(label="⏸️ Pausar", style=discord.ButtonStyle.primary, custom_id="btn_pause_play")
-    async def pausePlayButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="⏸️ Pausar", style=discord.ButtonStyle.primary, custom_id="btn_pause_play"
+    )
+    async def pausePlayButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Handle the Pause/Resume button click."""
         await interaction.response.defer()
         await self.player.togglePausePlay()
 
-    @discord.ui.button(label="⏭️ Siguiente", style=discord.ButtonStyle.secondary, custom_id="btn_next")
-    async def nextButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="⏭️ Siguiente", style=discord.ButtonStyle.secondary, custom_id="btn_next"
+    )
+    async def nextButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Handle the Next button click."""
         await interaction.response.defer()
         await self.player.skipSong()
 
-    @discord.ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger, custom_id="btn_stop")
-    async def stopButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="⏹️ Stop", style=discord.ButtonStyle.danger, custom_id="btn_stop"
+    )
+    async def stopButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Handle the Stop button click."""
         await interaction.response.defer()
         await self.player.stopPlayback()
@@ -2151,7 +2425,9 @@ class DisconnectedControlView(discord.ui.View):
         custom_id="btn_reconnect",
         row=1,
     )
-    async def reconnectButton(self, button: discord.ui.Button, interaction: discord.Interaction):
+    async def reconnectButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Revive the last song: re-join voice and play it again."""
         # Disable the whole dead panel up front so it can't be double-clicked
         # (and to acknowledge the interaction).
@@ -2194,6 +2470,7 @@ def getGuildPlayer(guildId: int, bot) -> GuildPlayer:
         guildPlayers[guildId] = GuildPlayer(guildId, bot)
     return guildPlayers[guildId]
 
+
 def clearGuildPlayer(guildId: int):
     """Clear a GuildPlayer and delete any queued downloads.
 
@@ -2209,18 +2486,25 @@ def clearGuildPlayer(guildId: int):
         if getattr(player, "autodj_grace_task", None) and not player.autodj_grace_task.done():
             player.autodj_grace_task.cancel()
         # Cancel background downloader task
-        if getattr(player, "preDownloadTask", None) and not player.preDownloadTask.done():
+        if (
+            getattr(player, "preDownloadTask", None)
+            and not player.preDownloadTask.done()
+        ):
             player.preDownloadTask.cancel()
-            playLogger.info(f"[CLEANUP] Cancelled active background pre-download task for guild {guildId}")
+            playLogger.info(
+                f"[CLEANUP] Cancelled active background pre-download task for guild {guildId}"
+            )
 
         # Delete all files in queue and currentSong
-        downloadsDir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+        downloadsDir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "downloads"
+        )
         filesToDelete = []
         if player.currentSong:
             filesToDelete.append(player.currentSong["id"])
         for song in player.queue:
             filesToDelete.append(song["id"])
-            
+
         for videoId in filesToDelete:
             filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
             webmpath = os.path.join(downloadsDir, f"{videoId}.webm")
@@ -2244,6 +2528,7 @@ def clearGuildPlayer(guildId: int):
         player.textChannel = None
         player.isDownloading = False
         del guildPlayers[guildId]
+
 
 def _format_choice_prompt(candidates: list[dict]) -> str:
     """Render a numbered list of search candidates for the "¿cuál querés?"
@@ -2310,7 +2595,9 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             try:
                 await player.resumeFromInterruption(vc)
             except Exception:
-                playLogger.exception("[PLAY] resumeFromInterruption failed; falling back to fresh play")
+                playLogger.exception(
+                    "[PLAY] resumeFromInterruption failed; falling back to fresh play"
+                )
                 player.interrupted = False
                 player.currentSong = None
         else:
@@ -2323,7 +2610,9 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             vc = await channel.connect(reconnect=True)
             await player.resumeFromInterruption(vc)
         except Exception:
-            playLogger.exception("[PLAY] reconnect-to-resume failed; falling back to fresh play")
+            playLogger.exception(
+                "[PLAY] reconnect-to-resume failed; falling back to fresh play"
+            )
             player.interrupted = False
             player.currentSong = None
             player.pendingVoiceChannel = channel
@@ -2336,7 +2625,11 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
 
     # Prepare search or URL input
     inputStr = query.strip()
-    isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://") or inputStr.startswith("ytsearch:"))
+    isSearch = not (
+        inputStr.startswith("http://")
+        or inputStr.startswith("https://")
+        or inputStr.startswith("ytsearch:")
+    )
     if isSearch:
         # ytsearchN para tener candidatos: los primeros hits suelen ser canales
         # (ej. "Indio Solari" devuelve el canal UCzq3uuD... que yt-dlp no
@@ -2347,65 +2640,87 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     # 1. Fetch metadata (ID and Title)
     await safeEdit(ctx, "🔍 Buscando y obteniendo metadatos...")
     try:
-        cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        cookiesPath = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
+        )
         ytDlpArgs = [config.YT_DLP_PATH]
         if os.path.exists(cookiesPath):
             ytDlpArgs += ["--cookies", cookiesPath]
         if config.YT_DLP_POT_BASE_URL:
-            ytDlpArgs += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+            ytDlpArgs += [
+                "--extractor-args",
+                f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}",
+            ]
         ytDlpArgs += [
             "--flat-playlist",
             "--simulate",
-            "--print", "%(id)s",
-            "--print", "%(title)s",
-            "--print", "%(duration_string)s",
+            "--print",
+            "%(id)s",
+            "--print",
+            "%(title)s",
+            "--print",
+            "%(duration_string)s",
             inputStr,
         ]
         proc = await asyncio.create_subprocess_exec(
-            *ytDlpArgs,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *ytDlpArgs, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            errMsg = stderr.decode('utf-8', errors='replace').strip()
+            errMsg = stderr.decode("utf-8", errors="replace").strip()
             diag = _diagnoseYtDlpFailure(errMsg, proc.returncode)
             reason = diag.format()
             print(f"[PLAY ERROR] Metadata fetch failed: {reason} ({errMsg[:200]})")
-            playLogger.error(f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg[:500]}")
+            playLogger.error(
+                f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg[:500]}"
+            )
             return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
-        lines = stdout.decode('utf-8', errors='replace').strip().split('\n')
+        lines = stdout.decode("utf-8", errors="replace").strip().split("\n")
         lines = [l.strip() for l in lines if l.strip()]
         if not lines:
             return await safeEdit(ctx, "❌ No se encontraron resultados.")
 
         songs = []
         for i in range(0, len(lines) - 2, 3):
-            durStr = lines[i+2]
-            songs.append({
-                "id": lines[i],
-                "title": lines[i+1],
-                "duration_string": durStr if durStr != "NA" else ""
-            })
+            durStr = lines[i + 2]
+            songs.append(
+                {
+                    "id": lines[i],
+                    "title": lines[i + 1],
+                    "duration_string": durStr if durStr != "NA" else "",
+                }
+            )
 
         if isSearch:
             # YouTube search mezcla videos con canales/playlists; filtramos
             # los que no son videos (id de canal "UC..." o sin duracion).
-            songs = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
+            songs = [
+                s
+                for s in songs
+                if not s["id"].startswith("UC") and s["duration_string"]
+            ]
 
         if not songs:
-            return await safeEdit(ctx, "❌ No se pudieron obtener los metadatos del video.")
+            return await safeEdit(
+                ctx, "❌ No se pudieron obtener los metadatos del video."
+            )
     except FileNotFoundError as e:
-        diag = _diag("admin",
-                     f"yt-dlp no encontrado en {config.YT_DLP_PATH}.",
-                     admin_step=f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.")
-        playLogger.error(f"[METADATA FAIL] yt-dlp binary missing at {config.YT_DLP_PATH}: {e}")
+        diag = _diag(
+            "admin",
+            f"yt-dlp no encontrado en {config.YT_DLP_PATH}.",
+            admin_step=f"yt-dlp no encontrado en `{config.YT_DLP_PATH}`. Revisá YT_DLP_PATH en .env.",
+        )
+        playLogger.error(
+            f"[METADATA FAIL] yt-dlp binary missing at {config.YT_DLP_PATH}: {e}"
+        )
         return await safeEdit(ctx, f"❌ Error al buscar el video: {diag.format()}")
     except Exception as e:
         diag = _diagnoseYtDlpFailure(str(e))
         reason = diag.format()
-        playLogger.error(f"[METADATA FAIL] Exception during metadata fetch for '{query}': {e} → audience: {diag.audience}. summary: {diag.summary}")
+        playLogger.error(
+            f"[METADATA FAIL] Exception during metadata fetch for '{query}': {e} → audience: {diag.audience}. summary: {diag.summary}"
+        )
         print(f"[PLAY ERROR] Exception during metadata fetch: {e}")
         return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
@@ -2419,7 +2734,8 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         if _should_autoplay_top(query, songs[0]["title"]):
             playLogger.info(
                 "[PLAY AUTOPLAY] query=%r top=%r ratio=%.2f → skipping picker",
-                query, songs[0]["title"],
+                query,
+                songs[0]["title"],
                 _query_title_ratio(query, songs[0]["title"]),
             )
             await player.addSongs([songs[0]], ctx)
@@ -2437,15 +2753,18 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             await player.addSongs([winner], ctx)
 
         vote = open_music_vote(
-            bot=ctx.bot, guild_id=ctx.guild.id,
-            candidates=candidates, on_resolve=_resolve,
+            bot=ctx.bot,
+            guild_id=ctx.guild.id,
+            candidates=candidates,
+            on_resolve=_resolve,
             requester_id=int(getattr(ctx.author, "id", 0) or 0),
         )
         prompt = _format_choice_prompt(candidates)
         msg = None
         try:
             msg = await ctx.interaction.edit_original_response(
-                content=prompt, view=None,
+                content=prompt,
+                view=None,
             )
         except Exception:
             try:
@@ -2504,26 +2823,37 @@ async def _yt_dlp_search(query: str, *, max_results: int = 1) -> list[dict]:
     filtered out below.
     """
     inputStr = query.strip()
-    isSearch = not (inputStr.startswith("http://") or inputStr.startswith("https://")
-                    or inputStr.startswith("ytsearch:"))
+    isSearch = not (
+        inputStr.startswith("http://")
+        or inputStr.startswith("https://")
+        or inputStr.startswith("ytsearch:")
+    )
     if isSearch:
         # ytsearchN + filtro abajo: los primeros hits suelen ser canales
         # (ej. "Indio Solari" → UCzq3uuD...) que no se pueden bajar, así que
         # pedimos algunos de más para tener candidatos válidos suficientes.
         fetch_n = max(max_results + 2, 3)
         inputStr = f"ytsearch{fetch_n}:{inputStr}"
-    cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+    cookiesPath = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
+    )
     args = [config.YT_DLP_PATH]
     if os.path.exists(cookiesPath):
         args += ["--cookies", cookiesPath]
     if config.YT_DLP_POT_BASE_URL:
-        args += ["--extractor-args",
-                 f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+        args += [
+            "--extractor-args",
+            f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}",
+        ]
     args += [
-        "--flat-playlist", "--simulate",
-        "--print", "%(id)s",
-        "--print", "%(title)s",
-        "--print", "%(duration_string)s",
+        "--flat-playlist",
+        "--simulate",
+        "--print",
+        "%(id)s",
+        "--print",
+        "%(title)s",
+        "--print",
+        "%(duration_string)s",
         inputStr,
     ]
     try:
@@ -2537,28 +2867,43 @@ async def _yt_dlp_search(query: str, *, max_results: int = 1) -> list[dict]:
         playLogger.warning(f"[PLAY-INDIO] yt-dlp spawn failed: {e}")
         return []
     if proc.returncode != 0:
-        playLogger.warning(f"[PLAY-INDIO] yt-dlp rc={proc.returncode}: "
-                           f"{stderr.decode('utf-8', 'replace').strip()[:200]}")
+        playLogger.warning(
+            f"[PLAY-INDIO] yt-dlp rc={proc.returncode}: "
+            f"{stderr.decode('utf-8', 'replace').strip()[:200]}"
+        )
         return []
-    lines = [l.strip() for l in stdout.decode("utf-8", "replace").strip().split("\n") if l.strip()]
+    lines = [
+        l.strip()
+        for l in stdout.decode("utf-8", "replace").strip().split("\n")
+        if l.strip()
+    ]
     songs: list[dict] = []
     for i in range(0, len(lines) - 2, 3):
         dur = lines[i + 2]
-        songs.append({
-            "id": lines[i],
-            "title": lines[i + 1],
-            "duration_string": dur if dur != "NA" else "",
-        })
+        songs.append(
+            {
+                "id": lines[i],
+                "title": lines[i + 1],
+                "duration_string": dur if dur != "NA" else "",
+            }
+        )
     if isSearch:
         # Filtramos canales/playlists para quedarnos con videos reales.
-        videos = [s for s in songs if not s["id"].startswith("UC") and s["duration_string"]]
+        videos = [
+            s for s in songs if not s["id"].startswith("UC") and s["duration_string"]
+        ]
         songs = videos[:max_results]
     return songs
 
 
-async def playFromIndio(bot, guild_id: int, query: str,
-                        voice_channel_id: Optional[int] = None,
-                        *, songs: Optional[list[dict]] = None) -> tuple[bool, str]:
+async def playFromIndio(
+    bot,
+    guild_id: int,
+    query: str,
+    voice_channel_id: Optional[int] = None,
+    *,
+    songs: Optional[list[dict]] = None,
+) -> tuple[bool, str]:
     """Queue a YouTube search/URL programmatically — no slash ctx required.
 
     Used by the indio when someone asks him to play music. Picks a voice
@@ -2596,10 +2941,13 @@ async def playFromIndio(bot, guild_id: int, query: str,
     if text_channel is None or not hasattr(text_channel, "send"):
         playLogger.warning(
             "[PLAY-INDIO] INDIO_PLAY_CHANNEL_ID=%s no encontrado en guild %s",
-            config.INDIO_PLAY_CHANNEL_ID, guild_id,
+            config.INDIO_PLAY_CHANNEL_ID,
+            guild_id,
         )
-        return False, (f"no encuentro el canal de musica configurado "
-                       f"(id={config.INDIO_PLAY_CHANNEL_ID})")
+        return False, (
+            f"no encuentro el canal de musica configurado "
+            f"(id={config.INDIO_PLAY_CHANNEL_ID})"
+        )
 
     # Voice-connect strategy mirrors playLogic: if already connected reuse/move
     # the vc; otherwise defer the join until the first song finishes downloading
@@ -2655,15 +3003,13 @@ async def playFromIndio(bot, guild_id: int, query: str,
     else:
         player.vc = vc
 
-    isFirst = (not player.currentSong and len(player.queue) == 0)
+    isFirst = not player.currentSong and len(player.queue) == 0
     title = songs[0]["title"]
     duration = songs[0].get("duration_string") or songs[0].get("duration") or ""
     duration_part = f" *({duration})*" if duration else ""
     verb = "Descargando" if isFirst else "Encolando"
     icon = "⬇️" if isFirst else "📥"
-    progress_text = (
-        f"{icon} {verb}: **{title}**{duration_part} — *pedido al indio*"
-    )
+    progress_text = f"{icon} {verb}: **{title}**{duration_part} — *pedido al indio*"
     try:
         if progress_msg is not None:
             await progress_msg.edit(content=progress_text)
@@ -2746,9 +3092,8 @@ async def reconnectLastSong(
     if requester is not None:
         player.lastRequester = requester
 
-    trigger_user = (
-        getattr(requester, "id", None)
-        or (bot.user.id if getattr(bot, "user", None) else 0)
+    trigger_user = getattr(requester, "id", None) or (
+        bot.user.id if getattr(bot, "user", None) else 0
     )
 
     vc = guild.voice_client
@@ -2800,7 +3145,9 @@ async def playSoundFromIndio(bot, guild_id: int, sound_query: str) -> tuple[bool
         return False, "vapls ya esta reproduciendo algo, paso"
 
     # Locate the sound file under CUSTOM_AUDIO_PATH (recursive fuzzy match).
-    root = getattr(config, "CUSTOM_AUDIO_PATH", None) or getattr(config, "AUDIO_DIR", None)
+    root = getattr(config, "CUSTOM_AUDIO_PATH", None) or getattr(
+        config, "AUDIO_DIR", None
+    )
     if not root or not os.path.isdir(root):
         return False, "CUSTOM_AUDIO_PATH no configurado"
     needle = sound_query.strip().lower()
