@@ -60,6 +60,18 @@ def test_success_status_returns_none():
 
 # --- End-to-end: _dispatch_indio_actions edits reply in place on failure ----
 
+def _member_in_voice(user_id=42, channel_id=99):
+    """A minimal Member stand-in that satisfies the music-action gating
+    in ``_dispatch_indio_actions``: it has an ``id`` and a ``voice.channel``
+    so the requester counts as 'in voice'."""
+    return types.SimpleNamespace(
+        id=user_id,
+        voice=types.SimpleNamespace(
+            channel=types.SimpleNamespace(id=channel_id),
+        ),
+    )
+
+
 def _make_handle(*, via_relay=False, channel_id=42, message_id=None,
                  edited_content=None, single=True, sent_content=None):
     """Build a reply handle mirroring what indioLogic / indioFromVoice produce.
@@ -121,6 +133,7 @@ async def test_dispatch_edits_reply_with_failure_reason_when_resume_finds_no_pla
         MagicMock(), 100, [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, va",
+        requester_member=_member_in_voice(),
     )
 
     # The original message was edited (not a new send) to include the reason.
@@ -158,6 +171,7 @@ async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
         MagicMock(), 100, [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, retomando",
+        requester_member=_member_in_voice(),
     )
 
     # Edit happened and includes a success marker (not a failure message).
@@ -198,6 +212,7 @@ async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(
         MagicMock(), 100, [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, va",
+        requester_member=_member_in_voice(),
     )
 
     assert edit_calls, "expected _edit_via_userbot to be called"
@@ -220,6 +235,7 @@ async def test_dispatch_no_edit_when_no_handle_provided(monkeypatch):
         MagicMock(), 100, [("RESUME_MUSIC", None)],
         reply_handle=None,
         reply_text="",
+        requester_member=_member_in_voice(),
     )
 
     assert statuses                        # action was attempted
@@ -241,6 +257,7 @@ async def test_dispatch_no_separate_channel_send_on_failure(monkeypatch):
         MagicMock(), 100, [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, va",
+        requester_member=_member_in_voice(),
     )
 
     # The reply was edited in place — no separate channel send needed.
@@ -266,6 +283,7 @@ async def test_dispatch_music_success_adds_music_suffix(monkeypatch):
         MagicMock(), 100, [("PLAY_MUSIC", "Queen")],
         reply_handle=handle,
         reply_text="dale, va Queen",
+        requester_member=_member_in_voice(),
     )
 
     assert edited
@@ -288,6 +306,7 @@ async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
         MagicMock(), 100, [("PLAY_SOUND", "risas")],
         reply_handle=handle,
         reply_text="tomá",
+        requester_member=_member_in_voice(),
     )
 
     assert edited
@@ -315,6 +334,7 @@ async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
         MagicMock(), 100, [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="una respuesta larga partida en varios mensajes",
+        requester_member=_member_in_voice(),
     )
 
     # The original (chunked) message was NOT edited; the result went out as a

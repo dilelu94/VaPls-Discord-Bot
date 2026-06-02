@@ -1271,6 +1271,10 @@ def _failure_feedback(status: str) -> Optional[str]:
         return _ACTION_FAILURE_MESSAGES[status]
     if status.endswith(": no active player"):
         return "no había reproductor activo, no estaba sonando nada"
+    if status.endswith(": no voice"):
+        return "metete en un canal de voz, si no no puedo hacer nada"
+    if status.endswith(": no requester"):
+        return "no puedo poner música desde acá — pedímelo desde Discord, en voz"
     if status.startswith("music: fail"):
         # Extract the inner reason after " — " when present.
         _, _, reason = status.partition(" — ")
@@ -1325,11 +1329,39 @@ def _dispatch_lock_for(guild_id: int) -> asyncio.Lock:
     return lock
 
 
+# Music-tools requieren que el requester (el que pidió) esté en voz. Pedidos
+# desde Telegram (vía HTTP /indio sin user_id de Discord) llegan con
+# requester_member=None y caen en "no requester"; texto sin voz cae en
+# "no voice". Cualquier acción no incluida acá no se gatea.
+_MUSIC_ACTIONS = frozenset({"PLAY_MUSIC", "PLAY_SOUND", "SKIP_MUSIC",
+                            "PAUSE_MUSIC", "RESUME_MUSIC", "STOP_MUSIC"})
+
+_MUSIC_STATUS_PREFIX = {
+    "PLAY_MUSIC": "music", "PLAY_SOUND": "sound",
+    "SKIP_MUSIC": "skip", "PAUSE_MUSIC": "pause",
+    "RESUME_MUSIC": "resume", "STOP_MUSIC": "stop",
+}
+
+
+def _gate_music_action(action: str, member) -> Optional[str]:
+    """Return a status string when the music action must be blocked, or None
+    when the requester is a Discord member in a voice channel. Matches the
+    ``: no requester`` / ``: no voice`` suffixes ``_failure_feedback`` knows."""
+    prefix = _MUSIC_STATUS_PREFIX.get(action, action.lower())
+    if member is None:
+        return f"{prefix}: no requester"
+    voice = getattr(member, "voice", None)
+    if voice is None or getattr(voice, "channel", None) is None:
+        return f"{prefix}: no voice"
+    return None
+
+
 async def _dispatch_indio_actions(bot: "discord.Bot",
                                    guild_id: Optional[int],
                                    actions: list[tuple[str, str]],
                                    reply_handle=None,
                                    reply_text: str = "",
+                                   requester_member: "Optional[discord.Member]" = None,
                                    ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
@@ -1373,6 +1405,12 @@ async def _dispatch_indio_actions(bot: "discord.Bot",
     async with _dispatch_lock_for(int(guild_id)):
         for action, arg in actions:
             try:
+                if action in _MUSIC_ACTIONS:
+                    gate_status = _gate_music_action(action, requester_member)
+                    if gate_status:
+                        statuses.append(gate_status)
+                        logger.info("indio %s gated: %s", action, gate_status)
+                        continue
                 if action == "PLAY_MUSIC":
                     ok, msg = await _invoke_slash_via_userbot(
                         "invoke_play",
@@ -2550,6 +2588,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
             ctx.bot, getattr(ctx.guild, "id", None), pending_actions,
             reply_handle=reply_handle,
             reply_text=clean_reply,
+            requester_member=ctx.author,
         ))
 
     _turn_ts = time.time()
@@ -2844,6 +2883,7 @@ async def indioFromVoice(
             bot, guild_id, pending_actions,
             reply_handle=reply_handle,
             reply_text=clean_reply,
+            requester_member=member,
         ))
 
     _turn_ts = time.time()

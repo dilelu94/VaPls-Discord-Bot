@@ -45,6 +45,17 @@ def _make_handle(edited_list):
     )
 
 
+def _member_in_voice(user_id=42, channel_id=99):
+    """Requester stand-in that satisfies the music-action gating
+    in ``_dispatch_indio_actions`` (has ``id`` + ``voice.channel``)."""
+    return types.SimpleNamespace(
+        id=user_id,
+        voice=types.SimpleNamespace(
+            channel=types.SimpleNamespace(id=channel_id),
+        ),
+    )
+
+
 async def test_play_music_via_relay_uses_softer_success_suffix(monkeypatch):
     """Relay ack-only path: the edit must reflect "I handed it off" rather
     than "I played it". The regular "listo" finality language is wrong
@@ -65,6 +76,7 @@ async def test_play_music_via_relay_uses_softer_success_suffix(monkeypatch):
         MagicMock(), 100, [("PLAY_MUSIC", "despacito")],
         reply_handle=handle,
         reply_text="dale, va",
+        requester_member=_member_in_voice(),
     )
 
     assert edited, "expected the reply to be edited with a result line"
@@ -103,6 +115,7 @@ async def test_play_music_via_fallback_keeps_strong_success_suffix(monkeypatch):
         MagicMock(), 100, [("PLAY_MUSIC", "despacito")],
         reply_handle=handle,
         reply_text="dale, va",
+        requester_member=_member_in_voice(),
     )
 
     assert edited, "expected the reply to be edited with a result line"
