@@ -596,9 +596,11 @@ _PRESET_2_PATTERNS: tuple[tuple[str, str], ...] = (
     ("indio", "dale"),
 )
 
-# Preset 3: placeholder / WIP — currently mirrors preset 2.
-# TODO: tune preset 3
-_PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_2_PATTERNS
+# Preset 3: enlarged grammar-pool preset — same wake words as preset 1
+# (re-enables "que indio"/"eh indio") but with a large decoy filler in VOSK's
+# grammar so ambient speech has many buckets to land in instead of collapsing
+# into a wake-word phrase. Tune the pool via _PRESET_3_FILLER below.
+_PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 
 _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
     1: _PRESET_1_PATTERNS,
@@ -608,13 +610,31 @@ _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
 
 # Active sensitivity preset. Default 2: only "che indio" invokes (the "que"/"eh"
 # variants were the dominant false-positive source). Preset 1 is more sensitive
-# (adds "que indio"/"eh indio"); preset 3 is a WIP placeholder. In-memory only —
+# (adds "que indio"/"eh indio"); preset 3 re-enables those variants but uses a
+# large decoy grammar pool to reduce false positives. In-memory only —
 # resets to this default on userbot restart.
 _SENSITIVITY_PRESET: int = 2
 
 # Generation counter — incremented by _set_sensitivity so that live per-user
 # VOSK recognizers (which embed the old grammar) are detected and rebuilt.
 _vosk_grammar_generation: int = 0
+
+# ---- Preset 3 manual-tuning decoy pool ------------------------------------
+# Decoys give VOSK somewhere to map ambient speech instead of collapsing it
+# into a wake-word. When a phrase keeps mis-firing (see [WAKE]/[VOSK] logs),
+# ADD IT HERE by hand so VOSK has a bucket for it.
+_PRESET_3_FILLER: list[str] = [
+    "che", "ey", "hola", "buenas", "dale", "vamos",
+    "que", "qué", "como", "cómo", "cual", "cuál",
+    "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
+    "si", "sí", "no", "ah", "eh", "uh", "oh",
+    "el", "la", "los", "las", "un", "una", "uno",
+    "yo", "vos", "tu", "tú", "ella", "nosotros",
+    "ser", "estar", "tener", "hacer", "decir", "ver",
+    "bien", "mal", "todo", "nada", "algo", "mucho", "poco",
+    "boludo", "loco", "posta", "ahre", "viste",
+    "mira", "escucha", "anda", "vení",
+]
 
 
 def _build_vosk_grammar() -> str:
@@ -687,8 +707,28 @@ def _build_vosk_grammar() -> str:
         ] + phrases
         phrases.insert(phrases.index("che"), "que")
         phrases.insert(phrases.index("che") + 1, "eh")
+    elif preset == 3:
+        # Preset 3: re-enables "que indio"/"eh indio" like preset 1, but adds
+        # a large decoy pool so VOSK has many buckets for ambient speech.
+        invocations = [
+            "che indio",
+            "que indio",
+            "eh indio",
+            "ey indio",
+            "hola indio",
+        ]
+        extra_lone = ["que", "eh"]
+        combined = invocations + phrases + extra_lone + _PRESET_3_FILLER
+        # Deduplicate while preserving order.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for token in combined:
+            if token not in seen:
+                seen.add(token)
+                deduped.append(token)
+        return json.dumps(deduped)
     else:
-        # Preset 2 and 3: only "che indio".
+        # Preset 2: only "che indio".
         phrases = ["che indio", "ey indio", "hola indio"] + phrases
     return json.dumps(phrases)
 
@@ -860,6 +900,8 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> tuple[bool, Optional[dict]]:
                         f"[VOSK] matched via alternative #{idx + 1}: "
                         f"{text!r} (top-1 was {candidates[0]!r})"
                     )
+                if result is not None:
+                    result["_matched_text"] = text
                 return True, result
         top1 = candidates[0] if candidates else ""
         if top1 and "indio" in _normalize(top1).split():
@@ -1013,10 +1055,13 @@ class WakeWordSink(voice_recv.AudioSink):
             accepted = rec.AcceptWaveform(data_16k)
             matched, vosk_result = _vosk_heard_wake_word(rec, accepted)
             if matched:
+                _matched_text = vosk_result.get("_matched_text", "") if vosk_result else ""
                 log.info(
-                    f"[WAKE] user={user_id} VOSK detected wake word, "
-                    f"starting capture (prebuf_chunks="
-                    f"{len(self.prebuffers.get(user_id, ()))})"
+                    "[WAKE] user=%s VOSK detected wake word=%r, "
+                    "starting capture (prebuf_chunks=%d)",
+                    user_id,
+                    _matched_text,
+                    len(self.prebuffers.get(user_id, ())),
                 )
                 self._wake_triggerer_id = user_id
                 self._wake_in_progress = True

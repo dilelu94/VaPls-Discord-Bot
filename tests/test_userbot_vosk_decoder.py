@@ -43,6 +43,10 @@ def _extract_decoder_helpers():
             "_preset_constants",
             r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
         ),
+        (
+            "_PRESET_3_FILLER",
+            r"^_PRESET_3_FILLER:.*?^\]\n",
+        ),
         ("_WAKE_ANTI_PATTERNS", r"^_WAKE_ANTI_PATTERNS:[^\n]*\n"),
         (
             "_build_vosk_grammar",
@@ -285,6 +289,21 @@ def test_grammar_contains_relaxed_collapses():
 def test_grammar_has_unk_catchall():
     tokens = json.loads(VOSK_GRAMMAR)
     assert "[unk]" in tokens
+
+
+def test_preset3_grammar_contains_filler_and_full_invocations():
+    """Preset 3 grammar must include filler tokens and re-added que/eh invocations."""
+    try:
+        set_sensitivity(3)
+        tokens = json.loads(build_grammar())
+    finally:
+        set_sensitivity(2)
+    # Filler decoys
+    for token in ("boludo", "como", "los"):
+        assert token in tokens, f"preset-3 grammar missing filler {token!r}"
+    # Re-added invocation phrases
+    for phrase in ("que indio", "eh indio"):
+        assert phrase in tokens, f"preset-3 grammar missing invocation {phrase!r}"
 
 
 def test_grammar_dropped_unrelated_filler():

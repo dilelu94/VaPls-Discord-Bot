@@ -39,8 +39,9 @@ def _extract_wake_ns():
     assert m, "could not locate _normalize"
     blocks.append(m.group(0))
 
-    # Preset pattern constants and _PRESETS dict (everything from
-    # _PRESET_1_PATTERNS through _SENSITIVITY_PRESET / _vosk_grammar_generation).
+    # Preset pattern constants, sensitivity globals, and _PRESET_3_FILLER.
+    # Captures from _PRESET_1_PATTERNS through the closing bracket of
+    # _PRESET_3_FILLER so that _build_vosk_grammar can reference it.
     m = re.search(
         r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
         src,
@@ -48,6 +49,15 @@ def _extract_wake_ns():
     )
     assert m, "could not locate preset constants"
     blocks.append(m.group(0))
+
+    # _PRESET_3_FILLER (placed after _vosk_grammar_generation)
+    m3 = re.search(
+        r"^_PRESET_3_FILLER:.*?^\]\n",
+        src,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m3, "could not locate _PRESET_3_FILLER"
+    blocks.append(m3.group(0))
 
     # `_build_vosk_grammar` (needed by _set_sensitivity)
     m = re.search(
@@ -247,18 +257,37 @@ def test_switching_back_to_preset1_restores_que_indio():
 
 
 # ---------------------------------------------------------------------------
-# Preset 3 — placeholder mirrors preset 2
+# Preset 3 — re-enables que/eh indio (same patterns as preset 1)
 # ---------------------------------------------------------------------------
 
 
-def test_preset3_che_indio_fires():
+@pytest.mark.parametrize(
+    "text",
+    [
+        "che indio",
+        "que indio",  # re-enabled in preset 3
+        "eh indio",   # re-enabled in preset 3
+        "indio ponete",
+        "indio poneme",
+        "indio reproduci",
+        "indio reproducí",
+        "indio reproduce",
+        "indio tirate",
+        "indio dale",
+        "indio por",
+        "indio tira",
+    ],
+)
+def test_preset3_invocation_and_commands_fire(text):
+    """Preset 3: 'che/que/eh indio' and all command-verb patterns fire."""
     set_sensitivity(3)
-    assert matches("che indio") is True
+    assert matches(text) is True
 
 
-def test_preset3_que_indio_does_not_fire():
+def test_preset3_bare_indio_does_not_fire():
+    """Preset 3: bare 'indio' alone must not trigger."""
     set_sensitivity(3)
-    assert matches("que indio") is False
+    assert matches("indio") is False
 
 
 # ---------------------------------------------------------------------------

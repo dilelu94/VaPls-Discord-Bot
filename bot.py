@@ -787,7 +787,7 @@ async def sensibilidad(
     ctx,
     preset: discord.Option(
         int,
-        description="Preset: 1=más sensible, 2=solo 'che indio' (default), 3=placeholder",
+        description="Preset: 1=más sensible, 2=solo 'che indio' (default), 3=pool grande+que/eh indio",
         choices=[1, 2, 3],
     ),
 ):
@@ -835,7 +835,7 @@ async def sensibilidad(
     _PRESET_DESCRIPTIONS = {
         1: "**Preset 1** — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
         2: '**Preset 2** — menos sensible (default): solo `che indio` + verbos. Reduce falsos positivos de "que".',
-        3: "**Preset 3** — (placeholder / WIP): igual al preset 2 por ahora.",
+        3: "**Preset 3** — menos sensible vía pool grande de frases, pero re-habilita `che/que/eh indio`. Editable a mano.",
     }
     await safe_respond(
         ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"
@@ -921,7 +921,7 @@ async def help_cmd(ctx):
             "**/entraindio** — hace que el indio (userbot) entre a tu canal "
             "de voz para escuchar y responder al wake-word.\n"
             "**/sensibilidad** `1|2|3` — ajusta la sensibilidad del wake-word "
-            "(1=máxima, 2=solo 'che indio', 3=WIP).\n"
+            "(1=máxima, 2=solo 'che indio' (default), 3=pool grande+que/eh indio).\n"
             "**/parar** — corta la reproducción, limpia la cola y se "
             "desconecta.\n"
             "**/quit** — sale del canal de voz sin tocar la cola."

@@ -150,7 +150,7 @@ Switch the VOSK wake-word sensitivity preset at runtime.
 - `preset`: integer 1, 2, or 3.
   - `1` — most sensitive: `che indio`, `que indio`, `eh indio` + command-verb patterns.
   - `2` — less sensitive (**default**): only `che indio` + command-verb patterns. Removes `que`/`eh` invocation pairs to reduce false positives.
-  - `3` — placeholder/WIP: currently identical to preset 2.
+  - `3` — enlarged grammar pool: re-enables `che indio`, `que indio`, `eh indio` + command-verb patterns (same as preset 1), but adds a large decoy token pool (`_PRESET_3_FILLER`) so VOSK has many buckets for ambient speech instead of collapsing noise into wake-word phrases. Pool is hand-editable in `userbot/bot.py`.
 
 The preset is **in-memory only** — it resets to the default (2) on userbot restart.
 

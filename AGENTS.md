@@ -140,6 +140,37 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 - `/indio`: persona con memoria corta por guild + memoria de largo plazo destilada por Gemini.
 - `/parar`: detiene playback y desconecta.
 - `/quit`: desconecta sin limpiar cola.
+- `/entraindio`: hace que el userbot (Indio) entre al canal de voz del invocador (relay `/join`).
+- `/sensibilidad` `1|2|3`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
+
+## 🎚️ Sensibilidad del wake-word (presets VOSK)
+
+El detector de wake-word del userbot corre VOSK con una **gramática restringida**
+(`KaldiRecognizer` con una lista cerrada de frases). Mecanismo clave: VOSK
+*colapsa* todo el audio hacia la entrada más parecida de esa lista. Si la lista
+es muy chica, el ruido y la charla ambiente se fuerzan hacia las frases de
+wake-word → falsos positivos. Si la lista es más grande (más "decoys": muletillas,
+interrogativos, artículos, verbos comunes), VOSK tiene dónde mandar ese audio y
+dispara menos. Dos palancas definen cada preset: **(a)** el set de pares de
+wake-word que cuentan como hit (`_WAKE_PATTERNS` / `_active_wake_patterns`) y
+**(b)** el pool de frases del grammar (`_build_vosk_grammar`).
+
+Se cambia con `/sensibilidad` (main bot) o `POST /sensibilidad` (relay del
+userbot). **El preset es in-memory y se resetea al default (2) al reiniciar el
+userbot.** Implementación en `userbot/bot.py` (`_PRESETS`, `_build_vosk_grammar`,
+`_set_sensitivity`, `_active_wake_patterns`); comando en `bot.py`.
+
+| Preset | Invocación | Grammar pool | Idea |
+|---|---|---|---|
+| **1** | `che/que/eh indio` + verbos | chico (solo wake-words + decoys mínimos) | El más sensible. |
+| **2** (default) | solo `che indio` + verbos | chico | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`). |
+| **3** | `che/que/eh indio` + verbos | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal. |
+
+**Tuning manual del preset 3:** los bloques de wake-words y filler en
+`userbot/bot.py` están marcados para editarse a mano. Cuando VOSK colapse mal una
+frase y dispare un falso positivo, se agrega esa frase al pool de filler (para que
+tenga dónde caer) o se ajusta `_WAKE_PATTERNS`. Los logs `[WAKE]`/`[VOSK]`
+imprimen el texto que VOSK escuchó en cada disparo para guiar ese ajuste.
 
 ## 📁 lsyncd (sync local PC → soundpad del server)
 
