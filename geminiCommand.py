@@ -2137,6 +2137,11 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
             )
             credits = _format_contributors_line()
             return f"{base}\n\n{credits}" if credits else base
+        if status == 503:
+            # Gemini sobrecargado / caído: outage transitorio del lado de Google,
+            # no un bug nuestro. Pedimos reintentar en un rato.
+            return "😵 La IA está caída ahora mismo (sobrecargada). Probá en un rato." if is_indio \
+                else "😵 Gemini no está disponible en este momento (servicio sobrecargado). Probá en un rato."
         return f"🌐 Algo se rompió (HTTP {status}). Probá de nuevo." if is_indio \
             else f"❌ Gemini falló (HTTP {status})."
     if kind == "blocked":
