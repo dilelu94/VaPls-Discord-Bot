@@ -43,7 +43,7 @@ def _extract_decoder_helpers():
             "_preset_constants",
             r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
         ),
-        ("_WAKE_ANTI_PATTERNS", r"^_WAKE_ANTI_PATTERNS:.*\n"),
+        ("_WAKE_ANTI_PATTERNS", r"^_WAKE_ANTI_PATTERNS:[^\n]*\n"),
         (
             "_build_vosk_grammar",
             r"^def _build_vosk_grammar\(.*?^_VOSK_GRAMMAR = _build_vosk_grammar\(\)\n",
