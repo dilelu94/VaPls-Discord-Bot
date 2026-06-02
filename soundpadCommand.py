@@ -1,4 +1,5 @@
 """Soundpad slash command and UI for playing custom audio clips."""
+
 import os
 import asyncio
 import difflib
@@ -10,24 +11,30 @@ from greeting import set_pending_trigger
 
 _AUDIO_EXTS = {".opus", ".mp3", ".wav", ".ogg", ".m4a"}
 
-# Per-guild registry of "live" soundpad panels. The idle watchdog reads this
-# so it can keep the bot in voice while the panel is still clickable — even
-# if no clip is currently playing. We use a counter (not a bool) because
-# nothing stops the same guild from having two panels open at once.
-_active_panels: dict[int, int] = {}
+# Per-guild registry of "live" soundpad panel views. The idle watchdog reads
+# this so it can keep the bot in voice while the panel is still clickable —
+# even if no clip is currently playing. We use a list (not a counter) so that
+# on disconnect we can iterate over the views and disable their buttons.
+_active_panels: dict[int, list["SoundpadView"]] = {}
 
 
-def _register_panel(guild_id: int) -> None:
+def _register_panel(view: "SoundpadView") -> None:
     """Mark a soundpad panel as live for this guild."""
-    _active_panels[guild_id] = _active_panels.get(guild_id, 0) + 1
+    gid = view.guild_id
+    if gid is None:
+        return
+    _active_panels.setdefault(gid, []).append(view)
 
 
-def _unregister_panel(guild_id: int) -> None:
-    """Mark a soundpad panel as no longer live. Idempotent past zero."""
+def _unregister_panel(guild_id: int, view: "SoundpadView") -> None:
+    """Mark a soundpad panel as no longer live. Idempotent."""
     if guild_id not in _active_panels:
         return
-    _active_panels[guild_id] -= 1
-    if _active_panels[guild_id] <= 0:
+    try:
+        _active_panels[guild_id].remove(view)
+    except ValueError:
+        pass
+    if not _active_panels[guild_id]:
         _active_panels.pop(guild_id, None)
 
 
@@ -37,7 +44,25 @@ def has_active_panel(guild_id: int) -> bool:
     Read by ``idleWatchdog._is_active`` so the bot doesn't disconnect from
     voice while a user can still click a button on the panel.
     """
-    return _active_panels.get(guild_id, 0) > 0
+    return len(_active_panels.get(guild_id, [])) > 0
+
+
+async def disable_panels(guild_id: int) -> None:
+    """Disable all live soundpad panels for a guild and unregister them.
+
+    Called by /parar and the idle watchdog before disconnecting, so the
+    panel message doesn't stay visible with zombie buttons that silently
+    fail.
+    """
+    views = _active_panels.pop(guild_id, [])
+    for v in views:
+        for item in v.children:
+            item.disabled = True
+        if v.message is not None:
+            try:
+                await v.message.edit(view=v)
+            except Exception:
+                pass
 
 
 def _normalize_clip_name(text: str) -> str:
@@ -242,7 +267,10 @@ async def play_clip_by_query(
             had_to_connect = True
         except Exception:
             return None
-    elif voice_channel is not None and getattr(vc.channel, "id", None) != voice_channel.id:
+    elif (
+        voice_channel is not None
+        and getattr(vc.channel, "id", None) != voice_channel.id
+    ):
         try:
             await vc.move_to(voice_channel)
         except Exception:
@@ -287,8 +315,10 @@ async def play_clip_by_query(
 
     return path
 
+
 class SoundpadView(discord.ui.View):
     """Interactive UI for browsing and playing soundpad audio files."""
+
     def __init__(self, output_dir: str, guild_id: "int | None" = None):
         """Initialize the soundpad view.
 
@@ -310,13 +340,18 @@ class SoundpadView(discord.ui.View):
         if not os.path.exists(output_dir):
             raise ValueError(f"La ruta de audios no existe: {output_dir}")
 
-        self.categories = sorted([
-            d for d in os.listdir(output_dir)
-            if os.path.isdir(os.path.join(output_dir, d)) and not d.startswith(".")
-        ])
+        self.categories = sorted(
+            [
+                d
+                for d in os.listdir(output_dir)
+                if os.path.isdir(os.path.join(output_dir, d)) and not d.startswith(".")
+            ]
+        )
 
         if not self.categories:
-            raise ValueError("No se encontraron carpetas (categorías) en la ruta de audios.")
+            raise ValueError(
+                "No se encontraron carpetas (categorías) en la ruta de audios."
+            )
 
         self.selected_category = self.categories[0]
         self.selected_subfolder = "/"
@@ -325,12 +360,12 @@ class SoundpadView(discord.ui.View):
         self.setup_components()
 
         if self.guild_id is not None:
-            _register_panel(self.guild_id)
+            _register_panel(self)
 
     async def on_timeout(self):
         """Remove this panel from the active-panel registry when it expires."""
         if self.guild_id is not None:
-            _unregister_panel(self.guild_id)
+            _unregister_panel(self.guild_id, self)
 
     def get_subfolders(self, category: str):
         """Return the list of subfolders for a category.
@@ -367,10 +402,10 @@ class SoundpadView(discord.ui.View):
             target_dir = os.path.join(self.output_dir, category)
         else:
             target_dir = os.path.join(self.output_dir, category, subfolder)
-            
+
         if not os.path.exists(target_dir):
             return []
-            
+
         files = []
         for f in os.listdir(target_dir):
             full_path = os.path.join(target_dir, f)
@@ -390,83 +425,90 @@ class SoundpadView(discord.ui.View):
             Mutates the view's UI components.
         """
         self.clear_items()
-        
+
         # 1. Category Select (Row 0)
         category_options = [
             discord.SelectOption(
-                label=cat, 
-                value=cat, 
-                default=(cat == self.selected_category)
-            ) for cat in self.categories[:25]
+                label=cat, value=cat, default=(cat == self.selected_category)
+            )
+            for cat in self.categories[:25]
         ]
         category_select = discord.ui.Select(
-            placeholder="📁 Selecciona una categoría...", 
-            options=category_options, 
-            row=0, 
-            custom_id="sp_category_select"
+            placeholder="📁 Selecciona una categoría...",
+            options=category_options,
+            row=0,
+            custom_id="sp_category_select",
         )
         category_select.callback = self.on_category_select
         self.add_item(category_select)
-        
+
         # 2. Subfolder Select (Row 1, if any exist)
         subfolders = self.get_subfolders(self.selected_category)
         has_subfolders = len(subfolders) > 1
-        
+
         row_offset = 0
         if has_subfolders:
             subfolder_options = [
                 discord.SelectOption(
-                    label="Root (/)" if sub == "/" else sub.replace("/", " ➔ ").replace("\\", " ➔ ").replace("_", " ").replace("-", " ")[:100],
+                    label="Root (/)"
+                    if sub == "/"
+                    else sub.replace("/", " ➔ ")
+                    .replace("\\", " ➔ ")
+                    .replace("_", " ")
+                    .replace("-", " ")[:100],
                     value=sub,
-                    default=(sub == self.selected_subfolder)
-                ) for sub in subfolders[:25]
+                    default=(sub == self.selected_subfolder),
+                )
+                for sub in subfolders[:25]
             ]
             subfolder_select = discord.ui.Select(
-                placeholder="📂 Selecciona una subcarpeta...", 
-                options=subfolder_options, 
-                row=1, 
-                custom_id="sp_subfolder_select"
+                placeholder="📂 Selecciona una subcarpeta...",
+                options=subfolder_options,
+                row=1,
+                custom_id="sp_subfolder_select",
             )
             subfolder_select.callback = self.on_subfolder_select
             self.add_item(subfolder_select)
             row_offset = 1
-            
+
         # 3. Audio Select (Row 1 or Row 2)
         files = self.get_folder_files(self.selected_category, self.selected_subfolder)
-        
+
         page_size = 25
         self.total_pages = max(1, (len(files) + page_size - 1) // page_size)
         if self.current_page >= self.total_pages:
             self.current_page = self.total_pages - 1
         if self.current_page < 0:
             self.current_page = 0
-            
-        page_files = files[self.current_page * page_size : (self.current_page + 1) * page_size]
+
+        page_files = files[
+            self.current_page * page_size : (self.current_page + 1) * page_size
+        ]
         self.files_by_index = {str(i): f for i, f in enumerate(page_files)}
-        
+
         if page_files:
             if not self.selected_file or self.selected_file not in files:
                 self.selected_file = page_files[0]
             elif self.selected_file not in page_files:
                 self.selected_file = page_files[0]
-                
+
             audio_options = []
             for i, f in enumerate(page_files):
                 base_name = os.path.basename(f)
-                label = os.path.splitext(base_name)[0].replace("_", " ").replace("-", " ")
+                label = (
+                    os.path.splitext(base_name)[0].replace("_", " ").replace("-", " ")
+                )
                 label = label[:100]
                 audio_options.append(
                     discord.SelectOption(
-                        label=label,
-                        value=str(i),
-                        default=(f == self.selected_file)
+                        label=label, value=str(i), default=(f == self.selected_file)
                     )
                 )
             audio_select = discord.ui.Select(
-                placeholder="🔊 Selecciona un sonido...", 
-                options=audio_options, 
-                row=row_offset + 1, 
-                custom_id="sp_audio_select"
+                placeholder="🔊 Selecciona un sonido...",
+                options=audio_options,
+                row=row_offset + 1,
+                custom_id="sp_audio_select",
             )
             audio_select.callback = self.on_audio_select
             self.add_item(audio_select)
@@ -475,54 +517,56 @@ class SoundpadView(discord.ui.View):
             self.files_by_index = {}
             self.add_item(
                 discord.ui.Select(
-                    placeholder="⚠️ No hay audios en este directorio", 
-                    options=[discord.SelectOption(label="Vacío", value="none")], 
-                    disabled=True, 
+                    placeholder="⚠️ No hay audios en este directorio",
+                    options=[discord.SelectOption(label="Vacío", value="none")],
+                    disabled=True,
                     row=row_offset + 1,
-                    custom_id="sp_audio_select"
+                    custom_id="sp_audio_select",
                 )
             )
-            
+
         # 4. Action Row (Row 2 or Row 3)
         prev_btn = discord.ui.Button(
-            label="◀️", 
-            style=discord.ButtonStyle.secondary, 
-            row=row_offset + 2, 
+            label="◀️",
+            style=discord.ButtonStyle.secondary,
+            row=row_offset + 2,
             custom_id="btn_sp_prev",
-            disabled=(self.current_page == 0)
+            disabled=(self.current_page == 0),
         )
         prev_btn.callback = self.on_prev_click
         self.add_item(prev_btn)
-        
+
         play_btn = discord.ui.Button(
-            label="🔄 Reproducir", 
-            style=discord.ButtonStyle.success, 
+            label="🔄 Reproducir",
+            style=discord.ButtonStyle.success,
             row=row_offset + 2,
-            custom_id="btn_sp_play"
+            custom_id="btn_sp_play",
         )
         play_btn.callback = self.on_play_click
         self.add_item(play_btn)
-        
+
         stop_btn = discord.ui.Button(
-            label="⏹️ Detener", 
-            style=discord.ButtonStyle.danger, 
+            label="⏹️ Detener",
+            style=discord.ButtonStyle.danger,
             row=row_offset + 2,
-            custom_id="btn_sp_stop"
+            custom_id="btn_sp_stop",
         )
         stop_btn.callback = self.on_stop_click
         self.add_item(stop_btn)
-        
+
         next_btn = discord.ui.Button(
-            label="▶️", 
-            style=discord.ButtonStyle.secondary, 
-            row=row_offset + 2, 
+            label="▶️",
+            style=discord.ButtonStyle.secondary,
+            row=row_offset + 2,
             custom_id="btn_sp_next",
-            disabled=(self.current_page == self.total_pages - 1)
+            disabled=(self.current_page == self.total_pages - 1),
         )
         next_btn.callback = self.on_next_click
         self.add_item(next_btn)
 
-    async def update_message(self, interaction: discord.Interaction, status_text: str = None):
+    async def update_message(
+        self, interaction: discord.Interaction, status_text: str = None
+    ):
         """Render the embed and edit the interaction message.
 
         Args:
@@ -537,22 +581,28 @@ class SoundpadView(discord.ui.View):
         """
         embed = discord.Embed(title="🎛️ Soundpad Panel", color=discord.Color.blurple())
         embed.add_field(name="📁 Categoría", value=self.selected_category, inline=True)
-        
-        sub_label = "Root (/)" if self.selected_subfolder == "/" else self.selected_subfolder.replace("/", " ➔ ").replace("\\", " ➔ ")
+
+        sub_label = (
+            "Root (/)"
+            if self.selected_subfolder == "/"
+            else self.selected_subfolder.replace("/", " ➔ ").replace("\\", " ➔ ")
+        )
         embed.add_field(name="📂 Subcarpeta", value=sub_label, inline=True)
-        
+
         if self.selected_file:
             clean_file = os.path.basename(self.selected_file)
-            clean_file = os.path.splitext(clean_file)[0].replace("_", " ").replace("-", " ")
+            clean_file = (
+                os.path.splitext(clean_file)[0].replace("_", " ").replace("-", " ")
+            )
         else:
             clean_file = "Ninguno"
         embed.add_field(name="🔊 Sonido", value=clean_file, inline=True)
-        
+
         embed.set_footer(text=f"Página {self.current_page + 1} de {self.total_pages}")
-        
-        if status_text: 
+
+        if status_text:
             embed.add_field(name="⚡ Estado", value=status_text, inline=False)
-            
+
         try:
             if interaction.response.is_done():
                 await interaction.edit_original_response(embed=embed, view=self)
@@ -584,7 +634,9 @@ class SoundpadView(discord.ui.View):
                     pass
         try:
             set_pending_trigger(interaction.user.voice.channel.id, interaction.user.id)
-            vc = await interaction.user.voice.channel.connect(reconnect=True, timeout=10.0)
+            vc = await interaction.user.voice.channel.connect(
+                reconnect=True, timeout=10.0
+            )
         except Exception as e:
             return None, f"Error al reconectar: {e}"
         return vc, None
@@ -602,10 +654,14 @@ class SoundpadView(discord.ui.View):
             This function is a coroutine and must be awaited.
         """
         from playCommand import guildPlayers
+
         if interaction.guild.id in guildPlayers:
             player = guildPlayers[interaction.guild.id]
             if player.currentSong:
-                return await interaction.followup.send("⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.", ephemeral=True)
+                return await interaction.followup.send(
+                    "⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.",
+                    ephemeral=True,
+                )
 
         guild = interaction.guild
         vc = guild.voice_client
@@ -621,9 +677,13 @@ class SoundpadView(discord.ui.View):
                 if err:
                     return await interaction.followup.send(f"❌ {err}", ephemeral=True)
 
-        filepath = os.path.join(self.output_dir, self.selected_category, self.selected_file)
+        filepath = os.path.join(
+            self.output_dir, self.selected_category, self.selected_file
+        )
         if not os.path.exists(filepath):
-            return await interaction.followup.send(f"❌ No encuentro el archivo: {self.selected_file}", ephemeral=True)
+            return await interaction.followup.send(
+                f"❌ No encuentro el archivo: {self.selected_file}", ephemeral=True
+            )
 
         try:
             if vc.is_playing():
@@ -633,45 +693,103 @@ class SoundpadView(discord.ui.View):
             pass
 
         try:
-            vc.play(discord.FFmpegOpusAudio(filepath, options='-af "dynaudnorm=p=0.95:f=200"'))
-            analytics.capture("soundpad audio played", user=interaction.user, guild=interaction.guild,
-                              properties={"category": self.selected_category,
-                                          "audio_file": self.selected_file,
-                                          "after_reconnect": False})
-            return await self.update_message(interaction, status_text=f"▶️ Reproduciendo: {os.path.basename(self.selected_file)}")
+            vc.play(
+                discord.FFmpegOpusAudio(
+                    filepath, options='-af "dynaudnorm=p=0.95:f=200"'
+                )
+            )
+            analytics.capture(
+                "soundpad audio played",
+                user=interaction.user,
+                guild=interaction.guild,
+                properties={
+                    "category": self.selected_category,
+                    "audio_file": self.selected_file,
+                    "after_reconnect": False,
+                },
+            )
+            return await self.update_message(
+                interaction,
+                status_text=f"▶️ Reproduciendo: {os.path.basename(self.selected_file)}",
+            )
         except discord.ClientException as e:
             print(f"[SOUNDPAD] ClientException on play ({e}); forcing reconnect...")
-            analytics.capture("soundpad reconnect attempted", user=interaction.user, guild=interaction.guild,
-                              properties={"reason": str(e), "category": self.selected_category,
-                                          "audio_file": self.selected_file})
+            analytics.capture(
+                "soundpad reconnect attempted",
+                user=interaction.user,
+                guild=interaction.guild,
+                properties={
+                    "reason": str(e),
+                    "category": self.selected_category,
+                    "audio_file": self.selected_file,
+                },
+            )
             vc, err = await self._force_reconnect(interaction)
             if err:
-                analytics.capture("soundpad playback failed", user=interaction.user, guild=interaction.guild,
-                                  properties={"stage": "reconnect", "error": err,
-                                              "category": self.selected_category,
-                                              "audio_file": self.selected_file})
-                return await interaction.followup.send(f"❌ Reconexión falló: {err}", ephemeral=True)
+                analytics.capture(
+                    "soundpad playback failed",
+                    user=interaction.user,
+                    guild=interaction.guild,
+                    properties={
+                        "stage": "reconnect",
+                        "error": err,
+                        "category": self.selected_category,
+                        "audio_file": self.selected_file,
+                    },
+                )
+                return await interaction.followup.send(
+                    f"❌ Reconexión falló: {err}", ephemeral=True
+                )
             try:
-                vc.play(discord.FFmpegOpusAudio(filepath, options='-af "dynaudnorm=p=0.95:f=200"'))
-                analytics.capture("soundpad audio played", user=interaction.user, guild=interaction.guild,
-                                  properties={"category": self.selected_category,
-                                              "audio_file": self.selected_file,
-                                              "after_reconnect": True})
-                await self.update_message(interaction, status_text=f"▶️ Reproduciendo (tras reconectar): {os.path.basename(self.selected_file)}")
+                vc.play(
+                    discord.FFmpegOpusAudio(
+                        filepath, options='-af "dynaudnorm=p=0.95:f=200"'
+                    )
+                )
+                analytics.capture(
+                    "soundpad audio played",
+                    user=interaction.user,
+                    guild=interaction.guild,
+                    properties={
+                        "category": self.selected_category,
+                        "audio_file": self.selected_file,
+                        "after_reconnect": True,
+                    },
+                )
+                await self.update_message(
+                    interaction,
+                    status_text=f"▶️ Reproduciendo (tras reconectar): {os.path.basename(self.selected_file)}",
+                )
             except Exception as e2:
                 print(f"[SOUNDPAD ERROR] Retry failed: {e2}")
-                analytics.capture_exception(e2, user=interaction.user, guild=interaction.guild,
-                                            properties={"action": "soundpad_retry_play",
-                                                        "category": self.selected_category,
-                                                        "audio_file": self.selected_file})
-                await interaction.followup.send(f"❌ Error tras reconectar: {e2}", ephemeral=True)
+                analytics.capture_exception(
+                    e2,
+                    user=interaction.user,
+                    guild=interaction.guild,
+                    properties={
+                        "action": "soundpad_retry_play",
+                        "category": self.selected_category,
+                        "audio_file": self.selected_file,
+                    },
+                )
+                await interaction.followup.send(
+                    f"❌ Error tras reconectar: {e2}", ephemeral=True
+                )
         except Exception as e:
             print(f"[SOUNDPAD ERROR] Playback failed: {e}")
-            analytics.capture_exception(e, user=interaction.user, guild=interaction.guild,
-                                        properties={"action": "soundpad_play",
-                                                    "category": self.selected_category,
-                                                    "audio_file": self.selected_file})
-            await interaction.followup.send(f"❌ Error de reproducción: {e}", ephemeral=True)
+            analytics.capture_exception(
+                e,
+                user=interaction.user,
+                guild=interaction.guild,
+                properties={
+                    "action": "soundpad_play",
+                    "category": self.selected_category,
+                    "audio_file": self.selected_file,
+                },
+            )
+            await interaction.followup.send(
+                f"❌ Error de reproducción: {e}", ephemeral=True
+            )
 
     async def on_category_select(self, interaction: discord.Interaction):
         """Handle category selection changes.
@@ -754,10 +872,17 @@ class SoundpadView(discord.ui.View):
         Async:
             This function is a coroutine and must be awaited.
         """
-        if interaction.guild.voice_client: interaction.guild.voice_client.stop()
-        analytics.capture("soundpad audio stopped", user=interaction.user, guild=interaction.guild,
-                          properties={"category": self.selected_category,
-                                      "audio_file": self.selected_file})
+        if interaction.guild.voice_client:
+            interaction.guild.voice_client.stop()
+        analytics.capture(
+            "soundpad audio stopped",
+            user=interaction.user,
+            guild=interaction.guild,
+            properties={
+                "category": self.selected_category,
+                "audio_file": self.selected_file,
+            },
+        )
         await self.update_message(interaction, status_text="⏹️ Detenido")
 
     async def on_prev_click(self, interaction: discord.Interaction):
@@ -800,6 +925,7 @@ class SoundpadView(discord.ui.View):
         else:
             await interaction.response.defer()
 
+
 class SoundpadStopView(discord.ui.View):
     """One-button view shown while a /soundpad query-mode clip is playing.
 
@@ -807,14 +933,18 @@ class SoundpadStopView(discord.ui.View):
     voice client's ``after`` callback, so stopping triggers the same teardown
     (and disconnect, when the bot had to connect itself) as natural completion.
     """
+
     def __init__(self, guild: discord.Guild):
         super().__init__(timeout=600)
         self.guild = guild
         self.message = None
 
-    @discord.ui.button(label="⏹️ Parar", style=discord.ButtonStyle.danger,
-                       custom_id="sp_query_stop")
-    async def on_stop(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="⏹️ Parar", style=discord.ButtonStyle.danger, custom_id="sp_query_stop"
+    )
+    async def on_stop(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         try:
             await interaction.response.defer()
         except Exception:
@@ -868,18 +998,29 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
         )
         if contributors:
             msg = f"{msg}\n\n{contributors}"
-        analytics.capture("soundpad gated", user=ctx.author, guild=ctx.guild,
-                          properties={"reason": "no_user_key"})
+        analytics.capture(
+            "soundpad gated",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"reason": "no_user_key"},
+        )
         return await ctx.followup.send(msg, ephemeral=True)
 
     # Block while a music vote is open: a soundpad clip stomping on top of an
     # in-progress music selection makes the bot feel hyperactive (and the
     # /play queue ends up muted by the clip). Decide the song first.
     import playCommand
-    if (ctx.guild is not None
-            and playCommand.get_active_vote(int(ctx.guild.id)) is not None):
-        analytics.capture("soundpad gated", user=ctx.author, guild=ctx.guild,
-                          properties={"reason": "music_vote_open"})
+
+    if (
+        ctx.guild is not None
+        and playCommand.get_active_vote(int(ctx.guild.id)) is not None
+    ):
+        analytics.capture(
+            "soundpad gated",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"reason": "music_vote_open"},
+        )
         return await ctx.followup.send(
             "che, hay una votación de música abierta — decidí primero "
             "(o esperá que cierre).",
@@ -887,35 +1028,50 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
         )
 
     from playCommand import guildPlayers
+
     if ctx.guild.id in guildPlayers:
         player = guildPlayers[ctx.guild.id]
         if player.currentSong:
-            return await ctx.followup.send("⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.", ephemeral=True)
+            return await ctx.followup.send(
+                "⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.",
+                ephemeral=True,
+            )
 
     if not ctx.author.voice:
-        return await ctx.followup.send("❌ Debes estar en un canal de voz.", ephemeral=True)
+        return await ctx.followup.send(
+            "❌ Debes estar en un canal de voz.", ephemeral=True
+        )
 
     if query:
         output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
         match_path = find_best_match(query, output_dir)
         if match_path is None:
-            analytics.capture("soundpad query miss", user=ctx.author, guild=ctx.guild,
-                              properties={"query": query})
+            analytics.capture(
+                "soundpad query miss",
+                user=ctx.author,
+                guild=ctx.guild,
+                properties={"query": query},
+            )
             return await ctx.followup.send(
                 f"🔎 No encontré ningún clip parecido a `{query}`.",
                 ephemeral=True,
             )
 
-        display = _normalize_clip_name(os.path.splitext(os.path.basename(match_path))[0])
+        display = _normalize_clip_name(
+            os.path.splitext(os.path.basename(match_path))[0]
+        )
         view = SoundpadStopView(ctx.guild)
         message = await ctx.followup.send(
             f"▶️ Reproduciendo: **{display}**",
             view=view,
         )
         view.message = message
-        analytics.capture("soundpad query played", user=ctx.author, guild=ctx.guild,
-                          properties={"query": query,
-                                      "audio_file": os.path.basename(match_path)})
+        analytics.capture(
+            "soundpad query played",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"query": query, "audio_file": os.path.basename(match_path)},
+        )
 
         await play_clip_by_query(
             ctx.bot,
@@ -950,11 +1106,21 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
     output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
     try:
         view = SoundpadView(output_dir, guild_id=ctx.guild.id)
-        analytics.capture("soundpad panel opened", user=ctx.author, guild=ctx.guild,
-                          properties={"categories_count": len(view.categories),
-                                      "default_category": view.selected_category})
+        analytics.capture(
+            "soundpad panel opened",
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={
+                "categories_count": len(view.categories),
+                "default_category": view.selected_category,
+            },
+        )
         await ctx.followup.send("🎛️ Soundpad Control Panel", view=view)
     except Exception as e:
-        analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
-                                    properties={"action": "soundpad_panel_open"})
+        analytics.capture_exception(
+            e,
+            user=ctx.author,
+            guild=ctx.guild,
+            properties={"action": "soundpad_panel_open"},
+        )
         await ctx.followup.send(f"❌ Error: {e}", ephemeral=True)

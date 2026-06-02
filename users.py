@@ -28,6 +28,7 @@ distills from conversation. Edit freely — the next /indio picks up changes.
 no es de un solo usuario. Se mergea con la memoria a largo plazo igual que
 los traits per-user.
 """
+
 USERS: dict[int, dict] = {
     285116759525031937: {
         "name": "Mila",
@@ -68,7 +69,7 @@ USERS: dict[int, dict] = {
     },
     189830039922016256: {
         "name": "Viny",
-        "greeting": "Audios/Necesito pito.m4a",
+        "greeting": "Audios/ay-ay-necesito-pito.mp3",
         "traits": [
             "nombre real: Juan",
             "apodos: Viny, Pela (y variantes de pelado)",
@@ -86,6 +87,7 @@ USERS: dict[int, dict] = {
     },
     309714566265438221: {
         "name": "Chalo",
+        "greeting": "Audios/bokita.mp3",
         "traits": [
             "nombre real: Gonzalo",
             "programador jr",
@@ -145,6 +147,7 @@ USERS: dict[int, dict] = {
     },
     495255209715433472: {
         "name": "Franko",
+        "greeting": "Audios/Sale un contercito.m4a",
         "traits": [
             "sexo: hombre",
             "falopero, drogadicto (chiste interno del grupo)",

@@ -1,4 +1,5 @@
 """Slash command implementation for /parar (stop playback and disconnect)."""
+
 import analytics
 
 
@@ -20,6 +21,7 @@ async def pararLogic(ctx):
     from bot import safe_respond
     from playCommand import guildPlayers, clearGuildPlayer
     from idleWatchdog import stop_idle_watchdog
+    from soundpadCommand import disable_panels
 
     try:
         stop_idle_watchdog(ctx.guild.id)
@@ -38,6 +40,11 @@ async def pararLogic(ctx):
                 properties={"action": "parar_stop_playback"},
             )
         clearGuildPlayer(ctx.guild.id)
+
+    try:
+        await disable_panels(ctx.guild.id)
+    except Exception:
+        pass
 
     if ctx.voice_client:
         channel_id = str(ctx.voice_client.channel.id)

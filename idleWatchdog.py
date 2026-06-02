@@ -8,6 +8,7 @@ bot itself joins or leaves a voice channel, so callers that connect to voice
 do not need to wire it up explicitly. ``/parar`` and ``/quit`` also call
 ``stop_idle_watchdog`` defensively before disconnecting.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -58,6 +59,7 @@ def _is_active(vc) -> bool:
         pass
     try:
         from soundpadCommand import has_active_panel
+
         guild = getattr(vc, "guild", None)
         guild_id = getattr(guild, "id", None)
         if guild_id is not None and has_active_panel(guild_id):
@@ -91,6 +93,13 @@ async def _disconnect_idle(bot, guild_id: int) -> None:
             clearGuildPlayer(guild_id)
         except Exception:
             logger.exception("idle watchdog: clearGuildPlayer failed")
+
+    try:
+        from soundpadCommand import disable_panels
+
+        await disable_panels(guild_id)
+    except Exception:
+        pass
 
     if vc is not None:
         try:
@@ -138,7 +147,8 @@ async def _watch_loop(
             if time.monotonic() - last_active >= idle_timeout:
                 logger.info(
                     "idle watchdog: guild=%s reached %.0fs of inactivity, disconnecting",
-                    guild_id, idle_timeout,
+                    guild_id,
+                    idle_timeout,
                 )
                 await _disconnect_idle(bot, guild_id)
                 return
@@ -168,13 +178,17 @@ def start_idle_watchdog(
     resets when the bot reconnects.
     """
     stop_idle_watchdog(guild_id)
-    timeout = idle_timeout if idle_timeout is not None else config.VOICE_IDLE_TIMEOUT_SECONDS
+    timeout = (
+        idle_timeout if idle_timeout is not None else config.VOICE_IDLE_TIMEOUT_SECONDS
+    )
     loop = asyncio.get_event_loop()
     task = loop.create_task(_watch_loop(bot, guild_id, timeout, poll_interval))
     _watchdogs[guild_id] = task
     logger.info(
         "idle watchdog: started for guild=%s (timeout=%.0fs, poll=%.2fs)",
-        guild_id, timeout, poll_interval,
+        guild_id,
+        timeout,
+        poll_interval,
     )
     return task
 

@@ -7,6 +7,7 @@ is_paused — it also means "there's a soundpad panel the user might click".
 These tests pin that promise so a future refactor can't silently drop the
 panel-aware check and start kicking the bot out from under an open UI.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,6 +19,7 @@ import pytest
 
 class FakeVC:
     """Stub VoiceClient covering only the surface idleWatchdog reads."""
+
     def __init__(self, guild_id=100, playing=False, paused=False, connected=True):
         self.guild = SimpleNamespace(id=guild_id)
         self.channel = SimpleNamespace(id=999, name="general")
@@ -40,6 +42,15 @@ class FakeVC:
         return self._connected
 
 
+class FakePanelView:
+    """Stand-in for SoundpadView so tests don't need the real class."""
+
+    def __init__(self, guild_id):
+        self.guild_id = guild_id
+        self.message = None
+        self.children = []
+
+
 def make_bot(vc):
     bot = MagicMock()
     bot.voice_clients = [vc] if vc is not None else []
@@ -54,6 +65,7 @@ def _reset_state():
     import idleWatchdog
     import soundpadCommand
     from playCommand import guildPlayers
+
     for task in list(idleWatchdog._watchdogs.values()):
         if not task.done():
             task.cancel()
@@ -84,17 +96,22 @@ async def test_active_soundpad_panel_keeps_bot_in_voice():
 
     vc = FakeVC(guild_id=100, playing=False, paused=False)
     bot = make_bot(vc)
-    soundpadCommand._register_panel(100)
+    panel = FakePanelView(100)
+    soundpadCommand._register_panel(panel)
 
     task = idleWatchdog.start_idle_watchdog(
-        bot, 100, idle_timeout=0.05, poll_interval=0.01,
+        bot,
+        100,
+        idle_timeout=0.05,
+        poll_interval=0.01,
     )
     await asyncio.sleep(0.25)  # several poll cycles, well past idle_timeout
     idleWatchdog.stop_idle_watchdog(100)
     await _wait_done(task)
 
-    assert vc.disconnect.await_count == 0, \
+    assert vc.disconnect.await_count == 0, (
         "watchdog must not drop the bot while a panel is live"
+    )
 
 
 async def test_panel_expiry_then_idle_disconnects():
@@ -105,22 +122,27 @@ async def test_panel_expiry_then_idle_disconnects():
 
     vc = FakeVC(guild_id=100)
     bot = make_bot(vc)
-    soundpadCommand._register_panel(100)
+    panel = FakePanelView(100)
+    soundpadCommand._register_panel(panel)
 
     task = idleWatchdog.start_idle_watchdog(
-        bot, 100, idle_timeout=0.05, poll_interval=0.01,
+        bot,
+        100,
+        idle_timeout=0.05,
+        poll_interval=0.01,
     )
     # While the panel is alive, no disconnect.
     await asyncio.sleep(0.15)
     assert vc.disconnect.await_count == 0
 
     # Panel expires.
-    soundpadCommand._unregister_panel(100)
+    soundpadCommand._unregister_panel(100, panel)
     # Allow the watchdog to observe and tick past idle_timeout.
     await _wait_done(task)
 
-    assert vc.disconnect.await_count >= 1, \
+    assert vc.disconnect.await_count >= 1, (
         "after the panel is gone the watchdog must disconnect"
+    )
 
 
 async def test_short_idle_timeout_disconnects_quickly():
@@ -135,14 +157,18 @@ async def test_short_idle_timeout_disconnects_quickly():
 
     started_at = time.monotonic()
     task = idleWatchdog.start_idle_watchdog(
-        bot, 100, idle_timeout=1.0, poll_interval=0.1,
+        bot,
+        100,
+        idle_timeout=1.0,
+        poll_interval=0.1,
     )
     await _wait_done(task, timeout=3.0)
     elapsed = time.monotonic() - started_at
 
     assert vc.disconnect.await_count >= 1
-    assert elapsed < 2.5, \
+    assert elapsed < 2.5, (
         f"watchdog should fire within ~2s of going idle, took {elapsed:.2f}s"
+    )
 
 
 async def test_register_unregister_panel_counter_handles_overlap():
@@ -152,17 +178,20 @@ async def test_register_unregister_panel_counter_handles_overlap():
     import soundpadCommand
 
     assert not soundpadCommand.has_active_panel(100)
-    soundpadCommand._register_panel(100)
-    soundpadCommand._register_panel(100)
+    p1 = FakePanelView(100)
+    p2 = FakePanelView(100)
+    soundpadCommand._register_panel(p1)
+    soundpadCommand._register_panel(p2)
     assert soundpadCommand.has_active_panel(100)
 
-    soundpadCommand._unregister_panel(100)
-    assert soundpadCommand.has_active_panel(100), \
+    soundpadCommand._unregister_panel(100, p1)
+    assert soundpadCommand.has_active_panel(100), (
         "guild still has one live panel, must stay 'active'"
+    )
 
-    soundpadCommand._unregister_panel(100)
+    soundpadCommand._unregister_panel(100, p2)
     assert not soundpadCommand.has_active_panel(100)
 
-    # Idempotent past zero — extra unregister doesn't blow up nor underflow.
-    soundpadCommand._unregister_panel(100)
+    # Idempotent — extra unregister doesn't blow up.
+    soundpadCommand._unregister_panel(100, p2)
     assert not soundpadCommand.has_active_panel(100)
