@@ -121,3 +121,15 @@ DECIFRAR_FEEDBACK_SAMPLE_RATE = int(os.getenv("DECIFRAR_FEEDBACK_SAMPLE_RATE", "
 # nadie votó.
 DECIFRAR_FEEDBACK_TIMEOUT_MINUTES = float(os.getenv("DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", "60"))
 DECIFRAR_FALSE_POSITIVES_LOG_PATH = os.getenv("DECIFRAR_FALSE_POSITIVES_LOG_PATH", "data/false_positives.jsonl")
+
+# Auto-DJ: when the queue empties and Auto-DJ is active, the Indio picks the
+# next song from the YouTube Mix of the last track and posts a suggestion.
+# Users have AUTODJ_GRACE_SECONDS to veto before it plays automatically.
+# After AUTODJ_MAX_CHAIN consecutive Auto-DJ tracks the mode shuts itself off.
+AUTODJ_GRACE_SECONDS = int(os.getenv("AUTODJ_GRACE_SECONDS", "15"))
+AUTODJ_MAX_CHAIN = int(os.getenv("AUTODJ_MAX_CHAIN", "10"))
+
+# Canal fijo donde el menú del modo DJ se postea siempre — tanto desde /dj
+# como cuando el Indio detecta el pedido en el chat de texto. Por defecto
+# coincide con INDIO_PLAY_CHANNEL_ID (el canal de música del grupo).
+AUTODJ_MENU_CHANNEL_ID = int(os.getenv("AUTODJ_MENU_CHANNEL_ID", "451607097432604672"))
