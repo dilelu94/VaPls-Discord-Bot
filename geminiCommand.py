@@ -226,11 +226,22 @@ _INDIO_TOOLS = [
         "description": (
             "Reproducir un clip corto del soundpad (audio meme/efecto) en "
             "el canal de voz. \n"
-            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
+            "Hay DOS casos válidos para llamarla:\n"
+            "CASO A (orden explícita): el mensaje tiene (1) un verbo "
             "explícito de orden — tirá, tirate, tirame, pone, poné, ponete, "
             "ponela, ponelo, mete, metele, hacé sonar, hacelo sonar, "
             "traete, queremos escuchar — Y (2) un nombre/keyword concreto "
-            "del clip a reproducir. 'Dale' suelto NO cuenta como verbo de "
+            "del clip. Acá el clip es la respuesta principal.\n"
+            "CASO B (lo nombran sin pedirlo): alguien dice TEXTUALMENTE el "
+            "nombre/keyword de un clip que existe pero sin verbo de orden. "
+            "Acá PRIMERO respondé normal a lo que dijeron (tu texto de "
+            "siempre) y ADEMÁS llamás play_sound para que el clip salga como "
+            "yapa/extra. Nunca reemplaces tu respuesta por el clip en este "
+            "caso. \n"
+            "FUERA DE ESOS DOS CASOS NO la llames: si no hay verbo de orden y "
+            "tampoco nombran un clip que exista, NO inventes un audio para "
+            "'comentar' la charla — solo respondé texto. \n"
+            "'Dale' suelto NO cuenta como verbo de "
             "orden: es muletilla ambigua que se usa para todo (asentir, "
             "pedir, animar). Solo si 'dale' viene seguido de OTRO verbo "
             "concreto ('dale, tirate ese audio', 'dale, pone el de las "
@@ -626,6 +637,7 @@ def _make_retry_notifier(ctx: discord.ApplicationContext):
 
 async def _send_reply(
     ctx: discord.ApplicationContext, text: str, *, edit_first: bool = False,
+    ephemeral: bool = False,
 ) -> int:
     """Send a possibly multi-part reply to Discord.
 
@@ -637,6 +649,10 @@ async def _send_reply(
             ``AVISO_ROTACION_GEMINI`` notice with the real reply). Subsequent
             chunks always go through ``followup.send``. Falls back to
             ``followup.send`` if the edit fails.
+        ephemeral: When True, the reply is visible only to the invoker. A
+            deferred-public response cannot be edited into an ephemeral one, so
+            ``edit_first`` is ignored in that case and every chunk goes out as
+            an ephemeral followup.
 
     Returns:
         Number of chunks sent.
@@ -649,14 +665,14 @@ async def _send_reply(
     """
     chunks = _split_for_discord(text)
     for i, c in enumerate(chunks):
-        if edit_first and i == 0:
+        if edit_first and i == 0 and not ephemeral:
             try:
                 await ctx.interaction.edit_original_response(content=c)
                 continue
             except Exception:
                 logger.debug("edit_original_response failed, falling back to followup",
                              exc_info=True)
-        await ctx.followup.send(c)
+        await ctx.followup.send(c, ephemeral=ephemeral)
     return len(chunks)
 
 
@@ -1195,6 +1211,103 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
         actions.append((action, arg))
     return actions
 
+
+# --- play_sound anti-misfire gate -----------------------------------------
+# El modelo a veces dispara play_sound sin que nadie lo haya pedido (free-
+# association de un meme con la charla). Para evitarlo SIN sumar otra llamada a
+# Gemini, clasificamos el mensaje crudo con regex/strings (costo cero):
+#   1. Hay un verbo de orden explícito (tirá/pone/reproducí/…) → "comandado":
+#      suena el clip ya (comportamiento de siempre).
+#   2. No hay verbo pero el NOMBRE del clip aparece textual en el mensaje →
+#      "espontáneo": el Indio igual responde su texto (se postea antes que el
+#      audio) y el clip sale como extra atrás.
+#   3. Ni verbo ni nombre en el mensaje → se DESCARTA solo el play_sound; la
+#      respuesta de texto se manda igual.
+
+_PLAY_SOUND_ORDER_RE = re.compile(
+    r"\b("
+    r"tira(te|me|le|lo|la|nos)?|"
+    r"pone(la|lo|le|me|nos)?|"
+    r"mete(le|lo|la)?|"
+    r"reproduci(lo|la|me)?|"
+    r"hace(lo|la)?\s+sonar|"
+    r"traete|"
+    r"queremos\s+(escuchar|oir)"
+    r")\b"
+)
+
+# Palabras genéricas que pueden estar en el nombre de un clip pero que NO deben
+# servir para "anclar" el nombre en el mensaje (si no, cualquier 'de'/'que'
+# matchearía). Solo se usan para el grounding del modo espontáneo.
+_NAME_STOPWORDS = frozenset({
+    "de", "del", "la", "las", "el", "los", "un", "una", "unos", "unas",
+    "y", "o", "a", "en", "que", "con", "por", "para", "es", "lo", "al",
+    "ser", "muy", "the", "se", "su", "mi", "tu",
+})
+
+_NAME_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _strip_accents_lower(s: str) -> str:
+    """Normaliza para comparar: minúsculas y sin tildes (tirá→tira)."""
+    norm = unicodedata.normalize("NFD", (s or "").lower())
+    return "".join(c for c in norm if unicodedata.category(c) != "Mn")
+
+
+def _has_play_sound_order(text: str) -> bool:
+    """True si el mensaje del usuario tiene un verbo imperativo de
+    reproducción (tirá, pone, metele, reproducí, hacé sonar, traete…)."""
+    if not text:
+        return False
+    return bool(_PLAY_SOUND_ORDER_RE.search(_strip_accents_lower(text)))
+
+
+def _name_grounded_in_message(name: str, text: str) -> bool:
+    """True si el nombre/keyword del clip elegido por el modelo aparece
+    textualmente en el mensaje del usuario (match por token/substring, sin
+    stopwords). Sirve para permitir el clip 'como extra' cuando alguien nombra
+    un audio sin dar la orden explícita."""
+    if not name or not text:
+        return False
+    msg = _strip_accents_lower(text)
+    msg_tokens = set(_NAME_TOKEN_RE.findall(msg))
+    if not msg_tokens:
+        return False
+    name_norm = _strip_accents_lower(name)
+    tokens = _NAME_TOKEN_RE.findall(name_norm)
+    meaningful = [t for t in tokens if len(t) >= 3 and t not in _NAME_STOPWORDS]
+    # Nombre todo-stopwords o muy corto: caemos a los tokens crudos para no
+    # quedarnos sin nada con qué anclar (ej. 'pez').
+    candidates = meaningful or [t for t in tokens if t not in _NAME_STOPWORDS]
+    for t in candidates:
+        if t in msg_tokens or t in msg:
+            return True
+    return False
+
+
+def _gate_play_sound_actions(actions: list[tuple[str, str]],
+                             raw_text: str) -> list[tuple[str, str]]:
+    """Filtra play_sound espurios. Devuelve la lista de acciones sin los
+    PLAY_SOUND que no cumplen ni verbo de orden ni nombre presente en el
+    mensaje. El resto de las acciones pasa intacto. No toca el texto de la
+    respuesta (que se manda aparte, antes del audio)."""
+    if not actions:
+        return actions
+    commanded = _has_play_sound_order(raw_text)
+    kept: list[tuple[str, str]] = []
+    for action, arg in actions:
+        if action != "PLAY_SOUND":
+            kept.append((action, arg))
+            continue
+        if commanded or _name_grounded_in_message(arg, raw_text):
+            kept.append((action, arg))
+        else:
+            logger.info(
+                "indio PLAY_SOUND suprimido: sin verbo de orden y nombre %r "
+                "no está en el mensaje %r — solo responde texto",
+                arg, (raw_text or "")[:80],
+            )
+    return kept
 
 def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
     """The relay flow and Discord both require non-empty content. When the
@@ -2210,6 +2323,12 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         This function is a coroutine and must be awaited.
     """
     t0 = time.monotonic()
+    # /vapls solo postea publico en los canales permitidos; en cualquier otro
+    # canal la respuesta sale ephemeral (solo la ve el invocador) para no
+    # ensuciar canales ajenos al bot.
+    _chan_id = getattr(ctx, "channel_id", None) or getattr(
+        getattr(ctx, "channel", None), "id", None)
+    public_allowed = _chan_id in config.PUBLIC_ALLOWED_CHANNEL_IDS
     notifier, retry_state = _make_retry_notifier(ctx)
     try:
         reply = await geminiClient.generate(
@@ -2230,11 +2349,15 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
             # queda público, igual que el aviso — no hay forma de hacer un edit
             # del original a "ephemeral", así que sacrificamos el ephemeral
             # del rate limit para no dejar mensajes huérfanos.
-            if retry_state["had_retry"]:
+            # En canal no permitido el error tambien sale ephemeral. El edit
+            # del deferred no puede ser ephemeral, asi que en ese caso saltamos
+            # el edit y mandamos un followup ephemeral.
+            err_ephemeral = is_rate_limited or not public_allowed
+            if retry_state["had_retry"] and not err_ephemeral:
                 from bot import safeEdit
                 await safeEdit(ctx, msg)
             else:
-                await ctx.followup.send(msg, ephemeral=is_rate_limited)
+                await ctx.followup.send(msg, ephemeral=err_ephemeral)
         except Exception:
             pass
         analytics.capture("vapls failed", user=ctx.author, guild=ctx.guild, properties={
@@ -2249,7 +2372,8 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
     except Exception as e:
         logger.exception("vapls unexpected error")
         try:
-            await ctx.followup.send("❌ Algo se rompió. Probá de nuevo.")
+            await ctx.followup.send("❌ Algo se rompió. Probá de nuevo.",
+                                    ephemeral=not public_allowed)
         except Exception:
             pass
         analytics.capture_exception(e, user=ctx.author, guild=ctx.guild,
@@ -2260,6 +2384,7 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         n_chunks = await _send_reply(
             ctx, _format_user_header(ctx, pregunta) + reply.text,
             edit_first=retry_state["had_retry"],
+            ephemeral=not public_allowed,
         )
     except Exception as e:
         logger.exception("vapls send failed")
@@ -2479,6 +2604,7 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
+    pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         ctx.bot, _choice_guild_id, mem_key, pending_actions, reply, _post_choice,
         requester_id=int(getattr(getattr(ctx, "author", None), "id", None) or 0),
@@ -2780,6 +2906,7 @@ async def indioFromVoice(
         return
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
+    pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         bot, guild_id, mem_key, pending_actions, reply, _post_choice,
         requester_id=int(user_id or 0),

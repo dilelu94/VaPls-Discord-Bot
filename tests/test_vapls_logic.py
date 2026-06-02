@@ -65,7 +65,10 @@ async def test_key_rotation_shows_transient_notice_then_clean_reply(
     # usuario que está cambiando de key y luego reemplazar ese aviso por la
     # respuesta final — sin dejar dos mensajes en cascada.
     patch_generate(reply=reply_factory(text="Paris es la capital"), retries=1)
-    ctx = ctx_factory(display_name="Mati")
+    # El reemplazo del aviso (edit del deferred publico) solo aplica cuando la
+    # respuesta es publica, i.e. en un canal permitido. En canales no permitidos
+    # /vapls responde ephemeral y no puede editar el deferred.
+    ctx = ctx_factory(display_name="Mati", channel_id=1490008278275461280)
 
     await vaplsLogic(ctx, "cual es la capital de francia")
 

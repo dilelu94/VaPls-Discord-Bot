@@ -80,6 +80,13 @@ INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "4516070974326046
 # 0 = comportamiento clasico (responde en el canal del trigger).
 INDIO_REPLY_CHANNEL_ID = int(os.getenv("INDIO_REPLY_CHANNEL_ID", "1490008278275461280"))
 
+# Canales donde el bot puede postear mensajes publicos. En cualquier otro canal
+# las respuestas de /vapls salen ephemeral (solo las ve el invocador), para no
+# ensuciar canales que no son los del bot.
+PUBLIC_ALLOWED_CHANNEL_IDS = {
+    cid for cid in (INDIO_PLAY_CHANNEL_ID, INDIO_REPLY_CHANNEL_ID) if cid
+}
+
 # Userbot voice-recording endpoint. After /play-audio finishes playing a
 # Telegram-uploaded clip we ask the userbot to capture the voice channel's
 # reply and POST it back to the Telegram bridge. Leave USERBOT_RECORD_URL
