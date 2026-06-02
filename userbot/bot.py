@@ -2412,17 +2412,32 @@ def _pick_vapls_command(cmds, name: str):
 
 async def _resolve_slash_commands(channel, name: str, timeout: float):
     """Fetch slash commands matching ``name`` in ``channel`` with a hard
-    timeout. discord.py-self may stall here under rate limiting or a slow
-    cache fetch, and there is no cancellation signal back from the caller
-    if the main bot has already given up. Returns the list, or raises
-    asyncio.TimeoutError if Discord doesn't answer in time.
+    timeout.
+
+    Usa ``Messageable.application_commands()`` (discord.py-self 2.1+) que
+    trae los comandos con sus options completas — ``slash_commands(query=…)``
+    (deprecated) devolvía un AsyncIterator filtrado server-side pero sin
+    el detalle de options, lo cual hacía que ``SlashCommand._parse_kwargs``
+    descartara el ``query=...`` que le pasamos y Discord rechazara la
+    invocación con 50035 "Invalid Form Body". Filtramos client-side por
+    name después del fetch.
+
+    Cae a ``slash_commands`` solo si la nueva API no está disponible
+    (versiones viejas del package). discord.py-self puede stallear bajo
+    rate-limit o un fetch lento de cache, así que envolvemos en
+    ``asyncio.wait_for``: TimeoutError sube al caller que decide cancelar.
     """
-    cmds_iter = channel.slash_commands(query=name)
-    if hasattr(cmds_iter, "__aiter__"):
-        async def _collect():
+    async def _fetch():
+        if hasattr(channel, "application_commands"):
+            all_cmds = await channel.application_commands()
+            return [c for c in all_cmds if getattr(c, "name", None) == name]
+        # Fallback para versiones anteriores a 2.1
+        cmds_iter = channel.slash_commands(query=name)
+        if hasattr(cmds_iter, "__aiter__"):
             return [c async for c in cmds_iter]
-        return await asyncio.wait_for(_collect(), timeout=timeout)
-    return await asyncio.wait_for(cmds_iter, timeout=timeout)
+        return await cmds_iter
+
+    return await asyncio.wait_for(_fetch(), timeout=timeout)
 
 
 async def _relay_invoke_play(request: web.Request) -> web.Response:
@@ -2453,8 +2468,8 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
             channel = await client.fetch_channel(channel_id)
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not hasattr(channel, "slash_commands"):
-        return web.json_response({"error": "channel has no slash_commands"}, status=400)
+    if not (hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")):
+        return web.json_response({"error": "channel has no slash command API"}, status=400)
 
     try:
         cmds = await _resolve_slash_commands(
@@ -2522,8 +2537,8 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
             channel = await client.fetch_channel(channel_id)
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not hasattr(channel, "slash_commands"):
-        return web.json_response({"error": "channel has no slash_commands"}, status=400)
+    if not (hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")):
+        return web.json_response({"error": "channel has no slash command API"}, status=400)
 
     try:
         cmds = await _resolve_slash_commands(

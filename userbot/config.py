@@ -105,6 +105,13 @@ TRANSCRIPT_CHANNEL_NAME = os.getenv("TRANSCRIPT_CHANNEL_NAME", "")
 RELAY_HOST = os.getenv("RELAY_HOST", "127.0.0.1")
 RELAY_PORT = int(os.getenv("RELAY_PORT", "8081"))
 RELAY_SECRET = os.getenv("RELAY_SECRET", "")
+# Hard timeout para la resolución de application_commands en el canal antes
+# de invocar /play o /soundpad. discord.py-self puede quedarse colgado bajo
+# rate-limit o un fetch lento de cache; sin esto el HTTP del main bot se
+# queda esperando sin poder cancelar. El nombre matchea el del main bot
+# (config.INDIO_RELAY_TIMEOUT) — el caller pasa el mismo valor para que el
+# timeout end-to-end del relay sea consistente.
+INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 
 # Bot user ID of the main VaPls bot. Used to disambiguate /play and /soundpad
 # slash commands when other bots in the guild expose commands with the same
