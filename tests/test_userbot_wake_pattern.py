@@ -11,6 +11,7 @@ Tests the pure pattern functions (``_text_matches_wake_pattern``,
 ``_set_sensitivity``, ``_active_wake_patterns``) extracted from
 ``userbot/bot.py`` so we don't need a live VOSK model.
 """
+
 from __future__ import annotations
 
 import re
@@ -42,7 +43,8 @@ def _extract_wake_ns():
     # _PRESET_1_PATTERNS through _SENSITIVITY_PRESET / _vosk_grammar_generation).
     m = re.search(
         r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
-        src, re.MULTILINE | re.DOTALL,
+        src,
+        re.MULTILINE | re.DOTALL,
     )
     assert m, "could not locate preset constants"
     blocks.append(m.group(0))
@@ -50,7 +52,8 @@ def _extract_wake_ns():
     # `_build_vosk_grammar` (needed by _set_sensitivity)
     m = re.search(
         r"^def _build_vosk_grammar\(.*?(?=^def |\Z)",
-        src, re.MULTILINE | re.DOTALL,
+        src,
+        re.MULTILINE | re.DOTALL,
     )
     assert m, "could not locate _build_vosk_grammar"
     blocks.append(m.group(0))
@@ -61,16 +64,15 @@ def _extract_wake_ns():
     blocks.append(m.group(0))
 
     # `_WAKE_PATTERNS` constant
-    m = re.search(
-        r"^_WAKE_PATTERNS:.*?^\)\n", src, re.MULTILINE | re.DOTALL,
-    )
+    m = re.search(r"^_WAKE_PATTERNS:.*\n", src, re.MULTILINE)
     assert m, "could not locate _WAKE_PATTERNS"
     blocks.append(m.group(0))
 
     # `_set_sensitivity`
     m = re.search(
         r"^def _set_sensitivity\(.*?(?=^def |\Z)",
-        src, re.MULTILINE | re.DOTALL,
+        src,
+        re.MULTILINE | re.DOTALL,
     )
     assert m, "could not locate _set_sensitivity"
     blocks.append(m.group(0))
@@ -78,14 +80,16 @@ def _extract_wake_ns():
     # `_active_wake_patterns`
     m = re.search(
         r"^def _active_wake_patterns\(.*?(?=^def |\Z)",
-        src, re.MULTILINE | re.DOTALL,
+        src,
+        re.MULTILINE | re.DOTALL,
     )
     assert m, "could not locate _active_wake_patterns"
     blocks.append(m.group(0))
 
     # `_text_matches_wake_pattern`
     m = re.search(
-        r"^def _text_matches_wake_pattern\(.*?(?=^def |\Z)", src,
+        r"^def _text_matches_wake_pattern\(.*?(?=^def |\Z)",
+        src,
         re.MULTILINE | re.DOTALL,
     )
     assert m, "could not locate _text_matches_wake_pattern"
@@ -94,6 +98,7 @@ def _extract_wake_ns():
     import unicodedata as _unicodedata
     import logging as _logging
     import json as _json
+
     ns: dict = {
         "unicodedata": _unicodedata,
         "json": _json,
@@ -115,25 +120,29 @@ active_patterns = _NS["_active_wake_patterns"]
 # Preset 1 (default) — positive cases
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text", [
-    # Wake-word invocation particles.
-    "che indio",
-    "Che indio",                  # casing-insensitive
-    "que indio",                  # VOSK hears "che indio" as "que indio"
-    "eh indio",                   # other speakers come out as "eh indio"
-    # Command-verb patterns.
-    "indio ponete",
-    "indio poneme",
-    "indio reproduci",
-    "indio reproducí",            # accent normalized via NFD
-    "indio reproduce",
-    "indio tirate",
-    "indio dale",
-    "indio dale play",            # one realistic combined-command sample
-    # Collapsed-verb patterns.
-    "indio por",                  # VOSK collapses "ponete"/"poneme" to "por"
-    "indio tira",                 # VOSK drops trailing "te" → "tira"
-])
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Wake-word invocation particles.
+        "che indio",
+        "Che indio",  # casing-insensitive
+        "que indio",  # VOSK hears "che indio" as "que indio"
+        "eh indio",  # other speakers come out as "eh indio"
+        # Command-verb patterns.
+        "indio ponete",
+        "indio poneme",
+        "indio reproduci",
+        "indio reproducí",  # accent normalized via NFD
+        "indio reproduce",
+        "indio tirate",
+        "indio dale",
+        "indio dale play",  # one realistic combined-command sample
+        # Collapsed-verb patterns.
+        "indio por",  # VOSK collapses "ponete"/"poneme" to "por"
+        "indio tira",  # VOSK drops trailing "te" → "tira"
+    ],
+)
 def test_preset1_pattern_fires(text):
     set_sensitivity(1)
     assert matches(text) is True
@@ -143,19 +152,23 @@ def test_preset1_pattern_fires(text):
 # Preset 1 — negative cases (bare or unrelated context)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text", [
-    "",
-    "indio",
-    "el indio",
-    "indio loco",            # historical false-positive: "indio + any word"
-    "como andas",
-    "che boludo",            # "che" alone, no "indio"
-    "che indio ",             # trailing whitespace — still fires? actually yes
-    "reproducí algo",        # missing "indio"
-    "ponete a reproducir",    # missing "indio"
-    "tirate de un puente",   # "tirate" alone without "indio" should not fire
-    "dale que va",            # "dale" alone without "indio" should not fire
-])
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "indio",
+        "el indio",
+        "indio loco",  # historical false-positive: "indio + any word"
+        "como andas",
+        "che boludo",  # "che" alone, no "indio"
+        "che indio ",  # trailing whitespace — still fires? actually yes
+        "reproducí algo",  # missing "indio"
+        "ponete a reproducir",  # missing "indio"
+        "tirate de un puente",  # "tirate" alone without "indio" should not fire
+        "dale que va",  # "dale" alone without "indio" should not fire
+    ],
+)
 def test_preset1_does_not_fire_on_bare_or_unrelated(text):
     set_sensitivity(1)
     # The trailing-whitespace case is actually a valid hit; filter it out
@@ -168,6 +181,7 @@ def test_preset1_does_not_fire_on_bare_or_unrelated(text):
 # ---------------------------------------------------------------------------
 # Preset 2 — "que indio" / "eh indio" no longer fire
 # ---------------------------------------------------------------------------
+
 
 def test_preset2_che_indio_fires():
     """Preset 2: 'che indio' still triggers the wake word."""
@@ -182,17 +196,20 @@ def test_preset2_que_eh_indio_do_not_fire(text):
     assert matches(text) is False
 
 
-@pytest.mark.parametrize("text", [
-    "indio ponete",
-    "indio poneme",
-    "indio reproduci",
-    "indio reproducí",
-    "indio reproduce",
-    "indio tirate",
-    "indio dale",
-    "indio por",
-    "indio tira",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "indio ponete",
+        "indio poneme",
+        "indio reproduci",
+        "indio reproducí",
+        "indio reproduce",
+        "indio tirate",
+        "indio dale",
+        "indio por",
+        "indio tira",
+    ],
+)
 def test_preset2_command_verbs_still_fire(text):
     """Preset 2: all command-verb patterns remain active."""
     set_sensitivity(2)
@@ -209,6 +226,7 @@ def test_preset2_bare_indio_does_not_fire():
 # Default preset is 2 (only "che indio" invokes out of the box)
 # ---------------------------------------------------------------------------
 
+
 def test_default_preset_is_2():
     """Out of the box the userbot runs preset 2: 'che indio' invokes but the
     'que indio'/'eh indio' false-positive variants do not."""
@@ -218,6 +236,7 @@ def test_default_preset_is_2():
 # ---------------------------------------------------------------------------
 # Switching presets restores behavior
 # ---------------------------------------------------------------------------
+
 
 def test_switching_back_to_preset1_restores_que_indio():
     """After switching 2 → 1, 'que indio' must match again."""
@@ -230,6 +249,7 @@ def test_switching_back_to_preset1_restores_que_indio():
 # ---------------------------------------------------------------------------
 # Preset 3 — placeholder mirrors preset 2
 # ---------------------------------------------------------------------------
+
 
 def test_preset3_che_indio_fires():
     set_sensitivity(3)
@@ -245,10 +265,12 @@ def test_preset3_que_indio_does_not_fire():
 # Grammar content for preset 2 does not include "que indio"/"eh indio"
 # ---------------------------------------------------------------------------
 
+
 def test_preset2_grammar_excludes_que_indio_and_eh_indio():
     """Preset 2 grammar string should not contain 'que indio' or 'eh indio'
     so VOSK is less likely to collapse noise into those phrases."""
     import json as _json
+
     set_sensitivity(2)
     grammar_phrases = _json.loads(_NS["_build_vosk_grammar"]())
     assert "que indio" not in grammar_phrases
@@ -258,6 +280,7 @@ def test_preset2_grammar_excludes_que_indio_and_eh_indio():
 def test_preset1_grammar_includes_que_indio_and_eh_indio():
     """Preset 1 grammar should include 'que indio' and 'eh indio'."""
     import json as _json
+
     set_sensitivity(1)
     grammar_phrases = _json.loads(_NS["_build_vosk_grammar"]())
     assert "que indio" in grammar_phrases
@@ -267,6 +290,7 @@ def test_preset1_grammar_includes_que_indio_and_eh_indio():
 # ---------------------------------------------------------------------------
 # Teardown: restore preset 1 so test isolation is maintained
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(autouse=True)
 def restore_preset():

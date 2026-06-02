@@ -11,6 +11,7 @@ The helper returns ``(matched, result_dict)`` — tests look only at the
 first element since the second is forwarded raw to the dispatch payload
 and any change in shape would not affect wake-word semantics.
 """
+
 from __future__ import annotations
 
 import json
@@ -35,35 +36,32 @@ def _extract_decoder_helpers():
     _TERM = r"(?=^(?:def |class |[A-Z_]+ ?= ?))"
     blocks = []
     for name, pattern in [
-        ("_normalize",
-         r"^def _normalize\(.*?" + _TERM),
+        ("_normalize", r"^def _normalize\(.*?" + _TERM),
         # Preset constants + sensitivity globals — needed by _build_vosk_grammar
         # and _active_wake_patterns which are called at module exec time.
-        ("_preset_constants",
-         r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n"),
-        ("_WAKE_ANTI_PATTERNS",
-         r"^_WAKE_ANTI_PATTERNS:.*?^\)\n"),
-        ("_build_vosk_grammar",
-         r"^def _build_vosk_grammar\(.*?^_VOSK_GRAMMAR = _build_vosk_grammar\(\)\n"),
+        (
+            "_preset_constants",
+            r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
+        ),
+        ("_WAKE_ANTI_PATTERNS", r"^_WAKE_ANTI_PATTERNS:.*\n"),
+        (
+            "_build_vosk_grammar",
+            r"^def _build_vosk_grammar\(.*?^_VOSK_GRAMMAR = _build_vosk_grammar\(\)\n",
+        ),
         # _WAKE_PATTERNS = _PRESET_1_PATTERNS (one line after _VOSK_GRAMMAR)
-        ("_WAKE_PATTERNS",
-         r"^_WAKE_PATTERNS:.*?^\n"),
-        ("_set_sensitivity",
-         r"^def _set_sensitivity\(.*?" + _TERM),
-        ("_active_wake_patterns",
-         r"^def _active_wake_patterns\(.*?" + _TERM),
-        ("_text_matches_wake_pattern",
-         r"^def _text_matches_wake_pattern\(.*?" + _TERM),
-        ("_text_has_anti_pattern",
-         r"^def _text_has_anti_pattern\(.*?" + _TERM),
-        ("_vosk_heard_wake_word",
-         r"^def _vosk_heard_wake_word\(.*?" + _TERM),
+        ("_WAKE_PATTERNS", r"^_WAKE_PATTERNS:[^\n]*\n"),
+        ("_set_sensitivity", r"^def _set_sensitivity\(.*?" + _TERM),
+        ("_active_wake_patterns", r"^def _active_wake_patterns\(.*?" + _TERM),
+        ("_text_matches_wake_pattern", r"^def _text_matches_wake_pattern\(.*?" + _TERM),
+        ("_text_has_anti_pattern", r"^def _text_has_anti_pattern\(.*?" + _TERM),
+        ("_vosk_heard_wake_word", r"^def _vosk_heard_wake_word\(.*?" + _TERM),
     ]:
         m = re.search(pattern, src, re.MULTILINE | re.DOTALL)
         assert m, f"could not locate {name}"
         blocks.append(m.group(0))
 
     import unicodedata as _unicodedata
+
     ns = {
         "unicodedata": _unicodedata,
         "json": json,
@@ -92,6 +90,7 @@ class _FakeRec:
 
 # ---- _vosk_heard_wake_word: gating on accepted ---------------------------
 
+
 def test_not_accepted_returns_false_without_reading_state():
     rec = _FakeRec({"alternatives": [{"text": "indio dale"}]})
     assert heard(rec, accepted=False)[0] is False
@@ -99,30 +98,43 @@ def test_not_accepted_returns_false_without_reading_state():
 
 # ---- _vosk_heard_wake_word: N-best (alternatives format) -----------------
 
+
 def test_alternatives_top1_matches_fires():
-    rec = _FakeRec({"alternatives": [
-        {"text": "indio dale", "confidence": -10.0},
-        {"text": "indio",       "confidence": -11.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "indio dale", "confidence": -10.0},
+                {"text": "indio", "confidence": -11.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is True
 
 
 def test_alternatives_second_matches_fires():
     # Top-1 is bare "indio" (no pattern). Alt #2 is "indio dale" → match.
-    rec = _FakeRec({"alternatives": [
-        {"text": "indio",       "confidence": -10.0},
-        {"text": "indio dale",  "confidence": -11.5},
-        {"text": "indio por",   "confidence": -12.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "indio", "confidence": -10.0},
+                {"text": "indio dale", "confidence": -11.5},
+                {"text": "indio por", "confidence": -12.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is True
 
 
 def test_alternatives_none_match_returns_false():
-    rec = _FakeRec({"alternatives": [
-        {"text": "indio",        "confidence": -10.0},
-        {"text": "indio anda",   "confidence": -11.0},
-        {"text": "indio mucho",  "confidence": -12.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "indio", "confidence": -10.0},
+                {"text": "indio anda", "confidence": -11.0},
+                {"text": "indio mucho", "confidence": -12.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is False
 
 
@@ -132,21 +144,30 @@ def test_alternatives_empty_list_returns_false():
 
 
 def test_alternatives_che_indio_in_top1_fires():
-    rec = _FakeRec({"alternatives": [
-        {"text": "che indio", "confidence": -8.0},
-        {"text": "que indio", "confidence": -9.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "che indio", "confidence": -8.0},
+                {"text": "que indio", "confidence": -9.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is True
 
 
 # ---- anti-pattern: "el indio" should NOT fire ---------------------------
 
+
 def test_el_indio_top1_does_not_fire():
     """Speaker said "el indio" (third-person mention). Even with N-best,
     we must NOT gatillar el wake-word."""
-    rec = _FakeRec({"alternatives": [
-        {"text": "el indio", "confidence": -8.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "el indio", "confidence": -8.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is False
 
 
@@ -154,33 +175,46 @@ def test_el_indio_as_alternative_vetoes_match():
     """VOSK top-1 says "che indio" but alt #2 says "el indio" — that's the
     signal the audio is ambiguous between "che" and "el". Veto the match
     to avoid the common false-positive."""
-    rec = _FakeRec({"alternatives": [
-        {"text": "che indio", "confidence": -8.0},
-        {"text": "el indio",  "confidence": -8.5},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "che indio", "confidence": -8.0},
+                {"text": "el indio", "confidence": -8.5},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is False
 
 
 def test_el_indio_with_accent_is_vetoed():
     """`_normalize` strips diacritics, so "él indio" reduces to ("el","indio")
     and hits the anti-pattern."""
-    rec = _FakeRec({"alternatives": [
-        {"text": "él indio", "confidence": -8.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "él indio", "confidence": -8.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is False
 
 
 def test_che_indio_without_el_indio_still_fires():
     """Sanity: if N-best does NOT include "el indio", the wake-word fires."""
-    rec = _FakeRec({"alternatives": [
-        {"text": "che indio",  "confidence": -8.0},
-        {"text": "que indio",  "confidence": -9.0},
-        {"text": "indio dale", "confidence": -10.0},
-    ]})
+    rec = _FakeRec(
+        {
+            "alternatives": [
+                {"text": "che indio", "confidence": -8.0},
+                {"text": "que indio", "confidence": -9.0},
+                {"text": "indio dale", "confidence": -10.0},
+            ]
+        }
+    )
     assert heard(rec, accepted=True)[0] is True
 
 
 # ---- _vosk_heard_wake_word: legacy single-best format --------------------
+
 
 def test_legacy_text_format_matches_fires():
     """Without SetMaxAlternatives, VOSK emits {"text": "..."} only."""
@@ -200,13 +234,16 @@ def test_empty_result_returns_false():
 
 def test_malformed_result_does_not_crash():
     """If Result() raises or returns garbage, the helper swallows it."""
+
     class Boom:
         def Result(self):
             raise RuntimeError("decoder exploded")
+
     assert heard(Boom(), accepted=True)[0] is False
 
 
 # ---- _build_vosk_grammar: contents ---------------------------------------
+
 
 def test_grammar_is_valid_json_list():
     tokens = json.loads(VOSK_GRAMMAR)
@@ -216,8 +253,13 @@ def test_grammar_is_valid_json_list():
 
 def test_grammar_contains_canonical_wake_phrases():
     tokens = json.loads(VOSK_GRAMMAR)
-    for phrase in ("che indio", "indio dale", "indio tirate",
-                   "indio ponete", "indio reproduci"):
+    for phrase in (
+        "che indio",
+        "indio dale",
+        "indio tirate",
+        "indio ponete",
+        "indio reproduci",
+    ):
         assert phrase in tokens, f"grammar missing {phrase!r}"
 
 

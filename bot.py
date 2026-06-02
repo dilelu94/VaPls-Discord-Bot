@@ -809,7 +809,7 @@ async def sensibilidad(
 
 @bot.slash_command(
     name="huh",
-    description="Activa/desactiva el sonido de confirmación al detectar wake-word",
+    description="Activa/desactiva el sonido de confirmación al detectar wake-word — hecho con ayuda de chipotlai",
 )
 async def huh(ctx):
     await safe_defer(ctx)
