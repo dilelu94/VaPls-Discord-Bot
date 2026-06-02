@@ -89,7 +89,7 @@ async def safe_defer(ctx, ephemeral: bool = False):
         return False
 
 
-async def safe_respond(ctx, message):
+async def safe_respond(ctx, message, ephemeral: bool = False):
     """Send a response or follow-up safely.
 
     Args:
@@ -104,9 +104,9 @@ async def safe_respond(ctx, message):
     """
     try:
         if ctx.response.is_done():
-            await ctx.followup.send(message)
+            await ctx.followup.send(message, ephemeral=ephemeral)
         else:
-            await ctx.respond(message)
+            await ctx.respond(message, ephemeral=ephemeral)
     except Exception:
         pass
 
@@ -847,11 +847,13 @@ async def sensibilidad(
     description="Activa/desactiva el sonido de confirmación al detectar wake-word — hecho con ayuda de chipotlai",
 )
 async def huh(ctx):
-    await safe_defer(ctx)
+    await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "huh")
 
     if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+        await safe_respond(
+            ctx, "❌ El relay del indio no está configurado.", ephemeral=True
+        )
         return
 
     url = urljoin(config.INDIO_RELAY_URL, "/toggle_wake_sound")
@@ -862,16 +864,18 @@ async def huh(ctx):
             async with sess.post(url, json={}, headers=headers) as resp:
                 body = await resp.json()
                 if resp.status >= 400:
-                    await safe_respond(ctx, "⚠️ No pude cambiar el estado del sonido.")
+                    await safe_respond(
+                        ctx, "⚠️ No pude cambiar el estado del sonido.", ephemeral=True
+                    )
                     return
                 enabled = body.get("enabled", False)
     except Exception as e:
         log.exception("huh relay failed")
-        await safe_respond(ctx, f"⚠️ Error llamando al indio: {e}")
+        await safe_respond(ctx, f"⚠️ Error llamando al indio: {e}", ephemeral=True)
         return
 
     status = "✅ Activado" if enabled else "❌ Desactivado"
-    await safe_respond(ctx, f"🎵 Sonido de wake-word: {status}")
+    await safe_respond(ctx, f"🎵 Sonido de wake-word: {status}", ephemeral=True)
 
 
 @bot.slash_command(
