@@ -530,56 +530,14 @@ _vosk_load_lock = threading.Lock()
 # into "indio" and floods Whisper with false positives). The command
 # verbs need to be in here too, otherwise VOSK collapses them to [unk]
 # and the matcher never sees "indio ponete".
-def _build_vosk_grammar() -> str:
-    """Build the restricted JSON grammar VOSK uses for wake-word detection.
+# ---------------------------------------------------------------------------
+# Sensitivity presets — controlled at runtime via /sensibilidad (main bot)
+# or POST /sensibilidad (relay). The preset is in-memory only and resets to
+# 1 on userbot restart.
+# ---------------------------------------------------------------------------
 
-    Only includes:
-      - Multi-token wake-word phrases (lets VOSK lock onto them directly).
-      - The leading particles that pair with "indio" ("che","que","eh","ey","hola").
-      - The verbs / collapsed-verb tokens that follow "indio".
-      - "[unk]" so anything outside the list still lands somewhere (otherwise
-        VOSK forces noise into a wake-word and we get false positives).
-
-    Everything else (filler like "boludo", interrogatives, articles, generic
-    verbs) was removed: it bloated the language model without contributing to
-    any _WAKE_PATTERNS pair. Smaller grammar → VOSK is more decisive on the
-    tokens we actually care about.
-    """
-    return json.dumps([
-        # Multi-token wake-word phrases (canonical + collapsed forms).
-        "che indio", "que indio", "eh indio", "ey indio", "hola indio",
-        "indio ponete", "indio poneme",
-        "indio reproduci", "indio reproducí", "indio reproduce",
-        "indio tirate", "indio dale",
-        "indio por",  # collapsed "indio ponete/poneme"
-        "indio tira", # collapsed "indio tirate"
-        # Third-person mentions ("el/él indio") are common false-positive
-        # neighbors of "eh/che indio". Listing them keeps VOSK from
-        # collapsing them into a wake-word — and the matcher vetoes them
-        # explicitly via _WAKE_ANTI_PATTERNS below.
-        "el indio", "él indio",
-        # Lone tokens so the matcher still works when VOSK emits unpaired.
-        "indio",
-        "che", "que", "eh", "ey", "hola", "el", "él",
-        "ponete", "poneme",
-        "reproduci", "reproducí", "reproduce",
-        "tirate", "tira", "dale", "por",
-        "y", "i", "o", "a", "si", "no",
-        # Catch-all bucket — without it VOSK collapses unknown audio into
-        # the closest grammar entry, producing false positives.
-        "[unk]",
-    ])
-
-
-_VOSK_GRAMMAR = _build_vosk_grammar()
-
-# Adjacent token pairs that count as a wake-word hit. We only fire when one
-# of these specific patterns appears in the VOSK output — "che indio" for
-# invocation, "indio ponete" / "indio reproducí" for commands. Bare "indio"
-# and "indio + random word" don't trigger anymore; that "indio + any word"
-# loophole produced most of the historical false positives.
-# Compared against accent-stripped lowercase tokens (see ``_normalize``).
-_WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
+# Preset 1: all invocation particles + all command verbs (current behavior).
+_PRESET_1_PATTERNS: tuple[tuple[str, str], ...] = (
     ("che", "indio"),
     ("que", "indio"),       # VOSK-small often hears "che" as "que"
     ("eh", "indio"),        # seen on speakers where "che" comes out as "eh"
@@ -592,6 +550,104 @@ _WAKE_PATTERNS: tuple[tuple[str, str], ...] = (
     ("indio", "tira"),      # VOSK-small drops trailing "te" → "tira"
     ("indio", "dale"),
 )
+
+# Preset 2: only "che indio" as invocation; all command-verb pairs kept.
+# Removes ("que","indio") and ("eh","indio") — the dominant false-positive
+# driver was "que", a very common Spanish word VOSK-small confuses with "che".
+_PRESET_2_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("che", "indio"),
+    ("indio", "ponete"),
+    ("indio", "poneme"),
+    ("indio", "por"),
+    ("indio", "reproduci"),
+    ("indio", "reproduce"),
+    ("indio", "tirate"),
+    ("indio", "tira"),
+    ("indio", "dale"),
+)
+
+# Preset 3: placeholder / WIP — currently mirrors preset 2.
+# TODO: tune preset 3
+_PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_2_PATTERNS
+
+_PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
+    1: _PRESET_1_PATTERNS,
+    2: _PRESET_2_PATTERNS,
+    3: _PRESET_3_PATTERNS,
+}
+
+# Active sensitivity preset. Default 2: only "che indio" invokes (the "que"/"eh"
+# variants were the dominant false-positive source). Preset 1 is more sensitive
+# (adds "que indio"/"eh indio"); preset 3 is a WIP placeholder. In-memory only —
+# resets to this default on userbot restart.
+_SENSITIVITY_PRESET: int = 2
+
+# Generation counter — incremented by _set_sensitivity so that live per-user
+# VOSK recognizers (which embed the old grammar) are detected and rebuilt.
+_vosk_grammar_generation: int = 0
+
+
+def _build_vosk_grammar() -> str:
+    """Build the restricted JSON grammar VOSK uses for wake-word detection.
+
+    Only includes:
+      - Multi-token wake-word phrases (lets VOSK lock onto them directly).
+      - The leading particles that pair with "indio" ("che","que","eh","ey","hola").
+      - The verbs / collapsed-verb tokens that follow "indio".
+      - "[unk]" so anything outside the list still lands somewhere (otherwise
+        VOSK forces noise into a wake-word and we get false positives).
+
+    Grammar is built from the active sensitivity preset so that VOSK is
+    less likely to collapse noise into phrases that are disabled in that preset.
+    Everything else (filler like "boludo", interrogatives, articles, generic
+    verbs) was removed: it bloated the language model without contributing to
+    any _WAKE_PATTERNS pair. Smaller grammar → VOSK is more decisive on the
+    tokens we actually care about.
+    """
+    preset = _SENSITIVITY_PRESET
+    # Base phrase set shared by all presets.
+    phrases = [
+        # Command-verb wake phrases (always active).
+        "indio ponete", "indio poneme",
+        "indio reproduci", "indio reproducí", "indio reproduce",
+        "indio tirate", "indio dale",
+        "indio por",   # collapsed "indio ponete/poneme"
+        "indio tira",  # collapsed "indio tirate"
+        # Third-person mentions ("el/él indio") — kept so VOSK doesn't
+        # collapse them into a wake-word; the matcher vetoes them via
+        # _WAKE_ANTI_PATTERNS.
+        "el indio", "él indio",
+        # Lone tokens.
+        "indio",
+        "che", "ey", "hola", "el", "él",
+        "ponete", "poneme",
+        "reproduci", "reproducí", "reproduce",
+        "tirate", "tira", "dale", "por",
+        "y", "i", "o", "a", "si", "no",
+        "[unk]",
+    ]
+    # Invocation phrases — added only for presets that include them.
+    if preset == 1:
+        phrases = [
+            "che indio", "que indio", "eh indio", "ey indio", "hola indio",
+        ] + phrases
+        phrases.insert(phrases.index("che"), "que")
+        phrases.insert(phrases.index("che") + 1, "eh")
+    else:
+        # Preset 2 and 3: only "che indio".
+        phrases = ["che indio", "ey indio", "hola indio"] + phrases
+    return json.dumps(phrases)
+
+
+_VOSK_GRAMMAR = _build_vosk_grammar()
+
+# Adjacent token pairs that count as a wake-word hit. We only fire when one
+# of these specific patterns appears in the VOSK output — "che indio" for
+# invocation, "indio ponete" / "indio reproducí" for commands. Bare "indio"
+# and "indio + random word" don't trigger anymore; that "indio + any word"
+# loophole produced most of the historical false positives.
+# Compared against accent-stripped lowercase tokens (see ``_normalize``).
+_WAKE_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 
 # Patterns that explicitly VETO a match even if some other alternative would
 # fire. Useful for third-person mentions ("el indio", "él indio") that sound
@@ -633,7 +689,7 @@ def _load_vosk_model():
 
 
 def _new_vosk_recognizer():
-    """Create a per-user KaldiRecognizer with the restricted grammar. Returns
+    """Create a per-user KaldiRecognizer with the current grammar. Returns
     None if VOSK isn't available so callers can fall back gracefully."""
     model = _load_vosk_model()
     if model is None:
@@ -641,6 +697,8 @@ def _new_vosk_recognizer():
     try:
         import vosk
         rec = vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
+        # Tag the recognizer with the grammar generation it was built from.
+        rec._grammar_generation = _vosk_grammar_generation
         if config.VOSK_MAX_ALTERNATIVES > 0:
             try:
                 rec.SetMaxAlternatives(config.VOSK_MAX_ALTERNATIVES)
@@ -652,16 +710,43 @@ def _new_vosk_recognizer():
         return None
 
 
+def _set_sensitivity(preset: int) -> None:
+    """Switch the VOSK wake-word sensitivity preset at runtime.
+
+    Validates 1 <= preset <= 3, updates the module-level ``_SENSITIVITY_PRESET``,
+    rebuilds ``_VOSK_GRAMMAR``, and bumps ``_vosk_grammar_generation`` so that
+    live per-user recognizers are detected as stale and rebuilt on next use.
+
+    The preset is in-memory only — it resets to 1 on userbot restart.
+    """
+    global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
+    if preset not in _PRESETS:
+        raise ValueError(f"Invalid sensitivity preset {preset!r}; must be 1, 2, or 3.")
+    _SENSITIVITY_PRESET = preset
+    _VOSK_GRAMMAR = _build_vosk_grammar()
+    _vosk_grammar_generation += 1
+    log.info("[VOSK] sensitivity preset set to %d (grammar generation %d)",
+             preset, _vosk_grammar_generation)
+
+
+def _active_wake_patterns() -> tuple[tuple[str, str], ...]:
+    """Return the wake-word pattern set for the currently active preset.
+
+    Pure accessor — useful in tests and for the matcher.
+    """
+    return _PRESETS[_SENSITIVITY_PRESET]
+
+
 def _text_matches_wake_pattern(text: str) -> bool:
-    """True when accent-stripped ``text`` contains one of ``_WAKE_PATTERNS``
-    as an adjacent token pair. Pure function — easy to unit-test without
-    loading VOSK."""
+    """True when accent-stripped ``text`` contains one of the active preset's
+    wake patterns as an adjacent token pair. Pure function — easy to unit-test
+    without loading VOSK."""
     norm = _normalize(text or "")
     tokens = [t for t in norm.split() if t]
     if len(tokens) < 2:
         return False
     pairs = set(zip(tokens, tokens[1:]))
-    return any(p in pairs for p in _WAKE_PATTERNS)
+    return any(p in pairs for p in _active_wake_patterns())
 
 
 def _text_has_anti_pattern(text: str) -> bool:
@@ -911,6 +996,12 @@ class WakeWordSink(voice_recv.AudioSink):
 
     def _recognizer_for(self, user_id: int):
         rec = self.recognizers.get(user_id)
+        # Discard recognizer if it was built with a different grammar generation
+        # (i.e. the sensitivity preset was switched via /sensibilidad).
+        if rec is not None and getattr(rec, "_grammar_generation", -1) != _vosk_grammar_generation:
+            log.debug("[VOSK] rebuilding stale recognizer for user %s (preset changed)", user_id)
+            rec = None
+            self.recognizers.pop(user_id, None)
         if rec is None:
             rec = _new_vosk_recognizer()
             if rec is not None:
@@ -2637,6 +2728,29 @@ async def _relay_dm(request: web.Request) -> web.Response:
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
 
 
+async def _relay_sensibilidad(request: web.Request) -> web.Response:
+    """Switch the VOSK wake-word sensitivity preset at runtime.
+
+    Body: ``{"preset": <int 1..3>}``.
+    Auth: ``X-API-Secret`` header must equal ``config.RELAY_SECRET``.
+    Returns ``{"preset": n}`` on success, 400 on invalid body/range.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        preset = int(data["preset"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    try:
+        _set_sensitivity(preset)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({"preset": preset})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -2651,6 +2765,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
+    app.router.add_post("/sensibilidad", _relay_sensibilidad)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

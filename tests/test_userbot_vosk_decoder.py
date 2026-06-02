@@ -37,16 +37,25 @@ def _extract_decoder_helpers():
     for name, pattern in [
         ("_normalize",
          r"^def _normalize\(.*?" + _TERM),
-        ("_WAKE_PATTERNS",
-         r"^_WAKE_PATTERNS:.*?^\)\n"),
+        # Preset constants + sensitivity globals — needed by _build_vosk_grammar
+        # and _active_wake_patterns which are called at module exec time.
+        ("_preset_constants",
+         r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n"),
         ("_WAKE_ANTI_PATTERNS",
          r"^_WAKE_ANTI_PATTERNS:.*?^\)\n"),
+        ("_build_vosk_grammar",
+         r"^def _build_vosk_grammar\(.*?^_VOSK_GRAMMAR = _build_vosk_grammar\(\)\n"),
+        # _WAKE_PATTERNS = _PRESET_1_PATTERNS (one line after _VOSK_GRAMMAR)
+        ("_WAKE_PATTERNS",
+         r"^_WAKE_PATTERNS:.*?^\n"),
+        ("_set_sensitivity",
+         r"^def _set_sensitivity\(.*?" + _TERM),
+        ("_active_wake_patterns",
+         r"^def _active_wake_patterns\(.*?" + _TERM),
         ("_text_matches_wake_pattern",
          r"^def _text_matches_wake_pattern\(.*?" + _TERM),
         ("_text_has_anti_pattern",
          r"^def _text_has_anti_pattern\(.*?" + _TERM),
-        ("_build_vosk_grammar",
-         r"^def _build_vosk_grammar\(.*?^_VOSK_GRAMMAR = _build_vosk_grammar\(\)\n"),
         ("_vosk_heard_wake_word",
          r"^def _vosk_heard_wake_word\(.*?" + _TERM),
     ]:
@@ -68,6 +77,7 @@ _NS = _extract_decoder_helpers()
 heard = _NS["_vosk_heard_wake_word"]
 build_grammar = _NS["_build_vosk_grammar"]
 VOSK_GRAMMAR = _NS["_VOSK_GRAMMAR"]
+set_sensitivity = _NS["_set_sensitivity"]
 
 
 class _FakeRec:
@@ -212,10 +222,22 @@ def test_grammar_contains_canonical_wake_phrases():
 
 
 def test_grammar_contains_relaxed_collapses():
-    """Tokens that VOSK-small produces when it mishears the canonical form."""
+    """Tokens that VOSK-small produces when it mishears the canonical form.
+
+    The verb collapses ("indio por", "indio tira") exist in every preset; the
+    "que indio"/"eh indio" invocation variants are preset-1 only (preset 2, the
+    default, drops them), so they are checked against the preset-1 grammar.
+    """
     tokens = json.loads(VOSK_GRAMMAR)
-    for phrase in ("que indio", "eh indio", "indio por", "indio tira"):
+    for phrase in ("indio por", "indio tira"):
         assert phrase in tokens, f"grammar missing {phrase!r}"
+    try:
+        set_sensitivity(1)
+        p1_tokens = json.loads(build_grammar())
+    finally:
+        set_sensitivity(2)
+    for phrase in ("que indio", "eh indio"):
+        assert phrase in p1_tokens, f"preset-1 grammar missing {phrase!r}"
 
 
 def test_grammar_has_unk_catchall():

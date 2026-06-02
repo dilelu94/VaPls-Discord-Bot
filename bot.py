@@ -705,6 +705,60 @@ async def entraindio(ctx):
     await safe_respond(ctx, f"🪶 El indio va para **{voice_channel.name}**.")
 
 
+@bot.slash_command(name="sensibilidad", description="Cambia la sensibilidad del wake-word del indio (presets 1-3)")
+async def sensibilidad(
+    ctx,
+    preset: discord.Option(
+        int,
+        description="Preset: 1=más sensible, 2=solo 'che indio' (default), 3=placeholder",
+        choices=[1, 2, 3],
+    ),
+):
+    """Slash command: switch the VOSK wake-word sensitivity preset.
+
+    Args:
+        ctx: Discord application context.
+        preset: Integer 1-3 selecting the sensitivity preset.
+
+    Side Effects:
+        POSTs to the userbot relay ``/sensibilidad`` which updates the active
+        wake-word pattern set and rebuilds the VOSK grammar in-memory.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    await safe_defer(ctx)
+    _track_command(ctx, "sensibilidad")
+
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+        return
+
+    url = urljoin(config.INDIO_RELAY_URL, "/sensibilidad")
+    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    payload = {"preset": preset}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                body = await resp.text()
+                if resp.status >= 400:
+                    log.warning("sensibilidad relay HTTP %s: %s", resp.status, body[:200])
+                    await safe_respond(ctx, f"⚠️ No pude cambiar la sensibilidad (HTTP {resp.status}).")
+                    return
+    except Exception as e:
+        log.exception("sensibilidad relay failed")
+        await safe_respond(ctx, f"⚠️ Error llamando al indio: {e}")
+        return
+
+    _PRESET_DESCRIPTIONS = {
+        1: "**Preset 1** — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
+        2: "**Preset 2** — menos sensible (default): solo `che indio` + verbos. Reduce falsos positivos de \"que\".",
+        3: "**Preset 3** — (placeholder / WIP): igual al preset 2 por ahora.",
+    }
+    await safe_respond(ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}")
+
+
 @bot.slash_command(name="help", description="Lista los comandos del bot y cómo funciona")
 async def help_cmd(ctx):
     """Slash command: list available commands and bot/userbot info.
@@ -745,6 +799,8 @@ async def help_cmd(ctx):
             "reproduce el que más se parezca a `query`.\n"
             "**/entraindio** — hace que el indio (userbot) entre a tu canal "
             "de voz para escuchar y responder al wake-word.\n"
+            "**/sensibilidad** `1|2|3` — ajusta la sensibilidad del wake-word "
+            "(1=máxima, 2=solo 'che indio', 3=WIP).\n"
             "**/parar** — corta la reproducción, limpia la cola y se "
             "desconecta.\n"
             "**/quit** — sale del canal de voz sin tocar la cola."

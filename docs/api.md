@@ -132,3 +132,31 @@ Common errors:
 ## Transcript forwarding
 The userbot can POST transcripts to `BOT_API_BASE/transcript`, but this handler
 is **not** implemented in `apiServer.py` and must be added separately.
+
+---
+
+## Userbot relay API
+
+These endpoints are served by the **userbot** (`apiServer` on `127.0.0.1:8081`).
+All requests must include `X-API-Secret: <RELAY_SECRET>`.
+
+### POST `/sensibilidad`
+Switch the VOSK wake-word sensitivity preset at runtime.
+
+**Body**
+```json
+{ "preset": 2 }
+```
+- `preset`: integer 1, 2, or 3.
+  - `1` — most sensitive: `che indio`, `que indio`, `eh indio` + command-verb patterns.
+  - `2` — less sensitive (**default**): only `che indio` + command-verb patterns. Removes `que`/`eh` invocation pairs to reduce false positives.
+  - `3` — placeholder/WIP: currently identical to preset 2.
+
+The preset is **in-memory only** — it resets to the default (2) on userbot restart.
+
+**Response**
+```json
+{ "preset": 2 }
+```
+- `400` if `preset` is missing, not an integer, or outside 1–3.
+- `503` if `RELAY_SECRET` is not configured.

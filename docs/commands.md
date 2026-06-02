@@ -10,6 +10,8 @@
 | `/sugerencias` | Manda una idea/feature. Gemini Flash-Lite la categoriza (la agrupa con ideas parecidas o abre un grupo nuevo) y **solo se persiste si logró categorizar**; el usuario recibe feedback de a qué grupo quedó (y cuántos lo pidieron antes). | `suggestionsCommand`, `geminiClient`, `analytics` |
 | `/sugerencias-ver` | Lista los grupos de sugerencias existentes, ordenados por las más pedidas. | `suggestionsCommand`, `analytics` |
 | `/quit` | Desconecta el bot del canal de voz sin tocar la cola. | `bot.py`, `analytics` |
+| `/entraindio` | Hace que el userbot (Indio) entre al canal de voz del invocador. | `bot.py`, userbot relay `/join` |
+| `/sensibilidad` `1\|2\|3` | Cambia la sensibilidad del wake-word del Indio. Preset 1 = más sensible: `che indio`, `que indio`, `eh indio` + verbos. Preset 2 = solo `che indio` + verbos (reduce falsos positivos de "que") y es el **default**. Preset 3 = placeholder/WIP (igual al 2 por ahora). El preset es in-memory y se resetea a 2 al reiniciar el userbot. | `bot.py`, userbot relay `/sensibilidad` |
 | `/restart` | Reinicia el proceso del bot (dev-only). | `bot.py`, `analytics` |
 
 Notas:
