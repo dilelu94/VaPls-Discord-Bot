@@ -111,7 +111,9 @@ Si el grupo te pide música/un tema/una canción NOMBRANDO qué quieren oír \
 audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te piden \
 controlar la música que ya está sonando, usás `skip_music` (saltear/cambiar), \
 `pause_music` (pausar/frenar), `resume_music` (retomar lo pausado) o \
-`stop_music` (parar y limpiar la cola). \
+`stop_music` (parar y limpiar la cola). Si te piden que "hagas de DJ", \
+"prendas el modo dj", "pinches", "pongas música en automático" o similares, \
+usás la tool `dj_mode` (abre el menú del modo DJ en el canal de música). \
 \
 DISAMBIGUACIÓN CLAVE: si decís "pone play" / "dale play" / "metele play" / \
 "continuá" / "resumí" / "play" SIN nombrar artista o canción, eso NUNCA es \
@@ -313,6 +315,16 @@ _INDIO_TOOLS = [
         "description": (
             "Parar la música y vaciar la cola. Usala cuando piden "
             "'pará la música', 'basta', 'cortala', 'limpiá la cola'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "dj_mode",
+        "description": (
+            "Abrir el menú del modo DJ en el canal de música. Usala cuando el "
+            "grupo pide activar/encender el 'modo dj', que el indio 'haga de dj', "
+            "'pinche', 'ponga música en automático', 'sea el dj', 'prenda el "
+            "auto dj' o similares. No tiene argumentos."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -1219,6 +1231,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "pause_music": ("PAUSE_MUSIC", None),
     "resume_music": ("RESUME_MUSIC", None),
     "stop_music": ("STOP_MUSIC", None),
+    "dj_mode": ("DJ_MODE", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -1227,6 +1240,7 @@ _ACTION_FALLBACK_TEXT = {
     "PAUSE_MUSIC": "⏸️ Pausando",
     "RESUME_MUSIC": "▶️ Dale, va",
     "STOP_MUSIC": "⏹️ Listo",
+    "DJ_MODE": "🎧 Modo DJ",
 }
 _ACTION_ARG_MAX_CHARS = 200
 
@@ -1676,6 +1690,17 @@ async def _dispatch_indio_actions(
                         msg = played_path or "no match"
                     statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
+                elif action == "DJ_MODE":
+                    # Open the DJ menu in the configured channel — same handler
+                    # used by the /dj slash command.
+                    try:
+                        from playCommand import openDjMenu
+                        ok, msg = await openDjMenu(bot, int(guild_id))
+                        statuses.append(f"dj_mode: {'ok' if ok else 'fail'} — {msg}")
+                        logger.info("indio DJ_MODE → ok=%s msg=%s", ok, msg)
+                    except Exception:
+                        logger.exception("indio DJ_MODE failed")
+                        statuses.append("dj_mode: fail — exception")
                 elif action in (
                     "SKIP_MUSIC",
                     "PAUSE_MUSIC",

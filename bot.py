@@ -15,7 +15,7 @@ import aiohttp
 import discord
 from discord.ext import commands
 
-from playCommand import playLogic
+from playCommand import playLogic, openDjMenu
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic
@@ -387,6 +387,35 @@ def _track_command(ctx, name, extra=None):
     analytics.capture(
         "command invoked", user=ctx.author, guild=ctx.guild, properties=props
     )
+
+
+@bot.slash_command(name="dj", description="Abre el menú del modo DJ en el canal de música")
+async def dj(ctx):
+    """Slash command: open the Auto-DJ menu in the configured music channel.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Posts the DJ menu (DjMenuView) in AUTODJ_MENU_CHANNEL_ID with buttons
+        to activate, veto, fire, or stop the Auto-DJ mode.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    await safe_defer(ctx)
+    _track_command(ctx, "dj")
+    if ctx.guild is None:
+        await ctx.followup.send("❌ Este comando solo funciona en un servidor.", ephemeral=True)
+        return
+    ok, msg = await openDjMenu(ctx.bot, ctx.guild.id)
+    if not ok:
+        await ctx.followup.send(f"❌ No pude abrir el menú DJ: {msg}", ephemeral=True)
+    else:
+        try:
+            await ctx.followup.send("🎧 Menú DJ abierto.", ephemeral=True)
+        except Exception:
+            pass
 
 
 @bot.slash_command(name="parar")

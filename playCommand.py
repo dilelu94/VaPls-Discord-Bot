@@ -7,6 +7,7 @@ FFmpeg, config, analytics, and greeting triggers.
 import os
 import asyncio
 import difflib
+import random
 import unicodedata
 import discord
 import config
@@ -468,6 +469,223 @@ def _diagnoseYtDlpFailure(stderr: str, returncode: int = 0) -> YtDlpDiagnosis:
                  user_step="Algo falló al bajar este video. Probá con otro link.",
                  admin_step=f"Revisar `play.log` para el stderr completo. Último: {tail}")
 
+# ---------------------------------------------------------------------------
+# Auto-DJ — constants, helpers, and UI views
+# ---------------------------------------------------------------------------
+
+_AUTODJ_PHRASES = [
+    "otra de {artista}, que venían cebados",
+    "más de {artista}, banquen",
+    "va {artista}, de una",
+    "sigo con {artista}",
+    "no me la pidió nadie pero la pongo",
+    "esta va de la mano, confíen",
+    "{artista} de nuevo, ¿se quejan?",
+    "más del mismo palo, escuchen",
+    "dale, va {artista}",
+    "esta pega con lo de antes",
+    "le fui al mix, confíen",
+    "la radio del indio, esto es lo que hay",
+]
+
+
+def _parse_duration_seconds(dur_str: str) -> int:
+    """Parse 'M:SS', 'MM:SS' or 'H:MM:SS' to total seconds. Returns 0 on failure."""
+    if not dur_str:
+        return 0
+    parts = dur_str.strip().split(":")
+    try:
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        if len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    except (ValueError, IndexError):
+        pass
+    return 0
+
+
+def _extract_artist(title: str) -> str:
+    """Extract artist from 'Artist — Title' or 'Artist - Title'.
+    Falls back to the first two words when no separator is found."""
+    for sep in (" — ", " – ", " - "):
+        idx = title.find(sep)
+        if idx > 0:
+            return title[:idx].strip()
+    words = title.split()
+    return " ".join(words[:2]) if len(words) >= 2 else title
+
+
+def _autodj_phrase(artist: str) -> str:
+    """Pick a random Auto-DJ intro line, slotting in the artist name."""
+    template = random.choice(_AUTODJ_PHRASES)
+    return template.format(artista=artist)
+
+
+class AutoDJSuggestionView(discord.ui.View):
+    """Shown during the grace period after an Auto-DJ suggestion.
+
+    Three buttons: veto the suggestion, play it immediately, or shut Auto-DJ off.
+    """
+    def __init__(self, player: "GuildPlayer"):
+        grace = getattr(config, "AUTODJ_GRACE_SECONDS", 15)
+        super().__init__(timeout=grace + 10)
+        self.player = player
+
+    @discord.ui.button(label="🚫 Ese tema no", style=discord.ButtonStyle.secondary,
+                       custom_id="autodj_veto")
+    async def veto(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Veto the current suggestion and search for another from the same artist."""
+        await interaction.response.defer()
+        await self.player._autodj_veto()
+
+    @discord.ui.button(label="▶️ Ya, ponela", style=discord.ButtonStyle.success,
+                       custom_id="autodj_now")
+    async def play_now(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Skip the grace timer and queue the suggestion immediately."""
+        await interaction.response.defer()
+        await self.player._autodj_fire_now()
+
+    @discord.ui.button(label="⏹️ Cortala", style=discord.ButtonStyle.danger,
+                       custom_id="autodj_stop")
+    async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Deactivate Auto-DJ after the current song finishes."""
+        await interaction.response.defer()
+        await self.player.autodj_deactivate(reason="button")
+
+
+class DjMenuView(discord.ui.View):
+    """Interactive menu posted by /dj (and by the Indio when he detects the request
+    in the text chat). Buttons wire directly to the GuildPlayer Auto-DJ API.
+
+    The view has no timeout so the buttons keep working even after a restart
+    (they are re-created when the slash command is run again; old messages with
+    stale custom_ids are no-ops once the player is gone).
+    """
+
+    def __init__(self, player: "GuildPlayer"):
+        super().__init__(timeout=None)
+        self.player = player
+
+    @discord.ui.button(label="🎧 Activar DJ", style=discord.ButtonStyle.success,
+                       custom_id="djmenu_activate")
+    async def activate(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Turn Auto-DJ on. Refuses if there is no history to seed from."""
+        await interaction.response.defer()
+        if not self.player.history and not self.player.currentSong:
+            try:
+                await interaction.followup.send(
+                    "🎧 Poné un tema primero y después prendo el modo DJ.",
+                    ephemeral=True,
+                )
+            except Exception:
+                pass
+            return
+        ok = self.player.autodj_activate()
+        if ok and self.player.textChannel:
+            try:
+                await self.player.textChannel.send(
+                    "🎧 Modo DJ prendido. Cuando se vacíe la cola, sigo yo."
+                )
+            except Exception:
+                pass
+        await self.player.updateControlMessage()
+
+    @discord.ui.button(label="🚫 Vetar sugerencia", style=discord.ButtonStyle.secondary,
+                       custom_id="djmenu_veto")
+    async def veto(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Veto the current Auto-DJ suggestion and search for another."""
+        await interaction.response.defer()
+        if not getattr(self.player, "autodj_pending_song", None):
+            try:
+                await interaction.followup.send(
+                    "🎧 No hay sugerencia pendiente para vetar.", ephemeral=True
+                )
+            except Exception:
+                pass
+            return
+        await self.player._autodj_veto()
+
+    @discord.ui.button(label="▶️ Poner ya", style=discord.ButtonStyle.primary,
+                       custom_id="djmenu_fire")
+    async def fire_now(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Skip the grace timer and queue the pending suggestion immediately."""
+        await interaction.response.defer()
+        await self.player._autodj_fire_now()
+
+    @discord.ui.button(label="⏹️ Cortar DJ", style=discord.ButtonStyle.danger,
+                       custom_id="djmenu_stop")
+    async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
+        """Deactivate Auto-DJ."""
+        await interaction.response.defer()
+        await self.player.autodj_deactivate(reason="button")
+
+
+async def openDjMenu(bot, guild_id: int) -> tuple:
+    """Post the DJ menu to the configured AUTODJ_MENU_CHANNEL_ID channel.
+
+    Called by the /dj slash command (in bot.py) and by the Indio's DJ_MODE
+    action dispatch (in geminiCommand._dispatch_indio_actions). Shares the
+    same pattern as playFromIndio so neither caller needs to know about
+    channel resolution, relay, or the GuildPlayer.
+
+    Returns (ok, message) — ok=True when the menu was posted successfully.
+    """
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return False, "guild no encontrado"
+
+    channel = guild.get_channel(config.AUTODJ_MENU_CHANNEL_ID)
+    if channel is None or not hasattr(channel, "send"):
+        playLogger.warning(
+            "[DJ-MENU] AUTODJ_MENU_CHANNEL_ID=%s not found in guild %s",
+            config.AUTODJ_MENU_CHANNEL_ID, guild_id,
+        )
+        return False, (
+            f"no encuentro el canal del menú DJ (id={config.AUTODJ_MENU_CHANNEL_ID})"
+        )
+
+    player = getGuildPlayer(guild_id, bot)
+    view = DjMenuView(player)
+    content = (
+        "🎧 **Modo DJ** — elegí una acción:\n"
+        "• **🎧 Activar DJ** — prende el modo automático (necesitás haber puesto algo primero).\n"
+        "• **🚫 Vetar** — descarta la sugerencia actual y busca otra.\n"
+        "• **▶️ Poner ya** — salta la espera y pone la sugerencia ahora.\n"
+        "• **⏹️ Cortar DJ** — apaga el modo DJ."
+    )
+    try:
+        # Try to post the text via userbot relay so it looks like the real Indio.
+        # The buttons ALWAYS go via the bot (user accounts can't attach Views).
+        relayed = False
+        try:
+            url = config.INDIO_RELAY_URL
+            secret = config.INDIO_RELAY_SECRET
+            if url and secret:
+                payload = {
+                    "channel_id": int(config.AUTODJ_MENU_CHANNEL_ID),
+                    "content": content,
+                }
+                headers = {"X-API-Secret": secret}
+                timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+                async with aiohttp.ClientSession(timeout=timeout) as sess:
+                    async with sess.post(url, json=payload, headers=headers) as resp:
+                        relayed = resp.status < 400
+        except Exception:
+            pass
+
+        if not relayed:
+            await channel.send(content, view=view)
+        else:
+            # Even when the text was relayed, post the buttons via the bot
+            # (user accounts can't attach Views to messages).
+            await channel.send(view=view)
+    except Exception as e:
+        playLogger.exception("[DJ-MENU] failed to post DJ menu")
+        return False, f"error al postear el menú: {e}"
+
+    return True, "menú DJ abierto"
+
+
 class CancelDownloadView(discord.ui.View):
     """UI view that lets a user cancel the initial yt-dlp download."""
     def __init__(self, player, videoId: str, videoTitle: str):
@@ -560,6 +778,285 @@ class GuildPlayer:
         # y ``stopPlayback`` lo limpian para evitar leak entre runs.
         self.indioProgressMessage = None
         self.indioProgressMeta: dict = {}
+
+        # Auto-DJ state
+        self.autodj_active: bool = False
+        self.autodj_chain_count: int = 0
+        self.autodj_pending_song: Optional[dict] = None
+        self.autodj_suggestion_msg: Optional[discord.Message] = None
+        self.autodj_grace_task: Optional[asyncio.Task] = None
+        # Seed carried forward across rounds (veto updates these to keep the artist thread)
+        self.autodj_seed_id: Optional[str] = None
+        self.autodj_seed_title: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Auto-DJ public API
+    # ------------------------------------------------------------------
+
+    def autodj_activate(self) -> bool:
+        """Turn Auto-DJ on. Returns False when there is no history to seed from."""
+        if not self.history and not self.currentSong:
+            return False
+        self.autodj_active = True
+        self.autodj_chain_count = 0
+        return True
+
+    async def autodj_deactivate(self, reason: str = "") -> None:
+        """Turn Auto-DJ off. Cancels any pending grace and edits the suggestion card."""
+        self.autodj_active = False
+        self.autodj_chain_count = 0
+        self._autodj_cancel_grace()
+        if self.autodj_suggestion_msg is not None:
+            try:
+                await self.autodj_suggestion_msg.edit(content="🎧 Auto-DJ desactivado.", view=None)
+            except Exception:
+                pass
+            self.autodj_suggestion_msg = None
+        self.autodj_pending_song = None
+        if self.textChannel and reason not in ("chain_cap",):
+            try:
+                await self.textChannel.send("🎧 Auto-DJ cortado. Pidan lo que quieran.")
+            except Exception:
+                pass
+        await self.updateControlMessage()
+
+    # ------------------------------------------------------------------
+    # Auto-DJ internals
+    # ------------------------------------------------------------------
+
+    def _autodj_cancel_grace(self) -> None:
+        """Cancel the pending grace timer without firing."""
+        if self.autodj_grace_task and not self.autodj_grace_task.done():
+            self.autodj_grace_task.cancel()
+        self.autodj_grace_task = None
+
+    def _autodj_should_continue(self) -> bool:
+        """True when conditions allow triggering another Auto-DJ suggestion."""
+        if not self.autodj_active:
+            return False
+        max_chain = getattr(config, "AUTODJ_MAX_CHAIN", 10)
+        if self.autodj_chain_count >= max_chain:
+            return False
+        if not self.history and not self.autodj_seed_id:
+            return False
+        if self.vc is None:
+            return False
+        try:
+            humans = sum(1 for m in self.vc.channel.members if not m.bot)
+        except Exception:
+            humans = 1
+        return humans > 0
+
+    async def _autodj_fetch_radio(self, seed_id: str) -> list:
+        """Fetch candidates from the YouTube Mix/Radio for seed_id."""
+        url = f"https://www.youtube.com/watch?v={seed_id}&list=RD{seed_id}"
+        cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        args = [config.YT_DLP_PATH]
+        if os.path.exists(cookiesPath):
+            args += ["--cookies", cookiesPath]
+        if config.YT_DLP_POT_BASE_URL:
+            args += ["--extractor-args",
+                     f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+        args += [
+            "--flat-playlist", "--simulate",
+            "--print", "%(id)s",
+            "--print", "%(title)s",
+            "--print", "%(duration_string)s",
+            "--playlist-items", "2-16",
+            url,
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+        except Exception as e:
+            playLogger.warning("[AUTODJ] radio fetch failed: %s", e)
+            return []
+        if proc.returncode != 0:
+            playLogger.warning("[AUTODJ] radio fetch rc=%d", proc.returncode)
+            return []
+        lines = [l.strip() for l in stdout.decode("utf-8", "replace").strip().split("\n") if l.strip()]
+        candidates = []
+        for i in range(0, len(lines) - 2, 3):
+            dur = lines[i + 2]
+            candidates.append({
+                "id": lines[i],
+                "title": lines[i + 1],
+                "duration_string": dur if dur != "NA" else "",
+            })
+        return candidates
+
+    async def _autodj_fetch_same_artist(self, title: str) -> list:
+        """Search YouTube for more songs by the same artist as title."""
+        artist = _extract_artist(title)
+        if not artist:
+            return []
+        return await _yt_dlp_search(artist, max_results=8)
+
+    def _autodj_pick_song(self, candidates: list, extra_exclude: Optional[str] = None) -> Optional[dict]:
+        """Pick the first candidate that passes duration and history filters."""
+        history_ids = {s["id"] for s in self.history[-50:]}
+        if self.currentSong:
+            history_ids.add(self.currentSong["id"])
+        if extra_exclude:
+            history_ids.add(extra_exclude)
+        for c in candidates:
+            if c["id"].startswith("UC"):
+                continue
+            if not c.get("duration_string"):
+                continue
+            if _parse_duration_seconds(c["duration_string"]) > 600:
+                continue
+            if c["id"] in history_ids:
+                continue
+            return c
+        return None
+
+    async def _autodj_propose_next(self) -> None:
+        """Fetch a suggestion and show the grace card. Core of the Auto-DJ loop."""
+        if not self._autodj_should_continue():
+            return
+
+        seed = self.history[-1] if self.history else None
+        seed_id = self.autodj_seed_id or (seed["id"] if seed else None)
+        seed_title = self.autodj_seed_title or (seed["title"] if seed else None)
+        if not seed_id or not seed_title:
+            return
+
+        candidates = await self._autodj_fetch_radio(seed_id)
+        song = self._autodj_pick_song(candidates)
+        if song is None:
+            playLogger.info("[AUTODJ] radio gave nothing valid, trying same-artist")
+            candidates = await self._autodj_fetch_same_artist(seed_title)
+            song = self._autodj_pick_song(candidates)
+
+        if song is None:
+            playLogger.info("[AUTODJ] no valid suggestion found, deactivating")
+            if self.textChannel:
+                try:
+                    await self.textChannel.send("🎧 No se me ocurre nada bueno. Pidan ustedes.")
+                except Exception:
+                    pass
+            self.autodj_active = False
+            await self.updateControlMessage()
+            return
+
+        self.autodj_pending_song = song
+        self.autodj_seed_id = song["id"]
+        self.autodj_seed_title = song["title"]
+        await self._autodj_start_grace(song, seed_title)
+
+    async def _autodj_start_grace(self, song: dict, seed_title: str) -> None:
+        """Post the suggestion card and start the grace countdown."""
+        artist = _extract_artist(seed_title)
+        phrase = _autodj_phrase(artist)
+        dur = song.get("duration_string", "")
+        dur_suffix = f" [{dur}]" if dur else ""
+        grace = getattr(config, "AUTODJ_GRACE_SECONDS", 15)
+        content = (
+            f"🎧 Sigo yo. La próxima:\n"
+            f"**{song['title']}**{dur_suffix}\n"
+            f"_{phrase}_\n\n"
+            f"La pongo en {grace}s. Decí \"ese tema no\" o tocá abajo 👇"
+        )
+        view = AutoDJSuggestionView(self)
+        if self.textChannel:
+            try:
+                self.autodj_suggestion_msg = await self.textChannel.send(content, view=view)
+            except Exception:
+                pass
+        self.autodj_grace_task = self.bot.loop.create_task(self._autodj_grace_timer())
+
+    async def _autodj_grace_timer(self) -> None:
+        """Sleep the grace period then fire the queued suggestion."""
+        grace = getattr(config, "AUTODJ_GRACE_SECONDS", 15)
+        try:
+            await asyncio.sleep(grace)
+        except asyncio.CancelledError:
+            return
+        await self._autodj_fire_now()
+
+    async def _autodj_fire_now(self) -> None:
+        """Cancel the grace timer and immediately queue the pending song."""
+        self._autodj_cancel_grace()
+        song = self.autodj_pending_song
+        self.autodj_pending_song = None
+        if song is None:
+            return
+
+        if self.autodj_suggestion_msg is not None:
+            try:
+                await self.autodj_suggestion_msg.edit(
+                    content=f"🎧 Auto-DJ: **{song['title']}** 🎵",
+                    view=None,
+                )
+            except Exception:
+                pass
+            self.autodj_suggestion_msg = None
+
+        self.autodj_chain_count += 1
+        max_chain = getattr(config, "AUTODJ_MAX_CHAIN", 10)
+        if self.autodj_chain_count >= max_chain:
+            self.autodj_active = False
+
+        guild = self.bot.get_guild(self.guildId) if self.bot else None
+        analytics.capture("autodj played", user=self.lastRequester, guild=guild, properties={
+            "video_id": song["id"],
+            "title": song["title"],
+            "chain_count": self.autodj_chain_count,
+        })
+        self.queue.append(song)
+        if not self.currentSong and self.queue:
+            self.currentSong = self.queue.pop(0)
+            await self.startPlayingCurrent()
+        else:
+            await self.updateControlMessage()
+            self.startPreDownloading()
+
+        if not self.autodj_active and self.textChannel:
+            try:
+                await self.textChannel.send("🎧 Bueno, ya banqué un rato. Sigan ustedes.")
+            except Exception:
+                pass
+            await self.updateControlMessage()
+
+    async def _autodj_veto(self) -> None:
+        """User vetoed the current suggestion: find another from the same artist."""
+        self._autodj_cancel_grace()
+        vetoed_id = self.autodj_pending_song["id"] if self.autodj_pending_song else None
+        self.autodj_pending_song = None
+
+        if self.autodj_suggestion_msg is not None:
+            try:
+                await self.autodj_suggestion_msg.edit(content="🔄 Buscando otra...", view=None)
+            except Exception:
+                pass
+            self.autodj_suggestion_msg = None
+
+        seed_title = self.autodj_seed_title or (self.history[-1]["title"] if self.history else None)
+        if not seed_title:
+            await self.autodj_deactivate(reason="veto_no_seed")
+            return
+
+        candidates = await self._autodj_fetch_same_artist(seed_title)
+        song = self._autodj_pick_song(candidates, extra_exclude=vetoed_id)
+        if song is None:
+            if self.textChannel:
+                try:
+                    await self.textChannel.send(
+                        "🎧 No encontré más del mismo artista. Pidan ustedes."
+                    )
+                except Exception:
+                    pass
+            self.autodj_active = False
+            await self.updateControlMessage()
+            return
+
+        self.autodj_pending_song = song
+        await self._autodj_start_grace(song, seed_title)
 
     def _resolveMusicChannel(self, fallback=None):
         """Return the configured music text channel for this guild.
@@ -1216,8 +1713,11 @@ class GuildPlayer:
             await self.startPlayingCurrent()
         else:
             self.currentSong = None
-            await self.updateControlMessage("⏹️ Fin de la cola de reproducción.")
-            # The idle watchdog observes the now-quiet vc and disconnects.
+            if self._autodj_should_continue():
+                await self._autodj_propose_next()
+            else:
+                await self.updateControlMessage("⏹️ Fin de la cola de reproducción.")
+                # The idle watchdog observes the now-quiet vc and disconnects.
 
     async def predownloadQueue(self):
         """Background task that pre-downloads queued songs.
@@ -1357,6 +1857,8 @@ class GuildPlayer:
         Async:
             This function is a coroutine and must be awaited.
         """
+        self._autodj_cancel_grace()
+        self.autodj_pending_song = None
         self.isStopping = True
         self.queue.clear()
         self.isDownloading = False
@@ -1703,6 +2205,9 @@ def clearGuildPlayer(guildId: int):
     """
     if guildId in guildPlayers:
         player = guildPlayers[guildId]
+        # Cancel Auto-DJ grace timer
+        if getattr(player, "autodj_grace_task", None) and not player.autodj_grace_task.done():
+            player.autodj_grace_task.cancel()
         # Cancel background downloader task
         if getattr(player, "preDownloadTask", None) and not player.preDownloadTask.done():
             player.preDownloadTask.cancel()

@@ -3,6 +3,7 @@
 | Command | Behavior | Subsystems touched |
 | --- | --- | --- |
 | `/play` | Busca o recibe una URL de YouTube, descarga con yt-dlp y reproduce en voz. Si la búsqueda devuelve varios resultados, muestra un menú para que quien pidió elija cuál; una URL se reproduce directo. | `playCommand`, `config`, `analytics`, FFmpeg |
+| `/dj` | Abre el menú del modo DJ en el canal `AUTODJ_MENU_CHANNEL_ID`. Desde ahí se puede activar el Auto-DJ, vetar la sugerencia actual, reproducirla ya, o apagarlo. | `playCommand`, `bot.py`, `config` |
 | `/parar` | Detiene la reproducción, limpia la cola y desconecta. | `pararCommand`, `playCommand`, `analytics` |
 | `/soundpad` | Abre el panel de Soundpad para reproducir clips locales. | `soundpadCommand`, `config`, `analytics` |
 | `/vapls` | Pregunta al bot Gemini sin memoria. | `geminiCommand`, `geminiClient`, `analytics` |
@@ -32,3 +33,40 @@ Notas:
     gana la **más votada** (empate → número más bajo; si nadie votó → la
     primera/más relevante). El conteo de reacciones requiere que el bot
     principal tenga el intent de reacciones (incluido en `Intents.default()`).
+
+## 🎧 Auto-DJ del Indio
+
+Cuando el Auto-DJ está activo y la cola se vacía, **el Indio elige el próximo
+tema** en vez de dejar morir la música. **No gasta tokens de IA extra**: la
+música la elige YouTube (Mix/radio del último tema o búsqueda del mismo artista)
+y las frases del Indio salen de un banco pre-escrito.
+
+**Cómo activar el modo DJ (dos vías — ambas abren el mismo menú en `AUTODJ_MENU_CHANNEL_ID`):**
+- **`/dj`** — comando slash directo desde cualquier canal de texto.
+- **Pedíselo al Indio en el chat de texto** — escribí algo como *"indio hacé de
+  DJ"*, *"mode DJ"*, *"ponete a pinchar"*, *"pone música en automático"*, etc.
+  El Indio lo detecta vía su sistema de tools de Gemini y abre el menú en el
+  canal configurado. **No funciona por voz** — el path de voz del Indio no tiene
+  lógica de DJ.
+
+**El menú** aparece en el canal `AUTODJ_MENU_CHANNEL_ID` con cuatro botones:
+- **🎧 Activar DJ** — prende el modo automático. **No se activa en frío**: necesita
+  un tema sonando o en historial para tener mood del que partir.
+- **🚫 Vetar sugerencia** — descarta la sugerencia actual y busca otra del mismo
+  artista.
+- **▶️ Poner ya** — salta la espera de `AUTODJ_GRACE_SECONDS` y pone la sugerencia
+  ahora.
+- **⏹️ Cortar DJ** — apaga el modo DJ.
+
+**Sugerencia + veto:** al vaciarse la cola, el Indio muestra el tema que va a
+poner y abre una ventana de `AUTODJ_GRACE_SECONDS`. Si nadie hace nada, lo pone.
+El botón 🚫 busca otro **del mismo artista**.
+
+**Apagado automático:**
+- Tras `AUTODJ_MAX_CHAIN` temas seguidos → se apaga solo.
+- Si se va todo el mundo del canal de voz → cancela lo pendiente y sigue el
+  camino normal de fin de cola.
+
+**Filtros:** nunca propone temas de más de 10 minutos ni algo que ya sonó en la
+sesión. El motor normal es el Mix/radio de YouTube (respeta el mood); el veto
+cae a búsqueda del mismo artista.
