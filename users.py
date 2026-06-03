@@ -230,6 +230,7 @@ GROUP_LORE: dict[str, list[str]] = {
     ],
     "chistes_internos": [
         "Bibi tiene pedido de captura por la corte internacional",
+        "El Indio tiene un juicio de Chipotle, pero igual tiene los contactos nunca le van hacer nada"
         "los que juegan CS son giles, los que juegan Dota unos capos",
         "los piononos sirven para limpiarse y dejarte un postrecito",
         "hasta Magote (que no estudia) desarrolló una app y Viny, que estudia programación hace 10 años, todavía no",

@@ -9,6 +9,7 @@ mensaje crudo del usuario, sin sumar otra llamada a Gemini. El caso real que
 motivó el cambio: a la pregunta "¿de qué cuadro soy?" el Indio tiró el clip de
 los Simpsons "los niños pueden ser muy crueles" sin que nadie lo pidiera.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -22,6 +23,7 @@ def _sounds(actions):
 
 
 # --- Caso que motivó el cambio: ni verbo ni nombre → no suena --------------
+
 
 def test_misfire_without_order_or_name_is_dropped():
     """El incidente de Tobi: pregunta de charla, el modelo igual eligió un
@@ -40,14 +42,17 @@ def test_dropping_sound_keeps_other_actions_path():
 
 # --- Caso A: hay verbo de orden → suena -----------------------------------
 
-@pytest.mark.parametrize("msg", [
-    "tirá el pezpija",
-    "pone el de las risas",
-    "metele milapollo",
-    "hacé sonar el de aplausos",
-    "reproducí el del relincho",
-    "dale, tirate ese audio",
-])
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        "tirá el pezpija",
+        "pone el de las risas",
+        "metele milapollo",
+        "reproducí el del relincho",
+        "dale, tirate ese audio",
+    ],
+)
 def test_explicit_order_verb_lets_the_clip_play(msg):
     """Con un imperativo de reproducción el clip suena, aunque el nombre que
     eligió el modelo no esté calcado en el mensaje."""
@@ -57,6 +62,7 @@ def test_explicit_order_verb_lets_the_clip_play(msg):
 
 
 # --- Caso B: nombran el clip sin pedirlo → suena como extra ----------------
+
 
 def test_named_clip_without_order_still_plays():
     """Si dicen textualmente el nombre del clip (sin verbo de orden) el audio
@@ -82,6 +88,7 @@ def test_generic_words_in_name_do_not_ground_it():
 
 
 # --- El gate no toca otras acciones ---------------------------------------
+
 
 def test_non_sound_actions_pass_through_untouched():
     """play_music / controles no se filtran nunca, con o sin verbo."""

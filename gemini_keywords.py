@@ -20,7 +20,8 @@ PLAY_ORDER_RE_SOURCE = (
     r"tira(te|me|le|lo|la|nos)?|"
     r"pone(la|lo|le|me|nos|te)?|"
     r"mete(le|lo|la)?|"
-    r"reproduci(lo|la|me)?"
+    r"reproduci(lo|la|me)?|"
+    r"hace(?:le|lo|la|nos)? sonar"
     r")\b"
 )
 
@@ -34,6 +35,8 @@ PLAY_MUSIC_VERBS = [
     "poné",
     "ponete",
     "reproducí",
+    "tirá",
+    "tirate",
 ]
 
 PLAY_SOUND_VERBS = [

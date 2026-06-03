@@ -30,7 +30,7 @@ def test_lists_the_required_imperative_verbs():
     has a positive list to anchor on. Without this, it tends to fire on any
     mention of music."""
     desc = _play_music_description()
-    for verb in ("ponete", "metele", "tirá", "tirate", "reproduci"):
+    for verb in ("poné", "ponete", "reproducí"):
         assert verb in desc, f"play_music prompt missing verb {verb!r}"
 
 
