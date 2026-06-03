@@ -2595,6 +2595,21 @@ class PlayerControlView(discord.ui.View):
         await interaction.response.defer()
         await self.player.stopPlayback()
 
+    @discord.ui.button(
+        label="🎧 DJ", style=discord.ButtonStyle.secondary, custom_id="btn_dj"
+    )
+    async def djButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
+        """Handle the DJ button click -- activate Auto-DJ mode."""
+        import playCommand
+        await interaction.response.defer()
+        await playCommand.openDjMenu(
+            self.player.bot,
+            self.player.guildId,
+            channel_id=interaction.channel_id,
+        )
+
 
 class DisconnectedControlView(discord.ui.View):
     """Dead control panel shown after an idle disconnect.
