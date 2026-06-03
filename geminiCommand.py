@@ -1696,6 +1696,7 @@ async def _dispatch_indio_actions(
                     # shows up next to the conversation, not in a fixed channel.
                     try:
                         from playCommand import openDjMenu
+
                         dj_channel_id = getattr(reply_handle, "channel_id", None)
                         ok, msg = await openDjMenu(bot, int(guild_id), dj_channel_id)
                         statuses.append(f"dj_mode: {'ok' if ok else 'fail'} — {msg}")
@@ -2557,12 +2558,17 @@ def _error_message(kind: str, status: Optional[int], persona: str) -> str:
     return "❌ Algo se rompió. Probá de nuevo."
 
 
-async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
+async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str, router=None):
     """Handle the /vapls command using a stateless Gemini prompt.
 
     Args:
         ctx: Discord application context.
         pregunta: User prompt text.
+        router: Optional :class:`channelRouting.ChannelRouter` built by the
+            caller (``bot._begin_routed``). When provided, public output is
+            routed to the home channel via ``router.post()``; when absent the
+            old ``PUBLIC_ALLOWED_CHANNEL_IDS`` guard is used as fallback so
+            calling code that doesn't pass a router keeps working.
 
     Returns:
         None.
@@ -2574,13 +2580,24 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         This function is a coroutine and must be awaited.
     """
     t0 = time.monotonic()
-    # /vapls solo postea publico en los canales permitidos; en cualquier otro
-    # canal la respuesta sale ephemeral (solo la ve el invocador) para no
-    # ensuciar canales ajenos al bot.
-    _chan_id = getattr(ctx, "channel_id", None) or getattr(
-        getattr(ctx, "channel", None), "id", None
-    )
-    public_allowed = _chan_id in config.PUBLIC_ALLOWED_CHANNEL_IDS
+
+    # Determine whether public posting is allowed in the source channel.
+    # When a router is provided it handles routing: public output always goes
+    # to the home channel via router.post(), so we treat public_allowed=True.
+    # Without a router we fall back to the legacy allowlist check.
+    if router is not None:
+        public_allowed = True  # router.post() handles destination
+    else:
+        _chan_id = getattr(ctx, "channel_id", None) or getattr(
+            getattr(ctx, "channel", None), "id", None
+        )
+        public_allowed = _chan_id in config.PUBLIC_ALLOWED_CHANNEL_IDS
+
+    async def _send_public(content, **kw):
+        if router is not None:
+            return await router.post(content, **kw)
+        return await ctx.followup.send(content, **kw)
+
     notifier, retry_state = _make_retry_notifier(ctx)
     try:
         reply = await geminiClient.generate(
@@ -2645,12 +2662,20 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
         return
 
     try:
-        n_chunks = await _send_reply(
-            ctx,
-            _format_user_header(ctx, pregunta) + reply.text,
-            edit_first=retry_state["had_retry"],
-            ephemeral=not public_allowed,
-        )
+        full_text = _format_user_header(ctx, pregunta) + reply.text
+        if router is not None:
+            # Multi-chunk routing: each chunk goes through router.post()
+            chunks = _split_for_discord(full_text)
+            for c in chunks:
+                await _send_public(c)
+            n_chunks = len(chunks)
+        else:
+            n_chunks = await _send_reply(
+                ctx,
+                full_text,
+                edit_first=retry_state["had_retry"],
+                ephemeral=not public_allowed,
+            )
     except Exception as e:
         logger.exception("vapls send failed")
         analytics.capture_exception(
@@ -2675,13 +2700,20 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str):
     )
 
 
-async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool):
+async def indioLogic(
+    ctx: discord.ApplicationContext, pregunta: str, nuevo: bool, router=None
+):
     """Handle the /indio command with short-term conversation memory.
 
     Args:
         ctx: Discord application context.
         pregunta: User prompt text.
         nuevo: Whether to reset the conversation history.
+        router: Optional :class:`channelRouting.ChannelRouter` built by the
+            caller (``bot._begin_routed``). When provided, public output is
+            routed via ``router.post()``; when absent the legacy
+            ``target_channel`` / ``INDIO_REPLY_CHANNEL_ID`` mechanism is used
+            for backward compatibility.
 
     Returns:
         None.
@@ -2700,22 +2732,26 @@ async def indioLogic(ctx: discord.ApplicationContext, pregunta: str, nuevo: bool
     )
     tagged_message = f"{speaker}: {pregunta or ''}"
 
-    # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, todos los
-    # posteos publicos del Indio aterrizan ahi en vez de en el canal del slash.
-    # Los mensajes ephemeral (hints al invocador) siguen yendo al canal del slash.
-    override_id = config.INDIO_REPLY_CHANNEL_ID
-    target_channel = ctx.bot.get_channel(override_id) if override_id else None
-    if override_id and target_channel is None:
-        logger.warning(
-            "indioLogic: INDIO_REPLY_CHANNEL_ID=%s no resuelve a canal — caigo "
-            "al canal del slash",
-            override_id,
-        )
+    if router is not None:
+        # Use ChannelRouter for routing — avoids duplicating the logic.
+        target_channel = getattr(router, "target", None)
+    else:
+        # Legacy path: build target_channel from INDIO_REPLY_CHANNEL_ID directly.
+        override_id = config.INDIO_REPLY_CHANNEL_ID
+        target_channel = ctx.bot.get_channel(override_id) if override_id else None
+        if override_id and target_channel is None:
+            logger.warning(
+                "indioLogic: INDIO_REPLY_CHANNEL_ID=%s no resuelve a canal — caigo "
+                "al canal del slash",
+                override_id,
+            )
 
     async def _post(content, **kw):
         """Postea contenido publico del Indio. Va al target_channel si el
         override esta activo; si no, via ctx.followup.send (canal del slash).
         Los mensajes ephemeral siempre se mandan via followup."""
+        if router is not None:
+            return await router.post(content, **kw)
         if target_channel is not None and not kw.get("ephemeral"):
             return await target_channel.send(content)
         return await ctx.followup.send(content, **kw)
@@ -3121,6 +3157,9 @@ async def indioFromVoice(
     speaker_name: Optional[str] = None,
     source_message_id: Optional[int] = None,
     from_voice: bool = False,
+    replied_content: Optional[str] = None,
+    replied_author: Optional[str] = None,
+    attachment_urls: Optional[list[dict]] = None,
 ) -> None:
     """Trigger the indio persona from a voice transcription or text wake-word.
 
@@ -3216,6 +3255,51 @@ async def indioFromVoice(
         f"\n\n{stable_extras}" if stable_extras else ""
     )
 
+    # ---- Context from replied-to message + image download ----
+    volatile = player_block or None
+    image_parts = None
+    if replied_content is not None and replied_author is not None:
+        ctx_lines = [f"[contexto: {replied_author} dijo: {replied_content}]"]
+        if attachment_urls:
+            videos = [
+                u
+                for u in attachment_urls
+                if u.get("mime_type", "").startswith("video/")
+            ]
+            if videos:
+                ctx_lines.append("[el mensaje tiene un video que no puedo ver]")
+            images = [
+                u
+                for u in attachment_urls
+                if u.get("mime_type", "").startswith("image/")
+            ][:3]
+            if images:
+                downloaded = []
+                async with aiohttp.ClientSession() as sess:
+                    for img in images:
+                        try:
+                            async with sess.get(
+                                img["url"], timeout=aiohttp.ClientTimeout(total=10)
+                            ) as resp:
+                                if resp.status == 200:
+                                    import base64
+
+                                    data = await resp.read()
+                                    downloaded.append(
+                                        {
+                                            "inline_data": {
+                                                "mime_type": img["mime_type"],
+                                                "data": base64.b64encode(data).decode(),
+                                            }
+                                        }
+                                    )
+                        except Exception:
+                            pass
+                if downloaded:
+                    image_parts = downloaded
+        ctx_text = "\n".join(ctx_lines)
+        volatile = f"{ctx_text}\n\n{player_block}" if player_block else ctx_text
+
     t0 = time.monotonic()
     try:
         reply = await geminiClient.generate(
@@ -3223,7 +3307,8 @@ async def indioFromVoice(
             system_instruction=system_instruction,
             history=_stamp_history_for_prompt(history_snapshot, time.time()),
             tools=_INDIO_TOOLS,
-            volatile_context=player_block or None,
+            volatile_context=volatile,
+            image_parts=image_parts,
         )
     except geminiClient.GeminiError as e:
         # Posteamos el aviso (incluido el 429 "conseguite una key") via el
@@ -3476,6 +3561,9 @@ async def askIndio(
     user_id: int = 0,
     source_message_id: Optional[int] = None,
     is_voice: bool = False,
+    replied_content: Optional[str] = None,
+    replied_author: Optional[str] = None,
+    attachment_urls: Optional[list[dict]] = None,
 ) -> bool:
     """Reusable entry point to talk to the indio from anywhere in the code.
 
@@ -3538,6 +3626,9 @@ async def askIndio(
         speaker_name=speaker_name,
         source_message_id=source_message_id,
         from_voice=is_voice,
+        replied_content=replied_content,
+        replied_author=replied_author,
+        attachment_urls=attachment_urls,
     )
     return True
 

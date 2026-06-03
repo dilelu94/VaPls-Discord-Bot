@@ -4,6 +4,7 @@ Runs an aiohttp server in the same asyncio loop as py-cord. Every request must
 include header X-API-Secret matching config.API_SECRET. Binds to
 config.API_HOST:config.API_PORT (default 127.0.0.1:8080).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -90,11 +91,15 @@ def _serializeMemberVoice(member: discord.Member) -> dict:
     }
 
 
-async def _triggerUserbotRecording(*, guildId: int, channelId: int,
-                                   callbackUrl: str,
-                                   callbackSecret: Optional[str],
-                                   metadataRaw: Optional[str],
-                                   duration: float) -> None:
+async def _triggerUserbotRecording(
+    *,
+    guildId: int,
+    channelId: int,
+    callbackUrl: str,
+    callbackSecret: Optional[str],
+    metadataRaw: Optional[str],
+    duration: float,
+) -> None:
     """Ask the userbot's relay to capture a voice reply.
 
     Args:
@@ -137,7 +142,9 @@ async def _triggerUserbotRecording(*, guildId: int, channelId: int,
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                config.USERBOT_RECORD_URL, json=payload, headers=headers,
+                config.USERBOT_RECORD_URL,
+                json=payload,
+                headers=headers,
             ) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
@@ -145,8 +152,9 @@ async def _triggerUserbotRecording(*, guildId: int, channelId: int,
                         "userbot /record HTTP %d: %s", resp.status, body[:200]
                     )
     except asyncio.TimeoutError:
-        logger.warning("userbot /record timeout after %.1fs",
-                       config.USERBOT_RECORD_TRIGGER_TIMEOUT)
+        logger.warning(
+            "userbot /record timeout after %.1fs", config.USERBOT_RECORD_TRIGGER_TIMEOUT
+        )
     except Exception:
         logger.exception("userbot /record trigger failed")
 
@@ -173,7 +181,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
     Returns:
         Configured aiohttp Application.
     """
-    app = web.Application(middlewares=[authMiddleware], client_max_size=25 * 1024 * 1024)
+    app = web.Application(
+        middlewares=[authMiddleware], client_max_size=25 * 1024 * 1024
+    )
 
     async def status(_: web.Request) -> web.Response:
         """Return the bot readiness and voice client status.
@@ -195,25 +205,28 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 for g in bot.guilds
             )
 
-        return web.json_response({
-            "ready": bot.is_ready(),
-            "guilds": len(bot.guilds),
-            "voice_clients": [
-                {
-                    "guild_id": vc.guild.id,
-                    "channel_id": vc.channel.id if vc.channel else None,
-                    "channel_name": vc.channel.name if vc.channel else None,
-                    "playing": vc.is_playing(),
-                }
-                for vc in bot.voice_clients
-            ],
-            "uptime_seconds": int(time.time() - _PROCESS_START),
-            "gateway_connected_seconds_ago": (
-                int(time.time() - _GATEWAY_CONNECTED_AT)
-                if _GATEWAY_CONNECTED_AT is not None else None
-            ),
-            "voice_states_count": voiceStatesCount,
-        })
+        return web.json_response(
+            {
+                "ready": bot.is_ready(),
+                "guilds": len(bot.guilds),
+                "voice_clients": [
+                    {
+                        "guild_id": vc.guild.id,
+                        "channel_id": vc.channel.id if vc.channel else None,
+                        "channel_name": vc.channel.name if vc.channel else None,
+                        "playing": vc.is_playing(),
+                    }
+                    for vc in bot.voice_clients
+                ],
+                "uptime_seconds": int(time.time() - _PROCESS_START),
+                "gateway_connected_seconds_ago": (
+                    int(time.time() - _GATEWAY_CONNECTED_AT)
+                    if _GATEWAY_CONNECTED_AT is not None
+                    else None
+                ),
+                "voice_states_count": voiceStatesCount,
+            }
+        )
 
     async def members(request: web.Request) -> web.Response:
         """List voice channels and optionally full guild members.
@@ -230,7 +243,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
         try:
             guildId = int(request.query["guild_id"])
         except (KeyError, ValueError):
-            return web.json_response({"error": "missing or invalid guild_id"}, status=400)
+            return web.json_response(
+                {"error": "missing or invalid guild_id"}, status=400
+            )
         voiceOnly = request.query.get("voice_only", "true").lower() == "true"
 
         guild = _resolveGuild(bot, guildId)
@@ -322,18 +337,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
             else None
         )
 
-        return web.json_response({
-            "id": member.id,
-            "display_name": member.display_name,
-            "name": member.name,
-            "status": str(getattr(member, "status", "unknown")),
-            "activity": activity,
-            "voice": voice,
-            "roles": [r.name for r in member.roles],
-            "joined_at": member.joined_at.isoformat() if member.joined_at else None,
-            "created_at": member.created_at.isoformat(),
-            "top_role": top_role,
-        })
+        return web.json_response(
+            {
+                "id": member.id,
+                "display_name": member.display_name,
+                "name": member.name,
+                "status": str(getattr(member, "status", "unknown")),
+                "activity": activity,
+                "voice": voice,
+                "roles": [r.name for r in member.roles],
+                "joined_at": member.joined_at.isoformat() if member.joined_at else None,
+                "created_at": member.created_at.isoformat(),
+                "top_role": top_role,
+            }
+        )
 
     async def sendMessage(request: web.Request) -> web.Response:
         """Post a message to a guild text channel.
@@ -373,11 +390,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return web.json_response({"error": str(e)}, status=500)
         return web.json_response({"message_id": msg.id})
 
-    async def _pickAutoVoiceChannel(guild: discord.Guild) -> Optional[discord.VoiceChannel]:
+    async def _pickAutoVoiceChannel(
+        guild: discord.Guild,
+    ) -> Optional[discord.VoiceChannel]:
         """Pick the most populated voice channel for autoplay."""
         candidates = [
-            (ch, sum(1 for m in ch.members if not m.bot))
-            for ch in guild.voice_channels
+            (ch, sum(1 for m in ch.members if not m.bot)) for ch in guild.voice_channels
         ]
         candidates = [c for c in candidates if c[1] > 0]
         if not candidates:
@@ -415,7 +433,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
         replyMetadata: Optional[str] = None
         replyDuration: Optional[float] = None
 
-        downloadsDir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+        downloadsDir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "downloads"
+        )
         os.makedirs(downloadsDir, exist_ok=True)
 
         while True:
@@ -478,7 +498,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     os.remove(uploadPath)
                 except Exception:
                     pass
-                return web.json_response({"error": "no active voice channel and no users in any voice channel"}, status=409)
+                return web.json_response(
+                    {
+                        "error": "no active voice channel and no users in any voice channel"
+                    },
+                    status=409,
+                )
             try:
                 vc = await channel.connect(reconnect=True, timeout=10.0)
             except Exception as e:
@@ -496,8 +521,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
             pass
 
         recordChannelId = vc.channel.id if vc.channel else None
-        wantRecording = bool(replyCallbackUrl and config.USERBOT_RECORD_URL
-                             and recordChannelId is not None)
+        wantRecording = bool(
+            replyCallbackUrl
+            and config.USERBOT_RECORD_URL
+            and recordChannelId is not None
+        )
 
         def _afterPlay(_err):
             try:
@@ -514,9 +542,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         callbackUrl=replyCallbackUrl,
                         callbackSecret=replyCallbackSecret,
                         metadataRaw=replyMetadata,
-                        duration=(replyDuration
-                                  if replyDuration is not None
-                                  else config.USERBOT_RECORD_DEFAULT_DURATION),
+                        duration=(
+                            replyDuration
+                            if replyDuration is not None
+                            else config.USERBOT_RECORD_DEFAULT_DURATION
+                        ),
                     ),
                     bot.loop,
                 )
@@ -529,12 +559,14 @@ def makeApp(bot: discord.Bot) -> web.Application:
             _afterPlay(None)
             return web.json_response({"error": f"play failed: {e}"}, status=500)
 
-        return web.json_response({
-            "played": True,
-            "channel_id": recordChannelId,
-            "channel_name": vc.channel.name if vc.channel else None,
-            "will_record_reply": wantRecording,
-        })
+        return web.json_response(
+            {
+                "played": True,
+                "channel_id": recordChannelId,
+                "channel_name": vc.channel.name if vc.channel else None,
+                "will_record_reply": wantRecording,
+            }
+        )
 
     async def queue(request: web.Request) -> web.Response:
         """Return the current playback queue for a guild.
@@ -551,24 +583,30 @@ def makeApp(bot: discord.Bot) -> web.Application:
         try:
             guildId = int(request.query["guild_id"])
         except (KeyError, ValueError):
-            return web.json_response({"error": "missing or invalid guild_id"}, status=400)
+            return web.json_response(
+                {"error": "missing or invalid guild_id"}, status=400
+            )
         gp = guildPlayers.get(guildId)
         if gp is None:
-            return web.json_response({
-                "current": None,
-                "queue": [],
-                "history_count": 0,
-                "is_paused": False,
-                "is_playing": False,
-            })
+            return web.json_response(
+                {
+                    "current": None,
+                    "queue": [],
+                    "history_count": 0,
+                    "is_paused": False,
+                    "is_playing": False,
+                }
+            )
         vc = gp.vc
-        return web.json_response({
-            "current": gp.currentSong,
-            "queue": list(gp.queue),
-            "history_count": len(gp.history),
-            "is_paused": bool(vc and vc.is_paused()),
-            "is_playing": bool(vc and vc.is_playing()),
-        })
+        return web.json_response(
+            {
+                "current": gp.currentSong,
+                "queue": list(gp.queue),
+                "history_count": len(gp.history),
+                "is_paused": bool(vc and vc.is_paused()),
+                "is_playing": bool(vc and vc.is_playing()),
+            }
+        )
 
     async def indioVoice(request: web.Request) -> web.Response:
         """Trigger the indio persona from a voice transcription.
@@ -595,9 +633,18 @@ def makeApp(bot: discord.Bot) -> web.Application:
         # that still send the old key keep working without changes.
         is_voice = bool(data.get("is_voice", data.get("decifrar", True)))
         user_id = int(data["user_id"]) if data.get("user_id") else 0
-        transcript_message_id = int(data["transcript_message_id"]) if data.get("transcript_message_id") else None
-        source_message_id = int(data["source_message_id"]) if data.get("source_message_id") else None
+        transcript_message_id = (
+            int(data["transcript_message_id"])
+            if data.get("transcript_message_id")
+            else None
+        )
+        source_message_id = (
+            int(data["source_message_id"]) if data.get("source_message_id") else None
+        )
         vosk_result = data.get("vosk_result")
+        replied_content = data.get("replied_content")
+        replied_author = data.get("replied_author")
+        attachment_urls = data.get("attachment_urls")
 
         async def _run() -> None:
             text = pregunta
@@ -610,14 +657,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
             #     cascade a brand-new music vote on top of the open one).
             if guild_id is not None:
                 import playCommand
+
                 active_vote = playCommand.get_active_vote(int(guild_id))
                 if active_vote is not None:
-                    if (active_vote.requester_id and user_id
-                            and int(user_id) != int(active_vote.requester_id)):
+                    if (
+                        active_vote.requester_id
+                        and user_id
+                        and int(user_id) != int(active_vote.requester_id)
+                    ):
                         logger.info(
                             "indio voice: drop non-requester %s during open "
                             "vote (requester=%s) raw=%r",
-                            user_id, active_vote.requester_id, text[:200],
+                            user_id,
+                            active_vote.requester_id,
+                            text[:200],
                         )
                         return
                     if geminiCommand.try_register_voice_vote(
@@ -626,8 +679,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         speaker_name=speaker_name,
                         text=text,
                     ):
-                        logger.info("indio voice: registered vote from raw %r",
-                                    text[:200])
+                        logger.info(
+                            "indio voice: registered vote from raw %r", text[:200]
+                        )
                         return
                     logger.info(
                         "indio voice: drop requester non-vote during open vote: %r",
@@ -639,12 +693,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 # to the transcript message so users can flag false positives.
                 try:
                     import decifrarVoting
-                    asyncio.create_task(decifrarVoting.record(
-                        text,
-                        msg_id=transcript_message_id,
-                        channel_id=channel_id,
-                        vosk_result=vosk_result,
-                    ))
+
+                    asyncio.create_task(
+                        decifrarVoting.record(
+                            text,
+                            msg_id=transcript_message_id,
+                            channel_id=channel_id,
+                            vosk_result=vosk_result,
+                        )
+                    )
                 except Exception:
                     logger.exception("indio voice: failed to schedule feedback record")
                 # Tag the message so the indio knows it came from voice ASR
@@ -660,6 +717,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 user_id=user_id,
                 source_message_id=source_message_id,
                 is_voice=is_voice,
+                replied_content=replied_content,
+                replied_author=replied_author,
+                attachment_urls=attachment_urls,
             )
 
         asyncio.create_task(_run())
@@ -670,13 +730,13 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         Used by the userbot to decide concurrency limits (3 vs 5 speakers).
         """
-        playing_guilds = [
-            vc.guild.id for vc in bot.voice_clients if vc.is_playing()
-        ]
-        return web.json_response({
-            "is_playing": bool(playing_guilds),
-            "guild_ids": [str(gid) for gid in playing_guilds],
-        })
+        playing_guilds = [vc.guild.id for vc in bot.voice_clients if vc.is_playing()]
+        return web.json_response(
+            {
+                "is_playing": bool(playing_guilds),
+                "guild_ids": [str(gid) for gid in playing_guilds],
+            }
+        )
 
     async def submitGeminiKey(request: web.Request) -> web.Response:
         """Receive one or more Gemini API keys from the userbot (or any
@@ -699,29 +759,33 @@ def makeApp(bot: discord.Bot) -> web.Application:
         results: list[dict] = []
         for k in candidates:
             ok, reason = await geminiKeys.add_key(
-                k, owner_id=owner_id, owner_name=owner_name, source=source,
+                k,
+                owner_id=owner_id,
+                owner_name=owner_name,
+                source=source,
             )
             results.append({"key_tail": k[-6:], "ok": ok, "reason": reason})
-        return web.json_response({
-            "found": len(candidates),
-            "results": results,
-        })
+        return web.json_response(
+            {
+                "found": len(candidates),
+                "results": results,
+            }
+        )
 
     async def textChannels(request: web.Request) -> web.Response:
         """List text channels of the guild."""
         try:
             guildId = int(request.query["guild_id"])
         except (KeyError, ValueError):
-            return web.json_response({"error": "missing or invalid guild_id"}, status=400)
+            return web.json_response(
+                {"error": "missing or invalid guild_id"}, status=400
+            )
 
         guild = _resolveGuild(bot, guildId)
         if guild is None:
             return web.json_response({"error": "guild not found"}, status=404)
 
-        channels = [
-            {"id": ch.id, "name": ch.name}
-            for ch in guild.text_channels
-        ]
+        channels = [{"id": ch.id, "name": ch.name} for ch in guild.text_channels]
         return web.json_response({"text_channels": channels})
 
     app.router.add_get("/status", status)
@@ -753,7 +817,9 @@ async def startApiServer(bot: discord.Bot) -> web.AppRunner:
         This function is a coroutine and must be awaited.
     """
     if not config.API_SECRET:
-        logger.warning("API_SECRET is empty - HTTP API will reject all requests. Set API_SECRET in .env to enable.")
+        logger.warning(
+            "API_SECRET is empty - HTTP API will reject all requests. Set API_SECRET in .env to enable."
+        )
     app = makeApp(bot)
     runner = web.AppRunner(app)
     await runner.setup()

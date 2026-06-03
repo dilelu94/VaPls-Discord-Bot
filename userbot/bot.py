@@ -624,16 +624,66 @@ _vosk_grammar_generation: int = 0
 # into a wake-word. When a phrase keeps mis-firing (see [WAKE]/[VOSK] logs),
 # ADD IT HERE by hand so VOSK has a bucket for it.
 _PRESET_3_FILLER: list[str] = [
-    "che", "ey", "hola", "buenas", "dale", "vamos",
-    "que", "qué", "como", "cómo", "cual", "cuál",
-    "donde", "dónde", "cuando", "cuándo", "porque", "por qué",
-    "si", "sí", "no", "ah", "eh", "uh", "oh",
-    "el", "la", "los", "las", "un", "una", "uno",
-    "yo", "vos", "tu", "tú", "ella", "nosotros",
-    "ser", "estar", "tener", "hacer", "decir", "ver",
-    "bien", "mal", "todo", "nada", "algo", "mucho", "poco",
-    "boludo", "loco", "posta", "ahre", "viste",
-    "mira", "escucha", "anda", "vení",
+    "che",
+    "ey",
+    "hola",
+    "buenas",
+    "dale",
+    "vamos",
+    "que",
+    "qué",
+    "como",
+    "cómo",
+    "cual",
+    "cuál",
+    "donde",
+    "dónde",
+    "cuando",
+    "cuándo",
+    "porque",
+    "por qué",
+    "si",
+    "sí",
+    "no",
+    "ah",
+    "eh",
+    "uh",
+    "oh",
+    "el",
+    "la",
+    "los",
+    "las",
+    "un",
+    "una",
+    "uno",
+    "yo",
+    "vos",
+    "tu",
+    "tú",
+    "ella",
+    "nosotros",
+    "ser",
+    "estar",
+    "tener",
+    "hacer",
+    "decir",
+    "ver",
+    "bien",
+    "mal",
+    "todo",
+    "nada",
+    "algo",
+    "mucho",
+    "poco",
+    "boludo",
+    "loco",
+    "posta",
+    "ahre",
+    "viste",
+    "mira",
+    "escucha",
+    "anda",
+    "vení",
 ]
 
 
@@ -1055,7 +1105,9 @@ class WakeWordSink(voice_recv.AudioSink):
             accepted = rec.AcceptWaveform(data_16k)
             matched, vosk_result = _vosk_heard_wake_word(rec, accepted)
             if matched:
-                _matched_text = vosk_result.get("_matched_text", "") if vosk_result else ""
+                _matched_text = (
+                    vosk_result.get("_matched_text", "") if vosk_result else ""
+                )
                 log.info(
                     "[WAKE] user=%s VOSK detected wake word=%r, "
                     "starting capture (prebuf_chunks=%d)",
@@ -1580,6 +1632,9 @@ async def _dispatch_to_indio(
     transcript_message_id: Optional[int] = None,
     source_message_id: Optional[int] = None,
     vosk_result: Optional[dict] = None,
+    replied_content: Optional[str] = None,
+    replied_author: Optional[str] = None,
+    attachment_urls: Optional[list[dict]] = None,
 ) -> None:
     """POST the raw transcript to the main bot's /indio endpoint.
 
@@ -1613,6 +1668,12 @@ async def _dispatch_to_indio(
             payload["source_message_id"] = str(source_message_id)
         if vosk_result is not None:
             payload["vosk_result"] = vosk_result
+        if replied_content is not None:
+            payload["replied_content"] = replied_content
+        if replied_author is not None:
+            payload["replied_author"] = replied_author
+        if attachment_urls is not None:
+            payload["attachment_urls"] = attachment_urls
         async with session.post(
             f"{config.MAIN_BOT_API_BASE}/indio",
             json=payload,
@@ -2149,6 +2210,50 @@ async def on_message(message):
         f"[INDIO-AUTO] match in #{getattr(message.channel, 'name', '?')}"
         f" by {speaker_name}: {content[:100]!r}"
     )
+    # ---- Extract replied-to message context for the indio ----
+    replied_content = None
+    replied_author = None
+    attachment_urls = None
+    ref = message.reference
+    if ref is not None:
+        ref_msg = getattr(message, "referenced_message", None)
+        if ref_msg is None and ref.message_id is not None:
+            try:
+                ref_msg = await message.channel.fetch_message(ref.message_id)
+            except Exception:
+                pass
+        if (
+            ref_msg is not None
+            and ref_msg.author is not None
+            and ref_msg.author.id != client.user.id
+        ):
+            replied_content = (ref_msg.content or "")[:500]
+            replied_author = _name_for(ref_msg.author.id, ref_msg.author)
+            images = [
+                a
+                for a in (ref_msg.attachments or [])
+                if a.content_type and a.content_type.startswith("image/")
+            ][:3]
+            if images:
+                attachment_urls = [
+                    {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
+                    for a in images
+                ]
+            else:
+                videos = [
+                    a
+                    for a in (ref_msg.attachments or [])
+                    if a.content_type and a.content_type.startswith("video/")
+                ]
+                if videos:
+                    attachment_urls = [
+                        {
+                            "url": a.url,
+                            "mime_type": a.content_type,
+                            "filename": a.filename,
+                        }
+                        for a in videos[:1]
+                    ]
     asyncio.create_task(
         _dispatch_to_indio(
             guild_id=guild.id,
@@ -2158,6 +2263,9 @@ async def on_message(message):
             is_voice=False,
             user_id=message.author.id,
             source_message_id=message.id,
+            replied_content=replied_content,
+            replied_author=replied_author,
+            attachment_urls=attachment_urls,
         )
     )
 

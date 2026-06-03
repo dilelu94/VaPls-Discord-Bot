@@ -4,6 +4,7 @@ Single-shot, stateless from the client's perspective: callers own conversation
 history and pass it in. Designed for the free tier of Gemini AI Studio:
 https://aistudio.google.com/apikey
 """
+
 import asyncio
 import time
 import logging
@@ -19,7 +20,9 @@ import geminiKeys
 
 logger = logging.getLogger("bot.gemini")
 
-GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GEMINI_ENDPOINT = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
 DEFAULT_TIMEOUT_SEC = 45
 
 # Cooldown aplicado a una key cuando devuelve HTTP 429. El free tier de Gemini
@@ -54,6 +57,7 @@ def _pool_keys() -> list[str]:
 def _available_keys() -> list[str]:
     """Return all configured keys whose cooldown has expired (or never set)."""
     import time as _time
+
     now = _time.monotonic()
     return [k for k in _pool_keys() if _key_cooldowns.get(k, 0.0) <= now]
 
@@ -94,15 +98,25 @@ def _pick_key() -> Optional[str]:
 
 def _mark_cooldown(key: str) -> None:
     import time as _time
+
     _key_cooldowns[key] = _time.monotonic() + _KEY_COOLDOWN_SEC
 
 
 class GeminiError(Exception):
     """Typed error for Gemini API failures."""
-    def __init__(self, msg: str, *, kind: str, status: Optional[int] = None,
-                 finish_reason: Optional[str] = None):
+
+    def __init__(
+        self,
+        msg: str,
+        *,
+        kind: str,
+        status: Optional[int] = None,
+        finish_reason: Optional[str] = None,
+    ):
         super().__init__(msg)
-        self.kind = kind  # "config" | "http" | "timeout" | "blocked" | "empty" | "parse"
+        self.kind = (
+            kind  # "config" | "http" | "timeout" | "blocked" | "empty" | "parse"
+        )
         self.status = status
         self.finish_reason = finish_reason
 
@@ -138,6 +152,7 @@ async def generate(
     max_output_tokens: int = 1024,
     tools: Optional[list[dict]] = None,
     volatile_context: Optional[str] = None,
+    image_parts: Optional[list[dict]] = None,
     distinct_id: Optional[str] = None,
     guild_id: Optional[str] = None,
     on_retry: Optional[Callable[[int, int, str], Awaitable[None]]] = None,
@@ -161,6 +176,9 @@ async def generate(
             that changes call-to-call. Sent at the very end of the request,
             bundled into the final user turn, so it never poisons the cacheable
             system-prompt + tools prefix.
+        image_parts: Optional list of ``{"inline_data": {"mime_type": str, "data": str}}``
+            dicts to include as image parts in the user message. Injected between
+            volatile_context and the text message, so Gemini sees images in context.
         on_retry: Optional async callback invoked when a key returns 429 and we
             rotate to another key. Receives ``(attempt, total_attempts, key_suffix)``
             where ``key_suffix`` is the last 6 chars of the failed key. Awaited
@@ -191,10 +209,13 @@ async def generate(
     user_parts: list[dict] = []
     if volatile_context:
         user_parts.append({"text": volatile_context})
+    if image_parts:
+        user_parts.extend(image_parts)
     user_parts.append({"text": user_message})
     body: dict = {
         "system_instruction": {"parts": [{"text": system_instruction}]},
-        "contents": (history or []) + [
+        "contents": (history or [])
+        + [
             {"role": "user", "parts": user_parts},
         ],
         "generationConfig": {
@@ -233,12 +254,16 @@ async def generate(
             used_keys.add(picked)
             params = {"key": picked}
             async with aiohttp.ClientSession(timeout=timeout) as sess:
-                async with sess.post(url, params=params, headers=headers, json=body) as resp:
+                async with sess.post(
+                    url, params=params, headers=headers, json=body
+                ) as resp:
                     status = resp.status
                     try:
                         data = await resp.json(content_type=None)
                     except Exception as e:
-                        raise GeminiError(f"JSON parse failed: {e}", kind="parse", status=status)
+                        raise GeminiError(
+                            f"JSON parse failed: {e}", kind="parse", status=status
+                        )
 
                     if 200 <= status < 300:
                         break
@@ -250,7 +275,10 @@ async def generate(
                         last_429_msg = msg or "rate limited"
                         logger.warning(
                             "gemini key …%s hit 429 (attempt %d/%d): %s",
-                            picked[-6:], attempt + 1, attempts, last_429_msg,
+                            picked[-6:],
+                            attempt + 1,
+                            attempts,
+                            last_429_msg,
                         )
                         if on_retry is not None:
                             try:
@@ -260,7 +288,9 @@ async def generate(
                         continue
                     logger.warning(
                         "gemini http %d (key …%s): %s",
-                        status, picked[-6:], msg or "request failed",
+                        status,
+                        picked[-6:],
+                        msg or "request failed",
                     )
                     raise GeminiError(
                         f"HTTP {status}: {msg or 'request failed'}",
@@ -284,7 +314,9 @@ async def generate(
     candidates = data.get("candidates") if isinstance(data, dict) else None
     if not candidates:
         block_reason = None
-        feedback = (data.get("promptFeedback") if isinstance(data, dict) else None) or {}
+        feedback = (
+            data.get("promptFeedback") if isinstance(data, dict) else None
+        ) or {}
         if isinstance(feedback, dict):
             block_reason = feedback.get("blockReason")
         raise GeminiError(
@@ -307,10 +339,12 @@ async def generate(
         fc = p.get("functionCall")
         if isinstance(fc, dict) and fc.get("name"):
             args = fc.get("args")
-            function_calls.append({
-                "name": str(fc["name"]),
-                "args": args if isinstance(args, dict) else {},
-            })
+            function_calls.append(
+                {
+                    "name": str(fc["name"]),
+                    "args": args if isinstance(args, dict) else {},
+                }
+            )
     text = "".join(text_chunks).strip()
 
     if not text and not function_calls:
@@ -330,7 +364,10 @@ async def generate(
     # actually hitting on our stable prefix.
     logger.info(
         "gemini ok model=%s prompt_tokens=%s cached_tokens=%s response_tokens=%s",
-        mdl, prompt_tokens, cached_tokens, response_tokens,
+        mdl,
+        prompt_tokens,
+        cached_tokens,
+        response_tokens,
     )
 
     # Track Gemini call in PostHog
