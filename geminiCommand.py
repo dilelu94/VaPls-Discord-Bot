@@ -106,30 +106,29 @@ trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
 hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
 lo pide naturalmente. \
 \
-Si el grupo te pide música/un tema/una canción NOMBRANDO qué quieren oír \
-(artista, canción, género, mood), usás la tool `play_music`. Si te piden un \
-audio/sonido/clip del soundpad, usás la tool `play_sound`. Si te piden \
-controlar la música que ya está sonando, usás `skip_music` (saltear/cambiar), \
-`pause_music` (pausar/frenar), `resume_music` (retomar lo pausado) o \
-`stop_music` (parar y limpiar la cola). Si te piden que "hagas de DJ", \
-"prendas el modo dj", "pinches", "pongas música en automático" o similares, \
-usás la tool `dj_mode` (abre el menú del modo DJ en el canal de música). \
+REGLAS ESTRICTAS para tools de música/sonido: NO uses NINGUNA tool a menos \
+que el usuario te esté dando una orden DIRECTA de reproducción. Preguntas, \
+opiniones, menciones de artistas, o charla general sobre música → respondé \
+SOLO con texto, sin llamar tools. \
 \
-DISAMBIGUACIÓN CLAVE: si decís "pone play" / "dale play" / "metele play" / \
-"continuá" / "resumí" / "play" SIN nombrar artista o canción, eso NUNCA es \
-play_music — es resume_music cuando hay algo pausado (mirá el [Estado del \
-reproductor] del prompt). play_music solo cuando hay un nombre/género que \
-buscar. \
+Únicos casos en que llamás una tool: \
+- "poné un tema" / "poné música" / "ponete un tema" / "poneme <algo>" \
+  con verbo de orden + QUÉ reproducir → `play_music` \
+- "tirá <clip>" / "poné <clip>" / "metele <clip>" / "reproducí <clip>" \
+  con verbo de orden + nombre del clip → `play_sound` \
+- "salteá" / "siguiente" / "cambiá" → `skip_music` \
+- "pausá" / "frená un toque" → `pause_music` \
+- "seguí" / "continuá" / "resumí" / "play" (sin artista) → `resume_music` \
+- "pará la música" / "cortala" / "basta" → `stop_music` \
+- "modo dj" / "hacé de dj" / "prendé el dj" → `dj_mode` \
 \
-Una sola tool por mensaje y solo cuando te lo piden de verdad. Antes de \
-llamarla — y SOLO si la vas a llamar — mandá un texto BREVE de confirmación \
-("dale, va Queen", "tomá milapollo", "dale, salteo", "va, retomo") — sin \
-chamuyo. Si decidís NO llamar ninguna tool (porque es una pregunta, una \
-charla, o el pedido no cumple los REQUISITOS DUROS de la tool), NO digas \
-"tomá", "dale va", "ahí va", "salteo", "retomo" ni nada que suene a \
-confirmación de acción — eso te deja prometiendo algo que no vas a hacer. \
-Respondé como charla normal y listo. Nunca digas "no puedo" o "no me anda": \
-las tools andan, las usás y listo. \
+"play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
+es resume_music. \
+\
+Una sola tool por mensaje. Antes de llamarla mandá texto BREVE de \
+confirmación ("dale va", "tomá", "dale salteo") — sin chamuyo. Si NO \
+llamás tool, NO digas frases de confirmación — respondé charla normal. \
+Nunca digas "no puedo" ni "no me anda". \
 \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
 como "che", "boludo" usado con afecto, "posta", "una banda", "de una"). \
@@ -181,31 +180,15 @@ _INDIO_TOOLS = [
     {
         "name": "play_music",
         "description": (
-            "Reproducir una canción/tema NUEVO en el canal de voz #sick-tunes vía "
-            "el comando /play. \n"
-            "REQUISITO DURO: el mensaje DEBE tener ambas cosas: (1) un verbo "
-            "explícito de orden — ponete, poneme, ponela, pone, metele, "
-            "mete, tirá, tirate, tirame, reproduci, reproducí, dejá, "
-            "dejame, traete, queremos escuchar — Y (2) un nombre/género/mood "
-            "concreto que diga QUÉ poner (artista, canción, género, palabra "
-            "clave como 'tema'). 'Dale' suelto NO cuenta como verbo de "
-            "orden: es muletilla ambigua que se usa para todo (asentir, "
-            "pedir, animar). Solo si el 'dale' viene seguido de OTRO verbo "
-            "concreto ('dale, poneme', 'dale, tirate') vale, y ahí el verbo "
-            "real es el segundo. \n"
-            "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
-            "un artista (mencionar a 'Queen' en una conversación NO significa "
-            "que quieran escucharlo). Si falta el nombre concreto, tampoco "
-            "(decir 'pone algo' solo, sin más, NO sirve). \n"
-            "Ejemplos VÁLIDOS: 'pone Queen', 'tirate un tema de los redondos', "
-            "'metele algo de jazz', 'reproduci Despacito', 'ponete un tema'. \n"
-            "Ejemplos INVÁLIDOS (NO llamar play_music): 'che indio cómo va', "
-            "'me encanta Queen', 'sacá esta música' (eso es stop_music), "
-            "'la música está fuerte', 'qué buen tema este'. \n"
-            "Si solo dicen 'play' / 'pone play' / 'dale play' / 'metele play' / "
-            "'continuá' / 'resumí' SIN nombrar artista o canción, NO uses esta "
-            "tool — eso es resume_music. Mirá el [Estado del reproductor] del "
-            "prompt para saber si hay algo pausado."
+            "Reproducir un tema NUEVO en el canal de voz. \n"
+            "REQUISITO DURO: el mensaje DEBE tener (1) un verbo de orden "
+            "explícito — poné, ponete, poneme, metele, dejá, traete, "
+            "queremos escuchar — Y (2) QUÉ reproducir (artista, canción, "
+            "o 'tema'). 'Dale' suelto NO es verbo de orden. \n"
+            "NO uses esta tool para comandos de control (saltear, pausar, "
+            "etc.) ni para clips del soundpad. \n"
+            "Si solo dicen 'play' / 'pone play' / 'metele play' / "
+            "'dale play' SIN artista, NUNCA es play_music — es resume_music."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -214,8 +197,8 @@ _INDIO_TOOLS = [
                     "type": "STRING",
                     "description": (
                         "Búsqueda en YouTube o URL. Usá lo que dijeron tal "
-                        "cual (ej: 'Dua Lipa', 'jazz tranquilo', "
-                        "'Despacito'). Si hay varios resultados, el sistema "
+                        "cual (ej: nombre del artista, canción, o género). "
+                        "Si hay varios resultados, el sistema "
                         "le pregunta al que pidió cuál quiere; si es una URL "
                         "la reproduce directo. No elijas vos el tema."
                     ),
@@ -233,8 +216,8 @@ _INDIO_TOOLS = [
             "CASO A (orden explícita): el mensaje tiene (1) un verbo "
             "explícito de orden — tirá, tirate, tirame, pone, poné, ponete, "
             "ponela, ponelo, mete, metele, hacé sonar, hacelo sonar, "
-            "traete, queremos escuchar — Y (2) un nombre/keyword concreto "
-            "del clip. Acá el clip es la respuesta principal.\n"
+            "reproducí, traete, queremos escuchar — Y (2) un nombre/keyword "
+            "concreto del clip. Acá el clip es la respuesta principal.\n"
             "CASO B (lo nombran sin pedirlo): alguien dice TEXTUALMENTE el "
             "nombre/keyword de un clip que existe pero sin verbo de orden. "
             "Acá PRIMERO respondé normal a lo que dijeron (tu texto de "
@@ -251,20 +234,18 @@ _INDIO_TOOLS = [
             "risas') vale, y ahí el verbo real es el segundo. \n"
             "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
             "una palabra que matchee con un clip del soundpad. Que alguien "
-            "diga 'el pez' o 'milapollo' en medio de una conversación NO "
+            "diga un nombre de clip en medio de una conversación NO "
             "significa que quieran que toques ese audio — están hablando del "
             "tema. Solo cuando hay un imperativo explícito pidiendo "
             "reproducirlo, llamás esta tool. \n"
             "Si falta el nombre concreto del clip (solo dicen 'pone un audio' "
             "sin más), tampoco la uses. \n"
-            "Ejemplos VÁLIDOS: 'tirá el pezpija', 'pone el de las risas', "
-            "'metele milapollo', 'hacé sonar el de aplausos', 'dale, tirate "
-            "ese audio'. \n"
-            "Ejemplos INVÁLIDOS (NO llamar play_sound): 'che indio tenés el "
-            "pez que pescó chalo?' (es una pregunta de charla, no un pedido), "
-            "'qué pescado pescó el chalo?' (sigue siendo charla), 'me "
-            "encantan los memes del soundpad', 'ese audio del otro día "
-            "estaba bueno', 'cuál es tu meme favorito?'."
+            "Ejemplos VÁLIDOS: 'tirá el de las risas', "
+            "'hacé sonar el de aplausos', 'dale, tirate ese audio'. \n"
+            "Ejemplos INVÁLIDOS (NO llamar play_sound): mencionar un clip "
+            "sin pedirlo ('che ese audio del otro día estaba bueno'), "
+            "preguntar por sonidos ('cuál es tu meme favorito?'), "
+            "o hablar del soundpad sin dar una orden."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -273,7 +254,7 @@ _INDIO_TOOLS = [
                     "type": "STRING",
                     "description": (
                         "Nombre o palabra clave del clip (fuzzy match). "
-                        "Ej: 'milapollo', 'risas', 'aplausos'."
+                        "Ej: 'risas', 'aplausos'."
                     ),
                 },
             },
@@ -283,30 +264,25 @@ _INDIO_TOOLS = [
     {
         "name": "skip_music",
         "description": (
-            "Saltear el tema actual y pasar al siguiente de la cola. "
-            "Usala cuando piden 'saltea', 'skip', 'pasá al que sigue', "
-            "'el siguiente', 'cambiá de tema'."
+            "Saltear el tema actual. "
+            "Usala cuando piden 'saltea', 'skip', 'siguiente', "
+            "'cambiá de tema'."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "pause_music",
         "description": (
-            "Pausar la música que está sonando ahora. Usala cuando "
-            "piden 'pausá', 'frená', 'pará un toque'."
+            "Pausar la música. Usala cuando piden 'pausá', 'frená', 'pará un toque'."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "resume_music",
         "description": (
-            "Despausar / retomar la música que estaba pausada. Usala cuando "
-            "piden 'resumí', 'resume', 'continuá' / 'continua', 'dale play', "
-            "'pone play', 'metele play', 'reanudá'. "
-            "REGLA CLAVE: si el [Estado del reproductor] dice que hay música "
-            "pausada y el usuario pide 'play' / 'pone play' / 'continuá' / "
-            "'resumí' sin nombrar artista o canción, ES ESTA TOOL — no "
-            "play_music. play_music es solo cuando dicen qué quieren oír."
+            "Despausar la música. Usala cuando "
+            "piden 'resumí', 'continuá', 'play', "
+            "'pone play', 'metele play' SIN artista."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -314,17 +290,17 @@ _INDIO_TOOLS = [
         "name": "stop_music",
         "description": (
             "Parar la música y vaciar la cola. Usala cuando piden "
-            "'pará la música', 'basta', 'cortala', 'limpiá la cola'."
+            "'pará', 'cortala', 'basta'."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "dj_mode",
         "description": (
-            "Abrir el menú del modo DJ en el canal de música. Usala cuando el "
-            "grupo pide activar/encender el 'modo dj', que el indio 'haga de dj', "
-            "'pinche', 'ponga música en automático', 'sea el dj', 'prenda el "
-            "auto dj' o similares. No tiene argumentos."
+            "Activar el modo DJ. Usala cuando el "
+            "grupo pide 'modo dj', que el indio 'haga de dj', "
+            "'pinche', 'ponga música en automático', 'sea el dj', "
+            "o 'prenda el auto dj'."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -476,7 +452,7 @@ def _load_indio_state() -> None:
                 _indio_last_seen[key] = last_seen
                 loaded += 1
         if isinstance(long_term, dict) and long_term:
-            _indio_long_term[key] = long_term
+            _indio_long_term[key] = _clean_music_from_long_term(long_term)
         if isinstance(current_members, list) and current_members:
             _indio_current_members[key] = [str(n) for n in current_members if n]
             _indio_members_refreshed_at[key] = current_members_at
@@ -1072,6 +1048,72 @@ def _extract_json(text: str) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
+# Palabras clave musicales que no deben contaminar la memoria a largo plazo
+# del Indio. Cuando aparecen en rasgos/anécdotas/eventos se filtran para que
+# el modelo no aprenda el patrón "voz → play_music" desde su propio historial.
+_MUSIC_BLOCK_WORDS = frozenset(
+    {
+        "música",
+        "musica",
+        "canción",
+        "cancion",
+        "canciones",
+        "play",
+        "play_music",
+        "play_sound",
+        "dj",
+        "autodj",
+        "tema musical",
+        "modo dj",
+        "reproducir",
+        "reproduciendo",
+        "escuchar",
+        "sonando",
+        "tirar un tema",
+        "poner música",
+    }
+)
+
+
+def _has_music_block_words(text: str) -> bool:
+    """True si el texto contiene alguna keyword musical a filtrar."""
+    t = _strip_accents_lower(text)
+    return any(w in t for w in _MUSIC_BLOCK_WORDS)
+
+
+def _clean_music_from_long_term(lt: dict) -> dict:
+    """Filtra entradas relacionadas con música de la memoria a largo plazo.
+    Remueve rasgos/anécdotas/eventos/chistes que contengan keywords musicales,
+    para que el Indio no acumule contexto que lo sesgue a llamar play_music."""
+    if not lt:
+        return lt
+    out: dict = {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
+    users = lt.get("users") or {}
+    for name, data in users.items():
+        if not isinstance(data, dict):
+            continue
+        cleaned: dict[str, list[str]] = {}
+        for field in ("traits", "preguntas_tipicas", "anecdotas"):
+            items = [
+                s for s in (data.get(field) or []) if not _has_music_block_words(str(s))
+            ]
+            if items:
+                cleaned[field] = items
+        if cleaned:
+            out["users"][name] = cleaned
+    out["eventos_del_grupo"] = [
+        e
+        for e in (lt.get("eventos_del_grupo") or [])
+        if not _has_music_block_words(str(e))
+    ]
+    out["chistes_internos"] = [
+        j
+        for j in (lt.get("chistes_internos") or [])
+        if not _has_music_block_words(str(j))
+    ]
+    return out
+
+
 def _clamp_long_term(lt: dict) -> dict:
     """Enforce structure + per-section caps so a misbehaving Gemini response
     can't blow up the prompt budget."""
@@ -1084,13 +1126,16 @@ def _clamp_long_term(lt: dict) -> dict:
             name = str(name)[:60]
             if name.lower() == "indio":
                 continue
-            traits = [str(t)[:120] for t in (data.get("traits") or []) if t][
+            src_traits = [str(t)[:120] for t in (data.get("traits") or []) if t]
+            src_qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t]
+            src_anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t]
+            traits = [t for t in src_traits if not _has_music_block_words(t)][
                 :_LT_TRAITS_PER_USER
             ]
-            qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t][
+            qs = [t for t in src_qs if not _has_music_block_words(t)][
                 :_LT_QUESTIONS_PER_USER
             ]
-            anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t][
+            anec = [t for t in src_anec if not _has_music_block_words(t)][
                 :_LT_ANECDOTES_PER_USER
             ]
             if traits or qs or anec:
@@ -1101,12 +1146,18 @@ def _clamp_long_term(lt: dict) -> dict:
                 }
     events = lt.get("eventos_del_grupo") if isinstance(lt, dict) else None
     if isinstance(events, list):
-        out["eventos_del_grupo"] = [str(e)[:120] for e in events if e][
-            :_LT_GROUP_EVENTS
-        ]
+        out["eventos_del_grupo"] = [
+            e
+            for e in [str(e)[:120] for e in events if e]
+            if not _has_music_block_words(e)
+        ][:_LT_GROUP_EVENTS]
     jokes = lt.get("chistes_internos") if isinstance(lt, dict) else None
     if isinstance(jokes, list):
-        out["chistes_internos"] = [str(j)[:120] for j in jokes if j][:_LT_JOKES]
+        out["chistes_internos"] = [
+            j
+            for j in [str(j)[:120] for j in jokes if j]
+            if not _has_music_block_words(j)
+        ][:_LT_JOKES]
     # Final safety: if still too big after structural clamp, drop oldest events/jokes.
     while len(json.dumps(out, ensure_ascii=False)) > _LONG_TERM_MAX_CHARS:
         if out["eventos_del_grupo"]:
@@ -1124,13 +1175,17 @@ def _clamp_long_term(lt: dict) -> dict:
 
 def _turns_to_text(turns: list[dict]) -> str:
     """Render a list of {role,parts:[{text}]} turns as plain text for the
-    compression prompt."""
+    compression prompt. Turns containing ``[voz]`` are skipped — las
+    transcripciones de voz no deben alimentar la memoria a largo plazo para
+    evitar el feedback loop voz → play_music."""
     lines: list[str] = []
     for t in turns:
         role = t.get("role", "?")
         parts = t.get("parts") or []
         text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
         if not text:
+            continue
+        if "[voz]" in text:
             continue
         speaker = "indio" if role == "model" else "grupo"
         lines.append(f"{speaker}: {text}")
@@ -1409,6 +1464,63 @@ def _gate_play_sound_actions(
     return kept
 
 
+# --- play_music anti-misfire gate -------------------------------------------
+# Mismo patrón que _gate_play_sound_actions: verificar determinísticamente
+# sobre el mensaje crudo del usuario que haya verbo de orden + query concreta.
+# Sin esto, Gemini puede llamar play_music para cualquier input de voz aunque
+# no haya pedido musical (caso real: "Quiero que sea su racista" → play_music).
+
+_MUSIC_GENERIC_QUERIES = frozenset(
+    {
+        "música",
+        "musica",
+        "cancion",
+        "canción",
+        "un tema",
+        "una canción",
+        "algo de música",
+        "un poco de música",
+        "algo",
+        "temita",
+        "músiquita",
+    }
+)
+
+
+def _is_concrete_query(query: str) -> bool:
+    """True cuando el query tiene contenido real (artista/género/keyword),
+    no un placeholder genérico como 'música' o 'algo'."""
+    q = _strip_accents_lower(query.strip())
+    return bool(q and len(q) >= 3 and q not in _MUSIC_GENERIC_QUERIES)
+
+
+def _gate_play_music_actions(
+    actions: list[tuple[str, str]], raw_text: str
+) -> list[tuple[str, str]]:
+    """Filtra play_music espurios. Solo deja pasar cuando el mensaje del
+    usuario tiene (1) un verbo imperativo de reproducción Y (2) el query
+    es un nombre concreto (artista/género/keyword), no un placeholder.
+    El resto de las acciones pasa intacto."""
+    if not actions:
+        return actions
+    has_order = _has_play_sound_order(raw_text)
+    kept: list[tuple[str, str]] = []
+    for action, arg in actions:
+        if action != "PLAY_MUSIC":
+            kept.append((action, arg))
+            continue
+        if has_order and _is_concrete_query(arg):
+            kept.append((action, arg))
+        else:
+            logger.info(
+                "indio PLAY_MUSIC suprimido: %s (msg=%r, query=%r)",
+                "sin verbo de orden" if not has_order else "query genérica",
+                (raw_text or "")[:80],
+                arg,
+            )
+    return kept
+
+
 def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
     """The relay flow and Discord both require non-empty content. When the
     model emits only a function call (no accompanying text), substitute a
@@ -1557,6 +1669,7 @@ _MUSIC_ACTIONS = frozenset(
         "PAUSE_MUSIC",
         "RESUME_MUSIC",
         "STOP_MUSIC",
+        "DJ_MODE",
     }
 )
 
@@ -1567,6 +1680,7 @@ _MUSIC_STATUS_PREFIX = {
     "PAUSE_MUSIC": "pause",
     "RESUME_MUSIC": "resume",
     "STOP_MUSIC": "stop",
+    "DJ_MODE": "dj_mode",
 }
 
 
@@ -2949,6 +3063,7 @@ async def indioLogic(
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
+    pending_actions = _gate_play_music_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         ctx.bot,
         _choice_guild_id,
@@ -3348,6 +3463,7 @@ async def indioFromVoice(
 
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
+    pending_actions = _gate_play_music_actions(pending_actions, pregunta)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         bot,
         guild_id,
@@ -3469,31 +3585,37 @@ async def indioFromVoice(
             )
         )
 
-    _turn_ts = time.time()
-    user_turn = {
-        "role": "user",
-        "parts": [
-            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
-        ],
-        "ts": _turn_ts,
-    }
-    model_turn = {
-        "role": "model",
-        "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
-        "ts": _turn_ts,
-    }
-    async with lock:
-        existing = _indio_history.get(mem_key, history_snapshot)
-        new_hist = list(existing) + [user_turn, model_turn]
-        if len(new_hist) > _HISTORY_HARD_CAP:
-            new_hist = new_hist[-_HISTORY_HARD_CAP:]
-        _indio_history[mem_key] = new_hist
-        _indio_last_seen[mem_key] = time.time()
-        history_size_after = len(new_hist)
-    await _persist_indio_state()
+    # No guardar mensajes de voz en el historial: acumulan contexto que sesga
+    # al modelo a asociar voz → play_music (feedback loop). Las transcripciones
+    # de voz se procesan cada vez como mensajes independientes.
+    if not from_voice:
+        _turn_ts = time.time()
+        user_turn = {
+            "role": "user",
+            "parts": [
+                {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
+            ],
+            "ts": _turn_ts,
+        }
+        model_turn = {
+            "role": "model",
+            "parts": [
+                {"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}
+            ],
+            "ts": _turn_ts,
+        }
+        async with lock:
+            existing = _indio_history.get(mem_key, history_snapshot)
+            new_hist = list(existing) + [user_turn, model_turn]
+            if len(new_hist) > _HISTORY_HARD_CAP:
+                new_hist = new_hist[-_HISTORY_HARD_CAP:]
+            _indio_history[mem_key] = new_hist
+            _indio_last_seen[mem_key] = time.time()
+            history_size_after = len(new_hist)
+        await _persist_indio_state()
 
-    if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-        _spawn(_maybe_compress(mem_key))
+        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+            _spawn(_maybe_compress(mem_key))
 
     # Si la respuesta se redirigio a otro canal, fallback al primer mensaje
     # del Indio en el target como landing point del link cuando no hubo header.
