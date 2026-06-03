@@ -198,6 +198,7 @@ class MusicVote:
         self.votes: dict[int, int] = {}  # user_id -> option index (0-based)
         self._closed = False
         self._close_task: Optional[asyncio.Task] = None
+        self._cancelled: bool = False
         self._on_resolve = on_resolve  # async fn(MusicVote, winner_dict)
         # Discord id of the user who triggered the vote (via /play or via the
         # indio's voice/chat request). Voice votes are restricted to this id
@@ -208,10 +209,18 @@ class MusicVote:
         # they post the prompt so the close cleanup can clear the reactions.
         self.reaction_message_id: Optional[int] = None
         self.reaction_channel_id: Optional[int] = None
+        self.source_message_id: Optional[int] = None
 
     @property
     def closed(self) -> bool:
         return self._closed
+    def cancel(self) -> None:
+        if self._closed:
+            return
+        self._cancelled = True
+        if self._close_task is not None and not self._close_task.done():
+            self._close_task.cancel()
+        self._close_task = asyncio.create_task(self._close())
 
     def start_timeout(self) -> None:
         """Arm the initial hard cap. If nobody votes within ``vote_max_sec`` the
@@ -269,9 +278,26 @@ class MusicVote:
         # anyone is heard again. Fire-and-forget — main bot's defence-in-depth
         # filter catches anything that races through the closing window.
         asyncio.create_task(_notify_userbot_vote_restriction(self.guild_id, None))
+        if self._cancelled:
+            if self.source_message_id and self.reaction_channel_id:
+                try:
+                    chan = self.bot.get_channel(int(self.reaction_channel_id))
+                    if chan is None:
+                        chan = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                    await chan.get_partial_message(int(self.source_message_id)).delete()
+                except Exception:
+                    pass
+            if self.reaction_message_id and self.reaction_channel_id:
+                try:
+                    chan = self.bot.get_channel(int(self.reaction_channel_id))
+                    if chan is None:
+                        chan = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                    msg = await chan.fetch_message(int(self.reaction_message_id))
+                    await msg.delete()
+                except Exception:
+                    pass
+            return
         winner = self._tally_winner()
-        # Best-effort: drop the seeded reactions so the closed picker doesn't
-        # invite latecomers to keep tapping.
         if self.reaction_message_id and self.reaction_channel_id:
             try:
                 channel = self.bot.get_channel(int(self.reaction_channel_id))
@@ -2767,6 +2793,10 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
                     await msg.add_reaction(_num_emoji(i + 1))
                 except Exception:
                     pass
+            try:
+                await msg.add_reaction("❌")
+            except Exception:
+                pass
         vote.start_timeout()
         return
 

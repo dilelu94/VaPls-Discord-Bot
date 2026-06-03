@@ -2220,13 +2220,13 @@ def try_register_voice_vote(
     voter = _voter_id_from(user_id, speaker_name or "")
     return vote.register_vote(voter, decision, close_now=True)
 
-
 def register_reaction_vote(
     *, channel_id: int, message_id: int, emoji: str, user_id: int
 ) -> bool:
     """Count an emoji reaction on a vote's options message as a vote.
+    \u274c cancels the vote instead of picking an option.
 
-    Called from the main bot's ``on_raw_reaction_add``. Looks up the open vote
+    Called from the main bot's on_raw_reaction_add. Looks up the open vote
     by its options message, maps the keycap emoji to an option, and records the
     reactor's pick keyed by user id. Reactions slide the timer (no close_now);
     the assumption is multiple people may be reacting in sequence and we want
@@ -2234,12 +2234,16 @@ def register_reaction_vote(
     """
     import playCommand
 
-    idx = playCommand.emoji_to_index((emoji or "").strip())
-    if idx is None:
-        # Some clients drop the variation selector — try the bare keycap too.
-        idx = playCommand.emoji_to_index((emoji or "").replace("\ufe0f", ""))
-    if idx is None:
-        return False
+    emoji = (emoji or "").strip()
+    is_cancel = emoji == "\u274c"
+
+    if not is_cancel:
+        idx = playCommand.emoji_to_index(emoji)
+        if idx is None:
+            # Some clients drop the variation selector -- try the bare keycap too.
+            idx = playCommand.emoji_to_index(emoji.replace("\ufe0f", ""))
+        if idx is None:
+            return False
     try:
         cid = int(channel_id)
         mid = int(message_id)
@@ -2249,12 +2253,13 @@ def register_reaction_vote(
         if vote.closed:
             continue
         if vote.reaction_message_id == mid and vote.reaction_channel_id == cid:
+            if is_cancel:
+                vote.cancel()
+                return True
             if idx >= len(vote.candidates):
                 return False
             return vote.register_vote(int(user_id), idx)
     return False
-
-
 async def _relay_dm_user(user_id: int, content: str) -> bool:
     """DM ``content`` to ``user_id`` from the userbot (the cuenta real).
 
@@ -2329,6 +2334,7 @@ async def _attach_vote_reactions(
         msg = await channel.fetch_message(int(message_id))
         for i in range(1, min(n, len(_NUM_EMOJI)) + 1):
             await msg.add_reaction(_num_emoji(i))
+        await msg.add_reaction("❌")
     except Exception:
         logger.exception("indio vote: attaching reactions failed")
 
@@ -3555,6 +3561,8 @@ async def indioFromVoice(
     if vote_open and opts_msg_id and _active_vote is not None:
         n = len(_active_vote.candidates)
         await _attach_vote_reactions(bot, _active_vote, channel_id, opts_msg_id, n)
+        if source_message_id:
+            _active_vote.source_message_id = int(source_message_id)
 
     if pending_actions:
         _spawn(
