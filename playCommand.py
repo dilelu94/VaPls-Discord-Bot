@@ -643,32 +643,62 @@ def _autodj_phrase(artist: str) -> str:
     return template.format(artista=artist)
 
 
+_GENERIC_QUERIES = [
+    "música",
+    "canciones",
+    "hits",
+    "populares",
+    "mixes",
+    "temazos",
+    "música 2025",
+    "canciones 2025",
+    "lo más escuchado",
+    "música para programar",
+]
+_generic_query_index = 0
+
+
+def _autodj_next_generic_query() -> str:
+    global _generic_query_index
+    q = _GENERIC_QUERIES[_generic_query_index]
+    _generic_query_index = (_generic_query_index + 1) % len(_GENERIC_QUERIES)
+    return q
+
+
 class AutoDJSuggestionView(discord.ui.View):
     """Shown during the grace period after an Auto-DJ suggestion.
 
     Three buttons: veto the suggestion, play it immediately, or shut Auto-DJ off.
     """
+
     def __init__(self, player: "GuildPlayer"):
         grace = getattr(config, "AUTODJ_GRACE_SECONDS", 15)
         super().__init__(timeout=grace + 10)
         self.player = player
 
-    @discord.ui.button(label="🚫 Ese tema no", style=discord.ButtonStyle.secondary,
-                       custom_id="autodj_veto")
+    @discord.ui.button(
+        label="🚫 Ese tema no",
+        style=discord.ButtonStyle.secondary,
+        custom_id="autodj_veto",
+    )
     async def veto(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Veto the current suggestion and search for another from the same artist."""
         await interaction.response.defer()
         await self.player._autodj_veto()
 
-    @discord.ui.button(label="▶️ Ya, ponela", style=discord.ButtonStyle.success,
-                       custom_id="autodj_now")
-    async def play_now(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="▶️ Ya, ponela", style=discord.ButtonStyle.success, custom_id="autodj_now"
+    )
+    async def play_now(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Skip the grace timer and queue the suggestion immediately."""
         await interaction.response.defer()
         await self.player._autodj_fire_now()
 
-    @discord.ui.button(label="⏹️ Cortala", style=discord.ButtonStyle.danger,
-                       custom_id="autodj_stop")
+    @discord.ui.button(
+        label="⏹️ Cortala", style=discord.ButtonStyle.danger, custom_id="autodj_stop"
+    )
     async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Deactivate Auto-DJ after the current song finishes."""
         await interaction.response.defer()
@@ -688,8 +718,11 @@ class DjMenuView(discord.ui.View):
         super().__init__(timeout=None)
         self.player = player
 
-    @discord.ui.button(label="🚫 Vetar sugerencia", style=discord.ButtonStyle.secondary,
-                       custom_id="djmenu_veto")
+    @discord.ui.button(
+        label="🚫 Vetar sugerencia",
+        style=discord.ButtonStyle.secondary,
+        custom_id="djmenu_veto",
+    )
     async def veto(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Veto the current Auto-DJ suggestion and search for another."""
         await interaction.response.defer()
@@ -703,15 +736,19 @@ class DjMenuView(discord.ui.View):
             return
         await self.player._autodj_veto()
 
-    @discord.ui.button(label="▶️ Poner ya", style=discord.ButtonStyle.primary,
-                       custom_id="djmenu_fire")
-    async def fire_now(self, button: discord.ui.Button, interaction: discord.Interaction):
+    @discord.ui.button(
+        label="▶️ Poner ya", style=discord.ButtonStyle.primary, custom_id="djmenu_fire"
+    )
+    async def fire_now(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
         """Skip the grace timer and queue the pending suggestion immediately."""
         await interaction.response.defer()
         await self.player._autodj_fire_now()
 
-    @discord.ui.button(label="⏹️ Cortar DJ", style=discord.ButtonStyle.danger,
-                       custom_id="djmenu_stop")
+    @discord.ui.button(
+        label="⏹️ Cortar DJ", style=discord.ButtonStyle.danger, custom_id="djmenu_stop"
+    )
     async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Deactivate Auto-DJ."""
         await interaction.response.defer()
@@ -747,7 +784,9 @@ async def openDjMenu(bot, guild_id: int, channel_id: Optional[int] = None) -> tu
     if channel is None or not hasattr(channel, "send"):
         playLogger.warning(
             "[DJ-MENU] no usable channel (channel_id=%s, fallback=%s) in guild %s",
-            channel_id, config.AUTODJ_MENU_CHANNEL_ID, guild_id,
+            channel_id,
+            config.AUTODJ_MENU_CHANNEL_ID,
+            guild_id,
         )
         return False, "no encuentro un canal donde abrir el menú DJ"
 
@@ -885,6 +924,8 @@ class GuildPlayer:
         self.autodj_pending_song: Optional[dict] = None
         self.autodj_suggestion_msg: Optional[discord.Message] = None
         self.autodj_grace_task: Optional[asyncio.Task] = None
+        self.autodj_predownload_proc = None  # subprocess during grace predownload
+        self.autodj_predownload_id: Optional[str] = None  # video ID being predownloaded
         # Seed carried forward across rounds (veto updates these to keep the artist thread)
         self.autodj_seed_id: Optional[str] = None
         self.autodj_seed_title: Optional[str] = None
@@ -906,9 +947,30 @@ class GuildPlayer:
         self.autodj_active = False
         self.autodj_chain_count = 0
         self._autodj_cancel_grace()
+        # Cancel any in-flight predownload and delete the file
+        if self.autodj_predownload_proc is not None:
+            try:
+                self.autodj_predownload_proc.kill()
+            except Exception:
+                pass
+            self.autodj_predownload_proc = None
+        if self.autodj_predownload_id is not None:
+            self.downloadingIds.discard(self.autodj_predownload_id)
+            dl_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "downloads"
+            )
+            fpath = os.path.join(dl_dir, f"{self.autodj_predownload_id}.mp3")
+            try:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception:
+                pass
+            self.autodj_predownload_id = None
         if self.autodj_suggestion_msg is not None:
             try:
-                await self.autodj_suggestion_msg.edit(content="🎧 Auto-DJ desactivado.", view=None)
+                await self.autodj_suggestion_msg.edit(
+                    content="🎧 Auto-DJ desactivado.", view=None
+                )
             except Exception:
                 pass
             self.autodj_suggestion_msg = None
@@ -933,36 +995,55 @@ class GuildPlayer:
     def _autodj_should_continue(self) -> bool:
         """True when conditions allow triggering another Auto-DJ suggestion."""
         if not self.autodj_active:
+            playLogger.info("[AUTODJ] should_continue: autodj_active is False")
             return False
         max_chain = getattr(config, "AUTODJ_MAX_CHAIN", 10)
         if self.autodj_chain_count >= max_chain:
+            playLogger.info(
+                "[AUTODJ] should_continue: chain_count %d >= max %d",
+                self.autodj_chain_count,
+                max_chain,
+            )
             return False
         if not self.history and not self.autodj_seed_id:
+            playLogger.info("[AUTODJ] should_continue: no history and no seed")
             return False
         if self.vc is None:
+            playLogger.info("[AUTODJ] should_continue: vc is None")
             return False
         try:
             humans = sum(1 for m in self.vc.channel.members if not m.bot)
         except Exception:
             humans = 1
+        if humans <= 0:
+            playLogger.info("[AUTODJ] should_continue: no humans in voice channel")
         return humans > 0
 
     async def _autodj_fetch_radio(self, seed_id: str) -> list:
         """Fetch candidates from the YouTube Mix/Radio for seed_id."""
         url = f"https://www.youtube.com/watch?v={seed_id}&list=RD{seed_id}"
-        cookiesPath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cookies.txt")
+        cookiesPath = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
+        )
         args = [config.YT_DLP_PATH]
         if os.path.exists(cookiesPath):
             args += ["--cookies", cookiesPath]
         if config.YT_DLP_POT_BASE_URL:
-            args += ["--extractor-args",
-                     f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}"]
+            args += [
+                "--extractor-args",
+                f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}",
+            ]
         args += [
-            "--flat-playlist", "--simulate",
-            "--print", "%(id)s",
-            "--print", "%(title)s",
-            "--print", "%(duration_string)s",
-            "--playlist-items", "2-16",
+            "--flat-playlist",
+            "--simulate",
+            "--print",
+            "%(id)s",
+            "--print",
+            "%(title)s",
+            "--print",
+            "%(duration_string)s",
+            "--playlist-items",
+            "2-16",
             url,
         ]
         try:
@@ -978,15 +1059,21 @@ class GuildPlayer:
         if proc.returncode != 0:
             playLogger.warning("[AUTODJ] radio fetch rc=%d", proc.returncode)
             return []
-        lines = [l.strip() for l in stdout.decode("utf-8", "replace").strip().split("\n") if l.strip()]
+        lines = [
+            l.strip()
+            for l in stdout.decode("utf-8", "replace").strip().split("\n")
+            if l.strip()
+        ]
         candidates = []
         for i in range(0, len(lines) - 2, 3):
             dur = lines[i + 2]
-            candidates.append({
-                "id": lines[i],
-                "title": lines[i + 1],
-                "duration_string": dur if dur != "NA" else "",
-            })
+            candidates.append(
+                {
+                    "id": lines[i],
+                    "title": lines[i + 1],
+                    "duration_string": dur if dur != "NA" else "",
+                }
+            )
         return candidates
 
     async def _autodj_fetch_same_artist(self, title: str) -> list:
@@ -996,7 +1083,15 @@ class GuildPlayer:
             return []
         return await _yt_dlp_search(artist, max_results=8)
 
-    def _autodj_pick_song(self, candidates: list, extra_exclude: Optional[str] = None) -> Optional[dict]:
+    async def _autodj_fetch_generic(self) -> list:
+        """Fallback search when radio and same-artist both return nothing."""
+        q = _autodj_next_generic_query()
+        playLogger.info("[AUTODJ] generic search query='%s'", q)
+        return await _yt_dlp_search(q, max_results=8)
+
+    def _autodj_pick_song(
+        self, candidates: list, extra_exclude: Optional[str] = None
+    ) -> Optional[dict]:
         """Pick the first candidate that passes duration and history filters."""
         history_ids = {s["id"] for s in self.history[-50:]}
         if self.currentSong:
@@ -1026,19 +1121,35 @@ class GuildPlayer:
         if not seed_id or not seed_title:
             return
 
-        playLogger.info("[AUTODJ] propose_next started (seed='%s', id=%s)", seed_title, seed_id)
+        playLogger.info(
+            "[AUTODJ] propose_next started (seed='%s', id=%s)", seed_title, seed_id
+        )
         candidates = await self._autodj_fetch_radio(seed_id)
+        playLogger.info("[AUTODJ] radio returned %d candidates", len(candidates))
         song = self._autodj_pick_song(candidates)
         if song is None:
             playLogger.info("[AUTODJ] radio gave nothing valid, trying same-artist")
             candidates = await self._autodj_fetch_same_artist(seed_title)
+            playLogger.info(
+                "[AUTODJ] same-artist returned %d candidates", len(candidates)
+            )
             song = self._autodj_pick_song(candidates)
 
         if song is None:
-            playLogger.info("[AUTODJ] no valid suggestion found, deactivating")
+            playLogger.info("[AUTODJ] same-artist gave nothing, trying generic search")
+            candidates = await self._autodj_fetch_generic()
+            playLogger.info(
+                "[AUTODJ] generic search returned %d candidates", len(candidates)
+            )
+            song = self._autodj_pick_song(candidates)
+
+        if song is None:
+            playLogger.warning("[AUTODJ] all sources exhausted, deactivating")
             if self.textChannel:
                 try:
-                    await self.textChannel.send("🎧 No se me ocurre nada bueno. Pidan ustedes.")
+                    await self.textChannel.send(
+                        "🎧 No se me ocurre nada bueno. Pidan ustedes."
+                    )
                 except Exception:
                     pass
             self.autodj_active = False
@@ -1062,15 +1173,19 @@ class GuildPlayer:
             f"🎧 Sigo yo. La próxima:\n"
             f"**{song['title']}**{dur_suffix}\n"
             f"_{phrase}_\n\n"
-            f"La pongo en {grace}s. Decí \"ese tema no\" o tocá abajo 👇"
+            f'La pongo en {grace}s. Decí "ese tema no" o tocá abajo 👇'
         )
         view = AutoDJSuggestionView(self)
         if self.textChannel:
             try:
-                self.autodj_suggestion_msg = await self.textChannel.send(content, view=view)
+                self.autodj_suggestion_msg = await self.textChannel.send(
+                    content, view=view
+                )
             except Exception:
                 pass
         self.autodj_grace_task = self.bot.loop.create_task(self._autodj_grace_timer())
+        # Start downloading during grace so the file is ready when the timer fires.
+        self.bot.loop.create_task(self._autodj_download_pending(song))
 
     async def _autodj_grace_timer(self) -> None:
         """Sleep the grace period then fire the queued suggestion."""
@@ -1087,6 +1202,62 @@ class GuildPlayer:
         # task.) Clearing the handle makes cancel_grace a no-op here.
         self.autodj_grace_task = None
         await self._autodj_fire_now()
+
+    async def _autodj_download_pending(self, song: dict) -> None:
+        """Download the pending Auto-DJ song during the grace period.
+
+        Runs in background so the file is on disk (or nearly done) by the
+        time the grace timer fires. ``startPlayingCurrent`` will see the
+        file exists or wait for ``downloadingIds`` to clear — no double
+        download.
+        """
+        videoId = song["id"]
+        if videoId in self.downloadingIds:
+            return
+        filepath = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "downloads", f"{videoId}.mp3"
+        )
+        if os.path.exists(filepath):
+            return
+        self.autodj_predownload_id = videoId
+        self.downloadingIds.add(videoId)
+        downloadsDir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "downloads"
+        )
+        os.makedirs(downloadsDir, exist_ok=True)
+        cookiesPath = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
+        )
+        args = [config.YT_DLP_PATH]
+        if os.path.exists(cookiesPath):
+            args += ["--cookies", cookiesPath]
+        if config.YT_DLP_POT_BASE_URL:
+            args += [
+                "--extractor-args",
+                f"youtubepot-bgutilhttp:base_url={config.YT_DLP_POT_BASE_URL}",
+            ]
+        args += [
+            "-x",
+            "--audio-format",
+            "mp3",
+            "--no-playlist",
+            "-o",
+            os.path.join(downloadsDir, "%(id)s.%(ext)s"),
+            f"https://www.youtube.com/watch?v={videoId}",
+        ]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            self.autodj_predownload_proc = proc
+            await proc.communicate()
+        except Exception:
+            playLogger.exception("[AUTODJ] predownload failed for %s", videoId)
+        finally:
+            self.autodj_predownload_proc = None
+            self.downloadingIds.discard(videoId)
+            if self.autodj_predownload_id == videoId:
+                self.autodj_predownload_id = None
 
     async def _autodj_fire_now(self) -> None:
         """Cancel the grace timer and immediately queue the pending song."""
@@ -1116,16 +1287,22 @@ class GuildPlayer:
             playLogger.error(
                 "[AUTODJ] fire_now: no voice connection — bot was disconnected before song could play "
                 "(song='%s', id=%s). Watchdog fired too early.",
-                song["title"], song["id"],
+                song["title"],
+                song["id"],
             )
 
         guild = self.bot.get_guild(self.guildId) if self.bot else None
-        analytics.capture("autodj played", user=self.lastRequester, guild=guild, properties={
-            "video_id": song["id"],
-            "title": song["title"],
-            "chain_count": self.autodj_chain_count,
-            "has_voice": has_voice,
-        })
+        analytics.capture(
+            "autodj played",
+            user=self.lastRequester,
+            guild=guild,
+            properties={
+                "video_id": song["id"],
+                "title": song["title"],
+                "chain_count": self.autodj_chain_count,
+                "has_voice": has_voice,
+            },
+        )
         self.queue.append(song)
         if not self.currentSong and self.queue:
             self.currentSong = self.queue.pop(0)
@@ -1136,7 +1313,9 @@ class GuildPlayer:
 
         if not self.autodj_active and self.textChannel:
             try:
-                await self.textChannel.send("🎧 Bueno, ya banqué un rato. Sigan ustedes.")
+                await self.textChannel.send(
+                    "🎧 Bueno, ya banqué un rato. Sigan ustedes."
+                )
             except Exception:
                 pass
             await self.updateControlMessage()
@@ -1145,16 +1324,41 @@ class GuildPlayer:
         """User vetoed the current suggestion: find another from the same artist."""
         self._autodj_cancel_grace()
         vetoed_id = self.autodj_pending_song["id"] if self.autodj_pending_song else None
+        # Kill any in-flight predownload and delete the file so we don't waste
+        # disk space on a song nobody wants.
+        if self.autodj_predownload_proc is not None:
+            try:
+                self.autodj_predownload_proc.kill()
+            except Exception:
+                pass
+            self.autodj_predownload_proc = None
+        if self.autodj_predownload_id is not None:
+            self.downloadingIds.discard(self.autodj_predownload_id)
+            self.autodj_predownload_id = None
+        if vetoed_id:
+            dl_dir = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "downloads"
+            )
+            fpath = os.path.join(dl_dir, f"{vetoed_id}.mp3")
+            try:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception:
+                pass
         self.autodj_pending_song = None
 
         if self.autodj_suggestion_msg is not None:
             try:
-                await self.autodj_suggestion_msg.edit(content="🔄 Buscando otra...", view=None)
+                await self.autodj_suggestion_msg.edit(
+                    content="🔄 Buscando otra...", view=None
+                )
             except Exception:
                 pass
             self.autodj_suggestion_msg = None
 
-        seed_title = self.autodj_seed_title or (self.history[-1]["title"] if self.history else None)
+        seed_title = self.autodj_seed_title or (
+            self.history[-1]["title"] if self.history else None
+        )
         if not seed_title:
             await self.autodj_deactivate(reason="veto_no_seed")
             return
@@ -2497,7 +2701,10 @@ def clearGuildPlayer(guildId: int):
     if guildId in guildPlayers:
         player = guildPlayers[guildId]
         # Cancel Auto-DJ grace timer
-        if getattr(player, "autodj_grace_task", None) and not player.autodj_grace_task.done():
+        if (
+            getattr(player, "autodj_grace_task", None)
+            and not player.autodj_grace_task.done()
+        ):
             player.autodj_grace_task.cancel()
         # Cancel background downloader task
         if (
