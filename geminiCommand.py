@@ -125,9 +125,9 @@ SOLO con texto, sin llamar tools. \
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
 \
-Una sola tool por mensaje. Antes de llamarla mandá texto BREVE de \
-confirmación ("dale va", "tomá", "dale salteo") — sin chamuyo. Si NO \
-llamás tool, NO digas frases de confirmación — respondé charla normal. \
+Una sola tool por mensaje. Confirmación ("dale va", "tomá", "dale salteo") \
+solo si la vas a llamar — sin chamuyo. Si NO llamás tool, NO digas \
+frases de confirmación — respondé charla normal. \
 Nunca digas "no puedo" ni "no me anda". \
 \
 Hablás español rioplatense bien casual (voseo, modismos argentinos, muletillas \
@@ -182,9 +182,11 @@ _INDIO_TOOLS = [
         "description": (
             "Reproducir un tema NUEVO en el canal de voz. \n"
             "REQUISITO DURO: el mensaje DEBE tener (1) un verbo de orden "
-            "explícito — poné, ponete, poneme, metele, dejá, traete, "
-            "queremos escuchar — Y (2) QUÉ reproducir (artista, canción, "
-            "o 'tema'). 'Dale' suelto NO es verbo de orden. \n"
+            "explícito — poné, ponete, poneme, metele, tirá, tirate, "
+            "reproducí, dejá, traete, queremos escuchar — Y (2) QUÉ "
+            "reproducir (artista, canción, o 'tema'). \n"
+            "'Dale' suelto es muletilla ambigua, NO es verbo de orden. \n"
+            "'Sacá' tampoco — sacar/quitar música es stop_music. \n"
             "NO uses esta tool para comandos de control (saltear, pausar, "
             "etc.) ni para clips del soundpad. \n"
             "Si solo dicen 'play' / 'pone play' / 'metele play' / "
@@ -1352,7 +1354,7 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
 _PLAY_SOUND_ORDER_RE = re.compile(
     r"\b("
     r"tira(te|me|le|lo|la|nos)?|"
-    r"pone(la|lo|le|me|nos)?|"
+    r"pone(la|lo|le|me|nos|te)?|"
     r"mete(le|lo|la)?|"
     r"reproduci(lo|la|me)?|"
     r"hace(lo|la)?\s+sonar|"
@@ -1466,41 +1468,22 @@ def _gate_play_sound_actions(
 
 # --- play_music anti-misfire gate -------------------------------------------
 # Mismo patrón que _gate_play_sound_actions: verificar determinísticamente
-# sobre el mensaje crudo del usuario que haya verbo de orden + query concreta.
-# Sin esto, Gemini puede llamar play_music para cualquier input de voz aunque
-# no haya pedido musical (caso real: "Quiero que sea su racista" → play_music).
-
-_MUSIC_GENERIC_QUERIES = frozenset(
-    {
-        "música",
-        "musica",
-        "cancion",
-        "canción",
-        "un tema",
-        "una canción",
-        "algo de música",
-        "un poco de música",
-        "algo",
-        "temita",
-        "músiquita",
-    }
-)
-
-
-def _is_concrete_query(query: str) -> bool:
-    """True cuando el query tiene contenido real (artista/género/keyword),
-    no un placeholder genérico como 'música' o 'algo'."""
-    q = _strip_accents_lower(query.strip())
-    return bool(q and len(q) >= 3 and q not in _MUSIC_GENERIC_QUERIES)
+# sobre el mensaje crudo del usuario que haya verbo de orden. Sin esto, Gemini
+# puede llamar play_music para cualquier input de voz aunque no haya pedido
+# musical (caso real: "Quiero que sea su racista" → play_music).
+#
+# NO filtra por "query concreta": "poné algo" es un pedido válido aunque el
+# target sea genérico. El gate solo corta los casos donde no hay NINGÚN verbo
+# de orden en el mensaje del usuario.
 
 
 def _gate_play_music_actions(
     actions: list[tuple[str, str]], raw_text: str
 ) -> list[tuple[str, str]]:
     """Filtra play_music espurios. Solo deja pasar cuando el mensaje del
-    usuario tiene (1) un verbo imperativo de reproducción Y (2) el query
-    es un nombre concreto (artista/género/keyword), no un placeholder.
-    El resto de las acciones pasa intacto."""
+    usuario tiene un verbo imperativo de reproducción (tirá, poneme, metele,
+    etc.). Sin verbo no hay pedido musical. El resto de las acciones pasa
+    intacto."""
     if not actions:
         return actions
     has_order = _has_play_sound_order(raw_text)
@@ -1509,12 +1492,11 @@ def _gate_play_music_actions(
         if action != "PLAY_MUSIC":
             kept.append((action, arg))
             continue
-        if has_order and _is_concrete_query(arg):
+        if has_order:
             kept.append((action, arg))
         else:
             logger.info(
-                "indio PLAY_MUSIC suprimido: %s (msg=%r, query=%r)",
-                "sin verbo de orden" if not has_order else "query genérica",
+                "indio PLAY_MUSIC suprimido: sin verbo de orden (msg=%r, query=%r)",
                 (raw_text or "")[:80],
                 arg,
             )
@@ -3588,6 +3570,7 @@ async def indioFromVoice(
     # No guardar mensajes de voz en el historial: acumulan contexto que sesga
     # al modelo a asociar voz → play_music (feedback loop). Las transcripciones
     # de voz se procesan cada vez como mensajes independientes.
+    history_size_after = 0
     if not from_voice:
         _turn_ts = time.time()
         user_turn = {

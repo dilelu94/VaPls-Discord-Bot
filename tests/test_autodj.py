@@ -17,6 +17,7 @@ Mocking policy (behavioral-testing skill): we fake only the yt-dlp boundary
 (the ``_autodj_fetch_*`` wrappers that shell out) and the Discord playback /
 control-message surface. The Auto-DJ state machine itself runs for real.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,6 +30,7 @@ import pytest
 # --------------------------------------------------------------------------
 # Local fakes
 # --------------------------------------------------------------------------
+
 
 def _member(*, bot=False):
     return SimpleNamespace(bot=bot)
@@ -64,6 +66,7 @@ def make_bot(guild_id=100):
 def fresh_player_state(monkeypatch):
     """Each test gets a clean playCommand.guildPlayers registry."""
     import playCommand
+
     monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=True)
     yield playCommand
 
@@ -86,6 +89,7 @@ def _make_player(playCommand, *, members=None, connected=True):
 # Pure helpers — these ARE the unit of behavior
 # --------------------------------------------------------------------------
 
+
 def test_parse_duration_handles_mmss_and_hmmss(fresh_player_state):
     playCommand = fresh_player_state
     assert playCommand._parse_duration_seconds("3:30") == 210
@@ -97,7 +101,9 @@ def test_parse_duration_handles_mmss_and_hmmss(fresh_player_state):
 def test_extract_artist_from_dashed_title(fresh_player_state):
     playCommand = fresh_player_state
     assert playCommand._extract_artist("Spinetta - Bajan") == "Spinetta"
-    assert playCommand._extract_artist("Soda Stereo — De Música Ligera") == "Soda Stereo"
+    assert (
+        playCommand._extract_artist("Soda Stereo — De Música Ligera") == "Soda Stereo"
+    )
     # No separator: falls back to the first couple of words, never empty.
     assert playCommand._extract_artist("Just Some Title Here") != ""
 
@@ -113,6 +119,7 @@ def test_phrase_includes_the_artist_name(fresh_player_state):
 # --------------------------------------------------------------------------
 # Activation rules
 # --------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_activate_refused_without_history(fresh_player_state):
@@ -140,14 +147,15 @@ async def test_activate_succeeds_with_history(fresh_player_state):
 # Candidate filtering
 # --------------------------------------------------------------------------
 
+
 def test_pick_song_skips_long_tracks_and_already_played(fresh_player_state):
     playCommand = fresh_player_state
     player = playCommand.GuildPlayer(100, MagicMock())
     player.history = [{"id": "old", "title": "Already Played"}]
     candidates = [
-        {"id": "long", "title": "Epic Jam", "duration_string": "12:00"},   # too long
+        {"id": "long", "title": "Epic Jam", "duration_string": "12:00"},  # too long
         {"id": "old", "title": "Already Played", "duration_string": "3:00"},  # repeat
-        {"id": "good", "title": "Fresh One", "duration_string": "4:00"},   # winner
+        {"id": "good", "title": "Fresh One", "duration_string": "4:00"},  # winner
     ]
     pick = player._autodj_pick_song(candidates)
     assert pick is not None and pick["id"] == "good"
@@ -168,6 +176,7 @@ def test_pick_song_returns_none_when_all_filtered(fresh_player_state):
 # The suggestion flow
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_queue_empty_with_autodj_proposes_next(fresh_player_state):
     """Active Auto-DJ + humans listening: when the last song ends, a suggestion
@@ -179,7 +188,13 @@ async def test_queue_empty_with_autodj_proposes_next(fresh_player_state):
     player.currentSong = None
     player.queue = []
 
-    radio = [{"id": "next1", "title": "Spinetta - Seguir Viviendo", "duration_string": "4:21"}]
+    radio = [
+        {
+            "id": "next1",
+            "title": "Spinetta - Seguir Viviendo",
+            "duration_string": "4:21",
+        }
+    ]
     player._autodj_fetch_radio = AsyncMock(return_value=radio)
 
     await player.onSongFinished(error=None)
@@ -200,8 +215,9 @@ async def test_empty_voice_channel_does_not_propose(fresh_player_state):
     player.history = [{"id": "seed", "title": "Spinetta - Bajan"}]
     player.currentSong = None
     player.queue = []
-    player._autodj_fetch_radio = AsyncMock(return_value=[
-        {"id": "x", "title": "whatever", "duration_string": "3:00"}])
+    player._autodj_fetch_radio = AsyncMock(
+        return_value=[{"id": "x", "title": "whatever", "duration_string": "3:00"}]
+    )
 
     await player.onSongFinished(error=None)
 
@@ -217,7 +233,11 @@ async def test_grace_fire_queues_the_pending_song(fresh_player_state):
     player.autodj_active = True
     player.currentSong = None
     player.queue = []
-    player.autodj_pending_song = {"id": "go", "title": "Sumo - La Rubia Tarada", "duration_string": "3:30"}
+    player.autodj_pending_song = {
+        "id": "go",
+        "title": "Sumo - La Rubia Tarada",
+        "duration_string": "3:30",
+    }
     player.startPlayingCurrent = AsyncMock()
 
     await player._autodj_fire_now()
@@ -237,15 +257,18 @@ async def test_waiting_out_grace_starts_playback(fresh_player_state, monkeypatch
     waiting did nothing. Here we run the REAL timer (grace shrunk to ~0) and a
     suggestion-card edit that actually suspends, which is where the abort hit."""
     import config
+
     playCommand = fresh_player_state
     monkeypatch.setattr(config, "AUTODJ_GRACE_SECONDS", 0, raising=False)
 
     player = playCommand.GuildPlayer(100, make_bot())
     player.vc = FakeVC()
+
     # The card edit must suspend (await something real) so a pending self-cancel
     # would surface here — exactly like the real Discord HTTP edit does.
     async def _suspending_edit(*a, **k):
         await asyncio.sleep(0)
+
     card = MagicMock()
     card.edit = _suspending_edit
     player.textChannel = MagicMock(send=AsyncMock(return_value=card))
@@ -280,11 +303,22 @@ async def test_veto_searches_same_artist(fresh_player_state):
     player = _make_player(playCommand)
     player.autodj_active = True
     player.autodj_seed_title = "Charly Garcia - Demoliendo Hoteles"
-    player.autodj_pending_song = {"id": "vetoed", "title": "Charly Garcia - Yendo de la Cama al Living"}
+    player.autodj_pending_song = {
+        "id": "vetoed",
+        "title": "Charly Garcia - Yendo de la Cama al Living",
+    }
 
     artist_hits = [
-        {"id": "vetoed", "title": "Charly Garcia - Yendo de la Cama al Living", "duration_string": "4:00"},
-        {"id": "other", "title": "Charly Garcia - Rezo por Vos", "duration_string": "5:00"},
+        {
+            "id": "vetoed",
+            "title": "Charly Garcia - Yendo de la Cama al Living",
+            "duration_string": "4:00",
+        },
+        {
+            "id": "other",
+            "title": "Charly Garcia - Rezo por Vos",
+            "duration_string": "5:00",
+        },
     ]
     player._autodj_fetch_same_artist = AsyncMock(return_value=artist_hits)
 
@@ -300,13 +334,18 @@ async def test_chain_cap_turns_autodj_off(fresh_player_state):
     """After AUTODJ_MAX_CHAIN consecutive Auto-DJ tracks, the mode disables
     itself so the bot doesn't play forever to an empty room."""
     import config
+
     playCommand = fresh_player_state
     player = _make_player(playCommand)
     player.autodj_active = True
     player.currentSong = None
     player.queue = []
     player.autodj_chain_count = config.AUTODJ_MAX_CHAIN - 1
-    player.autodj_pending_song = {"id": "last", "title": "Last One", "duration_string": "3:00"}
+    player.autodj_pending_song = {
+        "id": "last",
+        "title": "Last One",
+        "duration_string": "3:00",
+    }
     player.startPlayingCurrent = AsyncMock()
 
     await player._autodj_fire_now()
@@ -334,9 +373,11 @@ async def test_deactivate_clears_pending_suggestion(fresh_player_state):
 # /dj — openDjMenu posts to the configured AUTODJ_MENU_CHANNEL_ID
 # --------------------------------------------------------------------------
 
+
 def _make_fake_guild(guild_id=100, *, channel_id=None):
     """Build a minimal fake guild with one text channel."""
     import config
+
     ch_id = channel_id if channel_id is not None else config.AUTODJ_MENU_CHANNEL_ID
     channel = MagicMock()
     channel.send = AsyncMock()
@@ -371,8 +412,8 @@ async def test_open_dj_menu_activates_in_one_step_and_posts(monkeypatch):
     ok, msg = await playCommand.openDjMenu(bot, 100, 555)
 
     assert ok is True
-    assert player.autodj_active is True        # activated in one step
-    assert channel.send.await_count >= 1        # panel posted in the channel
+    assert player.autodj_active is True  # activated in one step
+    assert channel.send.await_count >= 1  # panel posted in the channel
 
 
 @pytest.mark.asyncio
@@ -394,7 +435,7 @@ async def test_open_dj_menu_cold_start_refuses(monkeypatch):
     assert ok is False
     assert msg == "cold-start"
     assert player.autodj_active is False
-    assert channel.send.await_count == 0        # nothing posted
+    assert channel.send.await_count == 0  # nothing posted
 
 
 @pytest.mark.asyncio
@@ -418,6 +459,7 @@ async def test_open_dj_menu_fails_when_channel_missing(monkeypatch):
 # DJ_MODE action — dispatched by _dispatch_indio_actions to openDjMenu
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_dispatch_dj_mode_calls_open_dj_menu(monkeypatch):
     """When _dispatch_indio_actions receives DJ_MODE, it calls openDjMenu."""
@@ -436,7 +478,16 @@ async def test_dispatch_dj_mode_calls_open_dj_menu(monkeypatch):
     bot.loop = asyncio.get_event_loop()
     guild_id = 100
 
-    await gc._dispatch_indio_actions(bot, guild_id, [("DJ_MODE", "")])
+    requester = MagicMock()
+    requester.voice = MagicMock()
+    requester.voice.channel = MagicMock()
+
+    await gc._dispatch_indio_actions(
+        bot,
+        guild_id,
+        [("DJ_MODE", "")],
+        requester_member=requester,
+    )
 
     assert len(called) == 1
     assert called[0][1] == guild_id
