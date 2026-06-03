@@ -20,10 +20,7 @@ PLAY_ORDER_RE_SOURCE = (
     r"tira(te|me|le|lo|la|nos)?|"
     r"pone(la|lo|le|me|nos|te)?|"
     r"mete(le|lo|la)?|"
-    r"reproduci(lo|la|me)?|"
-    r"hace(lo|la)?\s+sonar|"
-    r"traete|"
-    r"queremos\s+(escuchar|oir)"
+    r"reproduci(lo|la|me)?"
     r")\b"
 )
 
@@ -36,49 +33,35 @@ PLAY_ORDER_RE_SOURCE = (
 PLAY_MUSIC_VERBS = [
     "poné",
     "ponete",
-    "poneme",
-    "metele",
-    "tirá",
-    "tirate",
     "reproducí",
-    "dejá",
-    "traete",
-    "queremos escuchar",
 ]
 
 PLAY_SOUND_VERBS = [
     "tirá",
     "tirate",
-    "tirame",
     "pone",
     "poné",
     "ponete",
     "ponela",
-    "ponelo",
     "mete",
     "metele",
     "hacé sonar",
-    "hacelo sonar",
     "reproducí",
-    "traete",
-    "queremos escuchar",
 ]
 
 SKIP_VERBS = ["saltea", "skip", "siguiente", "cambiá de tema"]
 
-PAUSE_VERBS = ["pausá", "frená", "pará un toque"]
+PAUSE_VERBS = ["pausá", "frená", "pará la musica"]
 
 RESUME_VERBS = ["resumí", "continuá", "play", "pone play", "metele play"]
 
-STOP_VERBS = ["pará", "cortala", "basta"]
+STOP_VERBS = ["pará", "corta", "basta", "stop"]
 
 DJ_VERBS = [
     "modo dj",
     "hacé de dj",
-    "pinche",
-    "ponga música en automático",
-    "sea el dj",
-    "prenda el auto dj",
+    "música en automático",
+    "eleji la musicaauto dj",
 ]
 
 # ── Full trigger phrases for INDIO_SYSTEM ───────────────────────────────
@@ -89,7 +72,6 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "poné un tema",
         "poné música",
         "ponete un tema",
-        "poneme <algo>",
     ],
     "play_sound": [
         "tirá <clip>",
@@ -100,22 +82,22 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
     "skip_music": [
         "salteá",
         "siguiente",
-        "cambiá",
     ],
     "pause_music": [
         "pausá",
-        "frená un toque",
+        "pausa la musica",
     ],
     "resume_music": [
-        "seguí",
         "continuá",
         "resumí",
+        "play",
         "play (sin artista)",
     ],
     "stop_music": [
         "pará la música",
         "cortala",
         "basta",
+        "stop",
     ],
     "dj_mode": [
         "modo dj",
@@ -133,5 +115,5 @@ RESUME_CONTEXT_PLAY_PHRASES = [
     "metele play",
     "continuá",
     "resumí",
-    "retomá",
+    "segui con la musica",
 ]
