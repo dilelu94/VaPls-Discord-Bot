@@ -38,7 +38,8 @@ async def test_attach_vote_reactions_refuses_to_rebind():
 
     await geminiCommand._attach_vote_reactions(bot, vote, 555, 111, 3)
     assert vote.reaction_message_id == 111
-    assert msg1.add_reaction.await_count == 3   # 3 candidates seeded
+    # 3 número (1️⃣2️⃣3️⃣) + ❌ para cancelar la votación = 4 reacciones.
+    assert msg1.add_reaction.await_count == 4
 
     # Second attach with a DIFFERENT message id (the bug scenario): must NOT
     # repoint, and must NOT add any reactions on the unrelated message.
