@@ -171,6 +171,9 @@ async def on_connect():
                 log.info(f"Cleaned up local commands for guild {guild_id}")
             except Exception as e:
                 log.warning(f"Error cleaning guild {guild_id}: {e}")
+                analytics.capture_exception(
+                    e, properties={"action": "sync_commands", "guild_id": guild_id}
+                )
     log.info("Cleanup finished.")
 
 
@@ -412,7 +415,9 @@ async def dj(ctx):
             "❌ Este comando solo funciona en un servidor.", ephemeral=True
         )
         return
-    channel_id = getattr(ctx, "channel_id", None) or getattr(getattr(ctx, "channel", None), "id", None)
+    channel_id = getattr(ctx, "channel_id", None) or getattr(
+        getattr(ctx, "channel", None), "id", None
+    )
     ok, msg = await openDjMenu(ctx.bot, ctx.guild.id, channel_id)
     if ok:
         try:
@@ -628,8 +633,8 @@ async def sugerencias(
     try:
         if not ctx.response.is_done():
             await ctx.defer(ephemeral=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("sugerencias defer failed: %s", e)
     _track_command(ctx, "sugerencias", {"idea_length": len(idea or "")})
     await sugerenciasLogic(ctx, idea)
 
@@ -654,8 +659,8 @@ async def sugerencias_ver(ctx):
     try:
         if not ctx.response.is_done():
             await ctx.defer(ephemeral=True)
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("sugerencias-ver defer failed: %s", e)
     _track_command(ctx, "sugerencias-ver", {})
     await sugerenciasVerLogic(ctx)
 
@@ -688,15 +693,15 @@ async def quit(ctx):
         try:
             try:
                 stop_idle_watchdog(ctx.guild.id)
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning("quit: stop_idle_watchdog failed: %s", e)
             try:
                 await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
             except asyncio.TimeoutError:
                 try:
                     vc.cleanup()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.warning("quit: vc.cleanup failed: %s", e)
             analytics.capture(
                 "voice channel left",
                 user=ctx.author,
@@ -786,21 +791,21 @@ async def entraindio(ctx):
 
 @bot.slash_command(
     name="sensibilidad",
-    description="Cambia la sensibilidad del wake-word del indio (presets 1-3)",
+    description="Cambia la sensibilidad del wake-word del indio (presets 1-4)",
 )
 async def sensibilidad(
     ctx,
     preset: discord.Option(
         int,
-        description="Preset: 1=más sensible, 2=solo 'che indio' (default), 3=pool grande+que/eh indio",
-        choices=[1, 2, 3],
+        description="1=máx sensible, 2=solo che indio (default), 3=pool grande, 4=como 2 + Whisper confirma indio",
+        choices=[1, 2, 3, 4],
     ),
 ):
     """Slash command: switch the VOSK wake-word sensitivity preset.
 
     Args:
         ctx: Discord application context.
-        preset: Integer 1-3 selecting the sensitivity preset.
+        preset: Integer 1-4 selecting the sensitivity preset.
 
     Side Effects:
         POSTs to the userbot relay ``/sensibilidad`` which updates the active
@@ -841,6 +846,7 @@ async def sensibilidad(
         1: "**Preset 1** — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
         2: '**Preset 2** — menos sensible (default): solo `che indio` + verbos. Reduce falsos positivos de "que".',
         3: "**Preset 3** — menos sensible vía pool grande de frases, pero re-habilita `che/que/eh indio`. Editable a mano.",
+        4: "**Preset 4** — como el 2 (VOSK: solo `che indio`), pero Whisper re-chequea que se haya dicho `indio` en la región del wake-word; si no, descarta.",
     }
     await safe_respond(
         ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"
@@ -925,8 +931,9 @@ async def help_cmd(ctx):
             "reproduce el que más se parezca a `query`.\n"
             "**/entraindio** — hace que el indio (userbot) entre a tu canal "
             "de voz para escuchar y responder al wake-word.\n"
-            "**/sensibilidad** `1|2|3` — ajusta la sensibilidad del wake-word "
-            "(1=máxima, 2=solo 'che indio' (default), 3=pool grande+que/eh indio).\n"
+            "**/sensibilidad** `1|2|3|4` — ajusta la sensibilidad del wake-word "
+            "(1=máxima, 2=solo 'che indio' (default), 3=pool grande+que/eh indio, "
+            "4=como 2 + Whisper confirma 'indio').\n"
             "**/parar** — corta la reproducción, limpia la cola y se "
             "desconecta.\n"
             "**/quit** — sale del canal de voz sin tocar la cola."

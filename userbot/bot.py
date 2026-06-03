@@ -214,6 +214,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("userbot")
 
+import analytics
 import posthog_client
 
 posthog_client.init_observability(service_name="vapls-userbot")
@@ -518,6 +519,15 @@ class TranscriberSink(voice_recv.AudioSink):
                 f"[WHISPER][es] user_id={user_id} "
                 f"({duration:.1f}s audio, {dt * 1000:.0f}ms transcribe): {text}"
             )
+            analytics.capture(
+                "whisper_transcription",
+                properties={
+                    "user_id": user_id,
+                    "text": text,
+                    "duration_seconds": duration,
+                    "transcribe_ms": dt * 1000,
+                },
+            )
             await on_transcript(user_id, text)
         except Exception:
             log.exception("[WHISPER] transcribe failed")
@@ -602,10 +612,18 @@ _PRESET_2_PATTERNS: tuple[tuple[str, str], ...] = (
 # into a wake-word phrase. Tune the pool via _PRESET_3_FILLER below.
 _PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 
+# Preset 4: same VOSK gating as preset 2 (only "che indio" + command-verb
+# patterns, small grammar pool), but adds a second post-VOSK verification
+# layer: after VOSK fires, a dedicated short Whisper pass over the prebuffer
+# region must confirm the word "indio" is present. If Whisper can't hear
+# "indio", the whole event is discarded. Strict by design.
+_PRESET_4_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_2_PATTERNS
+
 _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
     1: _PRESET_1_PATTERNS,
     2: _PRESET_2_PATTERNS,
     3: _PRESET_3_PATTERNS,
+    4: _PRESET_4_PATTERNS,
 }
 
 # Active sensitivity preset. Default 2: only "che indio" invokes (the "que"/"eh"
@@ -778,7 +796,9 @@ def _build_vosk_grammar() -> str:
                 deduped.append(token)
         return json.dumps(deduped)
     else:
-        # Preset 2: only "che indio".
+        # Presets 2 and 4 share the small grammar pool: only "che indio" as
+        # invocation phrase.  Preset 4 adds a post-VOSK Whisper confirmation
+        # pass (handled in _transcribe_and_dispatch), so no grammar change needed.
         phrases = ["che indio", "ey indio", "hola indio"] + phrases
     return json.dumps(phrases)
 
@@ -859,15 +879,16 @@ def _new_vosk_recognizer():
 def _set_sensitivity(preset: int) -> None:
     """Switch the VOSK wake-word sensitivity preset at runtime.
 
-    Validates 1 <= preset <= 3, updates the module-level ``_SENSITIVITY_PRESET``,
-    rebuilds ``_VOSK_GRAMMAR``, and bumps ``_vosk_grammar_generation`` so that
-    live per-user recognizers are detected as stale and rebuilt on next use.
+    Validates preset is in _PRESETS (1-4), updates the module-level
+    ``_SENSITIVITY_PRESET``, rebuilds ``_VOSK_GRAMMAR``, and bumps
+    ``_vosk_grammar_generation`` so that live per-user recognizers are
+    detected as stale and rebuilt on next use.
 
-    The preset is in-memory only — it resets to 1 on userbot restart.
+    The preset is in-memory only — it resets to the default (2) on userbot restart.
     """
     global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
     if preset not in _PRESETS:
-        raise ValueError(f"Invalid sensitivity preset {preset!r}; must be 1, 2, or 3.")
+        raise ValueError(f"Invalid sensitivity preset {preset!r}; must be 1, 2, 3, or 4.")
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
     _vosk_grammar_generation += 1
@@ -952,6 +973,19 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> tuple[bool, Optional[dict]]:
                     )
                 if result is not None:
                     result["_matched_text"] = text
+                analytics.capture(
+                    "vosk_transcription",
+                    properties={
+                        "text": text,
+                        "matched": True,
+                        "alternatives": candidates,
+                        "top_confidence": result.get("alternatives", [{}])[0].get(
+                            "confidence"
+                        )
+                        if result and "alternatives" in result
+                        else None,
+                    },
+                )
                 return True, result
         top1 = candidates[0] if candidates else ""
         if top1 and "indio" in _normalize(top1).split():
@@ -1115,6 +1149,14 @@ class WakeWordSink(voice_recv.AudioSink):
                     _matched_text,
                     len(self.prebuffers.get(user_id, ())),
                 )
+                analytics.capture(
+                    "wake_word_detected",
+                    properties={
+                        "user_id": user_id,
+                        "matched_text": _matched_text,
+                        "guild_id": getattr(getattr(source, "guild", None), "id", None),
+                    },
+                )
                 self._wake_triggerer_id = user_id
                 self._wake_in_progress = True
                 self._start_capture(user_id, now, vosk_result)
@@ -1122,7 +1164,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 try:
                     rec.Reset()
                 except Exception:
-                    pass
+                    log.warning("[WAKE] rec.Reset() failed")
         except Exception:
             log.exception("[WAKE] write error")
 
@@ -1145,7 +1187,7 @@ class WakeWordSink(voice_recv.AudioSink):
             try:
                 rec.Reset()
             except Exception:
-                pass
+                log.warning("[VOSK] rec.Reset() failed in silence reset")
         # Push the marker forward so we don't keep resetting every frame.
         self.last_voice_ts[user_id] = now
 
@@ -1195,6 +1237,7 @@ class WakeWordSink(voice_recv.AudioSink):
             "started_at": now,
             "last_voice_ts": now,
             "vosk_result": vosk_result,
+            "prebuffer_len": len(seed),  # bytes of prebuffer seeded into buf
         }
 
     def _extend_capture(
@@ -1246,6 +1289,7 @@ class WakeWordSink(voice_recv.AudioSink):
             return
         secs = len(pcm) / (16000 * 2)
         vosk_result = capture.get("vosk_result")
+        prebuffer_len = capture.get("prebuffer_len", 0)
         with self._active_lock:
             limit = (
                 config.MAX_CONCURRENT_WHILE_PLAYING
@@ -1262,7 +1306,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 return
             self._active_count += 1
         asyncio.run_coroutine_threadsafe(
-            self._transcribe_and_dispatch(user_id, pcm, secs, vosk_result),
+            self._transcribe_and_dispatch(user_id, pcm, secs, vosk_result, prebuffer_len),
             self._client_ref.loop,
         )
 
@@ -1314,8 +1358,35 @@ class WakeWordSink(voice_recv.AudioSink):
         pcm_16k: bytes,
         duration: float,
         vosk_result: Optional[dict] = None,
+        prebuffer_len: int = 0,
     ) -> None:
         try:
+            # Preset 4: dedicated short Whisper pass over the prebuffer region
+            # to confirm "indio" was actually said before running the full
+            # command transcription.  Strict — drop the event if Whisper can't
+            # hear "indio" in the wake region.
+            if _SENSITIVITY_PRESET == 4:
+                wake_pcm = pcm_16k[:prebuffer_len] if prebuffer_len else pcm_16k
+                wake_text = await asyncio.to_thread(_run_whisper, wake_pcm)
+                if not _whisper_confirms_indio(wake_text):
+                    log.info(
+                        "[WAKE] user=%s preset4: 'indio' NOT confirmed in wake region (%r); discard",
+                        user_id,
+                        wake_text,
+                    )
+                    analytics.capture(
+                        "wake_word_rejected",
+                        properties={
+                            "user_id": user_id,
+                            "reason": "preset4_no_indio",
+                            "wake_text": wake_text,
+                        },
+                    )
+                    return  # finally still decrements _active_count and re-arms
+                log.info(
+                    "[WAKE] user=%s preset4: 'indio' confirmed (%r)", user_id, wake_text
+                )
+
             t0 = time.monotonic()
             text = await asyncio.to_thread(_run_whisper, pcm_16k)
             dt = time.monotonic() - t0
@@ -1328,6 +1399,16 @@ class WakeWordSink(voice_recv.AudioSink):
             log.info(
                 f"[WAKE][es] user_id={user_id} "
                 f"({duration:.1f}s audio, {dt * 1000:.0f}ms): {text}"
+            )
+            analytics.capture(
+                "whisper_transcription",
+                properties={
+                    "user_id": user_id,
+                    "text": text,
+                    "duration_seconds": duration,
+                    "transcribe_ms": dt * 1000,
+                    "via_wake_word": True,
+                },
             )
             # VOSK already matched a restrictive _WAKE_PATTERNS pair before we
             # got here, so we trust the trigger and forward whatever Whisper
@@ -1369,6 +1450,37 @@ def _has_text_beyond_wake_word(text: str) -> bool:
     return bool(cleaned)
 
 
+def _whisper_confirms_indio(text: str) -> bool:
+    """True iff the normalized transcript contains the token "indio".
+
+    Used by preset 4 to verify the prebuffer region actually contains the wake
+    word "indio" before committing to a full command transcription.
+
+    Matching rule: the normalized (accent-stripped, lowercased) text must
+    contain "indio" as a substring of at least one whitespace-delimited token
+    (so "indios," and "indio." also count, but "el_indo" does not).  Empty or
+    None input returns False.
+
+    Examples:
+        >>> _whisper_confirms_indio("che indio ponete un tema")
+        True
+        >>> _whisper_confirms_indio("ponete algo indio")
+        True
+        >>> _whisper_confirms_indio("INDIO")
+        True
+        >>> _whisper_confirms_indio("indio,")
+        True
+        >>> _whisper_confirms_indio("el indo")  # typo — no "indio"
+        False
+        >>> _whisper_confirms_indio("")
+        False
+    """
+    if not text:
+        return False
+    norm = _normalize(text)
+    return any("indio" in tok for tok in norm.split())
+
+
 # Cached "is the main bot playing audio" check — polled cheaply.
 # Runtime toggle for the wake-word confirmation sound ("huh").
 # Controlled via POST /toggle_wake_sound relay endpoint. Starts at the
@@ -1388,7 +1500,7 @@ def _main_bot_is_playing() -> bool:
     try:
         asyncio.run_coroutine_threadsafe(_refresh_play_state(), client.loop)
     except Exception:
-        pass
+        log.warning("[PLAY-STATE] failed to schedule refresh")
     with _play_state_lock:
         return _play_state["is_playing"]
 
@@ -1409,7 +1521,7 @@ async def _refresh_play_state() -> None:
                     _play_state["is_playing"] = bool(data.get("is_playing"))
                     _play_state["checked_at"] = time.monotonic()
     except Exception:
-        pass
+        log.warning("[PLAY-STATE] refresh HTTP request failed")
 
 
 # ---------- Sink: short raw-PCM recorder (mixed across speakers) ----------
@@ -1486,7 +1598,7 @@ class RecorderSink(voice_recv.AudioSink):
             if audioop.rms(mono, _REC_INPUT_WIDTH) >= self.rms_threshold:
                 self.had_voice = True
         except Exception:
-            pass
+            log.warning("[REC] rms check failed")
         with self._lock:
             self._frames.append((elapsed, mono))
             self.frame_count += 1
@@ -1858,7 +1970,7 @@ async def _idle_leave_after_delay(guild: discord.Guild) -> None:
             if vc.is_listening():
                 vc.stop_listening()
         except Exception:
-            pass
+            log.warning("[VOICE] stop_listening during idle leave failed")
         try:
             await vc.disconnect(force=True)
         except Exception as e:
@@ -1946,7 +2058,7 @@ async def _join_channel(channel: discord.VoiceChannel):
                     if existing.is_listening():
                         existing.stop_listening()
                 except Exception:
-                    pass
+                    log.warning("[VOICE] stop_listening during reconnect failed")
                 try:
                     await existing.disconnect(force=True)
                 except Exception as e:
@@ -2221,7 +2333,7 @@ async def on_message(message):
             try:
                 ref_msg = await message.channel.fetch_message(ref.message_id)
             except Exception:
-                pass
+                log.warning("[AUTOREPLY] fetch_message failed for autoreply reference")
         if (
             ref_msg is not None
             and ref_msg.author is not None
@@ -2673,7 +2785,7 @@ def _command_owner_id(cmd) -> Optional[int]:
         try:
             return int(app_id)
         except (TypeError, ValueError):
-            pass
+            log.warning("[RELAY] failed to parse application_id")
     app = getattr(cmd, "application", None)
     if app is not None:
         app_id = getattr(app, "id", None)
@@ -2681,7 +2793,7 @@ def _command_owner_id(cmd) -> Optional[int]:
             try:
                 return int(app_id)
             except (TypeError, ValueError):
-                pass
+                log.warning("[RELAY] failed to parse application.id")
     return None
 
 
@@ -3152,7 +3264,7 @@ async def main():
             try:
                 await relay_runner.cleanup()
             except Exception:
-                pass
+                log.warning("[MAIN] relay runner cleanup failed")
         if _http_session and not _http_session.closed:
             await _http_session.close()
 

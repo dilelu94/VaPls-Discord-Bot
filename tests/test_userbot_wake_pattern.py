@@ -105,9 +105,20 @@ def _extract_wake_ns():
     assert m, "could not locate _text_matches_wake_pattern"
     blocks.append(m.group(0))
 
+    # `_whisper_confirms_indio`
+    m = re.search(
+        r"^def _whisper_confirms_indio\(.*?(?=^def |\Z)",
+        src,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, "could not locate _whisper_confirms_indio"
+    blocks.append(m.group(0))
+
     import unicodedata as _unicodedata
     import logging as _logging
     import json as _json
+    import threading as _threading
+    from types import SimpleNamespace as _SimpleNamespace
 
     ns: dict = {
         "unicodedata": _unicodedata,
@@ -115,6 +126,7 @@ def _extract_wake_ns():
         # _set_sensitivity uses log.info; supply a no-op logger.
         "log": _logging.getLogger("test_wake_pattern"),
         "config": None,  # not used by the extracted functions
+        "threading": _threading,
     }
     exec("\n".join(blocks), ns)
     return ns
@@ -326,3 +338,83 @@ def restore_preset():
     """Reset sensitivity to the default preset (2) after each test."""
     yield
     set_sensitivity(2)
+
+
+# ---------------------------------------------------------------------------
+# Preset 4 — same VOSK gating as preset 2 + Whisper confirmation layer
+# ---------------------------------------------------------------------------
+
+
+def test_preset4_che_indio_fires():
+    """Preset 4 VOSK layer: 'che indio' still triggers (same as preset 2)."""
+    set_sensitivity(4)
+    assert matches("che indio") is True
+
+
+@pytest.mark.parametrize("text", ["que indio", "eh indio"])
+def test_preset4_que_eh_indio_do_not_fire(text):
+    """Preset 4 VOSK layer: 'que indio' and 'eh indio' are not active patterns."""
+    set_sensitivity(4)
+    assert matches(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "indio ponete",
+        "indio poneme",
+        "indio reproduci",
+        "indio reproducí",
+        "indio reproduce",
+        "indio tirate",
+        "indio dale",
+        "indio por",
+        "indio tira",
+    ],
+)
+def test_preset4_command_verbs_still_fire(text):
+    """Preset 4 VOSK layer: all command-verb patterns remain active."""
+    set_sensitivity(4)
+    assert matches(text) is True
+
+
+def test_preset4_bare_indio_does_not_fire():
+    """Preset 4: bare 'indio' alone must not trigger."""
+    set_sensitivity(4)
+    assert matches("indio") is False
+
+
+# ---------------------------------------------------------------------------
+# _whisper_confirms_indio — pure function tests
+# ---------------------------------------------------------------------------
+
+confirms = _NS["_whisper_confirms_indio"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "che indio ponete un tema",
+        "ponete algo indio",
+        "INDIO",
+        "indio,",   # punctuation attached — "indio," contains "indio"
+        "indios",   # plural also contains "indio" as substring
+    ],
+)
+def test_whisper_confirms_indio_true(text):
+    """_whisper_confirms_indio returns True when the word 'indio' is present."""
+    assert confirms(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ponete un tema de los redondos",
+        "",
+        "el indo",  # typo — no "indio"
+        None,
+    ],
+)
+def test_whisper_confirms_indio_false(text):
+    """_whisper_confirms_indio returns False when 'indio' is absent."""
+    assert confirms(text) is False

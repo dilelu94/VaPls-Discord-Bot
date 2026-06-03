@@ -12,7 +12,7 @@
 | `/sugerencias-ver` | Lista los grupos de sugerencias existentes, ordenados por las más pedidas. | `suggestionsCommand`, `analytics` |
 | `/quit` | Desconecta el bot del canal de voz sin tocar la cola. | `bot.py`, `analytics` |
 | `/entraindio` | Hace que el userbot (Indio) entre al canal de voz del invocador. | `bot.py`, userbot relay `/join` |
-| `/sensibilidad` `1\|2\|3` | Cambia la sensibilidad del wake-word del Indio. Preset 1 = más sensible: `che indio`, `que indio`, `eh indio` + verbos. Preset 2 = solo `che indio` + verbos (reduce falsos positivos de "que") y es el **default**. Preset 3 = re-habilita `che/que/eh indio` pero usa pool grande de frases señuelo en la gramática VOSK para reducir falsos positivos; editable a mano vía `_PRESET_3_FILLER`. El preset es in-memory y se resetea a 2 al reiniciar el userbot. | `bot.py`, userbot relay `/sensibilidad` |
+| `/sensibilidad` `1\|2\|3\|4` | Cambia la sensibilidad del wake-word del Indio. Preset 1 = más sensible: `che indio`, `que indio`, `eh indio` + verbos. Preset 2 = solo `che indio` + verbos (reduce falsos positivos de "que") y es el **default**. Preset 3 = re-habilita `che/que/eh indio` pero usa pool grande de frases señuelo en la gramática VOSK para reducir falsos positivos; editable a mano vía `_PRESET_3_FILLER`. Preset 4 = mismo VOSK que el 2 (`che indio` + verbos, gramática chica), pero agrega una segunda capa: después de que VOSK dispara, corre un pase corto de Whisper sobre el prebuffer y descarta el evento si Whisper no detecta "indio". Estricto por diseño. El preset es in-memory y se resetea a 2 al reiniciar el userbot. | `bot.py`, userbot relay `/sensibilidad` |
 | `/restart` | Reinicia el proceso del bot (dev-only). | `bot.py`, `analytics` |
 
 Notas:
