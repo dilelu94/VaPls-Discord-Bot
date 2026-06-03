@@ -629,9 +629,13 @@ _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
 # Active sensitivity preset. Default 2: only "che indio" invokes (the "que"/"eh"
 # variants were the dominant false-positive source). Preset 1 is more sensitive
 # (adds "que indio"/"eh indio"); preset 3 re-enables those variants but uses a
-# large decoy grammar pool to reduce false positives. In-memory only —
-# resets to this default on userbot restart.
-_SENSITIVITY_PRESET: int = 2
+# large decoy grammar pool to reduce false positives. Preset 4 uses the same
+# VOSK gating as preset 2 (only "che indio" + command-verb patterns, small
+# grammar pool) and adds a post-VOSK Whisper confirmation layer: after VOSK
+# fires, a short Whisper pass over the prebuffer must detect "indio"; if not,
+# the event is discarded. In-memory only — resets to this default (4) on
+# userbot restart.
+_SENSITIVITY_PRESET: int = 4
 
 # Generation counter — incremented by _set_sensitivity so that live per-user
 # VOSK recognizers (which embed the old grammar) are detected and rebuilt.

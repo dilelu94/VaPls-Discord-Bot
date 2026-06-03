@@ -149,11 +149,11 @@ Switch the VOSK wake-word sensitivity preset at runtime.
 ```
 - `preset`: integer 1, 2, 3, or 4.
   - `1` — most sensitive: `che indio`, `que indio`, `eh indio` + command-verb patterns.
-  - `2` — less sensitive (**default**): only `che indio` + command-verb patterns. Removes `que`/`eh` invocation pairs to reduce false positives.
+  - `2` — less sensitive: only `che indio` + command-verb patterns. Removes `que`/`eh` invocation pairs to reduce false positives.
   - `3` — enlarged grammar pool: re-enables `che indio`, `que indio`, `eh indio` + command-verb patterns (same as preset 1), but adds a large decoy token pool (`_PRESET_3_FILLER`) so VOSK has many buckets for ambient speech instead of collapsing noise into wake-word phrases. Pool is hand-editable in `userbot/bot.py`.
-  - `4` — same VOSK gating as preset 2 (`che indio` + command-verb patterns, small grammar pool), plus a second post-VOSK verification layer: after VOSK fires, a dedicated short Whisper pass over the prebuffer region must confirm the word "indio" is present. If Whisper cannot hear "indio", the event is discarded entirely (no full command transcription, no dispatch). Strict by design — legit invocations where Whisper misses "indio" are dropped.
+  - `4` — (**default**) same VOSK gating as preset 2 (`che indio` + command-verb patterns, small grammar pool), plus a second post-VOSK verification layer: after VOSK fires, a dedicated short Whisper pass over the prebuffer region must confirm the word "indio" is present. If Whisper cannot hear "indio", the event is discarded entirely (no full command transcription, no dispatch). Strict by design — legit invocations where Whisper misses "indio" are dropped.
 
-The preset is **in-memory only** — it resets to the default (2) on userbot restart.
+The preset is **in-memory only** — it resets to the default (4) on userbot restart.
 
 **Response**
 ```json

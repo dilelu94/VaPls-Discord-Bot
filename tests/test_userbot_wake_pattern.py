@@ -245,14 +245,15 @@ def test_preset2_bare_indio_does_not_fire():
 
 
 # ---------------------------------------------------------------------------
-# Default preset is 2 (only "che indio" invokes out of the box)
+# Default preset is 4 (same VOSK gating as preset 2 + Whisper confirmation)
 # ---------------------------------------------------------------------------
 
 
-def test_default_preset_is_2():
-    """Out of the box the userbot runs preset 2: 'che indio' invokes but the
-    'que indio'/'eh indio' false-positive variants do not."""
-    assert _NS["_SENSITIVITY_PRESET"] == 2
+def test_default_preset_is_4():
+    """Out of the box the userbot runs preset 4: same VOSK gating as preset 2
+    ('che indio' only, no 'que indio'/'eh indio') plus the Whisper confirmation
+    layer. The module-level variable must equal 4 before any test changes it."""
+    assert _NS["_SENSITIVITY_PRESET"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +336,9 @@ def test_preset1_grammar_includes_que_indio_and_eh_indio():
 
 @pytest.fixture(autouse=True)
 def restore_preset():
-    """Reset sensitivity to the default preset (2) after each test."""
+    """Reset sensitivity to the default preset (4) after each test."""
     yield
-    set_sensitivity(2)
+    set_sensitivity(4)
 
 
 # ---------------------------------------------------------------------------

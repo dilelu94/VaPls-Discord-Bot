@@ -156,16 +156,16 @@ wake-word que cuentan como hit (`_WAKE_PATTERNS` / `_active_wake_patterns`) y
 **(b)** el pool de frases del grammar (`_build_vosk_grammar`).
 
 Se cambia con `/sensibilidad` (main bot) o `POST /sensibilidad` (relay del
-userbot). **El preset es in-memory y se resetea al default (2) al reiniciar el
+userbot). **El preset es in-memory y se resetea al default (4) al reiniciar el
 userbot.** Implementación en `userbot/bot.py` (`_PRESETS`, `_build_vosk_grammar`,
 `_set_sensitivity`, `_active_wake_patterns`); comando en `bot.py`.
 
 | Preset | Invocación | Grammar pool | Idea |
 |---|---|---|---|
 | **1** | `che/que/eh indio` + verbos | chico (solo wake-words + decoys mínimos) | El más sensible. |
-| **2** (default) | solo `che indio` + verbos | chico | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`). |
+| **2** | solo `che indio` + verbos | chico | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`). |
 | **3** | `che/que/eh indio` + verbos | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal. |
-| **4** | solo `che indio` + verbos (igual que preset 2) | chico (igual que preset 2) | Agrega una segunda capa de verificación post-VOSK: corre un pase corto de Whisper sobre el prebuffer (región del wake-word) y descarta el evento si Whisper no detecta la palabra `indio`. Estricto — invocaciones donde Whisper no escucha `indio` se descartan sin correr la transcripción completa. |
+| **4** (default) | solo `che indio` + verbos (igual que preset 2) | chico (igual que preset 2) | Agrega una segunda capa de verificación post-VOSK: corre un pase corto de Whisper sobre el prebuffer (región del wake-word) y descarta el evento si Whisper no detecta la palabra `indio`. Estricto — invocaciones donde Whisper no escucha `indio` se descartan sin correr la transcripción completa. |
 
 **Tuning manual del preset 3:** los bloques de wake-words y filler en
 `userbot/bot.py` están marcados para editarse a mano. Cuando VOSK colapse mal una

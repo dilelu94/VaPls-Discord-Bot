@@ -797,7 +797,7 @@ async def sensibilidad(
     ctx,
     preset: discord.Option(
         int,
-        description="1=máx sensible, 2=solo che indio (default), 3=pool grande, 4=como 2 + Whisper confirma indio",
+        description="1=máx sensible, 2=solo che indio, 3=pool grande, 4=como 2 + Whisper confirma indio (default)",
         choices=[1, 2, 3, 4],
     ),
 ):
@@ -844,9 +844,9 @@ async def sensibilidad(
 
     _PRESET_DESCRIPTIONS = {
         1: "**Preset 1** — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
-        2: '**Preset 2** — menos sensible (default): solo `che indio` + verbos. Reduce falsos positivos de "que".',
+        2: '**Preset 2** — menos sensible: solo `che indio` + verbos. Reduce falsos positivos de "que".',
         3: "**Preset 3** — menos sensible vía pool grande de frases, pero re-habilita `che/que/eh indio`. Editable a mano.",
-        4: "**Preset 4** — como el 2 (VOSK: solo `che indio`), pero Whisper re-chequea que se haya dicho `indio` en la región del wake-word; si no, descarta.",
+        4: "**Preset 4** (default) — como el 2 (VOSK: solo `che indio`), pero Whisper re-chequea que se haya dicho `indio` en la región del wake-word; si no, descarta.",
     }
     await safe_respond(
         ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"
@@ -932,8 +932,8 @@ async def help_cmd(ctx):
             "**/entraindio** — hace que el indio (userbot) entre a tu canal "
             "de voz para escuchar y responder al wake-word.\n"
             "**/sensibilidad** `1|2|3|4` — ajusta la sensibilidad del wake-word "
-            "(1=máxima, 2=solo 'che indio' (default), 3=pool grande+que/eh indio, "
-            "4=como 2 + Whisper confirma 'indio').\n"
+            "(1=máxima, 2=solo 'che indio', 3=pool grande+que/eh indio, "
+            "4=como 2 + Whisper confirma 'indio' (default)).\n"
             "**/parar** — corta la reproducción, limpia la cola y se "
             "desconecta.\n"
             "**/quit** — sale del canal de voz sin tocar la cola."
