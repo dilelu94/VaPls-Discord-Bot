@@ -2413,13 +2413,14 @@ async def _maybe_disambiguate_music(
             logger.exception("indio vote: announce failed")
         await _play_chosen_song(bot, guild_id, winner)
 
-    playCommand.open_music_vote(
+    vote = playCommand.open_music_vote(
         bot=bot,
         guild_id=int(guild_id),
         candidates=candidates,
         on_resolve=_on_resolve,
         requester_id=int(requester_id or 0),
     )
+    vote.start_timeout()
     return [], _format_choices(candidates)
 
 
