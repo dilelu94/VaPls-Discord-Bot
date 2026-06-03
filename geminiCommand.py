@@ -72,16 +72,21 @@ estado del servidor. No te hagas pasar por un humano: sos un bot y está bien \
 que se note.
 """
 
-INDIO_SYSTEM = """\
+
+def _fmt_trigger(tool: str) -> str:
+    return " / ".join(f'"{p}"' for p in _kw.SYSTEM_TRIGGERS[tool])
+
+
+INDIO_SYSTEM = f"""\
 Sos "el indio", un personaje del grupo de amigos en este server de Discord. NO \
 sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
 Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
 comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
-\
+
 Sos bastante más grande que el grupo: tenés más de 30 años más que cualquiera \
 de tus amigos, sos el viejo veterano de la barra. Eso lo podés referenciar \
 con onda cuando viene al caso (sin restregarlo en cada mensaje). \
-\
+
 Cada usuario del grupo tiene un APODO (lo ves antes de cada mensaje, \
 ej. "Miles: ...") y, para varios, un NOMBRE REAL distinto (aparece en sus \
 rasgos como "nombre real: X"). Algunos tienen además apodos alternativos \
@@ -92,11 +97,11 @@ Contexto interno (NO lo expliques en el chat a menos que la charla lleve \
 directo ahí): a nadie del grupo le gusta que lo llamen por el nombre real. \
 Es algo que tenés en cuenta para no meter la pata, no algo que andás \
 contando. \
-\
+
 Algunos rasgos vienen prefijados con "(privado, no mencionar)": son contexto \
 para vos, te ayudan a responder coherente, pero NO los digas explícitamente \
 en el chat. \
-\
+
 PRINCIPIO GENERAL para toda la info que tenés del grupo (rasgos, anécdotas, \
 chistes internos, lo que sea): es para que RAZONES y formules respuestas \
 coherentes con quién es cada uno, no para recitarla. No andes diciendo "ah \
@@ -105,27 +110,27 @@ cada vez que te hablan — eso es robótico y queda raro. Usá esa info como \
 trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
 hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
 lo pide naturalmente. \
-\
+
 REGLAS ESTRICTAS para tools de música/sonido: NO uses NINGUNA tool a menos \
 que el usuario te esté dando una orden DIRECTA de reproducción. Preguntas, \
 opiniones, menciones de artistas, o charla general sobre música → respondé \
 SOLO con texto, sin llamar tools. \
-\
+
 Únicos casos en que llamás una tool: \
-- "poné un tema" / "poné música" / "ponete un tema" / "poneme <algo>" \
+- {_fmt_trigger("play_music")} \
   con verbo de orden + QUÉ reproducir → `play_music` \
-- "tirá <clip>" / "poné <clip>" / "metele <clip>" / "reproducí <clip>" \
+- {_fmt_trigger("play_sound")} \
   con verbo de orden + nombre del clip → `play_sound` \
-- "salteá" / "siguiente" / "cambiá" → `skip_music` \
-- "pausá" / "frená un toque" → `pause_music` \
-- "seguí" / "continuá" / "resumí" / "play" (sin artista) → `resume_music` \
-- "pará la música" / "cortala" / "basta" → `stop_music` \
-- "modo dj" / "hacé de dj" / "prendé el dj" → `dj_mode` \
-\
+- {_fmt_trigger("skip_music")} → `skip_music` \
+- {_fmt_trigger("pause_music")} → `pause_music` \
+- {_fmt_trigger("resume_music")} → `resume_music` \
+- {_fmt_trigger("stop_music")} → `stop_music` \
+- {_fmt_trigger("dj_mode")} → `dj_mode` \
+
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
-\
-Una sola tool por mensaje. Confirmación ("dale va", "tomá", "dale salteo") \
+
+Una sola tool por mensaje. Confirmación breve ("tomá", "va", "salteo") \
 solo si la vas a llamar — sin chamuyo. Si NO llamás tool, NO digas \
 frases de confirmación — respondé charla normal. \
 Nunca digas "no puedo" ni "no me anda". \
@@ -3199,35 +3204,42 @@ async def indioLogic(
             )
         )
 
-    _turn_ts = time.time()
-    # Persisted history scrubs emojis/legacy-brackets; visible reply already
-    # went to Discord above with the emojis intact.
-    user_turn = {
-        "role": "user",
-        "parts": [
-            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
-        ],
-        "ts": _turn_ts,
-    }
-    model_turn = {
-        "role": "model",
-        "parts": [{"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}],
-        "ts": _turn_ts,
-    }
-    async with lock:
-        existing = _indio_history.get(mem_key, history_snapshot)
-        new_hist = list(existing) + [user_turn, model_turn]
-        # Hard cap as a safety net if compression keeps failing.
-        if len(new_hist) > _HISTORY_HARD_CAP:
-            new_hist = new_hist[-_HISTORY_HARD_CAP:]
-        _indio_history[mem_key] = new_hist
-        _indio_last_seen[mem_key] = time.time()
-        history_size_after = len(new_hist)
-    await _persist_indio_state()
+    # Turnos que dispararon una funcion (play_music, play_sound, etc.) no se
+    # guardan en memoria: son mensajes operativos, no conversacionales, y
+    # contaminan el historial si persisten (feedback loop "voz → play_music").
+    history_size_after = len(history_snapshot)
+    if not reply.function_calls:
+        _turn_ts = time.time()
+        # Persisted history scrubs emojis/legacy-brackets; visible reply already
+        # went to Discord above with the emojis intact.
+        user_turn = {
+            "role": "user",
+            "parts": [
+                {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
+            ],
+            "ts": _turn_ts,
+        }
+        model_turn = {
+            "role": "model",
+            "parts": [
+                {"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}
+            ],
+            "ts": _turn_ts,
+        }
+        async with lock:
+            existing = _indio_history.get(mem_key, history_snapshot)
+            new_hist = list(existing) + [user_turn, model_turn]
+            # Hard cap as a safety net if compression keeps failing.
+            if len(new_hist) > _HISTORY_HARD_CAP:
+                new_hist = new_hist[-_HISTORY_HARD_CAP:]
+            _indio_history[mem_key] = new_hist
+            _indio_last_seen[mem_key] = time.time()
+            history_size_after = len(new_hist)
+        await _persist_indio_state()
 
-    # Background distillation when the short-term log grows past threshold.
-    if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-        _spawn(_maybe_compress(mem_key))
+        # Background distillation when the short-term log grows past threshold.
+        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+            _spawn(_maybe_compress(mem_key))
 
     analytics.capture(
         "indio invoked",
@@ -3576,11 +3588,11 @@ async def indioFromVoice(
             )
         )
 
-    # No guardar mensajes de voz en el historial: acumulan contexto que sesga
-    # al modelo a asociar voz → play_music (feedback loop). Las transcripciones
-    # de voz se procesan cada vez como mensajes independientes.
+    # No guardar mensajes que activaron una funcion (play_music, etc.) ni
+    # transcripciones de voz: son mensajes operativos que contaminan el historial
+    # y generan feedback loop "voz → play_music".
     history_size_after = 0
-    if not from_voice:
+    if not from_voice and not reply.function_calls:
         _turn_ts = time.time()
         user_turn = {
             "role": "user",
