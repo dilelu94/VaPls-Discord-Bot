@@ -13,11 +13,13 @@ These tests pin the wording so accidental rewrites that loosen the gate get
 caught. They don't assert exact phrases — only that the key signal words
 (verb list, hard requirement framing, invalid-example) are present.
 """
+
 from __future__ import annotations
 
 
 def _play_sound_description():
     from geminiCommand import _INDIO_TOOLS
+
     for tool in _INDIO_TOOLS:
         if tool.get("name") == "play_sound":
             return tool["description"].lower()
@@ -62,14 +64,9 @@ def test_warns_against_fuzzy_matching_conversation():
     assert "no significa" in desc or "hablando del tema" in desc
 
 
-def test_dale_alone_is_called_out_as_ambiguous():
-    """'Dale' suelto es muletilla rioplatense que puede significar cualquier
-    cosa (asentir, animar, pedir). Si Gemini la cuenta como verbo de orden,
-    cada vez que alguien diga 'dale, qué onda' o 'dale, contame' arranca a
-    tirar clips. La descripción tiene que distinguir 'dale' standalone (no
-    cuenta) de 'dale + otro verbo' (válido)."""
+def test_play_sound_has_no_dale_mention():
+    """'Dale' ya no aparece en la descripción: mencionarlo, incluso como
+    contraejemplo, mantiene el concepto activo y genera falsos positivos
+    (Gemini termina interpretando 'dale' como verbo de orden)."""
     desc = _play_sound_description()
-    # The disambiguation must be present in some form.
-    assert "muletilla" in desc or "ambigua" in desc or "ambigua" in desc
-    # And the rule about chained 'dale + verb' should be there too.
-    assert "dale" in desc
+    assert "dale" not in desc

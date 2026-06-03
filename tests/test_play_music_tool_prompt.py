@@ -12,11 +12,13 @@ These tests pin the wording so accidental rewrites that remove the explicit
 verb list get caught. They don't assert exact phrases — only that the prompt
 contains the key signal words.
 """
+
 from __future__ import annotations
 
 
 def _play_music_description():
     from geminiCommand import _INDIO_TOOLS
+
     for tool in _INDIO_TOOLS:
         if tool.get("name") == "play_music":
             return tool["description"].lower()
@@ -57,11 +59,9 @@ def test_mentions_resume_music_disambiguation():
     assert "resume_music" in desc
 
 
-def test_dale_alone_is_called_out_as_ambiguous():
-    """'Dale' suelto es muletilla rioplatense que puede significar cualquier
-    cosa (asentir, animar, pedir). Si Gemini la cuenta como verbo de orden,
-    cada vez que alguien diga 'dale, escuchame' arranca a tirar temas. La
-    descripción tiene que distinguir 'dale' standalone (no cuenta) de
-    'dale + otro verbo' (válido, donde el verbo real es el segundo)."""
+def test_play_music_has_no_dale_mention():
+    """'Dale' ya no aparece en la descripción: mencionarlo, incluso como
+    contraejemplo, mantiene el concepto activo y genera falsos positivos
+    (Gemini termina interpretando 'dale' como verbo de orden)."""
     desc = _play_music_description()
-    assert "muletilla" in desc or "ambigua" in desc
+    assert "dale" not in desc

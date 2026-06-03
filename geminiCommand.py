@@ -27,6 +27,7 @@ import discord
 import analytics
 import config
 import geminiClient
+import gemini_keywords as _kw
 import geminiKeys
 
 try:
@@ -187,15 +188,13 @@ _INDIO_TOOLS = [
         "description": (
             "Reproducir un tema NUEVO en el canal de voz. \n"
             "REQUISITO DURO: el mensaje DEBE tener (1) un verbo de orden "
-            "explícito — poné, ponete, poneme, metele, tirá, tirate, "
-            "reproducí, dejá, traete, queremos escuchar — Y (2) QUÉ "
+            "explícito — " + ", ".join(_kw.PLAY_MUSIC_VERBS) + " — Y (2) QUÉ "
             "reproducir (artista, canción, o 'tema'). \n"
-            "'Dale' suelto es muletilla ambigua, NO es verbo de orden. \n"
             "'Sacá' tampoco — sacar/quitar música es stop_music. \n"
             "NO uses esta tool para comandos de control (saltear, pausar, "
             "etc.) ni para clips del soundpad. \n"
-            "Si solo dicen 'play' / 'pone play' / 'metele play' / "
-            "'dale play' SIN artista, NUNCA es play_music — es resume_music."
+            "Si solo dicen 'play' / 'pone play' / 'metele play' "
+            "SIN artista, NUNCA es play_music — es resume_music."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -221,9 +220,9 @@ _INDIO_TOOLS = [
             "el canal de voz. \n"
             "Hay DOS casos válidos para llamarla:\n"
             "CASO A (orden explícita): el mensaje tiene (1) un verbo "
-            "explícito de orden — tirá, tirate, tirame, pone, poné, ponete, "
-            "ponela, ponelo, mete, metele, hacé sonar, hacelo sonar, "
-            "reproducí, traete, queremos escuchar — Y (2) un nombre/keyword "
+            "explícito de orden — "
+            + ", ".join(_kw.PLAY_SOUND_VERBS)
+            + " — Y (2) un nombre/keyword "
             "concreto del clip. Acá el clip es la respuesta principal.\n"
             "CASO B (lo nombran sin pedirlo): alguien dice TEXTUALMENTE el "
             "nombre/keyword de un clip que existe pero sin verbo de orden. "
@@ -234,11 +233,6 @@ _INDIO_TOOLS = [
             "FUERA DE ESOS DOS CASOS NO la llames: si no hay verbo de orden y "
             "tampoco nombran un clip que exista, NO inventes un audio para "
             "'comentar' la charla — solo respondé texto. \n"
-            "'Dale' suelto NO cuenta como verbo de "
-            "orden: es muletilla ambigua que se usa para todo (asentir, "
-            "pedir, animar). Solo si 'dale' viene seguido de OTRO verbo "
-            "concreto ('dale, tirate ese audio', 'dale, pone el de las "
-            "risas') vale, y ahí el verbo real es el segundo. \n"
             "Si falta el verbo de orden, NO uses esta tool aunque mencionen "
             "una palabra que matchee con un clip del soundpad. Que alguien "
             "diga un nombre de clip en medio de una conversación NO "
@@ -248,7 +242,7 @@ _INDIO_TOOLS = [
             "Si falta el nombre concreto del clip (solo dicen 'pone un audio' "
             "sin más), tampoco la uses. \n"
             "Ejemplos VÁLIDOS: 'tirá el de las risas', "
-            "'hacé sonar el de aplausos', 'dale, tirate ese audio'. \n"
+            "'hacé sonar el de aplausos'. \n"
             "Ejemplos INVÁLIDOS (NO llamar play_sound): mencionar un clip "
             "sin pedirlo ('che ese audio del otro día estaba bueno'), "
             "preguntar por sonidos ('cuál es tu meme favorito?'), "
@@ -272,42 +266,43 @@ _INDIO_TOOLS = [
         "name": "skip_music",
         "description": (
             "Saltear el tema actual. "
-            "Usala cuando piden 'saltea', 'skip', 'siguiente', "
-            "'cambiá de tema'."
+            "Usala cuando piden " + ", ".join(f"'{v}'" for v in _kw.SKIP_VERBS) + "."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "pause_music",
         "description": (
-            "Pausar la música. Usala cuando piden 'pausá', 'frená', 'pará un toque'."
+            "Pausar la música. "
+            "Usala cuando piden " + ", ".join(f"'{v}'" for v in _kw.PAUSE_VERBS) + "."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "resume_music",
         "description": (
-            "Despausar la música. Usala cuando "
-            "piden 'resumí', 'continuá', 'play', "
-            "'pone play', 'metele play' SIN artista."
+            "Despausar la música. "
+            "Usala cuando piden "
+            + ", ".join(f"'{v}'" for v in _kw.RESUME_VERBS)
+            + " SIN artista."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "stop_music",
         "description": (
-            "Parar la música y vaciar la cola. Usala cuando piden "
-            "'pará', 'cortala', 'basta'."
+            "Parar la música y vaciar la cola. "
+            "Usala cuando piden " + ", ".join(f"'{v}'" for v in _kw.STOP_VERBS) + "."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
     {
         "name": "dj_mode",
         "description": (
-            "Activar el modo DJ. Usala cuando el "
-            "grupo pide 'modo dj', que el indio 'haga de dj', "
-            "'pinche', 'ponga música en automático', 'sea el dj', "
-            "o 'prenda el auto dj'."
+            "Activar el modo DJ. "
+            "Usala cuando el grupo pide "
+            + ", ".join(f"'{v}'" for v in _kw.DJ_VERBS)
+            + "."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -731,6 +726,7 @@ def _format_player_state(bot, guild_id) -> str:
     cur = getattr(player, "currentSong", None)
     if isinstance(cur, dict):
         title = str(cur.get("title") or "").strip()
+    _play_phrases = " / ".join(f"'{p}'" for p in _kw.RESUME_CONTEXT_PLAY_PHRASES)
     # Interrupted state lives without a vc — the bot got kicked or dropped,
     # but we kept the song and queue in memory. The indio should steer
     # ambiguous play requests to resume_music here too.
@@ -741,9 +737,8 @@ def _format_player_state(bot, guild_id) -> str:
             else "música interrumpida por desconexión"
         )
         return (
-            f"[Estado del reproductor]: {head}. Si piden 'play' / "
-            f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
-            f"'resumí' / 'retomá' SIN nombrar artista o canción, usá "
+            f"[Estado del reproductor]: {head}. Si piden {_play_phrases} "
+            f"SIN nombrar artista o canción, usá "
             f"resume_music (NO play_music) — el bot va a reconectarse y "
             f"retomar desde donde quedó."
         )
@@ -754,9 +749,8 @@ def _format_player_state(bot, guild_id) -> str:
         if vc.is_paused():
             head = f'música PAUSADA — "{title}"' if title else "música pausada"
             return (
-                f"[Estado del reproductor]: {head}. Si piden 'play' / "
-                f"'pone play' / 'dale play' / 'metele play' / 'continuá' / "
-                f"'resumí' SIN nombrar artista o canción, usá resume_music "
+                f"[Estado del reproductor]: {head}. Si piden {_play_phrases} "
+                f"SIN nombrar artista o canción, usá resume_music "
                 f"(NO play_music)."
             )
     except Exception:
@@ -1356,17 +1350,7 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
 #   3. Ni verbo ni nombre en el mensaje → se DESCARTA solo el play_sound; la
 #      respuesta de texto se manda igual.
 
-_PLAY_SOUND_ORDER_RE = re.compile(
-    r"\b("
-    r"tira(te|me|le|lo|la|nos)?|"
-    r"pone(la|lo|le|me|nos|te)?|"
-    r"mete(le|lo|la)?|"
-    r"reproduci(lo|la|me)?|"
-    r"hace(lo|la)?\s+sonar|"
-    r"traete|"
-    r"queremos\s+(escuchar|oir)"
-    r")\b"
-)
+_PLAY_SOUND_ORDER_RE = re.compile(_kw.PLAY_ORDER_RE_SOURCE)
 
 # Palabras genéricas que pueden estar en el nombre de un clip pero que NO deben
 # servir para "anclar" el nombre en el mensaje (si no, cualquier 'de'/'que'
