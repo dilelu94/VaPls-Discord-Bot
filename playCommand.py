@@ -662,30 +662,6 @@ class DjMenuView(discord.ui.View):
         super().__init__(timeout=None)
         self.player = player
 
-    @discord.ui.button(label="🎧 Activar DJ", style=discord.ButtonStyle.success,
-                       custom_id="djmenu_activate")
-    async def activate(self, button: discord.ui.Button, interaction: discord.Interaction):
-        """Turn Auto-DJ on. Refuses if there is no history to seed from."""
-        await interaction.response.defer()
-        if not self.player.history and not self.player.currentSong:
-            try:
-                await interaction.followup.send(
-                    "🎧 Poné un tema primero y después prendo el modo DJ.",
-                    ephemeral=True,
-                )
-            except Exception:
-                pass
-            return
-        ok = self.player.autodj_activate()
-        if ok and self.player.textChannel:
-            try:
-                await self.player.textChannel.send(
-                    "🎧 Modo DJ prendido. Cuando se vacíe la cola, sigo yo."
-                )
-            except Exception:
-                pass
-        await self.player.updateControlMessage()
-
     @discord.ui.button(label="🚫 Vetar sugerencia", style=discord.ButtonStyle.secondary,
                        custom_id="djmenu_veto")
     async def veto(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -716,70 +692,64 @@ class DjMenuView(discord.ui.View):
         await self.player.autodj_deactivate(reason="button")
 
 
-async def openDjMenu(bot, guild_id: int) -> tuple:
-    """Post the DJ menu to the configured AUTODJ_MENU_CHANNEL_ID channel.
+async def openDjMenu(bot, guild_id: int, channel_id: Optional[int] = None) -> tuple:
+    """Activate Auto-DJ and post the control panel in the invoking channel.
 
     Called by the /dj slash command (in bot.py) and by the Indio's DJ_MODE
-    action dispatch (in geminiCommand._dispatch_indio_actions). Shares the
-    same pattern as playFromIndio so neither caller needs to know about
-    channel resolution, relay, or the GuildPlayer.
+    action dispatch (in geminiCommand._dispatch_indio_actions). Activating in
+    one step is intentional: ``/dj`` turns the mode on directly (no extra
+    "Activar" click), and the panel keeps the veto/play-now/stop buttons.
 
-    Returns (ok, message) — ok=True when the menu was posted successfully.
+    The panel goes to ``channel_id`` (the channel where /dj was run, or where
+    the Indio detected the request) so it shows up where the user is looking,
+    not in a fixed channel they might not be watching. Falls back to
+    ``AUTODJ_MENU_CHANNEL_ID`` only when no channel_id is given or it can't be
+    resolved. The Auto-DJ suggestions then follow the same channel.
+
+    Returns (ok, message). ok=False with a "cold start" message when there is
+    no song playing or in history to seed the mode from.
     """
     guild = bot.get_guild(guild_id)
     if guild is None:
         return False, "guild no encontrado"
 
-    channel = guild.get_channel(config.AUTODJ_MENU_CHANNEL_ID)
+    channel = None
+    if channel_id is not None:
+        channel = guild.get_channel(int(channel_id))
+    if channel is None or not hasattr(channel, "send"):
+        channel = guild.get_channel(config.AUTODJ_MENU_CHANNEL_ID)
     if channel is None or not hasattr(channel, "send"):
         playLogger.warning(
-            "[DJ-MENU] AUTODJ_MENU_CHANNEL_ID=%s not found in guild %s",
-            config.AUTODJ_MENU_CHANNEL_ID, guild_id,
+            "[DJ-MENU] no usable channel (channel_id=%s, fallback=%s) in guild %s",
+            channel_id, config.AUTODJ_MENU_CHANNEL_ID, guild_id,
         )
-        return False, (
-            f"no encuentro el canal del menú DJ (id={config.AUTODJ_MENU_CHANNEL_ID})"
-        )
+        return False, "no encuentro un canal donde abrir el menú DJ"
 
     player = getGuildPlayer(guild_id, bot)
+
+    # No se activa en frío: necesita un tema sonando o en historial.
+    if not player.history and not player.currentSong:
+        return False, "cold-start"
+
+    # The Auto-DJ lives where it was activated: panel + future suggestions land
+    # in this channel.
+    player.textChannel = channel
+    player.autodj_activate()
+
     view = DjMenuView(player)
     content = (
-        "🎧 **Modo DJ** — elegí una acción:\n"
-        "• **🎧 Activar DJ** — prende el modo automático (necesitás haber puesto algo primero).\n"
+        "🎧 **Modo DJ activado.** Cuando se vacíe la cola, sigo yo.\n"
         "• **🚫 Vetar** — descarta la sugerencia actual y busca otra.\n"
         "• **▶️ Poner ya** — salta la espera y pone la sugerencia ahora.\n"
         "• **⏹️ Cortar DJ** — apaga el modo DJ."
     )
     try:
-        # Try to post the text via userbot relay so it looks like the real Indio.
-        # The buttons ALWAYS go via the bot (user accounts can't attach Views).
-        relayed = False
-        try:
-            url = config.INDIO_RELAY_URL
-            secret = config.INDIO_RELAY_SECRET
-            if url and secret:
-                payload = {
-                    "channel_id": int(config.AUTODJ_MENU_CHANNEL_ID),
-                    "content": content,
-                }
-                headers = {"X-API-Secret": secret}
-                timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
-                async with aiohttp.ClientSession(timeout=timeout) as sess:
-                    async with sess.post(url, json=payload, headers=headers) as resp:
-                        relayed = resp.status < 400
-        except Exception:
-            pass
-
-        if not relayed:
-            await channel.send(content, view=view)
-        else:
-            # Even when the text was relayed, post the buttons via the bot
-            # (user accounts can't attach Views to messages).
-            await channel.send(view=view)
+        await channel.send(content, view=view)
     except Exception as e:
         playLogger.exception("[DJ-MENU] failed to post DJ menu")
         return False, f"error al postear el menú: {e}"
 
-    return True, "menú DJ abierto"
+    return True, "modo DJ activado"
 
 
 class CancelDownloadView(discord.ui.View):
@@ -1081,6 +1051,13 @@ class GuildPlayer:
             await asyncio.sleep(grace)
         except asyncio.CancelledError:
             return
+        # Drop our own task handle BEFORE firing. ``_autodj_fire_now`` calls
+        # ``_autodj_cancel_grace``, which would otherwise cancel THIS task —
+        # we *are* the grace task — raising CancelledError on the next await
+        # inside fire_now and aborting playback before it starts. (The "Ya,
+        # ponela" button doesn't hit this because it fires from a different
+        # task.) Clearing the handle makes cancel_grace a no-op here.
+        self.autodj_grace_task = None
         await self._autodj_fire_now()
 
     async def _autodj_fire_now(self) -> None:

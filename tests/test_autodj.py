@@ -229,6 +229,50 @@ async def test_grace_fire_queues_the_pending_song(fresh_player_state):
 
 
 @pytest.mark.asyncio
+async def test_waiting_out_grace_starts_playback(fresh_player_state, monkeypatch):
+    """Regression: letting the 15s grace window run out must actually start the
+    next track. The grace timer used to cancel ITSELF mid-fire (it is the very
+    task that _autodj_fire_now cancels), raising CancelledError on the next
+    await and aborting playback before it began — so 'Ya, ponela' worked but
+    waiting did nothing. Here we run the REAL timer (grace shrunk to ~0) and a
+    suggestion-card edit that actually suspends, which is where the abort hit."""
+    import config
+    playCommand = fresh_player_state
+    monkeypatch.setattr(config, "AUTODJ_GRACE_SECONDS", 0, raising=False)
+
+    player = playCommand.GuildPlayer(100, make_bot())
+    player.vc = FakeVC()
+    # The card edit must suspend (await something real) so a pending self-cancel
+    # would surface here — exactly like the real Discord HTTP edit does.
+    async def _suspending_edit(*a, **k):
+        await asyncio.sleep(0)
+    card = MagicMock()
+    card.edit = _suspending_edit
+    player.textChannel = MagicMock(send=AsyncMock(return_value=card))
+    player.updateControlMessage = AsyncMock()
+    player.startPlayingCurrent = AsyncMock()
+    player.autodj_active = True
+    player.currentSong = None
+    player.queue = []
+    song = {"id": "go", "title": "Sumo - La Rubia Tarada", "duration_string": "3:30"}
+    player.autodj_pending_song = song
+
+    # Start the REAL grace timer (not mocked); grace≈0 fires almost at once.
+    # Capture the task handle now — the fix clears player.autodj_grace_task
+    # before firing, so we await the captured reference. With the bug, this
+    # task cancels itself and the await raises CancelledError (test fails).
+    await player._autodj_start_grace(song, "Sumo - La Rubia Tarada")
+    grace_task = player.autodj_grace_task
+    assert grace_task is not None
+    await asyncio.wait_for(grace_task, timeout=2)
+
+    # fire_now ran to completion: the track became current and playback was
+    # kicked off, instead of being aborted by the self-cancel.
+    assert player.currentSong is not None and player.currentSong["id"] == "go"
+    player.startPlayingCurrent.assert_awaited()
+
+
+@pytest.mark.asyncio
 async def test_veto_searches_same_artist(fresh_player_state):
     """Vetoing the suggestion replaces it with a different track from the same
     artist."""
@@ -310,77 +354,64 @@ def _make_fake_bot(guild):
 
 
 @pytest.mark.asyncio
-async def test_open_dj_menu_posts_to_configured_channel(monkeypatch):
-    """openDjMenu resolves AUTODJ_MENU_CHANNEL_ID and sends the menu there."""
-    import config
+async def test_open_dj_menu_activates_in_one_step_and_posts(monkeypatch):
+    """/dj activates Auto-DJ directly (no extra click) and posts the panel in
+    the invoking channel."""
     import playCommand
 
     guild, channel = _make_fake_guild()
     bot = _make_fake_bot(guild)
-
-    # Silence the relay so the fallback channel.send path is exercised.
-    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
-    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
     monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=True)
 
-    ok, msg = await playCommand.openDjMenu(bot, 100)
+    # A player that has already played something → not a cold start.
+    player = playCommand.GuildPlayer(100, bot)
+    player.history = [{"id": "v1", "title": "Spinetta - Bajan"}]
+    playCommand.guildPlayers[100] = player
+
+    ok, msg = await playCommand.openDjMenu(bot, 100, 555)
 
     assert ok is True
-    # The channel that get_channel returned should have received a send call.
-    assert channel.send.await_count >= 1
+    assert player.autodj_active is True        # activated in one step
+    assert channel.send.await_count >= 1        # panel posted in the channel
+
+
+@pytest.mark.asyncio
+async def test_open_dj_menu_cold_start_refuses(monkeypatch):
+    """With nothing played yet, /dj refuses (cold start) and stays off."""
+    import playCommand
+
+    guild, channel = _make_fake_guild()
+    bot = _make_fake_bot(guild)
+    monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=True)
+
+    player = playCommand.GuildPlayer(100, bot)
+    player.history = []
+    player.currentSong = None
+    playCommand.guildPlayers[100] = player
+
+    ok, msg = await playCommand.openDjMenu(bot, 100, 555)
+
+    assert ok is False
+    assert msg == "cold-start"
+    assert player.autodj_active is False
+    assert channel.send.await_count == 0        # nothing posted
 
 
 @pytest.mark.asyncio
 async def test_open_dj_menu_fails_when_channel_missing(monkeypatch):
-    """openDjMenu returns ok=False when the configured channel is not found."""
+    """openDjMenu returns ok=False when no channel can be resolved."""
     import playCommand
 
     guild = MagicMock()
     guild.id = 100
-    guild.get_channel = MagicMock(return_value=None)  # channel not found
+    guild.get_channel = MagicMock(return_value=None)  # no channel found
     bot = _make_fake_bot(guild)
     monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=True)
 
-    ok, msg = await playCommand.openDjMenu(bot, 100)
+    ok, msg = await playCommand.openDjMenu(bot, 100, 555)
 
     assert ok is False
     assert msg  # any failure message
-
-
-# --------------------------------------------------------------------------
-# DjMenuView activate button — with and without history
-# --------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_djmenu_activate_with_history(fresh_player_state):
-    """DjMenuView activates Auto-DJ when there is history (button logic)."""
-    playCommand = fresh_player_state
-    player = _make_player(playCommand)
-    player.history = [{"id": "v1", "title": "Spinetta - Bajan"}]
-
-    # The activate button defers and then calls player.autodj_activate() when
-    # there is history. We exercise this by testing the underlying player API
-    # the button delegates to.
-    # Behavioral promise: "with history → Auto-DJ turns on."
-    ok = player.autodj_activate()
-    if ok and player.textChannel:
-        await player.textChannel.send("🎧 Modo DJ prendido.")
-
-    assert player.autodj_active is True
-
-
-@pytest.mark.asyncio
-async def test_djmenu_activate_refused_cold(fresh_player_state):
-    """DjMenuView activation is refused when there is no history or current song."""
-    playCommand = fresh_player_state
-    player = _make_player(playCommand)
-    player.history = []
-    player.currentSong = None
-
-    # The button checks this precondition before calling autodj_activate.
-    # Behavioral promise: "no history → autodj_activate returns False".
-    assert player.autodj_activate() is False
-    assert player.autodj_active is False
 
 
 # --------------------------------------------------------------------------
@@ -395,9 +426,9 @@ async def test_dispatch_dj_mode_calls_open_dj_menu(monkeypatch):
 
     called = []
 
-    async def _fake_open_dj_menu(bot, guild_id):
-        called.append((bot, guild_id))
-        return True, "menú DJ abierto"
+    async def _fake_open_dj_menu(bot, guild_id, channel_id=None):
+        called.append((bot, guild_id, channel_id))
+        return True, "modo DJ activado"
 
     monkeypatch.setattr(playCommand, "openDjMenu", _fake_open_dj_menu, raising=False)
 

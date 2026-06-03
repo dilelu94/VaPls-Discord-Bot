@@ -3,7 +3,7 @@
 | Command | Behavior | Subsystems touched |
 | --- | --- | --- |
 | `/play` | Busca o recibe una URL de YouTube, descarga con yt-dlp y reproduce en voz. Si la búsqueda devuelve varios resultados, muestra un menú para que quien pidió elija cuál; una URL se reproduce directo. | `playCommand`, `config`, `analytics`, FFmpeg |
-| `/dj` | Abre el menú del modo DJ en el canal `AUTODJ_MENU_CHANNEL_ID`. Desde ahí se puede activar el Auto-DJ, vetar la sugerencia actual, reproducirla ya, o apagarlo. | `playCommand`, `bot.py`, `config` |
+| `/dj` | **Activa el modo DJ en un paso** (requiere haber puesto música antes) y postea el panel de control **en el mismo canal donde se corrió**. El panel tiene botones para vetar la sugerencia, reproducirla ya, o apagar el modo. | `playCommand`, `bot.py`, `config` |
 | `/parar` | Detiene la reproducción, limpia la cola y desconecta. | `pararCommand`, `playCommand`, `analytics` |
 | `/soundpad` | Abre el panel de Soundpad para reproducir clips locales. | `soundpadCommand`, `config`, `analytics` |
 | `/vapls` | Pregunta al bot Gemini sin memoria. | `geminiCommand`, `geminiClient`, `analytics` |
@@ -41,17 +41,21 @@ tema** en vez de dejar morir la música. **No gasta tokens de IA extra**: la
 música la elige YouTube (Mix/radio del último tema o búsqueda del mismo artista)
 y las frases del Indio salen de un banco pre-escrito.
 
-**Cómo activar el modo DJ (dos vías — ambas abren el mismo menú en `AUTODJ_MENU_CHANNEL_ID`):**
-- **`/dj`** — comando slash directo desde cualquier canal de texto.
+**Cómo activar el modo DJ (dos vías — ambas lo prenden en un solo paso):**
+- **`/dj`** — lo activa directo y postea el panel **en el mismo canal donde lo
+  corrés**. **No se activa en frío**: necesita un tema sonando o en historial
+  (poné algo con `/play` primero).
 - **Pedíselo al Indio en el chat de texto** — escribí algo como *"indio hacé de
   DJ"*, *"mode DJ"*, *"ponete a pinchar"*, *"pone música en automático"*, etc.
-  El Indio lo detecta vía su sistema de tools de Gemini y abre el menú en el
-  canal configurado. **No funciona por voz** — el path de voz del Indio no tiene
-  lógica de DJ.
+  El Indio lo detecta vía su sistema de tools de Gemini y lo activa, posteando el
+  panel en el canal donde está charlando. **No funciona por voz** — el path de
+  voz del Indio no tiene lógica de DJ.
 
-**El menú** aparece en el canal `AUTODJ_MENU_CHANNEL_ID` con cuatro botones:
-- **🎧 Activar DJ** — prende el modo automático. **No se activa en frío**: necesita
-  un tema sonando o en historial para tener mood del que partir.
+El panel se postea en el canal de invocación (no en un canal fijo). El Auto-DJ
+y sus sugerencias quedan ahí. `AUTODJ_MENU_CHANNEL_ID` se usa solo como fallback
+si no se puede resolver el canal.
+
+**El panel** tiene tres botones:
 - **🚫 Vetar sugerencia** — descarta la sugerencia actual y busca otra del mismo
   artista.
 - **▶️ Poner ya** — salta la espera de `AUTODJ_GRACE_SECONDS` y pone la sugerencia
