@@ -1691,11 +1691,13 @@ async def _dispatch_indio_actions(
                     statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "DJ_MODE":
-                    # Open the DJ menu in the configured channel — same handler
-                    # used by the /dj slash command.
+                    # Activate Auto-DJ + post the panel — same handler as /dj.
+                    # Use the channel where the Indio just replied so the panel
+                    # shows up next to the conversation, not in a fixed channel.
                     try:
                         from playCommand import openDjMenu
-                        ok, msg = await openDjMenu(bot, int(guild_id))
+                        dj_channel_id = getattr(reply_handle, "channel_id", None)
+                        ok, msg = await openDjMenu(bot, int(guild_id), dj_channel_id)
                         statuses.append(f"dj_mode: {'ok' if ok else 'fail'} — {msg}")
                         logger.info("indio DJ_MODE → ok=%s msg=%s", ok, msg)
                     except Exception:

@@ -393,14 +393,14 @@ def _track_command(ctx, name, extra=None):
     name="dj", description="Abre el menú del modo DJ en el canal de música"
 )
 async def dj(ctx):
-    """Slash command: open the Auto-DJ menu in the configured music channel.
+    """Slash command: activate Auto-DJ and post its control panel here.
+
+    Activating in one step — /dj turns the mode on directly (no extra click)
+    and posts the panel (veto / play-now / stop) in the channel where it was
+    run. Refuses with a hint when nothing has played yet (cold start).
 
     Args:
         ctx: Discord application context.
-
-    Side Effects:
-        Posts the DJ menu (DjMenuView) in AUTODJ_MENU_CHANNEL_ID with buttons
-        to activate, veto, fire, or stop the Auto-DJ mode.
 
     Async:
         This function is a coroutine and must be awaited.
@@ -412,14 +412,19 @@ async def dj(ctx):
             "❌ Este comando solo funciona en un servidor.", ephemeral=True
         )
         return
-    ok, msg = await openDjMenu(ctx.bot, ctx.guild.id)
-    if not ok:
-        await ctx.followup.send(f"❌ No pude abrir el menú DJ: {msg}", ephemeral=True)
-    else:
+    channel_id = getattr(ctx, "channel_id", None) or getattr(getattr(ctx, "channel", None), "id", None)
+    ok, msg = await openDjMenu(ctx.bot, ctx.guild.id, channel_id)
+    if ok:
         try:
-            await ctx.followup.send("🎧 Menú DJ abierto.", ephemeral=True)
+            await ctx.followup.send("🎧 Modo DJ activado.", ephemeral=True)
         except Exception:
             pass
+    elif msg == "cold-start":
+        await ctx.followup.send(
+            "🎧 Poné un tema primero (con /play) y después corré /dj.", ephemeral=True
+        )
+    else:
+        await ctx.followup.send(f"❌ No pude activar el modo DJ: {msg}", ephemeral=True)
 
 
 @bot.slash_command(name="parar")
