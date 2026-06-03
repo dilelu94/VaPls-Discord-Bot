@@ -1000,6 +1000,7 @@ class GuildPlayer:
         if not seed_id or not seed_title:
             return
 
+        playLogger.info("[AUTODJ] propose_next started (seed='%s', id=%s)", seed_title, seed_id)
         candidates = await self._autodj_fetch_radio(seed_id)
         song = self._autodj_pick_song(candidates)
         if song is None:
@@ -1021,6 +1022,7 @@ class GuildPlayer:
         self.autodj_pending_song = song
         self.autodj_seed_id = song["id"]
         self.autodj_seed_title = song["title"]
+        playLogger.info("[AUTODJ] picked song: '%s' (id=%s)", song["title"], song["id"])
         await self._autodj_start_grace(song, seed_title)
 
     async def _autodj_start_grace(self, song: dict, seed_title: str) -> None:
@@ -1083,11 +1085,20 @@ class GuildPlayer:
         if self.autodj_chain_count >= max_chain:
             self.autodj_active = False
 
+        has_voice = bool(self.vc and self.vc.is_connected())
+        if not has_voice:
+            playLogger.error(
+                "[AUTODJ] fire_now: no voice connection — bot was disconnected before song could play "
+                "(song='%s', id=%s). Watchdog fired too early.",
+                song["title"], song["id"],
+            )
+
         guild = self.bot.get_guild(self.guildId) if self.bot else None
         analytics.capture("autodj played", user=self.lastRequester, guild=guild, properties={
             "video_id": song["id"],
             "title": song["title"],
             "chain_count": self.autodj_chain_count,
+            "has_voice": has_voice,
         })
         self.queue.append(song)
         if not self.currentSong and self.queue:

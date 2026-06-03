@@ -46,6 +46,8 @@ def _is_active(vc) -> bool:
     * Intentionally paused (``is_paused``).
     * There's a live soundpad panel in the guild — the user can still click
       a button to play a clip, so leaving voice would orphan the panel.
+    * Auto-DJ is active and there are humans in the channel — the bot is
+      fetching or waiting to propose the next track.
     """
     try:
         if vc.is_playing():
@@ -66,6 +68,23 @@ def _is_active(vc) -> bool:
             return True
     except Exception:
         # Soundpad module may be unavailable in some test setups — fail open.
+        pass
+    try:
+        from playCommand import guildPlayers
+
+        guild = getattr(vc, "guild", None)
+        guild_id = getattr(guild, "id", None)
+        if guild_id is not None:
+            player = guildPlayers.get(guild_id)
+            if player is not None and player.autodj_active:
+                humans = sum(1 for m in vc.channel.members if not m.bot)
+                if humans > 0:
+                    logger.debug(
+                        "idle watchdog: staying — Auto-DJ active (guild=%s, humans=%d)",
+                        guild_id, humans,
+                    )
+                    return True
+    except Exception:
         pass
     return False
 
