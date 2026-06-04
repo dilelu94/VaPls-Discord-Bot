@@ -2401,13 +2401,13 @@ _INDIO_PREFIX_RE = re.compile(
 # forbid newlines / nested brackets so we don't eat real bracketed content in
 # the middle of a sentence.
 _LEADING_SPEAKER_PREFIX_RE = re.compile(
-    r"^\s*[\[\(]\s*[^\\]\)\n]{1,40}\s*[\\]\)]\s*[:\-—]\s*",
+    r"^\s*[\[\(]\s*[^\]\)\n]{1,40}\s*[\]\)]\s*[:\-—]\s*",
 )
 
 _LITERAL_CMD_RE = re.compile(r"/(play|soundpad)\s+(.+)$", re.MULTILINE | re.IGNORECASE)
 
 
-_strip_speaker_prefix(text: str) -> str:
+def _strip_speaker_prefix(text: str) -> str:
     """Drop a leading "[indio]:" / "Indio:" / "[Miles]:" / "(el indio) -" style
     prefix from a model reply. The model sometimes mirrors the speaker tag
     format it sees in user turns even though INDIO_SYSTEM tells it not to.

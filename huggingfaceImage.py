@@ -50,7 +50,7 @@ async def generate(prompt: str, token: str) -> Optional[str]:
 
 
 async def _try_model(model: str, prompt: str, token: str) -> Optional[bytes]:
-    url = f"https://api-inference.huggingface.co/models/{model}"
+    url = f"https://router.huggingface.co/hf-inference/models/{model}"
     headers = {"Authorization": f"Bearer {token}"}
     for attempt in range(MAX_RETRIES):
         try:
