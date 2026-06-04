@@ -1188,7 +1188,12 @@ class WakeWordSink(voice_recv.AudioSink):
                 self._wake_triggerer_id = user_id
                 self._wake_in_progress = True
                 self._start_capture(user_id, now, vosk_result)
-                self._schedule_wake_sound(user_id)
+                # Preset 4 defers the wake sound until Whisper confirms "indio"
+                # (see _transcribe_and_dispatch) so it doesn't beep on events
+                # that the Whisper filter will discard. Other presets play it
+                # immediately on VOSK detection.
+                if _SENSITIVITY_PRESET != 4:
+                    self._schedule_wake_sound(user_id)
                 try:
                     rec.Reset()
                 except Exception:
@@ -1429,6 +1434,11 @@ class WakeWordSink(voice_recv.AudioSink):
                     },
                 )
                 return
+
+            if _SENSITIVITY_PRESET == 4:
+                # Wake sound was deferred at VOSK-detection time; play it now
+                # that the Whisper "indio" confirmation has passed.
+                self._schedule_wake_sound(user_id)
 
             log.info(
                 f"[WAKE][es] user_id={user_id} "
