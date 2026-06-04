@@ -216,7 +216,7 @@ async def generarimagenLogic(ctx, prompt: str):
 
             # If bot is present but channel is not accessible, fail with a clear message
             if target_channel is None:
-                await safeEdit(ctx, f"❌ No tengo acceso al canal <#{target_channel_id}>.")
+                await safeEdit(ctx, "no acceso al canal")
                 return
 
     path = await generate(prompt, config.HUGGINGFACE_API_TOKEN)
@@ -243,6 +243,8 @@ async def generarimagenLogic(ctx, prompt: str):
                 content="",
                 file=discord.File(path, filename="imagen.png"),
             )
+    except discord.Forbidden:
+        await safeEdit(ctx, "no acceso al canal")
     except discord.HTTPException as e:
         if "file is too large" in str(e).lower() or "413" in str(e):
             await safeEdit(ctx, "❌ La imagen supera el límite de 8 MB de Discord.")

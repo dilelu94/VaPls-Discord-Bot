@@ -360,4 +360,31 @@ async def test_generarimagen_outside_channel_no_access(ctx_factory, hf_http, mon
 
     # Verify we edited to state we don't have access
     history_text = "\n".join(ctx.deferred_history)
-    assert "No tengo acceso al canal" in history_text
+    assert "no acceso al canal" in history_text
+
+
+async def test_generarimagen_outside_channel_forbidden_on_send(ctx_factory, hf_http, monkeypatch):
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 1490008278275461280)
+    hf_http([
+        FakeHFResponse(status=200, content_type="image/png", data=b"image-outside")
+    ])
+    
+    # Context invoked in channel 42 (outside)
+    ctx = ctx_factory(channel_id=42)
+    
+    # Mock bot and channel that raises Forbidden on send
+    mock_channel = AsyncMock()
+    mock_channel.send.side_effect = discord.Forbidden(
+        response=MagicMock(status=403),
+        message="Forbidden"
+    )
+    mock_bot = MagicMock()
+    mock_bot._mock_custom_bot = True
+    mock_bot.get_channel.return_value = mock_channel
+    ctx.bot = mock_bot
+
+    await generarimagenLogic(ctx, "perrito lindo")
+
+    # Verify history has "no acceso al canal"
+    history_text = "\n".join(ctx.deferred_history)
+    assert "no acceso al canal" in history_text
