@@ -25,7 +25,7 @@ if str(ROOT) not in sys.path:
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def stub_analytics(request, monkeypatch):
-    if "test_posthog_client" in request.module.__name__:
+    if "test_posthog_client" in request.module.__name__ or "test_analytics_collision" in request.module.__name__:
         yield
         return
     import analytics

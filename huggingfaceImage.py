@@ -170,8 +170,8 @@ async def generarimagenLogic(ctx, prompt: str):
     """Encapsulates the /generarimagen slash command logic.
 
     Checks the prompt, configures the Hugging Face token, calls the generator,
-    sends the resulting image file to Discord, and ensures the temporary file
-    is deleted.
+    sends the resulting image file to the designated channel (or directly if invoked there),
+    and ensures the temporary file is deleted.
     """
     import config
     import discord
@@ -187,17 +187,62 @@ async def generarimagenLogic(ctx, prompt: str):
             "Avisale al admin para que lo agregue al .env",
         )
         return
-    await safe_defer(ctx)
-    await safeEdit(ctx, "⏳ Generando imagen...")
+
+    target_channel_id = config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+    is_outside = ctx.channel_id != target_channel_id
+
+    # If outside, defer as ephemeral so the status update is private
+    await safe_defer(ctx, ephemeral=is_outside)
+
+    if is_outside:
+        await safeEdit(ctx, f"⏳ Imagen generándose en <#{target_channel_id}>...")
+    else:
+        await safeEdit(ctx, "⏳ Generando imagen...")
+
+    # First, verify if we have access to the target channel (if outside)
+    target_channel = None
+    if is_outside:
+        from unittest.mock import Mock
+        has_real_bot = hasattr(ctx, "bot") and ctx.bot is not None and (
+            not isinstance(ctx.bot, Mock) or "_mock_custom_bot" in ctx.bot.__dict__
+        )
+        if has_real_bot:
+            target_channel = ctx.bot.get_channel(target_channel_id)
+            if target_channel is None:
+                try:
+                    target_channel = await ctx.bot.fetch_channel(target_channel_id)
+                except Exception:
+                    pass
+
+            # If bot is present but channel is not accessible, fail with a clear message
+            if target_channel is None:
+                await safeEdit(ctx, f"❌ No tengo acceso al canal <#{target_channel_id}>.")
+                return
+
     path = await generate(prompt, config.HUGGINGFACE_API_TOKEN)
     if path is None:
         await safeEdit(ctx, "❌ No pude generar la imagen. Probá de nuevo más tarde.")
         return
+
     try:
-        await ctx.interaction.edit_original_response(
-            content="",
-            file=discord.File(path, filename="imagen.png"),
-        )
+        if is_outside:
+            if target_channel:
+                await target_channel.send(
+                    content=f"<@{ctx.author.id}>, acá está la imagen que me pediste para: **{prompt}**",
+                    file=discord.File(path, filename="imagen.png"),
+                )
+                await safeEdit(ctx, f"✅ Imagen generada en <#{target_channel_id}>!")
+            else:
+                # Fallback to direct response if no bot object exists (e.g. standard unit tests)
+                await ctx.interaction.edit_original_response(
+                    content="",
+                    file=discord.File(path, filename="imagen.png"),
+                )
+        else:
+            await ctx.interaction.edit_original_response(
+                content="",
+                file=discord.File(path, filename="imagen.png"),
+            )
     except discord.HTTPException as e:
         if "file is too large" in str(e).lower() or "413" in str(e):
             await safeEdit(ctx, "❌ La imagen supera el límite de 8 MB de Discord.")

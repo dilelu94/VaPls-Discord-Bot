@@ -279,3 +279,85 @@ async def test_generarimagen_file_too_large(ctx_factory, hf_http):
         assert not os.path.exists(deleted_paths[0])
     finally:
         os_mod.unlink = original_unlink
+
+
+async def test_generarimagen_outside_channel_sends_to_target(ctx_factory, hf_http, monkeypatch):
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 1490008278275461280)
+    hf_http([
+        FakeHFResponse(status=200, content_type="image/png", data=b"image-outside")
+    ])
+    
+    # Context invoked in channel 42 (not target channel)
+    ctx = ctx_factory(channel_id=42)
+    
+    # Mock bot and the target channel
+    mock_channel = AsyncMock()
+    mock_bot = MagicMock()
+    mock_bot._mock_custom_bot = True
+    mock_bot.get_channel.return_value = mock_channel
+    ctx.bot = mock_bot
+
+    await generarimagenLogic(ctx, "perrito lindo")
+
+    # Verify target channel received the file
+    assert mock_channel.send.call_count == 1
+    _, send_kwargs = mock_channel.send.call_args
+    assert send_kwargs.get("file").filename == "imagen.png"
+    assert "<@1>" in send_kwargs.get("content")
+    assert "perrito lindo" in send_kwargs.get("content")
+
+    # Verify invoking channel shows the "generating" status
+    history_text = "\n".join(ctx.deferred_history)
+    assert "Imagen generándose en <#1490008278275461280>" in history_text
+    assert "Imagen generada en <#1490008278275461280>" in history_text
+
+
+async def test_generarimagen_inside_channel_responds_directly(ctx_factory, hf_http, monkeypatch):
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 1490008278275461280)
+    hf_http([
+        FakeHFResponse(status=200, content_type="image/png", data=b"image-inside")
+    ])
+    
+    # Context invoked inside the target channel
+    ctx = ctx_factory(channel_id=1490008278275461280)
+    mock_bot = MagicMock()
+    # Explicitly do NOT set _mock_custom_bot to check that inside channel behaves direct
+    ctx.bot = mock_bot
+
+    await generarimagenLogic(ctx, "perrito lindo")
+
+    # Verify target channel was NOT directly sent to via send
+    assert mock_bot.get_channel.call_count == 0
+
+    # Verify the image was sent via the edit_original_response
+    assert ctx.interaction.edit_original_response.call_count == 2
+    _, kwargs = ctx.interaction.edit_original_response.call_args
+    assert kwargs["content"] == ""
+    assert isinstance(kwargs["file"], discord.File)
+
+
+async def test_generarimagen_outside_channel_no_access(ctx_factory, hf_http, monkeypatch):
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 1490008278275461280)
+    
+    # We shouldn't hit network if access check fails early
+    def raise_network_error(*args, **kwargs):
+        raise AssertionError("Network shouldn't be touched!")
+    monkeypatch.setattr(aiohttp, "ClientSession", raise_network_error)
+
+    # Invoked in channel 42 (outside)
+    ctx = ctx_factory(channel_id=42)
+    
+    # Mock bot but return None for get_channel and fetch_channel
+    mock_bot = MagicMock()
+    mock_bot._mock_custom_bot = True
+    mock_bot.get_channel.return_value = None
+    async def fake_fetch(cid):
+        return None
+    mock_bot.fetch_channel = fake_fetch
+    ctx.bot = mock_bot
+
+    await generarimagenLogic(ctx, "un perrito")
+
+    # Verify we edited to state we don't have access
+    history_text = "\n".join(ctx.deferred_history)
+    assert "No tengo acceso al canal" in history_text

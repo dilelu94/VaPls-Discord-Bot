@@ -96,6 +96,9 @@ def capture(
 
     guild_id = props.get("guild_id")
     groups = {"guild": str(guild_id)} if guild_id else None
+    # Avoid collision with keyword/positional arguments in posthog_client.track_request
+    if "user_id" in props:
+        props["property_user_id"] = props.pop("user_id")
     # did may be None: track_request then captures a personless event, so bot
     # and system actions never create a person profile in PostHog.
     posthog_client.track_request(did, event, groups=groups, **props)
@@ -115,6 +118,9 @@ def capture_exception(exc: BaseException, *, user=None, guild=None, properties: 
     if guild is not None:
         props.setdefault("guild_id", str(getattr(guild, "id", "") or "") or None)
 
+    # Avoid collision with keyword arguments in posthog_client.capture_error
+    if "user_id" in props:
+        props["property_user_id"] = props.pop("user_id")
     posthog_client.capture_error(exc, user_id=did, **props)
 
 
