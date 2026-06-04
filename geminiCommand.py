@@ -3504,6 +3504,10 @@ async def indioFromVoice(
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
+    # Save flag BEFORE _maybe_disambiguate_music — that function consumes
+    # pending_actions for single-match direct plays (returns []), which would
+    # make the redirect check below miss the music action.
+    _had_music = any(a in _MUSIC_ACTIONS for a, _ in pending_actions)
     pending_actions, clean_reply = await _maybe_disambiguate_music(
         bot,
         guild_id,
@@ -3513,6 +3517,26 @@ async def indioFromVoice(
         _post_choice,
         requester_id=int(user_id or 0),
     )
+    # Music action redirect: cuando el Indio responde con una accion de
+    # musica desde wake-word de texto (sin reply contextual), redirigir
+    # la respuesta textual al canal de musica designado. Asi las
+    # confirmaciones ("🎵 Ahí va") y el progreso quedan en el canal de
+    # reproduccion en vez del canal de texto general. La accion musical
+    # ya se manda a INDIO_PLAY_CHANNEL_ID via _dispatch_indio_actions,
+    # pero el texto del Indio ("🎵 Ahí va") antes caia en INDIO_REPLY_CHANNEL_ID.
+    if not from_voice and replied_content is None and config.INDIO_PLAY_CHANNEL_ID:
+        if _had_music:
+            _play_chan = bot.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+            if (
+                _play_chan is not None
+                and getattr(_play_chan, "guild", None) is not None
+            ):
+                channel_id = config.INDIO_PLAY_CHANNEL_ID
+                guild_id = _play_chan.guild.id
+                channel = _play_chan
+                redirected = bool(
+                    original_channel_id and original_channel_id != channel_id
+                )
     relayed_via_userbot = False
     import playCommand
 
