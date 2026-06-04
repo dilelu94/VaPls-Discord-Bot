@@ -340,8 +340,8 @@ def indio(tmp_path, monkeypatch):
         import playCommand
         for _v in list(playCommand.active_votes.values()):
             _v._closed = True
-            if _v._close_task is not None and not _v._close_task.done():
-                _v._close_task.cancel()
+            if _v:
+                _v._cancel_timers()
         playCommand.active_votes.clear()
 
     _clear()

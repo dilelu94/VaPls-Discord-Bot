@@ -259,8 +259,8 @@ def _freeze_vote_timer(gc, guild_id=100):
     import playCommand
 
     v = playCommand.active_votes.get(guild_id)
-    if v and v._close_task is not None and not v._close_task.done():
-        v._close_task.cancel()
+    if v:
+        v._cancel_timers()
 
 
 def _active_vote(guild_id=100):

@@ -90,8 +90,8 @@ async def test_indioLogic_function_then_normal(
     v = playCommand.get_active_vote(100)
     if v is not None:
         v._closed = True
-        if v._close_task is not None and not v._close_task.done():
-            v._close_task.cancel()
+        if v:
+            v._cancel_timers()
 
     patch_generate(reply=reply_factory(text="bien y vos"))
     await indioLogic(ctx_factory(guild_id=100), "bien", nuevo=False)

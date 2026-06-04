@@ -197,7 +197,8 @@ class MusicVote:
         self.vote_max_sec = vote_max_sec
         self.votes: dict[int, int] = {}  # user_id -> option index (0-based)
         self._closed = False
-        self._close_task: Optional[asyncio.Task] = None
+        self._hard_cap_task: Optional[asyncio.Task] = None
+        self._sliding_task: Optional[asyncio.Task] = None
         self._cancelled: bool = False
         self._on_resolve = on_resolve  # async fn(MusicVote, winner_dict)
         # Discord id of the user who triggered the vote (via /play or via the
@@ -210,6 +211,12 @@ class MusicVote:
         self.reaction_message_id: Optional[int] = None
         self.reaction_channel_id: Optional[int] = None
         self.source_message_id: Optional[int] = None
+    def _cancel_timers(self) -> None:
+        if self._hard_cap_task and not self._hard_cap_task.done():
+            self._hard_cap_task.cancel()
+        if self._sliding_task and not self._sliding_task.done():
+            self._sliding_task.cancel()
+
 
     @property
     def closed(self) -> bool:
@@ -219,9 +226,8 @@ class MusicVote:
         if self._closed:
             return
         self._cancelled = True
-        if self._close_task is not None and not self._close_task.done():
-            self._close_task.cancel()
-        self._close_task = asyncio.create_task(self._close())
+        self._cancel_timers()
+        asyncio.create_task(self._close())
 
     def start_timeout(self) -> None:
         """Arm the initial hard cap. If nobody votes within ``vote_max_sec`` the
@@ -229,9 +235,9 @@ class MusicVote:
         sliding window as soon as the first vote arrives."""
         if self._closed:
             return
-        if self._close_task is not None and not self._close_task.done():
-            self._close_task.cancel()
-        self._close_task = asyncio.create_task(self._close_after(self.vote_max_sec))
+        if self._hard_cap_task and not self._hard_cap_task.done():
+            self._hard_cap_task.cancel()
+        self._hard_cap_task = asyncio.create_task(self._close_after(self.vote_max_sec))
 
     def register_vote(self, user_id: int, idx: int, *, close_now: bool = False) -> bool:
         """Record one user's vote. Returns True if the vote was accepted.
@@ -248,10 +254,17 @@ class MusicVote:
         self.votes[user_id] = idx
         if close_now:
             # Cancel any pending timeout and resolve right now.
-            if self._close_task is not None and not self._close_task.done():
-                self._close_task.cancel()
-            self._close_task = asyncio.create_task(self._close())
+            self._cancel_timers()
+            asyncio.create_task(self._close())
+        else:
+            self._schedule_sliding_close()
         return True
+
+    def _schedule_sliding_close(self) -> None:
+        """(Re)start the sliding close timer at ``vote_window_sec`` from now."""
+        if self._sliding_task and not self._sliding_task.done():
+            self._sliding_task.cancel()
+        self._sliding_task = asyncio.create_task(self._close_after(self.vote_window_sec))
 
 
 
@@ -266,6 +279,7 @@ class MusicVote:
         if self._closed:
             return
         self._closed = True
+        self._cancel_timers()
         # Pop from the active registry so a future query opens a fresh vote.
         if active_votes.get(self.guild_id) is self:
             active_votes.pop(self.guild_id, None)
