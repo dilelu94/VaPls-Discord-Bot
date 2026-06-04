@@ -308,6 +308,32 @@ _INDIO_TOOLS = [
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
+    {
+        "name": "generate_image",
+        "description": (
+            "Generar una imagen a pedido del usuario. "
+            "Úsala únicamente cuando el usuario ordene explícitamente generar o hacer una imagen "
+            "(ej: 'generá una imagen de...', 'haceme una imagen de...'). "
+            "Debes redactar un prompt en español muy descriptivo y detallado para la generación, "
+            "incorporando de forma inteligente y detallada los rasgos físicos, descripción o aspecto "
+            "de las personas del grupo de amigos si son nombradas en el pedido (por ejemplo, si piden "
+            "una imagen de 'Viny' y en tu memoria sabes que es pelado, flaco y de cara graciosa, "
+            "describe a un hombre joven con esas características)."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "prompt": {
+                    "type": "STRING",
+                    "description": (
+                        "El prompt detallado en español para generar la imagen. "
+                        "Debe incorporar los rasgos físicos y aspecto del usuario/amigo del lore si es mencionado."
+                    ),
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
 ]
 
 
@@ -859,12 +885,7 @@ async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) 
         )
 
 
-# Campos del dict de usuario en users.py que SÍ se exponen al prompt del Indio.
-# Cualquier campo fuera de esta tupla (greeting, block_dynamic_substrings, o
-# cualquier futuro campo operativo) nunca llega a Gemini. Si agregás un campo
-# nuevo a USERS pensado para el Indio, sumalo acá Y al test guardrail en
-# tests/test_indio_user_fields_allowlist.py.
-_INDIO_USER_FIELDS: tuple[str, ...] = ("traits", "preguntas_tipicas", "anecdotas")
+_INDIO_USER_FIELDS: tuple[str, ...] = ("traits", "preguntas_tipicas", "anecdotas", "descripcion", "fotos")
 
 
 def _static_user_traits() -> dict[str, dict[str, list[str]]]:
@@ -952,9 +973,15 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
             traits = data.get("traits") or []
             qs = data.get("preguntas_tipicas") or []
             anec = data.get("anecdotas") or []
+            desc = data.get("descripcion") or []
+            fotos = data.get("fotos") or []
             chunk = [f"- {name}:"]
             if traits:
                 chunk.append(f"   rasgos: {'; '.join(traits)}")
+            if desc:
+                chunk.append(f"   descripción física: {'; '.join(desc)}")
+            if fotos:
+                chunk.append(f"   fotos/aspecto: {'; '.join(fotos)}")
             if qs:
                 chunk.append(f"   suele preguntar sobre: {'; '.join(qs)}")
             if anec:
@@ -1299,6 +1326,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "resume_music": ("RESUME_MUSIC", None),
     "stop_music": ("STOP_MUSIC", None),
     "dj_mode": ("DJ_MODE", None),
+    "generate_image": ("GENERATE_IMAGE", "prompt"),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -1308,6 +1336,7 @@ _ACTION_FALLBACK_TEXT = {
     "RESUME_MUSIC": "▶️ Dale, va",
     "STOP_MUSIC": "⏹️ Listo",
     "DJ_MODE": "🎧 Modo DJ",
+    "GENERATE_IMAGE": "🎨 Generando imagen...",
 }
 _ACTION_ARG_MAX_CHARS = 200
 
@@ -1609,6 +1638,7 @@ _ACTION_SUCCESS_SUFFIX = {
     "PAUSE_MUSIC": "listo ✅",
     "RESUME_MUSIC": "listo ✅",
     "STOP_MUSIC": "listo ✅",
+    "GENERATE_IMAGE": "listo 🎨",
 }
 
 # When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
@@ -1621,6 +1651,7 @@ _ACTION_SUCCESS_SUFFIX = {
 _ACTION_RELAY_SUCCESS_SUFFIX = {
     "PLAY_MUSIC": "le pasé el tema al /play 🎵",
     "PLAY_SOUND": "le pasé el clip al /soundpad 🔊",
+    "GENERATE_IMAGE": "le pasé el prompt al /generarimagen 🎨",
 }
 
 
@@ -1664,6 +1695,7 @@ _MUSIC_STATUS_PREFIX = {
     "RESUME_MUSIC": "resume",
     "STOP_MUSIC": "stop",
     "DJ_MODE": "dj_mode",
+    "GENERATE_IMAGE": "image",
 }
 
 
@@ -1807,6 +1839,48 @@ async def _dispatch_indio_actions(
                         msg = played_path or "no match"
                     statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
+                elif action == "GENERATE_IMAGE":
+                    target_cid = getattr(reply_handle, "channel_id", None) or config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+                    ok, msg = await _invoke_slash_via_userbot(
+                        "invoke_generarimagen",
+                        channel_id=target_cid,
+                        query=arg,
+                    )
+                    if ok:
+                        relayed_success.add("GENERATE_IMAGE")
+                    else:
+                        logger.warning(
+                            "indio GENERATE_IMAGE relay failed (%s); falling back to direct HF image generation",
+                            msg,
+                        )
+                        try:
+                            import huggingfaceImage
+                            import discord
+                            path = await huggingfaceImage.generate(arg, config.HUGGINGFACE_API_TOKEN)
+                            if path:
+                                target_channel_id = config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+                                target_channel = bot.get_channel(target_channel_id)
+                                if target_channel is None:
+                                    target_channel = await bot.fetch_channel(target_channel_id)
+                                author_mention = f"<@{requester_member.id}>" if requester_member else "Alguien"
+                                await target_channel.send(
+                                    content=f"{author_mention}, acá está la imagen que me pediste para: **{arg}**",
+                                    file=discord.File(path, filename="imagen.png"),
+                                )
+                                import os
+                                try:
+                                    os.unlink(path)
+                                except Exception:
+                                    pass
+                                ok = True
+                                msg = "direct success"
+                            else:
+                                msg = "generation failed"
+                        except Exception as e:
+                            logger.exception("direct HF image generation fallback failed")
+                            msg = f"fallback error: {e}"
+                    statuses.append(f"image: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio GENERATE_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "DJ_MODE":
                     # Activate Auto-DJ + post the panel — same handler as /dj.
                     # Use the channel where the Indio just replied so the panel

@@ -151,3 +151,82 @@ async def test_play_sound_via_relay_uses_softer_success_suffix(monkeypatch):
     combined = edited[0]
     assert "va eso" in combined
     assert "listo" not in combined.lower()
+
+
+async def test_generate_image_via_relay_uses_softer_success_suffix(monkeypatch):
+    import geminiCommand
+
+    monkeypatch.setattr(
+        geminiCommand,
+        "_invoke_slash_via_userbot",
+        AsyncMock(return_value=(True, "un perrito")),
+    )
+
+    edited: list[str] = []
+    handle = _make_handle(edited)
+
+    await geminiCommand._dispatch_indio_actions(
+        MagicMock(), 100, [("GENERATE_IMAGE", "un perrito")],
+        reply_handle=handle,
+        reply_text="ahí va la imagen",
+    )
+
+    assert edited, "expected the reply to be edited with a result line"
+    combined = edited[0]
+    assert "ahí va la imagen" in combined
+    assert "le pasé el prompt al /generarimagen" in combined.lower()
+
+
+async def test_generate_image_via_fallback(monkeypatch):
+    import geminiCommand
+    import huggingfaceImage
+    import tempfile
+    import os
+
+    fd, path = tempfile.mkstemp()
+    try:
+        os.write(fd, b"fake-png-data")
+    finally:
+        os.close(fd)
+
+    monkeypatch.setattr(
+        geminiCommand,
+        "_invoke_slash_via_userbot",
+        AsyncMock(return_value=(False, "relay error")),
+    )
+    monkeypatch.setattr(
+        huggingfaceImage,
+        "generate",
+        AsyncMock(return_value=path),
+    )
+
+    spy_unlink = MagicMock()
+    monkeypatch.setattr(os, "unlink", spy_unlink)
+
+    fake_chan = AsyncMock()
+    mock_bot = MagicMock()
+    mock_bot.get_channel.return_value = fake_chan
+    ctx = MagicMock()
+
+    edited: list[str] = []
+    handle = _make_handle(edited)
+
+    try:
+        await geminiCommand._dispatch_indio_actions(
+            mock_bot, 100, [("GENERATE_IMAGE", "un perrito")],
+            reply_handle=handle,
+            reply_text="ahí va la imagen",
+            requester_member=_member_in_voice(),
+        )
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+    assert edited, "expected the reply to be edited with a result line"
+    combined = edited[0]
+    assert "ahí va la imagen" in combined
+    assert "image: ok" in combined or "listo" in combined.lower()
+    assert fake_chan.send.call_count == 1
+    assert spy_unlink.call_count == 1

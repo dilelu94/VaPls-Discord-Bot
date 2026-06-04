@@ -44,6 +44,12 @@ USERS: dict[int, dict] = {
         "anecdotas": [
             "los piononos (segun chiste del grupo) sirven para limpiarse y despues te dejan un postrecito",
         ],
+        "descripcion": [
+            "Un hombre joven alto y robusto, con cara de buena persona, a veces usando ropa de bombero voluntario.",
+        ],
+        "fotos": [
+            "Un bombero alto y robusto sonriendo al lado de un camión de bomberos rojo.",
+        ],
         "block_dynamic_substrings": ["sexo: hombre", "es hombre"],
     },
     211354006805676032: {
@@ -57,6 +63,12 @@ USERS: dict[int, dict] = {
             "de El Talar de Pacheco (Tigre)",
             "uno de los mejores amigos del indio",
             "tiene codornices y 2 cobayos",
+        ],
+        "descripcion": [
+            "Un joven programador morocho, peinado casual, sonriente, fanático de Boca y de la banda Queen.",
+        ],
+        "fotos": [
+            "Un pibe de pelo oscuro corto, sonriendo feliz frente a su laptop con pegatinas y una remera de la banda Queen.",
         ],
         "block_dynamic_substrings": [
             "le interesa la parte técnica",
@@ -83,6 +95,12 @@ USERS: dict[int, dict] = {
         ],
         "preguntas_tipicas": [
             "y la hermana de Mila?",
+        ],
+        "descripcion": [
+            "Un pibe flaco, completamente pelado, de mirada colgada o perdida, sonrisa tímida y gestos algo afeminados.",
+        ],
+        "fotos": [
+            "Un pelado flaco con auriculares grandes frente a una computadora en una habitación desordenada.",
         ],
     },
     309714566265438221: {
@@ -129,6 +147,12 @@ USERS: dict[int, dict] = {
         ],
         "anecdotas": [
             "no invito a nadie al casamiento",
+        ],
+        "descripcion": [
+            "Un hombre joven de cuello notablemente largo y rasgos judíos, aspecto prolijo y adinerado.",
+        ],
+        "fotos": [
+            "Un pibe de cuello muy largo y rasgos prolijos vistiendo ropa fina o de traje.",
         ],
     },
     428444575963807745: {
