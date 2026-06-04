@@ -6,6 +6,7 @@ columna vertebral del fix de canal: cuando la wake-word es de voz, el
 override ``INDIO_REPLY_CHANNEL_ID`` debe saltearse — pero solo si el flag
 viaja correctamente a través del HTTP boundary.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -71,18 +72,22 @@ async def _post_indio(monkeypatch, body):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_voice_wake_word_propagates_is_voice_true(monkeypatch):
     """Wake-word de voz (userbot dispatch, is_voice=True): el endpoint
     forwardea ``is_voice=True`` a ``askIndio``, que a su vez lo manda como
     ``from_voice=True`` a ``indioFromVoice`` para saltear el override."""
-    resp, captured = await _post_indio(monkeypatch, {
-        "pregunta": "che indio que onda",
-        "speaker_name": "Tobi",
-        "guild_id": "100",
-        "channel_id": "555",
-        "user_id": "42",
-        "is_voice": True,
-    })
+    resp, captured = await _post_indio(
+        monkeypatch,
+        {
+            "pregunta": "che indio que onda",
+            "speaker_name": "Tobi",
+            "guild_id": "100",
+            "channel_id": "555",
+            "user_id": "42",
+            "is_voice": True,
+        },
+    )
     assert resp.status == 200
     assert captured.get("is_voice") is True, (
         f"is_voice no llegó a askIndio: {captured!r}"
@@ -92,51 +97,63 @@ async def test_voice_wake_word_propagates_is_voice_true(monkeypatch):
     assert captured["user_id"] == 42
 
 
+@pytest.mark.slow
 async def test_text_wake_word_propagates_is_voice_false(monkeypatch):
     """Wake-word de texto (alguien escribe 'che indio' en un canal): el
     userbot dispatch incluye ``is_voice=False``, el endpoint debe
     propagarlo así para que ``indioFromVoice`` SÍ aplique el override."""
-    resp, captured = await _post_indio(monkeypatch, {
-        "pregunta": "che indio que onda",
-        "speaker_name": "Tobi",
-        "guild_id": "100",
-        "channel_id": "555",
-        "user_id": "42",
-        "is_voice": False,
-    })
+    resp, captured = await _post_indio(
+        monkeypatch,
+        {
+            "pregunta": "che indio que onda",
+            "speaker_name": "Tobi",
+            "guild_id": "100",
+            "channel_id": "555",
+            "user_id": "42",
+            "is_voice": False,
+        },
+    )
     assert resp.status == 200
     assert captured.get("is_voice") is False, (
         f"is_voice debe llegar como False: {captured!r}"
     )
 
 
+@pytest.mark.slow
 async def test_is_voice_defaults_to_true_when_absent(monkeypatch):
     """Back-compat: el callee viejo no manda el flag. El endpoint asume
     voz (es el caso histórico — el userbot solo dispatcheaba desde wake
     word de voz). Sin este default, una versión vieja del userbot
     aterrizaría en el path equivocado."""
-    resp, captured = await _post_indio(monkeypatch, {
-        "pregunta": "hola",
-        "speaker_name": "Tobi",
-        "guild_id": "100",
-        "channel_id": "555",
-        "user_id": "42",
-    })
+    resp, captured = await _post_indio(
+        monkeypatch,
+        {
+            "pregunta": "hola",
+            "speaker_name": "Tobi",
+            "guild_id": "100",
+            "channel_id": "555",
+            "user_id": "42",
+        },
+    )
     assert resp.status == 200
     assert captured.get("is_voice") is True
 
 
+@pytest.mark.slow
 async def test_decifrar_alias_maps_to_is_voice(monkeypatch):
     """``decifrar`` es el nombre histórico del flag; el endpoint lo acepta
     como alias para no romper userbots viejos en el medio del rollout."""
-    resp, captured = await _post_indio(monkeypatch, {
-        "pregunta": "hola",
-        "speaker_name": "Tobi",
-        "guild_id": "100",
-        "channel_id": "555",
-        "user_id": "42",
-        "decifrar": False,
-    })
+    resp, captured = await _post_indio(
+        monkeypatch,
+        {
+            "pregunta": "hola",
+            "speaker_name": "Tobi",
+            "guild_id": "100",
+            "channel_id": "555",
+            "user_id": "42",
+            "decifrar": False,
+        },
+    )
     assert resp.status == 200
     assert captured.get("is_voice") is False, (
         "decifrar=False debe terminar como is_voice=False en askIndio"
@@ -148,33 +165,41 @@ async def test_decifrar_alias_maps_to_is_voice(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_voice_path_adds_voz_prefix_to_text(monkeypatch):
     """Cuando is_voice=True, el endpoint prefija el texto con '[voz] '
     antes de pasarlo a askIndio (señal al prompt del Indio para que tolere
     errores de ASR). Es el otro flag que viaja en la misma decisión que
     is_voice; los pineamos juntos para que no se desincronicen."""
-    resp, captured = await _post_indio(monkeypatch, {
-        "pregunta": "che indio que onda",
-        "is_voice": True,
-        "guild_id": "100",
-        "channel_id": "555",
-        "user_id": "42",
-    })
+    resp, captured = await _post_indio(
+        monkeypatch,
+        {
+            "pregunta": "che indio que onda",
+            "is_voice": True,
+            "guild_id": "100",
+            "channel_id": "555",
+            "user_id": "42",
+        },
+    )
     assert resp.status == 200
     assert captured["text"].startswith("[voz] "), (
         f"esperaba prefix [voz] en texto de voz, got: {captured['text']!r}"
     )
 
 
+@pytest.mark.slow
 async def test_text_path_does_not_add_voz_prefix(monkeypatch):
     """Mismo acople en el caso contrario: texto NO debe llevar prefix."""
-    resp, captured = await _post_indio(monkeypatch, {
-        "pregunta": "che indio que onda",
-        "is_voice": False,
-        "guild_id": "100",
-        "channel_id": "555",
-        "user_id": "42",
-    })
+    resp, captured = await _post_indio(
+        monkeypatch,
+        {
+            "pregunta": "che indio que onda",
+            "is_voice": False,
+            "guild_id": "100",
+            "channel_id": "555",
+            "user_id": "42",
+        },
+    )
     assert resp.status == 200
     assert not captured["text"].startswith("[voz] "), (
         f"texto de texto NO debe llevar prefix [voz]: {captured['text']!r}"

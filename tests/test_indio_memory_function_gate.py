@@ -41,6 +41,7 @@ async def _drain():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_indioLogic_function_call_skips_history(
     indio, ctx_factory, patch_generate, reply_factory
 ):
@@ -67,6 +68,7 @@ async def test_indioLogic_normal_chat_saves_history(
     assert len(history(indio)) == 2
 
 
+@pytest.mark.slow
 async def test_indioLogic_function_then_normal(
     indio, ctx_factory, patch_generate, reply_factory
 ):
@@ -125,6 +127,7 @@ def _make_bot_and_channel(guild_id=100, channel_id=111):
     return bot, channel
 
 
+@pytest.mark.slow
 async def test_indioFromVoice_text_function_call_skips_history(
     indio, patch_generate, reply_factory, monkeypatch
 ):
@@ -184,6 +187,7 @@ async def test_indioFromVoice_text_normal_saves_history(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 async def test_indioFromVoice_voice_skips_history(
     indio, patch_generate, reply_factory, monkeypatch
 ):
