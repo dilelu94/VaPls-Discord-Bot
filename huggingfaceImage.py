@@ -66,7 +66,7 @@ async def _refine_prompt_with_gemini(prompt: str) -> str:
             user_message=prompt,
             system_instruction=sys_inst,
             model=config.GEMINI_MODEL,
-            timeout_sec=10,
+            timeout_sec=20,
         )
         refined = reply.text.strip()
         if refined:
