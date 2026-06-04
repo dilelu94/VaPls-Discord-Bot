@@ -26,15 +26,69 @@ TIMEOUT = 60
 MAX_RETRIES = 5
 
 
+async def _refine_prompt_with_gemini(prompt: str) -> str:
+    """Uses Gemini to translate and optimize the image generation prompt to English.
+
+    If Gemini is not configured, fails, or returns empty, falls back to the original prompt.
+    """
+    import geminiClient
+    import config
+
+    try:
+        keys = geminiClient._pool_keys()
+        picked = geminiClient._pick_key()
+        picked_suffix = f"…{picked[-6:]}" if picked else "None"
+        logger.info(
+            "Gemini configurado. Keys en pool: %d. Key seleccionada: %s",
+            len(keys),
+            picked_suffix,
+        )
+    except Exception as e:
+        logger.warning("Error al inspeccionar pool de keys de Gemini: %s", e)
+        keys = []
+
+    if not keys:
+        logger.info("Gemini no configurado para traducción de prompt, usando prompt original")
+        return prompt
+
+    sys_inst = (
+        "You are a professional prompt translator and engineer. "
+        "Translate the input prompt to English for a text-to-image AI (FLUX.1-schnell). "
+        "If the input is in Spanish or another language, translate it accurately to English. "
+        "If it is already in English, output it as-is. "
+        "Output ONLY the translated/refined English prompt. "
+        "Do not include any introductions, explanations, markdown quotes, or conversational filler."
+    )
+
+    try:
+        logger.info("refinando prompt con Gemini: %.100s", prompt)
+        reply = await geminiClient.generate(
+            user_message=prompt,
+            system_instruction=sys_inst,
+            model=config.GEMINI_MODEL,
+            timeout_sec=10,
+        )
+        refined = reply.text.strip()
+        if refined:
+            logger.info("prompt refinado por Gemini: %.100s", refined)
+            return refined
+    except Exception as e:
+        logger.warning("Fallo al refinar prompt con Gemini, usando original: %s", e)
+
+    return prompt
+
+
 async def generate(prompt: str, token: str) -> Optional[str]:
     if not token:
         logger.error("HUGGINGFACE_API_TOKEN no configurado")
         return None
 
-    data = await _try_model(DEFAULT_MODEL, prompt, token)
+    refined_prompt = await _refine_prompt_with_gemini(prompt)
+
+    data = await _try_model(DEFAULT_MODEL, refined_prompt, token)
     if data is None:
         logger.info("falling back to %s", FALLBACK_MODEL)
-        data = await _try_model(FALLBACK_MODEL, prompt, token)
+        data = await _try_model(FALLBACK_MODEL, refined_prompt, token)
     if data is None:
         return None
     if len(data) > MAX_FILE_SIZE:

@@ -87,6 +87,14 @@ def default_token(monkeypatch):
     monkeypatch.setattr(config, "HUGGINGFACE_API_TOKEN", "valid-hf-token", raising=False)
 
 
+# Mock Gemini prompt refinement to return the prompt as-is in tests
+@pytest.fixture(autouse=True)
+def mock_refine_prompt(monkeypatch):
+    async def dummy_refine(prompt):
+        return prompt
+    monkeypatch.setattr(huggingfaceImage, "_refine_prompt_with_gemini", dummy_refine)
+
+
 def joined_messages(ctx) -> str:
     """Helper to concatenate all text messages sent through ctx.sent_messages or history."""
     msgs = []
