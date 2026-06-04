@@ -247,19 +247,13 @@ class MusicVote:
             return False
         self.votes[user_id] = idx
         if close_now:
-            # Cancel any pending sliding close and resolve right now.
+            # Cancel any pending timeout and resolve right now.
             if self._close_task is not None and not self._close_task.done():
                 self._close_task.cancel()
             self._close_task = asyncio.create_task(self._close())
-        else:
-            self._schedule_close()
         return True
 
-    def _schedule_close(self) -> None:
-        """(Re)start the sliding close timer at ``vote_window_sec`` from now."""
-        if self._close_task is not None and not self._close_task.done():
-            self._close_task.cancel()
-        self._close_task = asyncio.create_task(self._close_after(self.vote_window_sec))
+
 
     async def _close_after(self, delay: float) -> None:
         try:

@@ -4,9 +4,8 @@ with. Two anchors define the timing the user agreed on:
 
 - if nobody reacts within the 1-minute hard cap, the top fuzzy-match candidate
   (candidates[0]) wins by default;
-- once someone reacts, the picker waits a short sliding window — 5 s in prod —
-  before locking in the most-voted option, with the timer resetting on each
-  new vote.
+- the picker stays open for the full duration of the hard cap regardless of when
+  votes are cast (the sliding window behavior was removed).
 
 Tests run with tiny timing knobs (well under a real second) so the suite stays
 fast. They assert on the outcome (which candidate ended up in ``on_resolve``,
@@ -72,9 +71,8 @@ async def test_no_votes_first_option_wins_by_default(clear_active_votes):
 
 
 async def test_first_vote_arms_settle_window_and_wins(clear_active_votes):
-    """A single reaction lands, then silence. After the short sliding window,
-    that option is the winner — even though the 1-minute hard cap had not yet
-    elapsed."""
+    """A single reaction lands, then silence. The vote stays open until the
+    hard cap elapses (sliding window removed)."""
     import playCommand
     resolved: list[dict] = []
 
@@ -82,14 +80,18 @@ async def test_first_vote_arms_settle_window_and_wins(clear_active_votes):
         resolved.append(winner)
 
     candidates = _cands(3)
+    # Use a small max_sec so the test stays fast
     vote = playCommand.open_music_vote(
         bot=None, guild_id=42, candidates=candidates,
-        on_resolve=_on_resolve, vote_max_sec=10.0, vote_window_sec=0.03,
+        on_resolve=_on_resolve, vote_max_sec=0.1,
     )
     vote.start_timeout()
     assert vote.register_vote(user_id=7, idx=2)
-    await _wait_for_close(vote)
-
+    # Should NOT be closed immediately
+    await asyncio.sleep(0.02)
+    assert not vote.closed
+    
+    await _wait_for_close(vote, timeout=0.2)
     assert resolved == [candidates[2]]
 
 
@@ -105,44 +107,18 @@ async def test_majority_wins_when_multiple_users_vote(clear_active_votes):
     candidates = _cands(3)
     vote = playCommand.open_music_vote(
         bot=None, guild_id=42, candidates=candidates,
-        on_resolve=_on_resolve, vote_max_sec=10.0, vote_window_sec=0.05,
+        on_resolve=_on_resolve, vote_max_sec=0.1,
     )
     vote.start_timeout()
     vote.register_vote(user_id=1, idx=1)
     vote.register_vote(user_id=2, idx=2)
     vote.register_vote(user_id=3, idx=1)
-    await _wait_for_close(vote)
+    await _wait_for_close(vote, timeout=0.2)
 
     assert resolved == [candidates[1]]
 
 
-async def test_each_vote_resets_the_settle_timer(clear_active_votes):
-    """A new vote arriving inside the sliding window pushes the close back —
-    the picker won't lock in until the room has been quiet for a full window.
-    The behavior we pin: a steady stream of votes keeps the picker open well
-    past a single sliding window."""
-    import playCommand
-    resolved: list[dict] = []
 
-    async def _on_resolve(vote, winner):
-        resolved.append(winner)
-
-    candidates = _cands(3)
-    window = 0.04
-    vote = playCommand.open_music_vote(
-        bot=None, guild_id=42, candidates=candidates,
-        on_resolve=_on_resolve, vote_max_sec=10.0, vote_window_sec=window,
-    )
-    vote.start_timeout()
-    # 3 votes arriving inside the sliding window each reset it; the total
-    # elapsed time is well over a single window but the vote stays open.
-    for uid in (1, 2, 3):
-        vote.register_vote(user_id=uid, idx=0)
-        await asyncio.sleep(window * 0.6)
-    assert not vote.closed
-    await _wait_for_close(vote)
-
-    assert resolved == [candidates[0]]
 
 
 async def test_reaction_dispatcher_lands_vote_on_picker_message(clear_active_votes):
