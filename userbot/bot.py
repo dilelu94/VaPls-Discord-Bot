@@ -382,8 +382,11 @@ class TranscriberSink(voice_recv.AudioSink):
             asyncio.run_coroutine_threadsafe(
                 self._idle_watcher(), self._client_ref.loop
             )
-        except Exception:
+        except Exception as e:
             log.exception("[WHISPER] failed to start idle watcher")
+            analytics.capture_exception(
+                e, properties={"action": "whisper_start_idle_watcher_failed"}
+            )
 
     async def _idle_watcher(self) -> None:
         while not self._stopped:
@@ -398,8 +401,11 @@ class TranscriberSink(voice_recv.AudioSink):
                         and (now - last) > self.SILENCE_FINAL_SECONDS
                     ):
                         self._finalize_user(uid)
-            except Exception:
+            except Exception as e:
                 log.exception("[WHISPER] idle watcher error")
+                analytics.capture_exception(
+                    e, properties={"action": "whisper_idle_watcher_error"}
+                )
 
     def _concurrency_limit(self) -> int:
         """Pick 3 while the main bot plays audio, else 5."""
@@ -470,8 +476,9 @@ class TranscriberSink(voice_recv.AudioSink):
             secs = len(self.buffers[user_id]) / (16000 * 2)
             if secs > self.MAX_UTTERANCE_SECONDS:
                 self._finalize_user(user_id)
-        except Exception:
+        except Exception as e:
             log.exception("[WHISPER] write error")
+            analytics.capture_exception(e, properties={"action": "whisper_write_error"})
 
     def _finalize_user(self, user_id: int) -> None:
         """Hand the user's buffer to a background transcription task."""
@@ -529,8 +536,11 @@ class TranscriberSink(voice_recv.AudioSink):
                 },
             )
             await on_transcript(user_id, text)
-        except Exception:
+        except Exception as e:
             log.exception("[WHISPER] transcribe failed")
+            analytics.capture_exception(
+                e, properties={"action": "whisper_transcribe_failed"}
+            )
         finally:
             with self._active_lock:
                 self._active_count -= 1
@@ -852,8 +862,11 @@ def _load_vosk_model():
             _vosk_model = vosk.Model(config.VOSK_MODEL_PATH)
             log.info("✅ VOSK model loaded.")
             return _vosk_model
-        except Exception:
+        except Exception as e:
             log.exception("[VOSK] failed to load model")
+            analytics.capture_exception(
+                e, properties={"action": "vosk_load_model_failed"}
+            )
             return None
 
 
@@ -872,11 +885,17 @@ def _new_vosk_recognizer():
         if config.VOSK_MAX_ALTERNATIVES > 0:
             try:
                 rec.SetMaxAlternatives(config.VOSK_MAX_ALTERNATIVES)
-            except Exception:
+            except Exception as e:
                 log.exception("[VOSK] SetMaxAlternatives failed")
+                analytics.capture_exception(
+                    e, properties={"action": "vosk_set_max_alternatives_failed"}
+                )
         return rec
-    except Exception:
+    except Exception as e:
         log.exception("[VOSK] failed to create recognizer")
+        analytics.capture_exception(
+            e, properties={"action": "vosk_create_recognizer_failed"}
+        )
         return None
 
 
@@ -892,7 +911,9 @@ def _set_sensitivity(preset: int) -> None:
     """
     global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
     if preset not in _PRESETS:
-        raise ValueError(f"Invalid sensitivity preset {preset!r}; must be 1, 2, 3, or 4.")
+        raise ValueError(
+            f"Invalid sensitivity preset {preset!r}; must be 1, 2, 3, or 4."
+        )
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
     _vosk_grammar_generation += 1
@@ -998,8 +1019,11 @@ def _vosk_heard_wake_word(rec, accepted: bool) -> tuple[bool, Optional[dict]]:
                 extra = f", alts={candidates[1:]!r}"
             log.info(f"[VOSK] near-miss, no pattern matched (text={top1!r}{extra})")
         return False, None
-    except Exception:
+    except Exception as e:
         log.exception("[VOSK] failed to read recognizer state")
+        analytics.capture_exception(
+            e, properties={"action": "vosk_read_recognizer_state_failed"}
+        )
         return False, None
 
 
@@ -1169,8 +1193,9 @@ class WakeWordSink(voice_recv.AudioSink):
                     rec.Reset()
                 except Exception:
                     log.warning("[WAKE] rec.Reset() failed")
-        except Exception:
+        except Exception as e:
             log.exception("[WAKE] write error")
+            analytics.capture_exception(e, properties={"action": "wake_write_error"})
 
     def _maybe_reset_on_silence(self, user_id: int, now: float) -> None:
         """Drop the prebuffer + reset VOSK once the speaker has been silent
@@ -1277,8 +1302,11 @@ class WakeWordSink(voice_recv.AudioSink):
                 greeting.play_wake_sound(self._client_ref, user_id=user_id),
                 self._client_ref.loop,
             )
-        except Exception:
+        except Exception as e:
             log.exception("[WAKE] failed to schedule wake sound")
+            analytics.capture_exception(
+                e, properties={"action": "wake_schedule_wake_sound_failed"}
+            )
 
     def _finalize_capture(self, user_id: int) -> None:
         capture = self.captures.pop(user_id, None)
@@ -1310,7 +1338,9 @@ class WakeWordSink(voice_recv.AudioSink):
                 return
             self._active_count += 1
         asyncio.run_coroutine_threadsafe(
-            self._transcribe_and_dispatch(user_id, pcm, secs, vosk_result, prebuffer_len),
+            self._transcribe_and_dispatch(
+                user_id, pcm, secs, vosk_result, prebuffer_len
+            ),
             self._client_ref.loop,
         )
 
@@ -1324,8 +1354,11 @@ class WakeWordSink(voice_recv.AudioSink):
             asyncio.run_coroutine_threadsafe(
                 self._idle_watcher(), self._client_ref.loop
             )
-        except Exception:
+        except Exception as e:
             log.exception("[WAKE] failed to start idle watcher")
+            analytics.capture_exception(
+                e, properties={"action": "wake_start_idle_watcher_failed"}
+            )
 
     async def _idle_watcher(self) -> None:
         """voice_recv stops calling write() once the speaker goes silent, so
@@ -1351,8 +1384,11 @@ class WakeWordSink(voice_recv.AudioSink):
                             f"dur={duration:.2f}s)"
                         )
                         self._finalize_capture(uid)
-            except Exception:
+            except Exception as e:
                 log.exception("[WAKE] idle watcher error")
+                analytics.capture_exception(
+                    e, properties={"action": "wake_idle_watcher_error"}
+                )
 
     # ---- Whisper handoff --------------------------------------------------
 
@@ -1426,8 +1462,11 @@ class WakeWordSink(voice_recv.AudioSink):
             await on_transcript(
                 user_id, text, via_wake_word=True, vosk_result=vosk_result
             )
-        except Exception:
+        except Exception as e:
             log.exception("[WAKE] transcribe failed")
+            analytics.capture_exception(
+                e, properties={"action": "wake_transcribe_failed"}
+            )
         finally:
             with self._active_lock:
                 self._active_count -= 1
@@ -1595,8 +1634,9 @@ class RecorderSink(voice_recv.AudioSink):
             return
         try:
             mono = audioop.tomono(pcm, _REC_INPUT_WIDTH, 0.5, 0.5)
-        except Exception:
+        except Exception as e:
             log.exception("[REC] tomono failed")
+            analytics.capture_exception(e, properties={"action": "rec_tomono_failed"})
             return
         try:
             if audioop.rms(mono, _REC_INPUT_WIDTH) >= self.rms_threshold:
@@ -1621,8 +1661,11 @@ class RecorderSink(voice_recv.AudioSink):
         """voice_recv calls this when the sink is detached."""
         try:
             self.finalize()
-        except Exception:
+        except Exception as e:
             log.exception("[REC] finalize from cleanup failed")
+            analytics.capture_exception(
+                e, properties={"action": "rec_finalize_from_cleanup_failed"}
+            )
 
 
 # ---------- Optional downstream forwarding ---------------------------------
@@ -1799,8 +1842,11 @@ async def _dispatch_to_indio(
             if resp.status >= 400:
                 body = await resp.text()
                 log.warning(f"[INDIO-WAKE] HTTP {resp.status}: {body[:200]}")
-    except Exception:
+    except Exception as e:
         log.exception("[INDIO-WAKE] dispatch failed")
+        analytics.capture_exception(
+            e, properties={"action": "indio_wake_dispatch_failed"}
+        )
 
 
 # ---------- Discord client + auto-join logic -------------------------------
@@ -2019,6 +2065,7 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
         vc.listen(sink)
     except Exception as e:
         log.exception(f"[VOICE] listen() failed: {e}")
+        analytics.capture_exception(e, properties={"action": "voice_listen_failed"})
 
 
 def _make_voice_sink() -> voice_recv.AudioSink:
@@ -2078,6 +2125,7 @@ async def _join_channel(channel: discord.VoiceChannel):
             )
     except Exception as e:
         log.exception(f"[VOICE] Failed to join {channel.name}: {e}")
+        analytics.capture_exception(e, properties={"action": "voice_join_failed"})
         return
     await _start_listening(vc)
 
@@ -2171,8 +2219,11 @@ async def on_voice_state_update(member, before, after):
                             channel_id=after.channel.id,
                         )
                     )
-            except Exception:
+            except Exception as e:
                 log.exception("[GREETING] schedule failed")
+                analytics.capture_exception(
+                    e, properties={"action": "greeting_schedule_failed"}
+                )
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
@@ -2251,8 +2302,11 @@ async def _handle_gemini_key_dm(message) -> bool:
                 log.warning(f"[GEMINI-KEY-DM] HTTP {resp.status}: {body[:200]}")
                 return True
             data = await resp.json(content_type=None)
-    except Exception:
+    except Exception as e:
         log.exception("[GEMINI-KEY-DM] forward failed")
+        analytics.capture_exception(
+            e, properties={"action": "gemini_key_dm_forward_failed"}
+        )
         return True
     results = (data or {}).get("results") or []
     added = sum(1 for r in results if r.get("ok"))
@@ -2270,8 +2324,11 @@ async def _handle_gemini_key_dm(message) -> bool:
     if lines:
         try:
             await message.channel.send("\n".join(lines))
-        except Exception:
+        except Exception as e:
             log.exception("[GEMINI-KEY-DM] reply failed")
+            analytics.capture_exception(
+                e, properties={"action": "gemini_key_dm_reply_failed"}
+            )
     log.info(
         f"[GEMINI-KEY-DM] from {owner_name} ({owner_id}): "
         f"added={added} dupes={dupes} failed={failed}"
@@ -2465,6 +2522,7 @@ async def _relay_say(request: web.Request) -> web.Response:
             message_ids.append(msg.id)
     except Exception as e:
         log.exception("[RELAY] send failed")
+        analytics.capture_exception(e, properties={"action": "relay_send_failed"})
         return web.json_response({"error": str(e)}, status=500)
 
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
@@ -2512,6 +2570,7 @@ async def _relay_edit(request: web.Request) -> web.Response:
         return web.json_response({"error": "cannot edit (not author)"}, status=403)
     except Exception as e:
         log.exception("[RELAY] edit failed")
+        analytics.capture_exception(e, properties={"action": "relay_edit_failed"})
         return web.json_response({"error": str(e)}, status=500)
     return web.json_response({"ok": True, "message_id": message_id})
 
@@ -2554,8 +2613,9 @@ async def _run_recording(
     async with lock:
         try:
             await _join_channel(channel)
-        except Exception:
+        except Exception as e:
             log.exception("[REC] join failed")
+            analytics.capture_exception(e, properties={"action": "rec_join_failed"})
             return
         vc = _vc_for_guild(guild)
         if vc is None or not vc.is_connected():
@@ -2566,8 +2626,11 @@ async def _run_recording(
         try:
             if vc.is_listening():
                 vc.stop_listening()
-        except Exception:
+        except Exception as e:
             log.exception("[REC] stop_listening failed")
+            analytics.capture_exception(
+                e, properties={"action": "rec_stop_listening_failed"}
+            )
 
         sink = RecorderSink(
             max_seconds=duration,
@@ -2575,8 +2638,11 @@ async def _run_recording(
         )
         try:
             vc.listen(sink)
-        except Exception:
+        except Exception as e:
             log.exception("[REC] listen(RecorderSink) failed")
+            analytics.capture_exception(
+                e, properties={"action": "rec_listen_recordersink_failed"}
+            )
             # Best-effort: restart transcription and bail.
             await _start_listening(vc)
             return
@@ -2588,8 +2654,11 @@ async def _run_recording(
             try:
                 if vc.is_listening():
                     vc.stop_listening()
-            except Exception:
+            except Exception as e:
                 log.exception("[REC] post-record stop_listening failed")
+                analytics.capture_exception(
+                    e, properties={"action": "rec_post_record_stop_listening_failed"}
+                )
 
         pcm = sink.finalize()
         had_voice = sink.had_voice
@@ -2601,8 +2670,11 @@ async def _run_recording(
         # Resume normal transcription before doing slower work below.
         try:
             await _start_listening(vc)
-        except Exception:
+        except Exception as e:
             log.exception("[REC] resume transcriber failed")
+            analytics.capture_exception(
+                e, properties={"action": "rec_resume_transcriber_failed"}
+            )
 
         if not had_voice:
             log.info("[REC] no voice activity detected; skipping callback")
@@ -2624,8 +2696,11 @@ async def _run_recording(
 
         try:
             ogg = await pcm_to_ogg_opus(trimmed)
-        except Exception:
+        except Exception as e:
             log.exception("[REC] OGG/Opus encode failed; skipping callback")
+            analytics.capture_exception(
+                e, properties={"action": "rec_ogg_opus_encode_failed"}
+            )
             return
 
         try:
@@ -2656,8 +2731,11 @@ async def _run_recording(
                     log.warning(f"[REC] callback HTTP {resp.status}: {body[:200]}")
                 else:
                     log.info(f"[REC] callback delivered ({len(ogg)}B)")
-        except Exception:
+        except Exception as e:
             log.exception("[REC] callback POST failed")
+            analytics.capture_exception(
+                e, properties={"action": "rec_callback_post_failed"}
+            )
 
 
 async def _relay_record(request: web.Request) -> web.Response:
@@ -2905,6 +2983,9 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
         return web.json_response({"error": "slash_commands() timed out"}, status=504)
     except Exception as e:
         log.exception("[RELAY-PLAY] slash_commands() failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_play_slash_commands_failed"}
+        )
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
 
     play_cmd = _pick_vapls_command(cmds, "play")
@@ -2930,9 +3011,15 @@ async def _relay_invoke_play(request: web.Request) -> web.Response:
             log.warning("[RELAY-PLAY] Discord rate-limited /play invocation: %s", e)
             return web.json_response({"error": f"rate-limited: {e}"}, status=429)
         log.exception("[RELAY-PLAY] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_play_invocation_failed"}
+        )
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
     except Exception as e:
         log.exception("[RELAY-PLAY] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_play_invocation_failed"}
+        )
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
@@ -2983,6 +3070,9 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         return web.json_response({"error": "slash_commands() timed out"}, status=504)
     except Exception as e:
         log.exception("[RELAY-SOUNDPAD] slash_commands() failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_soundpad_slash_commands_failed"}
+        )
         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
 
     sp_cmd = _pick_vapls_command(cmds, "soundpad")
@@ -3009,9 +3099,15 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
             )
             return web.json_response({"error": f"rate-limited: {e}"}, status=429)
         log.exception("[RELAY-SOUNDPAD] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_soundpad_invocation_failed"}
+        )
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
     except Exception as e:
         log.exception("[RELAY-SOUNDPAD] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_soundpad_invocation_failed"}
+        )
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
@@ -3050,6 +3146,7 @@ async def _relay_join(request: web.Request) -> web.Response:
         await _join_channel(channel)
     except Exception as e:
         log.exception("[RELAY-JOIN] join failed")
+        analytics.capture_exception(e, properties={"action": "relay_join_failed"})
         return web.json_response({"error": f"join failed: {e}"}, status=500)
     return web.json_response(
         {
@@ -3103,6 +3200,7 @@ async def _relay_edit(request: web.Request) -> web.Response:
         await msg.edit(content=content)
     except Exception as e:
         log.exception("[RELAY] edit failed")
+        analytics.capture_exception(e, properties={"action": "relay_edit_failed"})
         return web.json_response({"error": str(e)}, status=500)
 
     return web.json_response({"ok": True, "message_id": msg.id})

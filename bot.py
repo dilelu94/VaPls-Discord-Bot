@@ -30,6 +30,7 @@ import errorHandler
 import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import webhookLogger
+import geminiImage
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
@@ -192,6 +193,10 @@ async def on_ready():
     if _webhook_log_handler is not None:
         _webhook_log_handler.start(asyncio.get_running_loop())
     await bot.sync_commands()
+    try:
+        await geminiImage.init()
+    except Exception:
+        log.exception("geminiImage init failed (image gen unavailable)")
     if _api_runner is None:
         try:
             _api_runner = await startApiServer(bot)
@@ -610,6 +615,56 @@ async def indio(
 
 
 @bot.slash_command(
+    name="generarimagen",
+    description="Genera una imagen con Gemini (gratis, sin API key)",
+)
+async def generarimagen(
+    ctx,
+    prompt: discord.Option(
+        str, description="Descripción de la imagen que querés generar"
+    ),
+):
+    """Slash command: generate an image via Gemini web UI (browser automation).
+
+    Args:
+        ctx: Discord application context.
+        prompt: Image description.
+
+    Side Effects:
+        Launches a headless browser, generates the image, sends it to Discord,
+        and deletes the temp file.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    _track_command(ctx, "generarimagen", {"prompt_length": len(prompt or "")})
+    if not prompt or not prompt.strip():
+        await safe_respond(ctx, "decime qué generar")
+        return
+    await safe_defer(ctx)
+    await safeEdit(ctx, "⏳ Generando imagen...")
+    path = await geminiImage.generate(prompt)
+    if path is None:
+        await safeEdit(ctx, "❌ No pude generar la imagen. Probá de nuevo más tarde.")
+        return
+    try:
+        await ctx.interaction.edit_original_response(
+            content="",
+            file=discord.File(path, filename="imagen.png"),
+        )
+    except discord.HTTPException as e:
+        if "file is too large" in str(e).lower() or "413" in str(e):
+            await safeEdit(ctx, "❌ La imagen supera el límite de 8 MB de Discord.")
+        else:
+            await safeEdit(ctx, f"❌ Error al enviar: {e}")
+    finally:
+        try:
+            os.unlink(path)
+        except Exception:
+            log.warning("could not delete temp image %s", path)
+
+
+@bot.slash_command(
     name="sugerencias",
     description="Sugerile algo al bot — se agrupa con ideas similares",
 )
@@ -947,7 +1002,9 @@ async def help_cmd(ctx):
             "**/indio** `charla` — persona con memoria corta por guild y "
             "memoria larga destilada (rasgos, anécdotas, chistes internos). "
             "También responde por voz cuando lo nombrás en un canal donde "
-            "está el userbot."
+            "está el userbot.\n"
+            "**/generarimagen** `prompt` — genera una imagen con Gemini "
+            "(gratis, sin API key)."
         ),
         inline=False,
     )
@@ -1006,3 +1063,7 @@ if __name__ == "__main__":
         bot.run(config.TOKEN)
     finally:
         analytics.shutdown()
+        try:
+            asyncio.run(geminiImage.close())
+        except Exception:
+            pass
