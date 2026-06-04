@@ -341,8 +341,10 @@ _INDIO_TOOLS = [
             "Úsala únicamente cuando el usuario responda a una imagen existente (que tú puedes ver) "
             "y ordene explícitamente editarla, modificarla, o hacer una imagen parecida a esa "
             "(ej: 'haceme una imagen como esta pero con...', 'editame esta foto...'). "
-            "Debes redactar un prompt en español muy descriptivo y detallado indicando los cambios "
-            "o el estilo deseado para la nueva imagen."
+            "Debes redactar un prompt en español enfocado principalmente en los cambios, agregados o el estilo deseado "
+            "para la nueva imagen (ej: 'un hombre usando un gorrito de lana'). IMPORTANTE: NO describas de forma detallada "
+            "los rasgos físicos del sujeto original o del fondo que no deben cambiar (como si es pelado, su sonrisa, etc.), "
+            "ya que el modelo de edición de imagen-a-imagen los deformará si se especifican textualmente."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -350,13 +352,15 @@ _INDIO_TOOLS = [
                 "prompt": {
                     "type": "STRING",
                     "description": (
-                        "El prompt detallado en español que describe los cambios o la nueva imagen basada en la original."
+                        "El prompt en español enfocado únicamente en los cambios, agregados o estilo solicitado "
+                        "(ej: 'un hombre con un gorrito de lana'). No repitas descripciones físicas de lo que no cambia."
                     ),
                 },
             },
             "required": ["prompt"],
         },
     },
+
 ]
 
 
