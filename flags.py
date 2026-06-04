@@ -20,6 +20,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "parar": "text",
     "queue": "text",
     "generarimagen": "text",
+    "banana": "text",
     "sugerencias": "text",
     "sugerencias-ver": "text",
     "quit": "text",

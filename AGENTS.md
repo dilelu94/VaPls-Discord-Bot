@@ -164,6 +164,7 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 - `/quit`: desconecta sin limpiar cola.
 - `/entraindio`: hace que el userbot (Indio) entre al canal de voz del invocador (relay `/join`).
 - `/sensibilidad` `1|2|3`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
+- `/banana`: genera una imagen con Gemini (gratis, sin API key, usando Playwright).
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
@@ -232,25 +233,21 @@ journalctl --user -u lsyncd-rvc.service -f
 
 Si cambia el server / la key SSH, hay que editar `lsyncd_rvc.lua` y `systemctl --user restart lsyncd-rvc.service`.
 
-## 🖼️ Generación de imágenes (/generarimagen)
+## 🖼️ Generación de imágenes (/generarimagen y /banana)
 
-El comando `/generarimagen` genera imágenes usando la **Hugging Face Inference
-API** (free tier). El módulo que lo implementa es `huggingfaceImage.py`.
+Hay dos comandos para generar imágenes de manera gratuita:
 
-**Setup:**
+1. **`/generarimagen` (Hugging Face)**:
+   Usa la **Hugging Face Inference API** (free tier). El módulo que lo implementa es `huggingfaceImage.py`.
+   **Setup:**
+   1. Crear cuenta en https://huggingface.co/join
+   2. Ir a Settings → Access Tokens → "New token" (tipo **read**)
+   3. Poner el token en `.env`: `HUGGINGFACE_API_TOKEN=tu_token`
 
-1. Crear cuenta en https://huggingface.co/join
-2. Ir a Settings → Access Tokens → "New token" (tipo **read**)
-3. Poner el token en `.env`: `HUGGINGFACE_API_TOKEN=tu_token`
-
-El módulo usa `black-forest-labs/FLUX.1-schnell` con fallback a
-`stabilityai/stable-diffusion-3-medium-diffusers`. Tiene reintentos automáticos
-cuando el modelo está cold-loading (común en el free tier).
-
-**Playwright (deprecado):** El intento anterior usaba `geminiImage.py`
-(Playwright + Gemini web UI) pero la UI gratuita de Gemini no admite
-generación de imágenes. El archivo y `setup_gemini_session.py` se quedan
-en el árbol como referencia pero ya no se cargan desde `bot.py`.
+2. **`/banana` (Playwright / Gemini web UI)**:
+   Genera imágenes usando automatización de navegador con Playwright conectándose a la UI de Gemini. El módulo es `geminiImage.py`.
+   **Setup:**
+   1. Ejecutar `python setup_gemini_session.py` para abrir Chromium en modo interactivo, logearse con una cuenta de Google en Gemini y crear el archivo `/tmp/gemini_ready` para guardar la sesión en `gemini_auth.json`.
 
 ## ⚠️ Errores conocidos y workarounds
 

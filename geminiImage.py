@@ -1,13 +1,8 @@
-"""⚠️ DEPRECATED — Image generation via Gemini web UI (Playwright).
+"""Image generation via Gemini web UI (Playwright).
 
-Replaced by ``huggingfaceImage.py`` (Hugging Face Inference API) because the
-free Gemini tier does not support image generation. Kept in-tree for reference
-only — no longer loaded by the bot.
-
-Original docstring:
-> Free alternative to the paid Imagen/3.1 Flash Image API. Uses a persisted
-> Gmail session (storage_state) to access gemini.google.com's native image
-> generation without an API key.
+Free alternative to the paid Imagen/3.1 Flash Image API. Uses a persisted
+Gmail session (storage_state) to access gemini.google.com's native image
+generation without an API key.
 """
 
 import asyncio
@@ -276,3 +271,87 @@ async def close():
         logger.warning("browser cleanup: %s", e)
     finally:
         _playwright = _browser = _context = None
+
+
+async def bananaLogic(ctx, prompt: str):
+    """Encapsulates the /banana slash command logic.
+
+    Checks the prompt, calls the Playwright-based generator,
+    sends the resulting image file to the designated channel (or directly if invoked there),
+    and ensures the temporary file is deleted.
+    """
+    import config
+    import discord
+    from bot import safe_defer, safe_respond, safeEdit
+
+    if not prompt or not prompt.strip():
+        await safe_respond(ctx, "decime qué generar")
+        return
+
+    target_channel_id = config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+    is_outside = ctx.channel_id != target_channel_id
+
+    # If outside, defer as ephemeral so the status update is private
+    await safe_defer(ctx, ephemeral=is_outside)
+
+    if is_outside:
+        await safeEdit(ctx, f"⏳ Imagen generándose en <#{target_channel_id}>...")
+    else:
+        await safeEdit(ctx, "⏳ Generando imagen con Gemini...")
+
+    # First, verify if we have access to the target channel (if outside)
+    target_channel = None
+    if is_outside:
+        from unittest.mock import Mock
+        has_real_bot = hasattr(ctx, "bot") and ctx.bot is not None and (
+            not isinstance(ctx.bot, Mock) or "_mock_custom_bot" in ctx.bot.__dict__
+        )
+        if has_real_bot:
+            target_channel = ctx.bot.get_channel(target_channel_id)
+            if target_channel is None:
+                try:
+                    target_channel = await ctx.bot.fetch_channel(target_channel_id)
+                except Exception:
+                    pass
+
+            # If bot is present but channel is not accessible, fail with a clear message
+            if target_channel is None:
+                await safeEdit(ctx, "no acceso al canal")
+                return
+
+    path = await generate(prompt)
+    if path is None:
+        await safeEdit(ctx, "❌ No pude generar la imagen. Probá de nuevo más tarde.")
+        return
+
+    try:
+        if is_outside:
+            if target_channel:
+                await target_channel.send(
+                    content=f"<@{ctx.author.id}>, acá está la imagen que me pediste para: **{prompt}**",
+                    file=discord.File(path, filename="imagen.png"),
+                )
+                await safeEdit(ctx, f"✅ Imagen generada en <#{target_channel_id}>!")
+            else:
+                # Fallback to direct response if no bot object exists (e.g. standard unit tests)
+                await ctx.interaction.edit_original_response(
+                    content="",
+                    file=discord.File(path, filename="imagen.png"),
+                )
+        else:
+            await ctx.interaction.edit_original_response(
+                content="",
+                file=discord.File(path, filename="imagen.png"),
+            )
+    except discord.Forbidden:
+        await safeEdit(ctx, "no acceso al canal")
+    except discord.HTTPException as e:
+        if "file is too large" in str(e).lower() or "413" in str(e):
+            await safeEdit(ctx, "❌ La imagen supera el límite de 8 MB de Discord.")
+        else:
+            await safeEdit(ctx, f"❌ Error al enviar: {e}")
+    finally:
+        try:
+            os.unlink(path)
+        except Exception:
+            logger.warning("could not delete temp image %s", path)

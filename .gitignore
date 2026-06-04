@@ -40,3 +40,6 @@ lsyncd.status
 image_cache/*
 !image_cache/.gitkeep
 
+# Gemini Playwright Gmail session authentication state
+gemini_auth.json
+

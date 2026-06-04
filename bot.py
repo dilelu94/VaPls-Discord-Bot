@@ -31,6 +31,7 @@ import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import webhookLogger
 import huggingfaceImage
+import geminiImage
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
@@ -204,16 +205,20 @@ async def on_ready():
     log.info(f"Bot online as {bot.user}")
     if _webhook_log_handler is not None:
         _webhook_log_handler.start(asyncio.get_running_loop())
-    await bot.sync_commands()
     if _api_runner is None:
         try:
             _api_runner = await startApiServer(bot)
         except Exception as e:
             log.warning(f"Failed to start HTTP API: {e}")
+    await bot.sync_commands()
     try:
         await decifrarVoting.start(bot)
     except Exception:
         log.exception("decifrar voting startup failed")
+    try:
+        await geminiImage.init()
+    except Exception:
+        log.exception("geminiImage init failed (image gen unavailable)")
 
 
 @bot.event
@@ -696,6 +701,32 @@ async def generarimagen(
     await huggingfaceImage.generarimagenLogic(ctx, prompt)
 
 
+@bot.slash_command(
+    name="banana",
+    description="Genera una imagen con Gemini (gratis, sin API key, usando Playwright)",
+)
+async def banana(
+    ctx,
+    prompt: discord.Option(
+        str, description="Descripción de la imagen que querés generar"
+    ),
+):
+    """Slash command: generate an image via Gemini web UI (browser automation).
+
+    Args:
+        ctx: Discord application context.
+        prompt: Image description.
+
+    Side Effects:
+        Launches a headless browser, generates the image, sends it to Discord,
+        and deletes the temp file.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    _track_command(ctx, "banana", {"prompt_length": len(prompt or "")})
+    await geminiImage.bananaLogic(ctx, prompt)
+
 
 @bot.slash_command(
     name="sugerencias",
@@ -1037,7 +1068,8 @@ async def help_cmd(ctx):
             "También responde por voz cuando lo nombrás en un canal donde "
             "está el userbot.\n"
             "**/generarimagen** `prompt` — genera una imagen con Hugging Face "
-            "(gratis, requiere token)."
+            "(gratis, requiere token).\n"
+            "**/banana** `prompt` — genera una imagen con Gemini (gratis, sin API key)."
         ),
         inline=False,
     )
@@ -1096,3 +1128,8 @@ if __name__ == "__main__":
         bot.run(config.TOKEN)
     finally:
         analytics.shutdown()
+        try:
+            import asyncio
+            asyncio.run(geminiImage.close())
+        except Exception:
+            pass

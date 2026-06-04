@@ -3251,6 +3251,93 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
+async def _relay_invoke_banana(request: web.Request) -> web.Response:
+    """Ask the userbot to invoke VaPls's /banana slash command with a
+    ``query`` (used as prompt) argument so the image is generated under the
+    real user account. Mirrors :func:`_relay_invoke_play`."""
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        query = str(data["query"]).strip()
+    except Exception as e:
+        log.warning("[RELAY-BANANA] rejected invalid body: %s", e)
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not query:
+        return web.json_response({"error": "empty query"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not (
+        hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
+    ):
+        return web.json_response(
+            {"error": "channel has no slash command API"}, status=400
+        )
+
+    try:
+        cmds = await _resolve_slash_commands(
+            channel,
+            "banana",
+            timeout=config.INDIO_RELAY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "[RELAY-BANANA] slash_commands() timed out for channel %s", channel_id
+        )
+        return web.json_response({"error": "slash_commands() timed out"}, status=504)
+    except Exception as e:
+        log.exception("[RELAY-BANANA] slash_commands() failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_banana_slash_commands_failed"}
+        )
+        return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
+
+    gen_cmd = _pick_vapls_command(cmds, "banana")
+    if gen_cmd is None:
+        log.warning(
+            "[RELAY-BANANA] VaPls /banana not found in channel %s (saw %d candidates)",
+            channel_id,
+            len(cmds),
+        )
+        return web.json_response(
+            {"error": "banana command not found in channel"}, status=404
+        )
+
+    try:
+        await gen_cmd(prompt=query)
+        log.info(
+            f"[RELAY-BANANA] invoked /banana prompt={query!r} in channel={channel_id}"
+        )
+        return web.json_response({"invoked": True, "query": query})
+    except discord.HTTPException as e:
+        if getattr(e, "status", None) == 429:
+            log.warning(
+                "[RELAY-BANANA] Discord rate-limited /banana invocation: %s", e
+            )
+            return web.json_response({"error": f"rate-limited: {e}"}, status=429)
+        log.exception("[RELAY-BANANA] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_banana_invocation_failed"}
+        )
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+    except Exception as e:
+        log.exception("[RELAY-BANANA] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_banana_invocation_failed"}
+        )
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+
+
 async def _relay_join(request: web.Request) -> web.Response:
     """Make the userbot join (or move to) a specific voice channel.
 
@@ -3476,6 +3563,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
     app.router.add_post("/invoke_generarimagen", _relay_invoke_generarimagen)
+    app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
