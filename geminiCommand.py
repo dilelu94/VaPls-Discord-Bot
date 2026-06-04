@@ -3331,9 +3331,11 @@ async def indioFromVoice(
     # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, las
     # respuestas del Indio aterrizan ahi. La wake-word de voz queda exenta
     # (from_voice=True): el transcript del userbot ya cae en su canal
-    # dedicado y mover la respuesta a otro lado genera ruido.
+    # dedicado y mover la respuesta a otro lado genera ruido. Si el mensaje
+    # fue un reply a otro mensaje (replied_content), la respuesta se queda
+    # en el canal original y se postea como reply al invocador.
     original_channel_id = channel_id
-    if config.INDIO_REPLY_CHANNEL_ID and not from_voice:
+    if config.INDIO_REPLY_CHANNEL_ID and not from_voice and replied_content is None:
         target_chan = bot.get_channel(config.INDIO_REPLY_CHANNEL_ID)
         if target_chan is not None and getattr(target_chan, "guild", None) is not None:
             channel_id = config.INDIO_REPLY_CHANNEL_ID

@@ -513,8 +513,7 @@ async def play(
     Async:
         This function is a coroutine and must be awaited.
     """
-    if await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID):
-        return
+    will_redirect = await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID)
     _track_command(ctx, "play", {"query_length": len(query or "")})
     if not query or not query.strip():
         await ctx.followup.send("decime qué reproducir la próxima", ephemeral=True)
@@ -572,8 +571,7 @@ async def soundpad(
         await ctx.respond(msg, ephemeral=True)
         return
 
-    if await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID):
-        return
+    will_redirect = await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID)
     _track_command(ctx, "soundpad", {"query_length": len(query or "")})
     await soundpadLogic(ctx, query=query)
 
