@@ -680,37 +680,8 @@ async def generarimagen(
         This function is a coroutine and must be awaited.
     """
     _track_command(ctx, "generarimagen", {"prompt_length": len(prompt or "")})
-    if not prompt or not prompt.strip():
-        await safe_respond(ctx, "decime qué generar")
-        return
-    if not config.HUGGINGFACE_API_TOKEN:
-        await safe_respond(
-            ctx,
-            "❌ El token de Hugging Face no está configurado. "
-            "Avisale al admin para que lo agregue al .env",
-        )
-        return
-    await safe_defer(ctx)
-    await safeEdit(ctx, "⏳ Generando imagen...")
-    path = await huggingfaceImage.generate(prompt, config.HUGGINGFACE_API_TOKEN)
-    if path is None:
-        await safeEdit(ctx, "❌ No pude generar la imagen. Probá de nuevo más tarde.")
-        return
-    try:
-        await ctx.interaction.edit_original_response(
-            content="",
-            file=discord.File(path, filename="imagen.png"),
-        )
-    except discord.HTTPException as e:
-        if "file is too large" in str(e).lower() or "413" in str(e):
-            await safeEdit(ctx, "❌ La imagen supera el límite de 8 MB de Discord.")
-        else:
-            await safeEdit(ctx, f"❌ Error al enviar: {e}")
-    finally:
-        try:
-            os.unlink(path)
-        except Exception:
-            log.warning("could not delete temp image %s", path)
+    await huggingfaceImage.generarimagenLogic(ctx, prompt)
+
 
 
 @bot.slash_command(
