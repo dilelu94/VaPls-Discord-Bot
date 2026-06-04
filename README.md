@@ -90,7 +90,7 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
 ## Estructura del proyecto
 - `bot.py`: Lógica principal, comandos y reproducción.
 - `userbot/bot.py`: Transcripción de voz con Vosk.
-- **Nota de Desarrollo:** Los comandos se programan en "vapls". El userbot es un usuario más y no debe contener lógica de comandos propia, debe utilizar los comandos de "vapls".
+- **Nota de Desarrollo:** Los comandos se programan en "vapls". El userbot es un usuario más y no debe contener lógica propia; para interactuar, debe invocar los comandos de "vapls" programáticamente mediante una función que llame al comando slash con argumentos.
 - `playCommand.py`: Cola de música y yt-dlp.
 - `soundpadCommand.py`: UI de soundpad.
 - `apiServer.py`: HTTP API.

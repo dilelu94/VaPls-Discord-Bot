@@ -58,7 +58,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 ## 🛠️ Principios de Programación de Lógica
 
 - **Centralización en "vapls":** Los comandos y la lógica de interacción principal deben programarse siempre en el **Main bot** ("vapls").
-- **El Userbot es un usuario:** El *Indio* (userbot) debe ser tratado como un usuario más. Si se le pide realizar una tarea, debe utilizar los comandos de "vapls" (ej. `/play`, `/soundpad`) como si fuera un usuario humano.
+- **El Userbot es un usuario:** El *Indio* (userbot) debe ser tratado como un usuario más. Si se le pide realizar una tarea, debe invocar los comandos de "vapls" programáticamente mediante una función que ejecute el comando slash con sus argumentos (ya que no puede usar comandos slash literales por texto).
 - **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea estrictamente necesario por limitaciones técnicas (ej. algo que no pueda implementarse desde el bot "vapls").
 
 ## 🌐 Servidor de producción (2026-05-30)
