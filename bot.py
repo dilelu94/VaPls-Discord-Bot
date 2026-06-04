@@ -591,9 +591,22 @@ async def soundpad(
         await ctx.respond(msg, ephemeral=True)
         return
 
-    await safe_defer(ctx)
+    will_redirect = config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    await safe_defer(ctx, ephemeral=will_redirect)
+    redirect_ch = None
+    if will_redirect:
+        try:
+            await ctx.interaction.edit_original_response(
+                content=f"soundpad en <#{config.INDIO_PLAY_CHANNEL_ID}>"
+            )
+        except Exception:
+            pass
+        if ctx.guild:
+            ch = ctx.guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+            if ch is not None and hasattr(ch, "send"):
+                redirect_ch = ch
     _track_command(ctx, "soundpad", {"query_length": len(query or "")})
-    await soundpadLogic(ctx, query=query)
+    await soundpadLogic(ctx, query=query, redirect_channel=redirect_ch)
 
 
 @bot.slash_command(name="vapls", description="consulta rápida, sin memoria")

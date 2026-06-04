@@ -974,13 +974,20 @@ class SoundpadStopView(discord.ui.View):
             pass
 
 
-async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = None):
+async def soundpadLogic(
+    ctx: discord.ApplicationContext,
+    query: "str | None" = None,
+    redirect_channel: "discord.TextChannel | None" = None,
+):
     """Handle the /soundpad slash command.
 
     Args:
         ctx: Discord application context.
         query: Optional fuzzy search. When provided, finds the most similar
             clip and plays it directly instead of opening the UI panel.
+        redirect_channel: When set, public output (panel message or query-mode
+            confirmation) is posted here instead of via ctx.followup. Used
+            when /soundpad is invoked outside the designated audio channel.
 
     Returns:
         None.
@@ -1071,10 +1078,16 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
             os.path.splitext(os.path.basename(match_path))[0]
         )
         view = SoundpadStopView(ctx.guild)
-        message = await ctx.followup.send(
-            f"▶️ Reproduciendo: **{display}**",
-            view=view,
-        )
+        if redirect_channel is not None:
+            message = await redirect_channel.send(
+                f"▶️ Reproduciendo: **{display}**",
+                view=view,
+            )
+        else:
+            message = await ctx.followup.send(
+                f"▶️ Reproduciendo: **{display}**",
+                view=view,
+            )
         view.message = message
         analytics.capture(
             "soundpad query played",
@@ -1132,7 +1145,10 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
                 "default_category": view.selected_category,
             },
         )
-        await ctx.followup.send("🎛️ Soundpad Control Panel", view=view)
+        if redirect_channel is not None:
+            await redirect_channel.send("🎛️ Soundpad Control Panel", view=view)
+        else:
+            await ctx.followup.send("🎛️ Soundpad Control Panel", view=view)
     except Exception as e:
         analytics.capture_exception(
             e,
