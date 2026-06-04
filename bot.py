@@ -520,9 +520,10 @@ async def play(
     Async:
         This function is a coroutine and must be awaited.
     """
-    await safe_defer(ctx)
+    will_redirect = config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    await safe_defer(ctx, ephemeral=will_redirect)
     redirect_ch = None
-    if config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID:
+    if will_redirect:
         try:
             await ctx.interaction.edit_original_response(
                 content=f"musica en <#{config.INDIO_PLAY_CHANNEL_ID}>"
