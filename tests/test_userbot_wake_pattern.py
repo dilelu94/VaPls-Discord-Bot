@@ -400,6 +400,8 @@ confirms = _NS["_whisper_confirms_indio"]
         "INDIO",
         "indio,",   # punctuation attached — "indio," contains "indio"
         "indios",   # plural also contains "indio" as substring
+        "che india",      # Whisper-small mis-spelling of "indio"
+        "cheindio dale",  # glued: token "cheindio" contains "indio"
     ],
 )
 def test_whisper_confirms_indio_true(text):
@@ -413,6 +415,7 @@ def test_whisper_confirms_indio_true(text):
         "ponete un tema de los redondos",
         "",
         "el indo",  # typo — no "indio"
+        "el individuo",  # contains "indi" but not "indio"/"india"
         None,
     ],
 )

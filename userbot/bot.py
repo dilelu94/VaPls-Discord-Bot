@@ -563,6 +563,37 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
     return " ".join(s.text.strip() for s in segments if s.text).strip()
 
 
+def _run_whisper_wake(pcm_16k_bytes: bytes) -> str:
+    """Whisper pass tuned for the SHORT wake-word region (~1.5s of "che indio").
+
+    Used by preset 4 to confirm the wake word. Differs from :func:`_run_whisper`
+    (which transcribes the full command) in ways that matter on a brief clip:
+
+      - ``vad_filter=False``: the VAD trims brief leading speech, which would
+        cut the very wake word we're trying to confirm.
+      - ``initial_prompt`` biases the decoder toward "che indio" so it writes
+        "indio" instead of dropping it or hearing "cheneo".
+      - tighter hallucination guards (``no_speech_threshold`` / log-prob /
+        compression ratio): marginal short clips otherwise emit boilerplate
+        like YouTube-subtitle text. A hallucination won't contain "indio", so
+        it's correctly rejected downstream.
+    """
+    audio = np.frombuffer(pcm_16k_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+    segments, _info = whisper_model.transcribe(
+        audio,
+        language="es",
+        beam_size=1,
+        vad_filter=False,
+        temperature=0.0,
+        no_speech_threshold=0.6,
+        log_prob_threshold=-1.0,
+        compression_ratio_threshold=2.4,
+        condition_on_previous_text=False,
+        initial_prompt="Che indio.",
+    )
+    return " ".join(s.text.strip() for s in segments if s.text).strip()
+
+
 # ---------- VOSK wake-word recognizer (gating layer for Whisper) -----------
 # VOSK is loaded lazily and only when WAKE_WORD_ENABLED is true. A KaldiRecognizer
 # is created per speaker with a restricted grammar so it only ever discriminates
@@ -1406,6 +1437,40 @@ class WakeWordSink(voice_recv.AudioSink):
         prebuffer_len: int = 0,
     ) -> None:
         try:
+            # Preset 4: before transcribing the full command, confirm the wake
+            # word on the PREBUFFER region with a dedicated short Whisper pass.
+            # Whisper drops the brief leading "che indio" when a command follows
+            # (it transcribes only "ponete un tema…"), so checking the full
+            # transcript yields false negatives; the short wake-region clip
+            # transcribes "che indio" reliably (see _run_whisper_wake).
+            if _SENSITIVITY_PRESET == 4:
+                wake_pcm = pcm_16k[:prebuffer_len] if prebuffer_len else pcm_16k
+                wake_text = await asyncio.to_thread(_run_whisper_wake, wake_pcm)
+                if not _whisper_confirms_indio(wake_text):
+                    log.info(
+                        "[WAKE] user=%s preset4: 'indio' NOT confirmed in wake "
+                        "region (%r); discard",
+                        user_id,
+                        wake_text,
+                    )
+                    analytics.capture(
+                        "wake_word_rejected",
+                        properties={
+                            "speaker_id": user_id,
+                            "reason": "preset4_no_indio",
+                            "wake_text": wake_text,
+                        },
+                    )
+                    return
+                log.info(
+                    "[WAKE] user=%s preset4: 'indio' confirmed in wake region (%r)",
+                    user_id,
+                    wake_text,
+                )
+                # Wake sound was deferred at VOSK-detection time; play it now
+                # that the Whisper "indio" confirmation has passed.
+                self._schedule_wake_sound(user_id)
+
             t0 = time.monotonic()
             text = await asyncio.to_thread(_run_whisper, pcm_16k)
             dt = time.monotonic() - t0
@@ -1415,30 +1480,6 @@ class WakeWordSink(voice_recv.AudioSink):
                     f"({duration:.1f}s audio, {dt * 1000:.0f}ms); skip"
                 )
                 return
-
-            # Preset 4: confirm "indio" appears in the Whisper transcript
-            # using the full audio (prebuffer + capture), not just the
-            # prebuffer alone — Whisper is unreliable on short ~1.5s clips.
-            if _SENSITIVITY_PRESET == 4 and not _whisper_confirms_indio(text):
-                log.info(
-                    "[WAKE] user=%s preset4: 'indio' NOT confirmed in transcript (%r); discard",
-                    user_id,
-                    text,
-                )
-                analytics.capture(
-                    "wake_word_rejected",
-                    properties={
-                        "speaker_id": user_id,
-                        "reason": "preset4_no_indio",
-                        "text": text,
-                    },
-                )
-                return
-
-            if _SENSITIVITY_PRESET == 4:
-                # Wake sound was deferred at VOSK-detection time; play it now
-                # that the Whisper "indio" confirmation has passed.
-                self._schedule_wake_sound(user_id)
 
             log.info(
                 f"[WAKE][es] user_id={user_id} "
@@ -1517,7 +1558,11 @@ def _whisper_confirms_indio(text: str) -> bool:
         True
         >>> _whisper_confirms_indio("indio,")
         True
-        >>> _whisper_confirms_indio("el indo")  # typo — no "indio"
+        >>> _whisper_confirms_indio("che india")  # Whisper-small mis-spelling
+        True
+        >>> _whisper_confirms_indio("cheindio dale")  # glued
+        True
+        >>> _whisper_confirms_indio("el individuo")  # not the wake word
         False
         >>> _whisper_confirms_indio("")
         False
@@ -1525,7 +1570,11 @@ def _whisper_confirms_indio(text: str) -> bool:
     if not text:
         return False
     norm = _normalize(text)
-    return any("indio" in tok for tok in norm.split())
+    # Accept "indio" plus the close mis-spellings Whisper-small produces on the
+    # short wake clip ("india"; "indió" already strips to "indio"). Substring
+    # within a token so glued/punctuated forms ("cheindio", "indio,", "indios")
+    # count, while unrelated words like "individuo" do not.
+    return any(("indio" in tok or "india" in tok) for tok in norm.split())
 
 
 # Cached "is the main bot playing audio" check — polled cheaply.
