@@ -2480,6 +2480,30 @@ async def on_message(message):
                         }
                         for a in videos[:1]
                     ]
+
+    # Si no hay adjuntos del reply, usar los del mensaje actual (wake-word directa)
+    if attachment_urls is None and message.attachments:
+        images = [
+            a
+            for a in message.attachments
+            if a.content_type and a.content_type.startswith("image/")
+        ][:3]
+        if images:
+            attachment_urls = [
+                {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
+                for a in images
+            ]
+        else:
+            videos = [
+                a
+                for a in message.attachments
+                if a.content_type and a.content_type.startswith("video/")
+            ]
+            if videos:
+                attachment_urls = [
+                    {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
+                    for a in videos[:1]
+                ]
     asyncio.create_task(
         _dispatch_to_indio(
             guild_id=guild.id,

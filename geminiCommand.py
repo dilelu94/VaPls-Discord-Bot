@@ -3586,6 +3586,41 @@ async def indioFromVoice(
     # ---- Context from replied-to message + image download ----
     volatile = player_block or None
     image_parts = None
+
+    # Descarga de imágenes del mensaje actual o del mensaje al que se responde.
+    # attachment_urls ya viene poblado por el caller (userbot) con las adjuntos
+    # relevantes (sea del mensaje original o del reply).
+    if attachment_urls:
+        images = [
+            u
+            for u in attachment_urls
+            if u.get("mime_type", "").startswith("image/")
+        ][:3]
+        if images:
+            downloaded = []
+            async with aiohttp.ClientSession() as sess:
+                for img in images:
+                    try:
+                        async with sess.get(
+                            img["url"], timeout=aiohttp.ClientTimeout(total=10)
+                        ) as resp:
+                            if resp.status == 200:
+                                import base64
+
+                                data = await resp.read()
+                                downloaded.append(
+                                    {
+                                        "inlineData": {
+                                            "mimeType": img["mime_type"],
+                                            "data": base64.b64encode(data).decode(),
+                                        }
+                                    }
+                                )
+                    except Exception:
+                        pass
+            if downloaded:
+                image_parts = downloaded
+
     if replied_content is not None and replied_author is not None:
         ctx_lines = [f"[contexto: {replied_author} dijo: {replied_content}]"]
         if attachment_urls:
@@ -3596,35 +3631,6 @@ async def indioFromVoice(
             ]
             if videos:
                 ctx_lines.append("[el mensaje tiene un video que no puedo ver]")
-            images = [
-                u
-                for u in attachment_urls
-                if u.get("mime_type", "").startswith("image/")
-            ][:3]
-            if images:
-                downloaded = []
-                async with aiohttp.ClientSession() as sess:
-                    for img in images:
-                        try:
-                            async with sess.get(
-                                img["url"], timeout=aiohttp.ClientTimeout(total=10)
-                            ) as resp:
-                                if resp.status == 200:
-                                    import base64
-
-                                    data = await resp.read()
-                                    downloaded.append(
-                                        {
-                                            "inline_data": {
-                                                "mime_type": img["mime_type"],
-                                                "data": base64.b64encode(data).decode(),
-                                            }
-                                        }
-                                    )
-                        except Exception:
-                            pass
-                if downloaded:
-                    image_parts = downloaded
         ctx_text = "\n".join(ctx_lines)
         volatile = f"{ctx_text}\n\n{player_block}" if player_block else ctx_text
 

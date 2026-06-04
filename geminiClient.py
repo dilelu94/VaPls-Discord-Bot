@@ -176,7 +176,7 @@ async def generate(
             that changes call-to-call. Sent at the very end of the request,
             bundled into the final user turn, so it never poisons the cacheable
             system-prompt + tools prefix.
-        image_parts: Optional list of ``{"inline_data": {"mime_type": str, "data": str}}``
+        image_parts: Optional list of ``{"inlineData": {"mimeType": str, "data": str}}``
             dicts to include as image parts in the user message. Injected between
             volatile_context and the text message, so Gemini sees images in context.
         on_retry: Optional async callback invoked when a key returns 429 and we
