@@ -1620,29 +1620,38 @@ class GuildPlayer:
             self.initialCtx = ctx
 
         estimatedTime = int(time.time() + 30)
+        msg_content = ""
+        view = None
         if len(songs) > 1:
             if isFirst:
-                view = CancelDownloadView(
-                    self, songs[0]["id"], f"Playlist ({len(songs)} canciones)"
-                )
-                await ctx.interaction.edit_original_response(
-                    content=f"✅ Descargando playlist (se añadieron **{len(songs)}** canciones, iniciando con **{songs[0]['title']}**... <t:{estimatedTime}:R>)",
-                    view=view,
-                )
+                view = CancelDownloadView(self, songs[0]["id"], f"Playlist ({len(songs)} canciones)")
+                msg_content = f"✅ Descargando playlist (se añadieron **{len(songs)}** canciones, iniciando con **{songs[0]['title']}**... <t:{estimatedTime}:R>)"
             else:
-                await safeEdit(
-                    ctx, f"✅ Se añadieron **{len(songs)}** canciones a la cola."
-                )
+                msg_content = f"✅ Se añadieron **{len(songs)}** canciones a la cola."
         else:
             if isFirst:
                 view = CancelDownloadView(self, songs[0]["id"], songs[0]["title"])
-                await ctx.interaction.edit_original_response(
-                    content=f"✅ Descargando: **{songs[0]['title']}**... <t:{estimatedTime}:R>",
-                    view=view,
-                )
+                msg_content = f"✅ Descargando: **{songs[0]['title']}**... <t:{estimatedTime}:R>"
             else:
-                await safeEdit(ctx, f"✅ Se añadió **{songs[0]['title']}** a la cola.")
+                msg_content = f"✅ Se añadió **{songs[0]['title']}** a la cola."
 
+        if self.indioProgressMessage:
+            try:
+                await self.indioProgressMessage.edit(content=msg_content, view=view)
+            except Exception:
+                pass
+            if isFirst:
+                self.indioProgressMeta = {
+                    "title": songs[0]["title"],
+                    "duration": songs[0].get("duration_string") or "",
+                    "isFirst": True,
+                    "video_id": songs[0]["id"],
+                    "source": "slash"
+                }
+        elif isFirst:
+            await ctx.interaction.edit_original_response(content=msg_content, view=view)
+        else:
+            await safeEdit(ctx, msg_content)
         await self._enqueueAndMaybeStart(songs)
 
     async def cancelDownload(
@@ -1993,10 +2002,11 @@ class GuildPlayer:
                 duration = meta.get("duration") or ""
                 duration_part = f" *({duration})*" if duration else ""
                 is_first = meta.get("isFirst", False)
+                suffix = " — *pedido al indio*" if meta.get("source") == "indio" else ""
                 final_text = (
-                    f"🎶 Te puse: **{videoTitle}**{duration_part} — *pedido al indio*"
+                    f"🎶 Te puse: **{videoTitle}**{duration_part}{suffix}"
                     if is_first
-                    else f"📥 Encolé: **{videoTitle}**{duration_part} — *pedido al indio*"
+                    else f"📥 Encolé: **{videoTitle}**{duration_part}{suffix}"
                 )
                 try:
                     await self.indioProgressMessage.edit(content=final_text)
@@ -2824,8 +2834,15 @@ async def playLogic(
     from bot import safe_defer, safe_respond, safeEdit
 
     async def _send(m: str):
+        if player.indioProgressMessage:
+            try:
+                await player.indioProgressMessage.edit(content=m)
+                return
+            except Exception:
+                pass
         if redirect_channel:
-            await redirect_channel.send(m)
+            msg = await redirect_channel.send(m)
+            player.indioProgressMessage = msg
         else:
             await safeEdit(ctx, m)
 

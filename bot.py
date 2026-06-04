@@ -524,8 +524,8 @@ async def play(
     redirect_ch = None
     if config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID:
         try:
-            await ctx.followup.send(
-                f"te respondo en <#{config.INDIO_PLAY_CHANNEL_ID}>", ephemeral=True
+            await ctx.interaction.edit_original_response(
+                content=f"musica en <#{config.INDIO_PLAY_CHANNEL_ID}>"
             )
         except Exception:
             pass
