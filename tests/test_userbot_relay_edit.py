@@ -10,6 +10,7 @@ fetch_message / edit) — a real process edge. We do NOT mock aiohttp itself;
 we run the handler through a real aiohttp TestClient so the routing, JSON
 serialisation and HTTP headers are exercised for real.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +33,7 @@ MESSAGE_ID = 999_888_777
 # Extract _relay_edit from source with injected stubs
 # ---------------------------------------------------------------------------
 
+
 def _load_relay_edit():
     """Extract _relay_edit from userbot/bot.py without running discord setup.
 
@@ -50,7 +52,8 @@ def _load_relay_edit():
     )
     # Find the next top-level definition after _relay_edit
     end = next(
-        i for i, line in enumerate(lines[start + 1:], start=start + 1)
+        i
+        for i, line in enumerate(lines[start + 1 :], start=start + 1)
         if line.startswith(("async def ", "def ", "class "))
     )
     block = "\n".join(lines[start:end])
@@ -63,12 +66,15 @@ def _load_relay_edit():
     )
     log_stub = logging.getLogger("test_relay_edit")
 
+    analytics_stub = SimpleNamespace(capture_exception=lambda e, **kw: None)
+
     ns: dict = {
         "config": config_stub,
         "client": client_stub,
         "log": log_stub,
         "web": web,
         "discord": discord,
+        "analytics": analytics_stub,
     }
     exec(block, ns)
     return ns["_relay_edit"], config_stub, client_stub
@@ -80,6 +86,7 @@ _handler, _cfg, _client_stub = _load_relay_edit()
 # ---------------------------------------------------------------------------
 # Test helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_app() -> web.Application:
     app = web.Application()
@@ -115,6 +122,7 @@ def _make_channel(message_id: int = MESSAGE_ID, content: str = "original"):
 # Tests
 # ---------------------------------------------------------------------------
 
+
 async def test_edit_updates_message_content_and_returns_200():
     """The target message's edit() is called with the new content, and the
     response is 200 with ok=true and the message_id."""
@@ -126,7 +134,11 @@ async def test_edit_updates_message_content_and_returns_200():
     try:
         resp = await tc.post(
             "/edit",
-            json={"channel_id": CHANNEL_ID, "message_id": MESSAGE_ID, "content": "updated text"},
+            json={
+                "channel_id": CHANNEL_ID,
+                "message_id": MESSAGE_ID,
+                "content": "updated text",
+            },
             headers=_good_headers(),
         )
         body = await resp.json()
@@ -337,7 +349,11 @@ async def test_fetch_channel_fallback_used_when_get_channel_misses():
     try:
         resp = await tc.post(
             "/edit",
-            json={"channel_id": CHANNEL_ID, "message_id": MESSAGE_ID, "content": "via fetch"},
+            json={
+                "channel_id": CHANNEL_ID,
+                "message_id": MESSAGE_ID,
+                "content": "via fetch",
+            },
             headers=_good_headers(),
         )
         body = await resp.json()
