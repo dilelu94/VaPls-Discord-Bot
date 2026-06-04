@@ -22,7 +22,6 @@ from geminiCommand import vaplsLogic, indioLogic
 from suggestionsCommand import sugerenciasLogic, sugerenciasVerLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
-import flags as cmdflags
 import analytics
 import apiServer
 from apiServer import startApiServer
@@ -180,6 +179,18 @@ async def on_connect():
 
 
 _api_runner = None
+
+
+@bot.event
+async def on_disconnect():
+    """Log and alert when the bot disconnects from Discord Gateway."""
+    log.warning("🔌 BOT DESCONECTADO del Gateway de Discord")
+
+
+@bot.event
+async def on_resume():
+    """Log and alert when the bot reconnects to Discord Gateway."""
+    log.warning("🔌 BOT RECONECTADO al Gateway de Discord")
 
 
 @bot.event
@@ -513,12 +524,24 @@ async def play(
     Async:
         This function is a coroutine and must be awaited.
     """
-    will_redirect = await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID)
+    await safe_defer(ctx)
+    redirect_ch = None
+    if config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID:
+        try:
+            await ctx.followup.send(
+                f"te respondo en <#{config.INDIO_PLAY_CHANNEL_ID}>", ephemeral=True
+            )
+        except Exception:
+            pass
+        if ctx.guild:
+            ch = ctx.guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+            if ch is not None and hasattr(ch, "send"):
+                redirect_ch = ch
     _track_command(ctx, "play", {"query_length": len(query or "")})
     if not query or not query.strip():
         await ctx.followup.send("decime qué reproducir la próxima", ephemeral=True)
         return
-    await playLogic(ctx, query)
+    await playLogic(ctx, query, redirect_channel=redirect_ch)
 
 
 @bot.slash_command(
@@ -571,7 +594,7 @@ async def soundpad(
         await ctx.respond(msg, ephemeral=True)
         return
 
-    will_redirect = await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID)
+    await safe_defer(ctx)
     _track_command(ctx, "soundpad", {"query_length": len(query or "")})
     await soundpadLogic(ctx, query=query)
 

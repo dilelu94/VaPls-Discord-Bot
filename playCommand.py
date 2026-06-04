@@ -1371,7 +1371,9 @@ class GuildPlayer:
         candidates = await self._autodj_fetch_same_artist(seed_title)
         song = self._autodj_pick_song(candidates, extra_exclude=vetoed_id)
         if song is None:
-            await self._send_dj_status("🎧 No encontré más del mismo artista. Pidan ustedes.")
+            await self._send_dj_status(
+                "🎧 No encontré más del mismo artista. Pidan ustedes."
+            )
             self.autodj_active = False
             await self.updateControlMessage()
             return
@@ -2615,6 +2617,7 @@ class PlayerControlView(discord.ui.View):
     ):
         """Handle the DJ button click -- activate Auto-DJ mode."""
         import playCommand
+
         await interaction.response.defer()
         await playCommand.openDjMenu(
             self.player.bot,
@@ -2789,12 +2792,20 @@ def _format_choice_prompt(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def playLogic(ctx: discord.ApplicationContext, query: str):
+async def playLogic(
+    ctx: discord.ApplicationContext,
+    query: str,
+    *,
+    redirect_channel: Optional[discord.TextChannel] = None,
+):
     """Handle the /play slash command.
 
     Args:
         ctx: Discord application context.
         query: Search term or YouTube URL.
+        redirect_channel: When set, all messages go here instead of the
+            interaction response (used when the command has a "music" flag
+            and was invoked outside the music channel).
 
     Returns:
         None.
@@ -2807,12 +2818,24 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
     """
     from bot import safe_defer, safe_respond, safeEdit
 
+    async def _send(m: str):
+        if redirect_channel:
+            await redirect_channel.send(m)
+        else:
+            await safeEdit(ctx, m)
+
+    async def _respond(m: str):
+        if redirect_channel:
+            await redirect_channel.send(m)
+        else:
+            await safe_respond(ctx, m)
+
     if not await safe_defer(ctx):
         return
 
     # Ensure user is in a voice channel
     if not ctx.author.voice:
-        return await safe_respond(ctx, "❌ ¡Debes estar en un canal de voz!")
+        return await _respond("❌ ¡Debes estar en un canal de voz!")
 
     channel = ctx.author.voice.channel
 
@@ -2886,7 +2909,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         inputStr = f"ytsearch{_PLAY_CHOICE_COUNT + 2}:{inputStr}"
 
     # 1. Fetch metadata (ID and Title)
-    await safeEdit(ctx, "🔍 Buscando y obteniendo metadatos...")
+    await _send("🔍 Buscando y obteniendo metadatos...")
     try:
         cookiesPath = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "cookies.txt"
@@ -2925,12 +2948,12 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
                 diag.audience,
                 errMsg[:300],
             )
-            return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
+            return await _send(f"❌ Error al buscar el video: {reason}")
 
         lines = stdout.decode("utf-8", errors="replace").strip().split("\n")
         lines = [l.strip() for l in lines if l.strip()]
         if not lines:
-            return await safeEdit(ctx, "❌ No se encontraron resultados.")
+            return await _send("❌ No se encontraron resultados.")
 
         songs = []
         for i in range(0, len(lines) - 2, 3):
@@ -2953,9 +2976,7 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             ]
 
         if not songs:
-            return await safeEdit(
-                ctx, "❌ No se pudieron obtener los metadatos del video."
-            )
+            return await _send("❌ No se pudieron obtener los metadatos del video.")
     except FileNotFoundError as e:
         diag = _diag(
             "admin",
@@ -2965,14 +2986,14 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         playLogger.error(
             f"[METADATA FAIL] yt-dlp binary missing at {config.YT_DLP_PATH}: {e}"
         )
-        return await safeEdit(ctx, f"❌ Error al buscar el video: {diag.format()}")
+        return await _send(f"❌ Error al buscar el video: {diag.format()}")
     except Exception as e:
         diag = _diagnoseYtDlpFailure(str(e))
         reason = diag.format()
         playLogger.error(
             "[METADATA FAIL] Exception during metadata fetch for '%s': %s", query, e
         )
-        return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
+        return await _send(f"❌ Error al buscar el video: {reason}")
 
     # Free-text search with several candidates → let the requester pick which
     # one instead of silently grabbing the first hit (which often was the wrong
@@ -3011,16 +3032,22 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         )
         prompt = _format_choice_prompt(candidates)
         msg = None
-        try:
-            msg = await ctx.interaction.edit_original_response(
-                content=prompt,
-                view=None,
-            )
-        except Exception:
+        if redirect_channel:
             try:
-                msg = await ctx.followup.send(prompt)
+                msg = await redirect_channel.send(prompt)
             except Exception:
-                await safeEdit(ctx, prompt)
+                pass
+        if msg is None:
+            try:
+                msg = await ctx.interaction.edit_original_response(
+                    content=prompt,
+                    view=None,
+                )
+            except Exception:
+                try:
+                    msg = await ctx.followup.send(prompt)
+                except Exception:
+                    await safeEdit(ctx, prompt)
         if msg is not None:
             vote.reaction_message_id = int(msg.id)
             vote.reaction_channel_id = int(msg.channel.id)
