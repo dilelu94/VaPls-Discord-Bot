@@ -1401,32 +1401,6 @@ class WakeWordSink(voice_recv.AudioSink):
         prebuffer_len: int = 0,
     ) -> None:
         try:
-            # Preset 4: dedicated short Whisper pass over the prebuffer region
-            # to confirm "indio" was actually said before running the full
-            # command transcription.  Strict — drop the event if Whisper can't
-            # hear "indio" in the wake region.
-            if _SENSITIVITY_PRESET == 4:
-                wake_pcm = pcm_16k[:prebuffer_len] if prebuffer_len else pcm_16k
-                wake_text = await asyncio.to_thread(_run_whisper, wake_pcm)
-                if not _whisper_confirms_indio(wake_text):
-                    log.info(
-                        "[WAKE] user=%s preset4: 'indio' NOT confirmed in wake region (%r); discard",
-                        user_id,
-                        wake_text,
-                    )
-                    analytics.capture(
-                        "wake_word_rejected",
-                        properties={
-                            "user_id": user_id,
-                            "reason": "preset4_no_indio",
-                            "wake_text": wake_text,
-                        },
-                    )
-                    return  # finally still decrements _active_count and re-arms
-                log.info(
-                    "[WAKE] user=%s preset4: 'indio' confirmed (%r)", user_id, wake_text
-                )
-
             t0 = time.monotonic()
             text = await asyncio.to_thread(_run_whisper, pcm_16k)
             dt = time.monotonic() - t0
@@ -1436,6 +1410,26 @@ class WakeWordSink(voice_recv.AudioSink):
                     f"({duration:.1f}s audio, {dt * 1000:.0f}ms); skip"
                 )
                 return
+
+            # Preset 4: confirm "indio" appears in the Whisper transcript
+            # using the full audio (prebuffer + capture), not just the
+            # prebuffer alone — Whisper is unreliable on short ~1.5s clips.
+            if _SENSITIVITY_PRESET == 4 and not _whisper_confirms_indio(text):
+                log.info(
+                    "[WAKE] user=%s preset4: 'indio' NOT confirmed in transcript (%r); discard",
+                    user_id,
+                    text,
+                )
+                analytics.capture(
+                    "wake_word_rejected",
+                    properties={
+                        "user_id": user_id,
+                        "reason": "preset4_no_indio",
+                        "text": text,
+                    },
+                )
+                return
+
             log.info(
                 f"[WAKE][es] user_id={user_id} "
                 f"({duration:.1f}s audio, {dt * 1000:.0f}ms): {text}"
