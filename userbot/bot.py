@@ -529,7 +529,7 @@ class TranscriberSink(voice_recv.AudioSink):
             analytics.capture(
                 "whisper_transcription",
                 properties={
-                    "user_id": user_id,
+                    "speaker_id": user_id,
                     "text": text,
                     "duration_seconds": duration,
                     "transcribe_ms": dt * 1000,
@@ -1180,7 +1180,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 analytics.capture(
                     "wake_word_detected",
                     properties={
-                        "user_id": user_id,
+                        "speaker_id": user_id,
                         "matched_text": _matched_text,
                         "guild_id": getattr(getattr(source, "guild", None), "id", None),
                     },
@@ -1423,7 +1423,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 analytics.capture(
                     "wake_word_rejected",
                     properties={
-                        "user_id": user_id,
+                        "speaker_id": user_id,
                         "reason": "preset4_no_indio",
                         "text": text,
                     },
@@ -1437,7 +1437,7 @@ class WakeWordSink(voice_recv.AudioSink):
             analytics.capture(
                 "whisper_transcription",
                 properties={
-                    "user_id": user_id,
+                    "speaker_id": user_id,
                     "text": text,
                     "duration_seconds": duration,
                     "transcribe_ms": dt * 1000,
