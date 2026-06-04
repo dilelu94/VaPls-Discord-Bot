@@ -312,6 +312,11 @@ class MusicVote:
                     )
                 msg = await channel.fetch_message(int(self.reaction_message_id))
                 await msg.clear_reactions()
+                title = winner.get("title", "")
+                if self.votes:
+                    await msg.edit(content=f"🎵 Ganó: **{title}**")
+                else:
+                    await msg.edit(content=f"🎵 Se reproducirá: **{title}**")
             except Exception:
                 pass
         try:
