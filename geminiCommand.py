@@ -3314,6 +3314,15 @@ async def indioFromVoice(
     # clean_reply, para que la cuenta-real (userbot) se lo mande.
     redirected = bool(original_channel_id and original_channel_id != channel_id)
     member = guild.get_member(user_id)
+    # Telegram requests arrive with user_id=0. Try to resolve the Discord
+    # member by speaker_name so music actions can use their voice channel
+    # if they're connected — Discord in-voice takes priority over auto-pick.
+    if member is None and speaker_name:
+        _norm = speaker_name.strip().lower()
+        member = discord.utils.find(
+            lambda m: m.display_name.lower() == _norm or m.name.lower() == _norm,
+            guild.members,
+        )
     speaker = speaker_name or (member.display_name if member else None) or "alguien"
 
     _evict_stale_indio()
