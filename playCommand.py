@@ -809,7 +809,7 @@ async def openDjMenu(bot, guild_id: int, channel_id: Optional[int] = None) -> tu
         "• **⏹️ Cortar DJ** — apaga el modo DJ."
     )
     try:
-        await channel.send(content, view=view)
+        player.dj_menu_msg = await channel.send(content, view=view)
     except Exception as e:
         playLogger.exception("[DJ-MENU] failed to post DJ menu")
         return False, f"error al postear el menú: {e}"
@@ -929,6 +929,7 @@ class GuildPlayer:
         # Seed carried forward across rounds (veto updates these to keep the artist thread)
         self.autodj_seed_id: Optional[str] = None
         self.autodj_seed_title: Optional[str] = None
+        self.dj_menu_msg: Optional[discord.Message] = None
 
     # ------------------------------------------------------------------
     # Auto-DJ public API
@@ -941,6 +942,19 @@ class GuildPlayer:
         self.autodj_active = True
         self.autodj_chain_count = 0
         return True
+
+    async def _send_dj_status(self, content: str) -> None:
+        if self.dj_menu_msg is not None:
+            try:
+                await self.dj_menu_msg.edit(content=content, view=None)
+                return
+            except Exception:
+                self.dj_menu_msg = None
+        if self.textChannel:
+            try:
+                await self.textChannel.send(content)
+            except Exception:
+                pass
 
     async def autodj_deactivate(self, reason: str = "") -> None:
         """Turn Auto-DJ off. Cancels any pending grace and edits the suggestion card."""
@@ -975,11 +989,8 @@ class GuildPlayer:
                 pass
             self.autodj_suggestion_msg = None
         self.autodj_pending_song = None
-        if self.textChannel and reason not in ("chain_cap",):
-            try:
-                await self.textChannel.send("🎧 Auto-DJ cortado. Pidan lo que quieran.")
-            except Exception:
-                pass
+        if reason not in ("chain_cap",):
+            await self._send_dj_status("🎧 Auto-DJ cortado. Pidan lo que quieran.")
         await self.updateControlMessage()
 
     # ------------------------------------------------------------------
@@ -1145,13 +1156,7 @@ class GuildPlayer:
 
         if song is None:
             playLogger.warning("[AUTODJ] all sources exhausted, deactivating")
-            if self.textChannel:
-                try:
-                    await self.textChannel.send(
-                        "🎧 No se me ocurre nada bueno. Pidan ustedes."
-                    )
-                except Exception:
-                    pass
+            await self._send_dj_status("🎧 No se me ocurre nada bueno. Pidan ustedes.")
             self.autodj_active = False
             await self.updateControlMessage()
             return
@@ -1311,13 +1316,8 @@ class GuildPlayer:
             await self.updateControlMessage()
             self.startPreDownloading()
 
-        if not self.autodj_active and self.textChannel:
-            try:
-                await self.textChannel.send(
-                    "🎧 Bueno, ya banqué un rato. Sigan ustedes."
-                )
-            except Exception:
-                pass
+        if not self.autodj_active:
+            await self._send_dj_status("🎧 Bueno, ya banqué un rato. Sigan ustedes.")
             await self.updateControlMessage()
 
     async def _autodj_veto(self) -> None:
@@ -1366,13 +1366,7 @@ class GuildPlayer:
         candidates = await self._autodj_fetch_same_artist(seed_title)
         song = self._autodj_pick_song(candidates, extra_exclude=vetoed_id)
         if song is None:
-            if self.textChannel:
-                try:
-                    await self.textChannel.send(
-                        "🎧 No encontré más del mismo artista. Pidan ustedes."
-                    )
-                except Exception:
-                    pass
+            await self._send_dj_status("🎧 No encontré más del mismo artista. Pidan ustedes.")
             self.autodj_active = False
             await self.updateControlMessage()
             return
