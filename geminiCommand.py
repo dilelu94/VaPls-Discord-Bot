@@ -2401,7 +2401,7 @@ _INDIO_PREFIX_RE = re.compile(
 # forbid newlines / nested brackets so we don't eat real bracketed content in
 # the middle of a sentence.
 _LEADING_SPEAKER_PREFIX_RE = re.compile(
-    r"^\s*[\[\(]\s*[^\]\)\n]{1,40}\s*[\]\)]\s*[:\-—]\s*",
+    r"^\s*[\\[\\(]\s*[^\\\]\\)\n]{1,40}\s*[\\\]\\)]\s*[:\\-—]\s*",
 )
 
 _LITERAL_CMD_RE = re.compile(r"/(play|soundpad)\s+(.+)$", re.MULTILINE | re.IGNORECASE)
