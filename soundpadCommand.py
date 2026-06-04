@@ -720,7 +720,7 @@ class SoundpadView(discord.ui.View):
             )
             return await self.update_message(
                 interaction,
-                status_text=f"▶️ Reproduciendo: {os.path.basename(self.selected_file)}",
+                status_text=f"▶️ Reproduciendo: {os.path.basename(self.selected_file)} (por {interaction.user.display_name})",
             )
         except discord.ClientException as e:
             _log.warning("ClientException on play (%s); forcing reconnect...", e)
@@ -768,7 +768,7 @@ class SoundpadView(discord.ui.View):
                 )
                 await self.update_message(
                     interaction,
-                    status_text=f"▶️ Reproduciendo (tras reconectar): {os.path.basename(self.selected_file)}",
+                    status_text=f"▶️ Reproduciendo (tras reconectar): {os.path.basename(self.selected_file)} (por {interaction.user.display_name})",
                 )
             except Exception as e2:
                 _log.warning("Retry failed: %s", e2)
@@ -1080,12 +1080,12 @@ async def soundpadLogic(
         view = SoundpadStopView(ctx.guild)
         if redirect_channel is not None:
             message = await redirect_channel.send(
-                f"▶️ Reproduciendo: **{display}**",
+                f"▶️ Reproduciendo: **{display}** (por {ctx.author.display_name})",
                 view=view,
             )
         else:
             message = await ctx.followup.send(
-                f"▶️ Reproduciendo: **{display}**",
+                f"▶️ Reproduciendo: **{display}** (por {ctx.author.display_name})",
                 view=view,
             )
         view.message = message
