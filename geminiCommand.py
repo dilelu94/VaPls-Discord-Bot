@@ -2401,13 +2401,13 @@ _INDIO_PREFIX_RE = re.compile(
 # forbid newlines / nested brackets so we don't eat real bracketed content in
 # the middle of a sentence.
 _LEADING_SPEAKER_PREFIX_RE = re.compile(
-    r"^\s*[\[\(]\s*[^\]\)
-_LITERAL_CMD_RE = re.compile(r"/(play|soundpad)\s+(.+)$", re.MULTILINE | re.IGNORECASE)
-\n]{1,40}\s*[\]\)]\s*[:\-—]\s*",
+    r"^\s*[\[\(]\s*[^\\]\)\n]{1,40}\s*[\\]\)]\s*[:\-—]\s*",
 )
 
+_LITERAL_CMD_RE = re.compile(r"/(play|soundpad)\s+(.+)$", re.MULTILINE | re.IGNORECASE)
 
-def _strip_speaker_prefix(text: str) -> str:
+
+_strip_speaker_prefix(text: str) -> str:
     """Drop a leading "[indio]:" / "Indio:" / "[Miles]:" / "(el indio) -" style
     prefix from a model reply. The model sometimes mirrors the speaker tag
     format it sees in user turns even though INDIO_SYSTEM tells it not to.
@@ -3050,7 +3050,7 @@ async def indioLogic(
             )
             clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
             if not clean_reply:
-                return
+                clean_reply = "Aca tenes"
 
         question_header = _format_user_header(ctx, pregunta).rstrip()
         # Cuando respondemos en el canal del slash, el header edita el
@@ -3502,7 +3502,7 @@ async def indioFromVoice(
         )
         clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
         if not clean_reply:
-            return
+            clean_reply = "Aca tenes"
     if redirected and user_id and not vote_open:
         lines = (pregunta or "").splitlines() or [""]
         quoted = "\n".join(f"> {ln}" for ln in lines)
