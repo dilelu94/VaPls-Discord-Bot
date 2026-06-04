@@ -1639,10 +1639,11 @@ def _dispatch_lock_for(guild_id: int) -> asyncio.Lock:
     return lock
 
 
-# Music-tools requieren que el requester (el que pidió) esté en voz. Pedidos
-# desde Telegram (vía HTTP /indio sin user_id de Discord) llegan con
-# requester_member=None y caen en "no requester"; texto sin voz cae en
-# "no voice". Cualquier acción no incluida acá no se gatea.
+# Music-tools desde Discord requieren que el requester esté en voz.
+# Pedidos desde Telegram (vía HTTP /indio sin user_id de Discord) llegan con
+# requester_member=None: los dejamos pasar — el relay + playFromIndio eligen
+# el canal automáticamente. Un Discord-user que pide desde texto sin estar en
+# voz cae en "no voice". Cualquier acción no incluida acá no se gatea.
 _MUSIC_ACTIONS = frozenset(
     {
         "PLAY_MUSIC",
@@ -1668,11 +1669,22 @@ _MUSIC_STATUS_PREFIX = {
 
 def _gate_music_action(action: str, member) -> Optional[str]:
     """Return a status string when the music action must be blocked, or None
-    when the requester is a Discord member in a voice channel. Matches the
-    ``: no requester`` / ``: no voice`` suffixes ``_failure_feedback`` knows."""
-    prefix = _MUSIC_STATUS_PREFIX.get(action, action.lower())
+    when it should proceed.
+
+    ``member is None`` means the request came from Telegram / HTTP (no Discord
+    user context). We let it through: the relay will invoke the userbot /play
+    and ``playFromIndio`` auto-picks a voice channel, so no requester voice
+    state is needed.
+
+    ``member`` with no voice channel is a Discord user who asked from text
+    without being in voice — that one stays blocked so we don't play to an
+    empty channel.
+
+    Matches the ``: no voice`` suffix ``_failure_feedback`` knows."""
     if member is None:
-        return f"{prefix}: no requester"
+        # Telegram / HTTP path — allow, let relay + playFromIndio handle it.
+        return None
+    prefix = _MUSIC_STATUS_PREFIX.get(action, action.lower())
     voice = getattr(member, "voice", None)
     if voice is None or getattr(voice, "channel", None) is None:
         return f"{prefix}: no voice"
