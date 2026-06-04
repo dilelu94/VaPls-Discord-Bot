@@ -131,7 +131,7 @@ SOLO con texto, sin llamar tools. \
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
 
-REGLA DE ORO PARA MÚSICA: Cuando un usuario te pida música (ej: "ponete algo de Spinetta"), NO uses herramientas internas. Respondé ÚNICAMENTE con el comando literal `/play <tema>` (ej: `/play Spinetta - Seguir viviendo`) en tu respuesta de texto. Tu cuenta enviará ese comando al canal de música y el bot oficial lo ejecutará. Lo mismo para `/soundpad <clip>`. No agregues charla innecesaria si vas a tirar un comando. \n\nUna sola tool por mensaje. Confirmación breve ("tomá", "va", "salteo") \
+Si el usuario te pide música, podés usar la herramienta `play_music` o simplemente escribir el comando `/play <tema>` en tu respuesta; el sistema se encargará de que el bot VaPls lo reproduzca. \n\nUna sola tool por mensaje. Confirmación breve ("tomá", "va", "salteo") \
 solo si la vas a llamar — sin chamuyo. Si NO llamás tool, NO digas \
 frases de confirmación — respondé charla normal. \
 Nunca digas "no puedo" ni "no me anda". \
@@ -2388,81 +2388,6 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
         )
 
 
-async def _maybe_disambiguate_music(
-    bot, guild_id, mem_key, pending_actions, reply, post, *, requester_id: int = 0
-):
-    """Intercept a single free-text ``play_music`` so the indio lists the
-    matches and opens a group vote, instead of playing the first hit.
-
-    The search reuses yt-dlp exactly like before (no extra Gemini). With a
-    single clear hit we play it directly; with several we list them and open a
-    voting window (``post`` is how the winner gets announced when it closes). A
-    direct URL, several actions at once, or a non-music turn pass through
-    untouched.
-
-    Returns ``(actions_to_dispatch, reply_text)``.
-    """
-    clean = _strip_speaker_prefix(reply.text)
-    clean = _ensure_reply_text(clean, pending_actions)
-    if guild_id is None:
-        return pending_actions, clean
-    music = [a for a in pending_actions if a[0] == "PLAY_MUSIC"]
-    others = [a for a in pending_actions if a[0] != "PLAY_MUSIC"]
-    if len(music) != 1 or others:
-        return pending_actions, clean
-    query = music[0][1]
-    if _looks_like_url(query):
-        # An explicit URL has nothing to disambiguate — let it play directly.
-        return pending_actions, clean
-
-    import playCommand
-
-    candidates = await playCommand._yt_dlp_search(
-        query, max_results=_MUSIC_CHOICE_COUNT
-    )
-    if not candidates:
-        return [], "no encontré nada en YouTube con eso, decímelo de otra forma"
-    # Re-rank by fuzzy similarity against the user's query so the option the
-    # vote falls back to when nobody picks (candidates[0] in _tally_vote_winner)
-    # is the one that actually best matches what was asked, not just YouTube's
-    # top relevance hit. Stable for ties (Python's sort) so ratio ties keep
-    # YouTube's relative order. Helper lives in playCommand alongside the /play
-    # autoplay logic — single source of truth for "what matches the query".
-    candidates.sort(
-        key=lambda c: playCommand._query_title_ratio(query, c.get("title", "")),
-        reverse=True,
-    )
-    if len(candidates) == 1:
-        # One clear match: play it directly with the metadata we already have.
-        _spawn(_play_chosen_song(bot, guild_id, candidates[0]))
-        return [], clean
-    # Several matches: open a shared MusicVote (one per guild — same storage
-    # used by the /play picker buttons). The indio's chat surface here lists
-    # the options as text + reactions; voice votes and button clicks all write
-    # into the same vote state.
-    import playCommand
-
-    async def _on_resolve(vote, winner: dict) -> None:
-        # Announce + reproduce. ``post`` was passed in by the caller and knows
-        # how to send via the userbot relay (or fall back to channel.send).
-        try:
-            await post(f"dale, va: {winner['title']} 🎵")
-        except Exception as e:
-            logger.exception("indio vote: announce failed")
-            analytics.capture_exception(
-                e, properties={"action": "indio_vote_announce_failed"}
-            )
-        await _play_chosen_song(bot, guild_id, winner)
-
-    vote = playCommand.open_music_vote(
-        bot=bot,
-        guild_id=int(guild_id),
-        candidates=candidates,
-        on_resolve=_on_resolve,
-        requester_id=int(requester_id or 0),
-    )
-    vote.start_timeout()
-    return [], _format_choices(candidates)
 
 
 _INDIO_PREFIX_RE = re.compile(
@@ -3092,15 +3017,8 @@ async def indioLogic(
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
-    pending_actions, clean_reply = await _maybe_disambiguate_music(
-        ctx.bot,
-        _choice_guild_id,
-        mem_key,
-        pending_actions,
-        reply,
-        _post_choice,
-        requester_id=int(getattr(getattr(ctx, "author", None), "id", None) or 0),
-    )
+    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     relayed_via_userbot = False
     import playCommand
 
@@ -3114,6 +3032,23 @@ async def indioLogic(
     opts_msg_id = None
     reply_handle = None
     try:
+        # Intercept literal /play commands from the Indio to trigger the real slash command
+        _stripped_reply = clean_reply.strip()
+        if _stripped_reply.startswith("/play ") or _stripped_reply.startswith("/soundpad "):
+            _parts = _stripped_reply.split(" ", 1)
+            _cmd = _parts[0][1:]
+            _query = _parts[1] if len(_parts) > 1 else ""
+            _action = "PLAY_MUSIC" if _cmd == "play" else "PLAY_SOUND"
+            _spawn(
+                _dispatch_indio_actions(
+                    ctx.bot,
+                    getattr(ctx.guild, "id", None),
+                    [(_action, _query)],
+                    requester_member=ctx.author,
+                )
+            )
+            # Avoid sending the literal text and saving it to history as a chat turn
+            return
         question_header = _format_user_header(ctx, pregunta).rstrip()
         # Cuando respondemos en el canal del slash, el header edita el
         # deferred ("thinking..." o aviso de rotación). _post es el fallback
@@ -3508,15 +3443,8 @@ async def indioFromVoice(
     # pending_actions for single-match direct plays (returns []), which would
     # make the redirect check below miss the music action.
     _had_music = any(a in _MUSIC_ACTIONS for a, _ in pending_actions)
-    pending_actions, clean_reply = await _maybe_disambiguate_music(
-        bot,
-        guild_id,
-        mem_key,
-        pending_actions,
-        reply,
-        _post_choice,
-        requester_id=int(user_id or 0),
-    )
+    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     # Music action redirect: cuando el Indio responde con una accion de
     # musica desde wake-word de texto (sin reply contextual), redirigir
     # la respuesta textual al canal de musica designado. Asi las
@@ -3554,6 +3482,23 @@ async def indioFromVoice(
     # redirige a otro canal (asi el user recibe notificacion). Vota-open no
     # quiere header arriba — la lista de opciones tiene que ir limpia para
     # que las reacciones queden en la primera linea.
+    
+    # Intercept literal /play commands from the Indio to trigger the real slash command
+    _stripped_reply = clean_reply.strip()
+    if _stripped_reply.startswith("/play ") or _stripped_reply.startswith("/soundpad "):
+        _parts = _stripped_reply.split(" ", 1)
+        _cmd = _parts[0][1:]
+        _query = _parts[1] if len(_parts) > 1 else ""
+        _action = "PLAY_MUSIC" if _cmd == "play" else "PLAY_SOUND"
+        _spawn(
+            _dispatch_indio_actions(
+                bot,
+                guild_id,
+                [(_action, _query)],
+                requester_member=member,
+            )
+        )
+        return
     if redirected and user_id and not vote_open:
         lines = (pregunta or "").splitlines() or [""]
         quoted = "\n".join(f"> {ln}" for ln in lines)
