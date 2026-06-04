@@ -19,8 +19,11 @@ PLAY_ORDER_RE_SOURCE = (
     r"\b("
     r"tira(te|me|le|lo|la|nos)?|"
     r"pone(la|lo|le|me|nos|te)?|"
-    r"mete(le|lo|la)?|"
-    r"reproduci(lo|la|me)?|"
+    r"pon(te|me|lo|la|le|nos)?|"
+    r"ponga(s|me|lo|la|le|nos)?|"
+    r"manda(te|me|lo|la|le|nos)?|"
+    r"mete(le|lo|la|te|me|nos)?|"
+    r"reproduci(lo|la|me|te|nos)?|"
     r"hace(?:le|lo|la|nos)? sonar"
     r")\b"
 )
