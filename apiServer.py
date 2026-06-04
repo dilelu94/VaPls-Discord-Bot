@@ -19,6 +19,7 @@ import aiohttp
 import discord
 from aiohttp import web
 
+import analytics
 import config
 import geminiCommand
 import geminiKeys
@@ -387,7 +388,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
             msg = await channel.send(f"**[TG/{senderLabel}]** {content}")
         except Exception as e:
             logger.exception("sendMessage failed")
+            analytics.capture_exception(
+                e,
+                properties={
+                    "action": "api_send_message",
+                    "guild_id": guildId,
+                    "channel_id": channelId,
+                },
+            )
             return web.json_response({"error": str(e)}, status=500)
+        analytics.capture(
+            "api message sent",
+            properties={
+                "guild_id": guildId,
+                "channel_id": channelId,
+                "sender_label": senderLabel,
+            },
+        )
         return web.json_response({"message_id": msg.id})
 
     async def _pickAutoVoiceChannel(
@@ -496,8 +513,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
             if channel is None:
                 try:
                     os.remove(uploadPath)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to remove upload file: %s", e)
                 return web.json_response(
                     {
                         "error": "no active voice channel and no users in any voice channel"
@@ -509,16 +526,16 @@ def makeApp(bot: discord.Bot) -> web.Application:
             except Exception as e:
                 try:
                     os.remove(uploadPath)
-                except Exception:
-                    pass
+                except Exception as e2:
+                    logger.warning("Failed to remove upload file: %s", e2)
                 return web.json_response({"error": f"failed to join: {e}"}, status=500)
 
         try:
             if vc.is_playing():
                 vc.stop()
                 await asyncio.sleep(0.2)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to stop existing playback before playAudio: %s", e)
 
         recordChannelId = vc.channel.id if vc.channel else None
         wantRecording = bool(
@@ -530,8 +547,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
         def _afterPlay(_err):
             try:
                 os.remove(uploadPath)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to remove upload in _afterPlay: %s", e)
             if not wantRecording:
                 return
             try:

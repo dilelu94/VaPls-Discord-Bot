@@ -52,10 +52,9 @@ def test_blocked_dynamic_facts_are_scrubbed_from_user_dossier():
     """Si Gemini distila un fact que matchea un block del usuario, ese fact
     se filtra del dossier de ESE usuario antes de llegar al prompt. Pinea el
     comportamiento real del feature block_dynamic_substrings."""
-    # Mila tiene block ["sexo: mujer", "es mujer", "bombera"] en users.py real.
+    # Mila tiene block ["sexo: hombre", "es hombre"] en users.py real.
     lt = {"users": {"Mila": {"traits": [
-        "es mujer",           # debería filtrarse (matchea block)
-        "bombera",            # debería filtrarse (matchea block)
+        "es hombre",          # debería filtrarse (matchea block)
         "le gusta el mate",   # debería pasar (no matchea ningún block)
     ]}}}
     rendered = _format_long_term(lt, current_members=["Mila"])
@@ -67,8 +66,7 @@ def test_blocked_dynamic_facts_are_scrubbed_from_user_dossier():
     mila_chunk = rendered[mila_idx:next_user_idx if next_user_idx > 0 else None]
 
     assert "le gusta el mate" in mila_chunk
-    assert "es mujer" not in mila_chunk
-    assert "bombera" not in mila_chunk
+    assert "es hombre" not in mila_chunk
 
 
 def test_unknown_user_field_is_ignored(monkeypatch):

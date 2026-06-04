@@ -13,6 +13,7 @@ Configurable por env vars:
 Usado por main bot y userbot — cada proceso lo instala con un prefix distinto
 así en el thread se distinguen las dos fuentes.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -163,13 +164,11 @@ class DiscordWebhookHandler(logging.Handler):
                     await asyncio.sleep(min(retry_after, 5.0))
                 elif resp.status >= 400:
                     body = await resp.text()
-                    # No usamos logging acá — recursion risk.
-                    print(
-                        f"[webhookLogger] POST failed {resp.status}: {body[:200]}",
-                        flush=True,
+                    logging.getLogger("bot.webhook").error(
+                        "POST failed %s: %s", resp.status, body[:200]
                     )
         except Exception as e:
-            print(f"[webhookLogger] POST error: {e}", flush=True)
+            logging.getLogger("bot.webhook").error("POST error: %s", e)
 
 
 def install_from_env(

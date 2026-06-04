@@ -12,6 +12,7 @@ If the JSON file doesn't exist on first run, we seed it from
 ``config.GEMINI_API_KEYS`` (or the legacy single ``GEMINI_API_KEY``) so legacy
 deployments keep working.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -22,6 +23,7 @@ import re
 import tempfile
 from typing import Optional
 
+import analytics
 import config
 
 logger = logging.getLogger("bot.gemini.keys")
@@ -30,9 +32,7 @@ logger = logging.getLogger("bot.gemini.keys")
 #   AIzaSy... → 39 chars total (classic Google API key)
 #   AQ.Ab8RN6... → ephemeral OAuth-derived keys (~50 chars)
 # Captura el token contiguo despues del prefijo conocido.
-_GEMINI_KEY_RE = re.compile(
-    r"\b(?:AIza[\w-]{20,80}|AQ\.[A-Za-z0-9_\-]{20,120})"
-)
+_GEMINI_KEY_RE = re.compile(r"\b(?:AIza[\w-]{20,80}|AQ\.[A-Za-z0-9_\-]{20,120})")
 
 _keys: list[dict] = []  # cada item: {"key", "owner_name", "owner_id", "note", "source"}
 _lock = asyncio.Lock()
@@ -92,10 +92,7 @@ def format_contributors_line() -> str:
         counts[name] = counts.get(name, 0) + 1
     if not counts:
         return ""
-    parts = [
-        f"{name} ({n})" if n > 1 else name
-        for name, n in counts.items()
-    ]
+    parts = [f"{name} ({n})" if n > 1 else name for name, n in counts.items()]
     return f"🙏 Contribuyentes actuales: {', '.join(parts)}."
 
 
@@ -111,19 +108,21 @@ def load_from_disk(path: Optional[str] = None) -> int:
     try:
         with open(target, "r", encoding="utf-8") as f:
             data = json.load(f)
-        for item in (data.get("keys") or []):
+        for item in data.get("keys") or []:
             if not isinstance(item, dict):
                 continue
             key = (item.get("key") or "").strip()
             if not key:
                 continue
-            loaded.append({
-                "key": key,
-                "owner_name": str(item.get("owner_name") or "unknown"),
-                "owner_id": str(item.get("owner_id") or ""),
-                "note": str(item.get("note") or ""),
-                "source": str(item.get("source") or "manual"),
-            })
+            loaded.append(
+                {
+                    "key": key,
+                    "owner_name": str(item.get("owner_name") or "unknown"),
+                    "owner_id": str(item.get("owner_id") or ""),
+                    "note": str(item.get("note") or ""),
+                    "source": str(item.get("source") or "manual"),
+                }
+            )
     except FileNotFoundError:
         logger.info("gemini keys file %s not found — bootstrapping from env", target)
     except Exception:
@@ -131,13 +130,15 @@ def load_from_disk(path: Optional[str] = None) -> int:
 
     if not loaded:
         for k in config.GEMINI_API_KEYS:
-            loaded.append({
-                "key": k,
-                "owner_name": "unknown",
-                "owner_id": "",
-                "note": "bootstrap from .env",
-                "source": "env",
-            })
+            loaded.append(
+                {
+                    "key": k,
+                    "owner_name": "unknown",
+                    "owner_id": "",
+                    "note": "bootstrap from .env",
+                    "source": "env",
+                }
+            )
 
     _keys.clear()
     _keys.extend(loaded)
@@ -166,8 +167,8 @@ def _persist_sync(path: str) -> None:
     except Exception:
         try:
             os.unlink(tmp)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("Failed to remove temp file %s: %s", tmp, e)
         raise
 
 
@@ -208,6 +209,9 @@ async def add_key(
             return False, "persist failed"
     logger.info(
         "gemini keys: added one (owner=%s/%s, source=%s, total=%d)",
-        owner_name, owner_id, source, len(_keys),
+        owner_name,
+        owner_id,
+        source,
+        len(_keys),
     )
     return True, "added"

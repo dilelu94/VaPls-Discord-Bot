@@ -13,6 +13,7 @@ react inline:
 No persistent state, no voting channel, no in-memory cache promotion. The
 JSONL is debug-only — readers parse it; nothing in the bot reads it back.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,6 +26,7 @@ from typing import Optional
 
 import discord
 
+import analytics
 import config
 
 logger = logging.getLogger("decifrarVoting")
@@ -47,9 +49,13 @@ _started = False
 
 # ---- Public entry point --------------------------------------------------
 
-async def record(raw: str, msg_id: Optional[int] = None,
-                 channel_id: Optional[int] = None,
-                 vosk_result: Optional[dict] = None) -> None:
+
+async def record(
+    raw: str,
+    msg_id: Optional[int] = None,
+    channel_id: Optional[int] = None,
+    vosk_result: Optional[dict] = None,
+) -> None:
     """Maybe seed reactions on a voice transcript for ASR-quality feedback.
 
     Safe to call fire-and-forget from any voice-transcript callsite. Only
@@ -74,6 +80,13 @@ async def record(raw: str, msg_id: Optional[int] = None,
         }
 
     asyncio.create_task(_seed_reactions(channel_id, msg_id))
+    analytics.capture(
+        "decifrar feedback sampled",
+        properties={
+            "channel_id": channel_id,
+            "message_id": msg_id,
+        },
+    )
 
 
 async def _seed_reactions(channel_id: int, message_id: int) -> None:
@@ -85,10 +98,13 @@ async def _seed_reactions(channel_id: int, message_id: int) -> None:
         for emoji in _SEEDED_EMOJIS:
             await msg.add_reaction(emoji)
     except Exception:
-        logger.exception("decifrar_feedback: failed to seed reactions on %s", message_id)
+        logger.exception(
+            "decifrar_feedback: failed to seed reactions on %s", message_id
+        )
 
 
 # ---- Reaction handling ---------------------------------------------------
+
 
 async def handle_reaction_vote(
     bot: discord.Bot,
@@ -127,8 +143,9 @@ async def handle_reaction_vote(
 
 
 def _log_false_positive(entry: dict, *, voter_id: int) -> None:
-    path = getattr(config, "DECIFRAR_FALSE_POSITIVES_LOG_PATH",
-                   "data/false_positives.jsonl")
+    path = getattr(
+        config, "DECIFRAR_FALSE_POSITIVES_LOG_PATH", "data/false_positives.jsonl"
+    )
     parent = os.path.dirname(path)
     if parent:
         try:
@@ -145,27 +162,42 @@ def _log_false_positive(entry: dict, *, voter_id: int) -> None:
     try:
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record_row, ensure_ascii=False) + "\n")
-        logger.info("decifrar_feedback: logged false positive raw=%r",
-                    entry.get("raw", "")[:200])
+        logger.info(
+            "decifrar_feedback: logged false positive raw=%r",
+            entry.get("raw", "")[:200],
+        )
     except OSError:
         logger.exception("decifrar_feedback: failed to write false positive log")
 
 
-async def _clear_seeded_reactions(bot: discord.Bot, channel_id: int,
-                                  message_id: int) -> None:
+async def _clear_seeded_reactions(
+    bot: discord.Bot, channel_id: int, message_id: int
+) -> None:
     try:
         channel = bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
         msg = await channel.fetch_message(message_id)
-    except Exception:
+    except Exception as e:
+        logger.warning(
+            "Failed to fetch message %s for reaction clear: %s", message_id, e
+        )
+        analytics.capture_exception(
+            e, properties={"action": "decifrar_fetch_msg", "message_id": message_id}
+        )
         return
     for emoji in _SEEDED_EMOJIS:
         try:
             await msg.remove_reaction(emoji, bot.user)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(
+                "Failed to remove reaction %s on %s: %s", emoji, message_id, e
+            )
+            analytics.capture_exception(
+                e, properties={"action": "decifrar_clear_reaction", "emoji": emoji}
+            )
 
 
 # ---- Startup + expiry ----------------------------------------------------
+
 
 async def start(bot: "discord.Bot") -> None:
     """Idempotent startup hook: bind the bot reference and launch the expiry
@@ -179,8 +211,10 @@ async def start(bot: "discord.Bot") -> None:
     if not getattr(config, "DECIFRAR_FEEDBACK_ENABLED", True):
         return
     asyncio.create_task(_expiry_loop())
-    logger.info("decifrar_feedback started; sample_rate=%s",
-                getattr(config, "DECIFRAR_FEEDBACK_SAMPLE_RATE", 3))
+    logger.info(
+        "decifrar_feedback started; sample_rate=%s",
+        getattr(config, "DECIFRAR_FEEDBACK_SAMPLE_RATE", 3),
+    )
 
 
 async def _expiry_loop() -> None:
@@ -189,16 +223,19 @@ async def _expiry_loop() -> None:
     while True:
         try:
             await asyncio.sleep(60)
-            ttl_minutes = float(getattr(config,
-                                        "DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", 60))
+            ttl_minutes = float(
+                getattr(config, "DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", 60)
+            )
             ttl = ttl_minutes * 60
             if ttl <= 0:
                 continue
             now = time.time()
             async with _lock:
-                expired_ids = [mid for mid, e in _entries.items()
-                               if not e.get("resolved")
-                               and (now - e.get("ts", now)) > ttl]
+                expired_ids = [
+                    mid
+                    for mid, e in _entries.items()
+                    if not e.get("resolved") and (now - e.get("ts", now)) > ttl
+                ]
                 expired = [(mid, _entries.pop(mid)) for mid in expired_ids]
             if _bot is None:
                 continue
@@ -211,6 +248,7 @@ async def _expiry_loop() -> None:
 
 
 # ---- Test hook -----------------------------------------------------------
+
 
 def _reset_for_tests() -> None:
     global _entries, _bot, _started

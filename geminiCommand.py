@@ -79,10 +79,10 @@ def _fmt_trigger(tool: str) -> str:
 
 
 INDIO_SYSTEM = f"""\
-Sos "el indio", un personaje del grupo de amigos en este server de Discord. NO \
-sos un bot: sos un pibe más del grupo, charlatán, divertido, con buena onda. \
-Importante: VaPls SÍ es un bot, el bot oficial del grupo que corre los \
-comandos como /play, /vapls, /indio, etc. NO trates a VaPls como persona. \
+Sos el indio, un amigo más del grupo en este server de Discord: charlatán, \
+divertido, con buena onda. Importante: VaPls es un bot, el bot oficial del \
+grupo que corre los comandos como /play, /vapls, /indio, etc. NO trates a \
+VaPls como persona. \
 
 Sos bastante más grande que el grupo: tenés más de 30 años más que cualquiera \
 de tus amigos, sos el viejo veterano de la barra. Eso lo podés referenciar \
@@ -178,8 +178,7 @@ copiás el código completo con los "<", ":" e "id" numérico. No inventes ids \
 ni uses ":nombre:" pelado, no funciona. Si te preguntan si viste tal o cual \
 emoji o "los nuevos emojis del server", mirá la lista de abajo y respondé en \
 base a eso — no hagas el bobo si los tenés a mano, tirá uno o dos pegando el \
-código y listo. Nunca rompés el personaje para decir "como modelo de \
-lenguaje..." ni nada similar.
+código y listo. Nunca digas nada de "como modelo de lenguaje" ni nada similar.
 """
 
 _INDIO_TOOLS = [
@@ -435,8 +434,11 @@ def _load_indio_state() -> None:
             data = json.load(f)
     except FileNotFoundError:
         return
-    except Exception:
+    except Exception as e:
         logger.exception("indio memory load failed at %s", path)
+        analytics.capture_exception(
+            e, properties={"action": "indio_memory_load_failed"}
+        )
         return
     entries = data.get("entries", {})
     now = time.time()
@@ -505,8 +507,11 @@ async def _persist_indio_state() -> None:
         }
         try:
             await asyncio.to_thread(_write_json_atomic, path, payload)
-        except Exception:
+        except Exception as e:
             logger.exception("indio memory persist failed at %s", path)
+            analytics.capture_exception(
+                e, properties={"action": "indio_memory_persist_failed"}
+            )
 
 
 def _write_json_atomic(path: str, payload: dict) -> None:
@@ -1222,8 +1227,9 @@ async def _compress_long_term(
             "indio compress: gemini failed (%s, status=%s)", e.kind, e.status
         )
         return None
-    except Exception:
+    except Exception as e:
         logger.exception("indio compress: unexpected error")
+        analytics.capture_exception(e, properties={"action": "indio_compress_error"})
         return None
     parsed = _extract_json(reply.text)
     if parsed is None:
@@ -1704,8 +1710,11 @@ async def _dispatch_indio_actions(
     statuses: list[str] = []
     try:
         import playCommand
-    except Exception:
+    except Exception as e:
         logger.exception("indio actions: playCommand import failed")
+        analytics.capture_exception(
+            e, properties={"action": "indio_actions_playcommand_import_failed"}
+        )
         return []
     # Set of (action, "relay") tuples for the playback actions that succeeded
     # only via the userbot relay (so we got an HTTP ack but not a real "queued"
@@ -1757,9 +1766,15 @@ async def _dispatch_indio_actions(
                         )
                         try:
                             from soundpadCommand import play_clip_by_query
-                        except Exception:
+                        except Exception as e:
                             logger.exception(
                                 "indio PLAY_SOUND: soundpadCommand import failed"
+                            )
+                            analytics.capture_exception(
+                                e,
+                                properties={
+                                    "action": "indio_play_sound_soundpad_import_failed"
+                                },
                             )
                             statuses.append("sound: fail — import error")
                             continue
@@ -1786,8 +1801,11 @@ async def _dispatch_indio_actions(
                         ok, msg = await openDjMenu(bot, int(guild_id), dj_channel_id)
                         statuses.append(f"dj_mode: {'ok' if ok else 'fail'} — {msg}")
                         logger.info("indio DJ_MODE → ok=%s msg=%s", ok, msg)
-                    except Exception:
+                    except Exception as e:
                         logger.exception("indio DJ_MODE failed")
+                        analytics.capture_exception(
+                            e, properties={"action": "indio_dj_mode_failed"}
+                        )
                         statuses.append("dj_mode: fail — exception")
                 elif action in (
                     "SKIP_MUSIC",
@@ -1859,6 +1877,12 @@ async def _dispatch_indio_actions(
                                     logger.exception(
                                         "indio RESUME_MUSIC reconnect failed"
                                     )
+                                    analytics.capture_exception(
+                                        e,
+                                        properties={
+                                            "action": "indio_resume_music_reconnect_failed"
+                                        },
+                                    )
                                     statuses.append(f"resume: reconnect failed ({e})")
                         else:
                             statuses.append("resume: not paused")
@@ -1872,8 +1896,11 @@ async def _dispatch_indio_actions(
                             _ACTION_FALLBACK_TEXT.get(action, "👍"),
                             reply_to_id=None,
                         )
-            except Exception:
+            except Exception as e:
                 logger.exception("indio action %s failed", action)
+                analytics.capture_exception(
+                    e, properties={"action": "indio_action_failed"}
+                )
                 statuses.append(f"{action.lower()}: fail — exception")
 
         # After all actions ran, surface the outcome on the indio's reply. When the
@@ -1930,8 +1957,11 @@ async def _dispatch_indio_actions(
                             await _relay_to_userbot(ch_id, result_line, None)
                         elif msg_obj is not None and getattr(msg_obj, "channel", None):
                             await msg_obj.channel.send(result_line)
-            except Exception:
+            except Exception as e:
                 logger.exception("indio dispatch result delivery failed")
+                analytics.capture_exception(
+                    e, properties={"action": "indio_dispatch_result_delivery_failed"}
+                )
 
         return statuses
 
@@ -2209,6 +2239,7 @@ def try_register_voice_vote(
     voter = _voter_id_from(user_id, speaker_name or "")
     return vote.register_vote(voter, decision, close_now=True)
 
+
 def register_reaction_vote(
     *, channel_id: int, message_id: int, emoji: str, user_id: int
 ) -> bool:
@@ -2249,6 +2280,8 @@ def register_reaction_vote(
                 return False
             return vote.register_vote(int(user_id), idx)
     return False
+
+
 async def _relay_dm_user(user_id: int, content: str) -> bool:
     """DM ``content`` to ``user_id`` from the userbot (the cuenta real).
 
@@ -2292,8 +2325,9 @@ async def _relay_say(channel_id: int, content: str) -> Optional[int]:
                 data = await resp.json(content_type=None)
         ids = (data or {}).get("message_ids") or []
         return int(ids[0]) if ids else None
-    except Exception:
+    except Exception as e:
         logger.exception("indio relay say (with id) failed")
+        analytics.capture_exception(e, properties={"action": "indio_relay_say_failed"})
         return None
 
 
@@ -2324,8 +2358,11 @@ async def _attach_vote_reactions(
         for i in range(1, min(n, len(_NUM_EMOJI)) + 1):
             await msg.add_reaction(_num_emoji(i))
         await msg.add_reaction("❌")
-    except Exception:
+    except Exception as e:
         logger.exception("indio vote: attaching reactions failed")
+        analytics.capture_exception(
+            e, properties={"action": "indio_vote_attaching_reactions_failed"}
+        )
 
 
 async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
@@ -2341,8 +2378,11 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
             song.get("title") or "tema",
             songs=[song],
         )
-    except Exception:
+    except Exception as e:
         logger.exception("indio: play chosen song failed")
+        analytics.capture_exception(
+            e, properties={"action": "indio_play_chosen_song_failed"}
+        )
 
 
 async def _maybe_disambiguate_music(
@@ -2404,8 +2444,11 @@ async def _maybe_disambiguate_music(
         # how to send via the userbot relay (or fall back to channel.send).
         try:
             await post(f"dale, va: {winner['title']} 🎵")
-        except Exception:
+        except Exception as e:
             logger.exception("indio vote: announce failed")
+            analytics.capture_exception(
+                e, properties={"action": "indio_vote_announce_failed"}
+            )
         await _play_chosen_song(bot, guild_id, winner)
 
     vote = playCommand.open_music_vote(
@@ -2538,8 +2581,9 @@ async def _relay_to_userbot(
     except asyncio.TimeoutError:
         logger.warning("indio relay timeout after %.1fs", config.INDIO_RELAY_TIMEOUT)
         return None
-    except Exception:
+    except Exception as e:
         logger.exception("indio relay failed")
+        analytics.capture_exception(e, properties={"action": "indio_relay_failed"})
         return None
 
 
@@ -2903,8 +2947,11 @@ async def indioLogic(
                     "(o esperá que cierre).",
                     ephemeral=True,
                 )
-            except Exception:
+            except Exception as e:
                 logger.exception("indio: notify-vote-open failed")
+                analytics.capture_exception(
+                    e, properties={"action": "indio_notify_vote_open_failed"}
+                )
             return
 
     async with lock:
@@ -3422,8 +3469,11 @@ async def indioFromVoice(
                 relayed = await _relay_to_userbot(channel_id, msg, None)
             if not relayed:
                 await channel.send(msg)
-        except Exception:
+        except Exception as e:
             logger.exception("indioFromVoice error-send failed")
+            analytics.capture_exception(
+                e, properties={"action": "indio_from_voice_error_send_failed"}
+            )
         analytics.capture(
             "indio voice failed",
             user=member,
@@ -3487,8 +3537,11 @@ async def indioFromVoice(
             if landing_msg_id is None:
                 sent_header = await channel.send(question_header)
                 landing_msg_id = getattr(sent_header, "id", None)
-        except Exception:
+        except Exception as e:
             logger.exception("indioFromVoice: question header failed")
+            analytics.capture_exception(
+                e, properties={"action": "indio_from_voice_question_header_failed"}
+            )
     # Anchor para Discord "reply": SOLO cuando podemos atar la respuesta al
     # mensaje del USER (wake-word original en el mismo canal). Cuando hay
     # redirect el "anchor" disponible es el header que el bot mismo postea,
@@ -3550,8 +3603,11 @@ async def indioFromVoice(
                     message=sent_msg,
                     single=len(chunks) == 1,
                 )
-    except Exception:
+    except Exception as e:
         logger.exception("indioFromVoice send failed")
+        analytics.capture_exception(
+            e, properties={"action": "indio_from_voice_send_failed"}
+        )
         return
 
     if vote_open and opts_msg_id and _active_vote is not None:

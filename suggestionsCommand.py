@@ -34,6 +34,7 @@ Formato persistido (``config.SUGGESTIONS_PATH``)::
       ]
     }
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,7 +61,12 @@ _PERSIST_LOCK = asyncio.Lock()
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 def _new_group_id() -> str:
@@ -73,6 +79,7 @@ def _new_group_id() -> str:
 @dataclass
 class Submission:
     """A single user's request, as raw text plus who/when."""
+
     user_id: str
     user_name: str
     text: str
@@ -99,6 +106,7 @@ class Submission:
 @dataclass
 class Group:
     """A cluster of submissions pointing at the same feature/idea."""
+
     id: str
     title: str
     summary: str
@@ -133,7 +141,9 @@ class Group:
             summary=str(d.get("summary", "")),
             created_at=str(d.get("created_at", "")) or _now_iso(),
             updated_at=str(d.get("updated_at", "")) or _now_iso(),
-            submissions=[Submission.from_dict(s) for s in subs] if isinstance(subs, list) else [],
+            submissions=[Submission.from_dict(s) for s in subs]
+            if isinstance(subs, list)
+            else [],
         )
 
 
@@ -148,8 +158,8 @@ def _write_json_atomic(path: str, payload: dict) -> None:
     except Exception:
         try:
             os.unlink(tmp)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("Failed to remove temp file %s: %s", tmp, e)
         raise
 
 
@@ -243,7 +253,7 @@ def _extract_json(text: str) -> Optional[dict]:
     if start == -1 or end == -1 or end <= start:
         return None
     try:
-        obj = json.loads(s[start:end + 1])
+        obj = json.loads(s[start : end + 1])
     except Exception:
         return None
     return obj if isinstance(obj, dict) else None
@@ -284,8 +294,9 @@ async def _classify(idea: str, groups: list[Group]) -> Optional[Classification]:
     if isinstance(title, str) and title.strip():
         return Classification(
             new_title=title.strip()[:_MAX_TITLE_CHARS],
-            new_summary=(summary.strip()[:_MAX_SUMMARY_CHARS]
-                         if isinstance(summary, str) else ""),
+            new_summary=(
+                summary.strip()[:_MAX_SUMMARY_CHARS] if isinstance(summary, str) else ""
+            ),
         )
     return None
 
@@ -300,7 +311,9 @@ class SubmissionResult:
     prior_count: int  # how many submissions the group had *before* this one
 
 
-async def submit_suggestion(*, user_id: str, user_name: str, text: str) -> Optional[SubmissionResult]:
+async def submit_suggestion(
+    *, user_id: str, user_name: str, text: str
+) -> Optional[SubmissionResult]:
     """Categorize a suggestion with Gemini and, only on success, persist it.
 
     Returns ``None`` when Gemini cannot categorize the idea — in that case
@@ -395,19 +408,21 @@ async def sugerenciasLogic(ctx, idea: str) -> None:
     user = ctx.author
     user_id = str(getattr(user, "id", "0"))
     user_name = (
-        getattr(user, "display_name", None)
-        or getattr(user, "name", None)
-        or "anon"
+        getattr(user, "display_name", None) or getattr(user, "name", None) or "anon"
     )
 
     try:
-        result = await submit_suggestion(user_id=user_id, user_name=user_name, text=text)
+        result = await submit_suggestion(
+            user_id=user_id, user_name=user_name, text=text
+        )
     except ValueError:
         await _send(ctx, "decime que sugerencia tenes, no la dejes vacia")
         return
     except Exception:
         logger.exception("sugerencias: submit failed")
-        await _send(ctx, "se rompio algo guardando la sugerencia, probá de nuevo en un rato")
+        await _send(
+            ctx, "se rompio algo guardando la sugerencia, probá de nuevo en un rato"
+        )
         return
 
     if result is None:
@@ -450,14 +465,21 @@ async def sugerenciasVerLogic(ctx) -> None:
         groups = await asyncio.to_thread(_store().load)
     except Exception:
         logger.exception("sugerencias-ver: load failed")
-        await _send(ctx, "no pude leer las sugerencias ahora, probá de nuevo en un rato")
+        await _send(
+            ctx, "no pude leer las sugerencias ahora, probá de nuevo en un rato"
+        )
         return
 
     if not groups:
-        await _send(ctx, "todavía no hay ninguna sugerencia. Mandá la primera con `/sugerencias`.")
+        await _send(
+            ctx,
+            "todavía no hay ninguna sugerencia. Mandá la primera con `/sugerencias`.",
+        )
         return
 
-    analytics.capture("suggestions_viewed", distinct_id=str(getattr(ctx.author, "id", "0")))
+    analytics.capture(
+        "suggestions_viewed", distinct_id=str(getattr(ctx.author, "id", "0"))
+    )
     await _send(ctx, _format_listing(groups))
 
 

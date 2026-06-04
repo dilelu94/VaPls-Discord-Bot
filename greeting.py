@@ -1,4 +1,5 @@
 """Greeting soundboard trigger helpers for voice channel joins."""
+
 import asyncio
 import logging
 import os
@@ -6,6 +7,7 @@ import time
 
 import discord
 
+import analytics
 import config
 from users import USERS
 
@@ -71,7 +73,9 @@ async def trigger_soundboard_entry(channel):
     now = time.time()
     user_id = _pending_trigger_user.pop(channel.id, None)
     last = _last_greeting.get(channel.id, 0.0)
-    logger.info(f"[GREETING] trigger fired: channel={channel.id} user={user_id} since_last={now - last:.1f}s")
+    logger.info(
+        f"[GREETING] trigger fired: channel={channel.id} user={user_id} since_last={now - last:.1f}s"
+    )
     if now - last < 15.0:
         logger.info(f"[GREETING] throttled (< 15s since last greeting on this channel)")
         return
@@ -99,5 +103,16 @@ async def trigger_soundboard_entry(channel):
             return
         logger.info(f"[GREETING] playing: {path}")
         vc.play(discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS))
+        analytics.capture(
+            "greeting played",
+            properties={
+                "channel_id": channel.id,
+                "path": path,
+                "user_id": user_id,
+            },
+        )
     except Exception as e:
         logger.exception(f"[GREETING] playback failed: {e}")
+        analytics.capture_exception(
+            e, properties={"action": "greeting_playback", "channel_id": channel.id}
+        )

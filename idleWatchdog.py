@@ -81,7 +81,8 @@ def _is_active(vc) -> bool:
                 if humans > 0:
                     logger.debug(
                         "idle watchdog: staying — Auto-DJ active (guild=%s, humans=%d)",
-                        guild_id, humans,
+                        guild_id,
+                        humans,
                     )
                     return True
     except Exception:
@@ -117,8 +118,11 @@ async def _disconnect_idle(bot, guild_id: int) -> None:
         from soundpadCommand import disable_panels
 
         await disable_panels(guild_id)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("disable_panels failed: %s", e)
+        analytics.capture_exception(
+            e, properties={"action": "idle_disable_panels", "guild_id": guild_id}
+        )
 
     if vc is not None:
         try:
@@ -126,8 +130,11 @@ async def _disconnect_idle(bot, guild_id: int) -> None:
         except asyncio.TimeoutError:
             try:
                 vc.cleanup()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("vc.cleanup failed: %s", e)
+                analytics.capture_exception(
+                    e, properties={"action": "idle_vc_cleanup", "guild_id": guild_id}
+                )
         except Exception:
             logger.exception("idle watchdog: disconnect failed")
 
@@ -142,8 +149,11 @@ async def _disconnect_idle(bot, guild_id: int) -> None:
                 "trigger": "idle_timeout",
             },
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("analytics.capture failed: %s", e)
+        analytics.capture_exception(
+            e, properties={"action": "idle_analytics_capture", "guild_id": guild_id}
+        )
 
 
 async def _watch_loop(

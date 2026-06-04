@@ -1,6 +1,9 @@
 """Slash command implementation for /parar (stop playback and disconnect)."""
 
+import logging
 import analytics
+
+_log = logging.getLogger("bot.parar")
 
 
 async def pararLogic(ctx):
@@ -25,14 +28,17 @@ async def pararLogic(ctx):
 
     try:
         stop_idle_watchdog(ctx.guild.id)
-    except Exception:
-        pass
+    except Exception as e:
+        _log.warning("Failed to stop idle watchdog: %s", e)
+        analytics.capture_exception(
+            e, properties={"action": "parar_stop_watchdog", "guild_id": ctx.guild.id}
+        )
 
     if ctx.guild.id in guildPlayers:
         try:
             await guildPlayers[ctx.guild.id].stopPlayback()
         except Exception as e:
-            print(f"[PARAR ERROR] Error stopping playback: {e}")
+            _log.warning("Error stopping playback: %s", e)
             analytics.capture_exception(
                 e,
                 user=ctx.author,
@@ -43,8 +49,11 @@ async def pararLogic(ctx):
 
     try:
         await disable_panels(ctx.guild.id)
-    except Exception:
-        pass
+    except Exception as e:
+        _log.warning("Failed to disable soundpad panels: %s", e)
+        analytics.capture_exception(
+            e, properties={"action": "parar_disable_panels", "guild_id": ctx.guild.id}
+        )
 
     if ctx.voice_client:
         channel_id = str(ctx.voice_client.channel.id)

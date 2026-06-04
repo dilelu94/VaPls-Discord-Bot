@@ -3,11 +3,14 @@
 import os
 import asyncio
 import difflib
+import logging
 import discord
 import config
 import analytics
 import geminiKeys
 from greeting import set_pending_trigger
+
+_log = logging.getLogger("bot.soundpad")
 
 _AUDIO_EXTS = {".opus", ".mp3", ".wav", ".ogg", ".m4a"}
 
@@ -265,7 +268,11 @@ async def play_clip_by_query(
         try:
             vc = await target.connect(reconnect=True, timeout=10.0)
             had_to_connect = True
-        except Exception:
+        except Exception as e:
+            _log.warning("Failed to connect to voice channel %s: %s", target, e)
+            analytics.capture_exception(
+                e, properties={"action": "soundpad_connect", "guild_id": guild.id}
+            )
             return None
     elif (
         voice_channel is not None
@@ -273,8 +280,11 @@ async def play_clip_by_query(
     ):
         try:
             await vc.move_to(voice_channel)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Failed to move to voice channel %s: %s", voice_channel, e)
+            analytics.capture_exception(
+                e, properties={"action": "soundpad_move_to", "guild_id": guild.id}
+            )
 
     try:
         if vc.is_playing():
@@ -689,8 +699,8 @@ class SoundpadView(discord.ui.View):
             if vc.is_playing():
                 vc.stop()
                 await asyncio.sleep(0.2)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Failed to stop existing playback: %s", e)
 
         try:
             vc.play(
@@ -713,7 +723,7 @@ class SoundpadView(discord.ui.View):
                 status_text=f"▶️ Reproduciendo: {os.path.basename(self.selected_file)}",
             )
         except discord.ClientException as e:
-            print(f"[SOUNDPAD] ClientException on play ({e}); forcing reconnect...")
+            _log.warning("ClientException on play (%s); forcing reconnect...", e)
             analytics.capture(
                 "soundpad reconnect attempted",
                 user=interaction.user,
@@ -761,7 +771,7 @@ class SoundpadView(discord.ui.View):
                     status_text=f"▶️ Reproduciendo (tras reconectar): {os.path.basename(self.selected_file)}",
                 )
             except Exception as e2:
-                print(f"[SOUNDPAD ERROR] Retry failed: {e2}")
+                _log.warning("Retry failed: %s", e2)
                 analytics.capture_exception(
                     e2,
                     user=interaction.user,
@@ -776,7 +786,7 @@ class SoundpadView(discord.ui.View):
                     f"❌ Error tras reconectar: {e2}", ephemeral=True
                 )
         except Exception as e:
-            print(f"[SOUNDPAD ERROR] Playback failed: {e}")
+            _log.warning("Playback failed: %s", e)
             analytics.capture_exception(
                 e,
                 user=interaction.user,
@@ -1100,8 +1110,15 @@ async def soundpadLogic(ctx: discord.ApplicationContext, query: "str | None" = N
         try:
             set_pending_trigger(ctx.author.voice.channel.id, ctx.author.id)
             await vc.move_to(ctx.author.voice.channel)
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("Failed to move_to in soundpadLogic: %s", e)
+            analytics.capture_exception(
+                e,
+                properties={
+                    "action": "soundpad_logic_move_to",
+                    "guild_id": ctx.guild.id,
+                },
+            )
 
     output_dir = getattr(config, "CUSTOM_AUDIO_PATH", "audio_output")
     try:

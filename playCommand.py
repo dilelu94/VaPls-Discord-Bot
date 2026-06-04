@@ -214,6 +214,7 @@ class MusicVote:
     @property
     def closed(self) -> bool:
         return self._closed
+
     def cancel(self) -> None:
         if self._closed:
             return
@@ -283,7 +284,9 @@ class MusicVote:
                 try:
                     chan = self.bot.get_channel(int(self.reaction_channel_id))
                     if chan is None:
-                        chan = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                        chan = await self.bot.fetch_channel(
+                            int(self.reaction_channel_id)
+                        )
                     await chan.get_partial_message(int(self.source_message_id)).delete()
                 except Exception:
                     pass
@@ -291,7 +294,9 @@ class MusicVote:
                 try:
                     chan = self.bot.get_channel(int(self.reaction_channel_id))
                     if chan is None:
-                        chan = await self.bot.fetch_channel(int(self.reaction_channel_id))
+                        chan = await self.bot.fetch_channel(
+                            int(self.reaction_channel_id)
+                        )
                     msg = await chan.fetch_message(int(self.reaction_message_id))
                     await msg.delete()
                 except Exception:
@@ -1836,7 +1841,6 @@ class GuildPlayer:
                 else:
                     diag = _diagnoseYtDlpFailure(str(e))
                 reason = diag.format()
-                print(f"[PLAYER ERROR] Download exception: {e}")
                 analytics.capture_exception(
                     e,
                     user=self.lastRequester,
@@ -1997,7 +2001,6 @@ class GuildPlayer:
             # Start background pre-downloading of the queue
             self.startPreDownloading()
         except Exception as e:
-            print(f"[PLAYER ERROR] Playback start exception: {e}")
             analytics.capture_exception(
                 e,
                 user=self.lastRequester,
@@ -2005,7 +2008,7 @@ class GuildPlayer:
                 properties={"stage": "play", "video_id": videoId, "title": videoTitle},
             )
             playLogger.error(
-                f"[PLAYBACK ERROR] Playback start exception for '{videoTitle}': {e}"
+                "[PLAYBACK ERROR] Playback start exception for '%s': %s", videoTitle, e
             )
             await self.updateControlMessage(f"❌ Error al reproducir {videoTitle}: {e}")
             try:
@@ -2028,9 +2031,23 @@ class GuildPlayer:
             This function is a coroutine and must be awaited.
         """
         if error:
-            print(f"[PLAYER] Playback error: {error}")
             playLogger.error(
-                f"[PLAYBACK ERROR] Playback finished with error for '{self.currentSong['title'] if self.currentSong else 'Unknown'}': {error}"
+                "[PLAYBACK ERROR] Playback finished with error for '%s': %s",
+                self.currentSong["title"] if self.currentSong else "Unknown",
+                error,
+            )
+            analytics.capture_exception(
+                error,
+                user=self.lastRequester,
+                guild=self.bot.get_guild(self.guildId) if self.bot else None,
+                properties={
+                    "stage": "finish",
+                    "title": self.currentSong["title"]
+                    if self.currentSong
+                    else "Unknown",
+                }
+                if hasattr(self, "currentSong")
+                else {"stage": "finish"},
             )
 
         # Defensive: if the voice client died (kick / network drop / region
@@ -2092,8 +2109,9 @@ class GuildPlayer:
                         f"[CLEANUP] Deleted temporary file for '{self.currentSong['title']}' (ID: {videoId}). Size: {fileSize} bytes"
                     )
             except Exception as e:
-                print(f"[PLAYER] Error deleting file {filepath}: {e}")
-                playLogger.error(f"[CLEANUP ERROR] Error deleting file {filepath}: {e}")
+                playLogger.error(
+                    "[CLEANUP ERROR] Error deleting file %s: %s", filepath, e
+                )
 
         # Stop action
         if self.isStopping:
@@ -2388,13 +2406,13 @@ class GuildPlayer:
                     embed=embed, view=view
                 )
         except Exception as e:
-            print(f"[PLAYER] Error updating control message: {e}")
+            playLogger.warning("[PLAYER] Error updating control message: %s", e)
             try:
                 self.controlMessage = await self.textChannel.send(
                     embed=embed, view=view
                 )
             except Exception:
-                pass
+                playLogger.warning("[PLAYER] Fallback send also failed")
 
     async def showIdleDisconnect(self):
         """Turn the live control panel into a dead "disconnected" state.
@@ -2900,9 +2918,12 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
             errMsg = stderr.decode("utf-8", errors="replace").strip()
             diag = _diagnoseYtDlpFailure(errMsg, proc.returncode)
             reason = diag.format()
-            print(f"[PLAY ERROR] Metadata fetch failed: {reason} ({errMsg[:200]})")
             playLogger.error(
-                f"[METADATA FAIL] Query '{query}' failed with returncode {proc.returncode}. audience: {diag.audience}. summary: {diag.summary}. stderr: {errMsg[:500]}"
+                "[METADATA FAIL] Query '%s' failed (rc=%s, audience=%s): %s",
+                query,
+                proc.returncode,
+                diag.audience,
+                errMsg[:300],
             )
             return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
@@ -2949,9 +2970,8 @@ async def playLogic(ctx: discord.ApplicationContext, query: str):
         diag = _diagnoseYtDlpFailure(str(e))
         reason = diag.format()
         playLogger.error(
-            f"[METADATA FAIL] Exception during metadata fetch for '{query}': {e} → audience: {diag.audience}. summary: {diag.summary}"
+            "[METADATA FAIL] Exception during metadata fetch for '%s': %s", query, e
         )
-        print(f"[PLAY ERROR] Exception during metadata fetch: {e}")
         return await safeEdit(ctx, f"❌ Error al buscar el video: {reason}")
 
     # Free-text search with several candidates → let the requester pick which

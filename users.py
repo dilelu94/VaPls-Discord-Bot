@@ -44,7 +44,7 @@ USERS: dict[int, dict] = {
         "anecdotas": [
             "los piononos (segun chiste del grupo) sirven para limpiarse y despues te dejan un postrecito",
         ],
-        "block_dynamic_substrings": ["sexo: mujer", "es mujer", "bombera"],
+        "block_dynamic_substrings": ["sexo: hombre", "es hombre"],
     },
     211354006805676032: {
         "name": "Miles",
@@ -230,7 +230,6 @@ GROUP_LORE: dict[str, list[str]] = {
     ],
     "chistes_internos": [
         "Bibi tiene pedido de captura por la corte internacional",
-        "El Indio tiene un juicio de Chipotle, pero igual tiene los contactos nunca le van hacer nada"
         "los que juegan CS son giles, los que juegan Dota unos capos",
         "los piononos sirven para limpiarse y dejarte un postrecito",
         "hasta Magote (que no estudia) desarrolló una app y Viny, que estudia programación hace 10 años, todavía no",
@@ -254,6 +253,21 @@ NON_DISCORD_MEMBERS: list[dict] = [
         "anecdotas": [
             "el indio tiene fotos con él",
             "tiene pedido de captura por la corte internacional (chiste interno del grupo)",
+        ],
+    },
+    {
+        "name": "El Indio",
+        "traits": [
+            "sexo: hombre",
+            "el mas grande del grupo, les lleva 30 años a todos",
+            "sabe una banda de musica, de todos los generos",
+            "tiene contactos en todos lados, siempre consigue lo que hace falta",
+            "es el dueño del bot de música del Discord",
+            "tiene un juicio de Chipotle",
+        ],
+        "anecdotas": [
+            "tiene contactos, nunca le van a hacer nada no importa que juicio le hagan",
+            "siempre resuelve lo que sea pidiéndole a bibi unos bonbons",
         ],
     },
 ]
