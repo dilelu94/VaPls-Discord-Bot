@@ -5,8 +5,8 @@ Requires a Hugging Face account and API token:
 2. Create a read token at https://huggingface.co/settings/tokens
 3. Set HUGGINGFACE_API_TOKEN in .env
 
-Uses black-forest-labs/FLUX.1-dev by default, with automatic retry
-when the model is cold-loading. Falls back to SDXL if FLUX fails.
+Uses black-forest-labs/FLUX.1-schnell by default, with automatic retry
+when the model is cold-loading. Falls back to SD3 Medium if FLUX fails.
 """
 
 import asyncio
@@ -19,8 +19,8 @@ import aiohttp
 
 logger = logging.getLogger("bot.huggingface.image")
 
-DEFAULT_MODEL = "black-forest-labs/FLUX.1-dev"
-FALLBACK_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
+DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
+FALLBACK_MODEL = "stabilityai/stable-diffusion-3-medium-diffusers"
 MAX_FILE_SIZE = 8 * 1024 * 1024
 TIMEOUT = 60
 MAX_RETRIES = 5

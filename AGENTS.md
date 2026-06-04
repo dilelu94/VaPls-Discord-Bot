@@ -243,8 +243,8 @@ API** (free tier). El módulo que lo implementa es `huggingfaceImage.py`.
 2. Ir a Settings → Access Tokens → "New token" (tipo **read**)
 3. Poner el token en `.env`: `HUGGINGFACE_API_TOKEN=tu_token`
 
-El módulo usa `black-forest-labs/FLUX.1-dev` con fallback a
-`stabilityai/stable-diffusion-xl-base-1.0`. Tiene reintentos automáticos
+El módulo usa `black-forest-labs/FLUX.1-schnell` con fallback a
+`stabilityai/stable-diffusion-3-medium-diffusers`. Tiene reintentos automáticos
 cuando el modelo está cold-loading (común en el free tier).
 
 **Playwright (deprecado):** El intento anterior usaba `geminiImage.py`

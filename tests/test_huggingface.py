@@ -119,7 +119,7 @@ async def test_generarimagen_success(ctx_factory, hf_http):
         
         # Verify the request went to the default FLUX model
         assert len(spy) == 1
-        assert "FLUX.1-dev" in spy[0]["url"]
+        assert "FLUX.1-schnell" in spy[0]["url"]
         assert spy[0]["kwargs"]["json"] == {"inputs": "un perrito en el espacio"}
         assert spy[0]["kwargs"]["headers"] == {"Authorization": "Bearer valid-hf-token"}
 
@@ -150,7 +150,7 @@ async def test_generarimagen_cold_loading_retry(ctx_factory, hf_http):
     # Verify we retried 3 times (all on FLUX) and finally succeeded
     assert len(spy) == 3
     for s in spy:
-        assert "FLUX.1-dev" in s["url"]
+        assert "FLUX.1-schnell" in s["url"]
     
     # Verify the image was sent
     assert ctx.interaction.edit_original_response.call_count == 2
@@ -169,10 +169,10 @@ async def test_generarimagen_fallback_to_sdxl(ctx_factory, hf_http):
 
     await generarimagenLogic(ctx, "cielo estrellado")
 
-    # Verify we hit FLUX first, then SDXL
+    # Verify we hit FLUX first, then fallback SD3
     assert len(spy) == 2
-    assert "FLUX.1-dev" in spy[0]["url"]
-    assert "stable-diffusion-xl-base" in spy[1]["url"]
+    assert "FLUX.1-schnell" in spy[0]["url"]
+    assert "stable-diffusion-3-medium-diffusers" in spy[1]["url"]
 
     # Verify the image was sent
     assert ctx.interaction.edit_original_response.call_count == 2
@@ -192,8 +192,8 @@ async def test_generarimagen_total_failure(ctx_factory, hf_http):
 
     # Verify both models were attempted
     assert len(spy) == 2
-    assert "FLUX.1-dev" in spy[0]["url"]
-    assert "stable-diffusion-xl-base" in spy[1]["url"]
+    assert "FLUX.1-schnell" in spy[0]["url"]
+    assert "stable-diffusion-3-medium-diffusers" in spy[1]["url"]
 
     # Verify we showed a friendly error message to the user
     text = joined_messages(ctx)
