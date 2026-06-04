@@ -346,6 +346,7 @@ class SoundpadView(discord.ui.View):
         self.output_dir = output_dir
         self.message = None
         self.guild_id = guild_id
+        self.is_playing = False
 
         if not os.path.exists(output_dir):
             raise ValueError(f"La ruta de audios no existe: {output_dir}")
@@ -555,14 +556,15 @@ class SoundpadView(discord.ui.View):
         play_btn.callback = self.on_play_click
         self.add_item(play_btn)
 
-        stop_btn = discord.ui.Button(
-            label="⏹️ Detener",
-            style=discord.ButtonStyle.danger,
-            row=row_offset + 2,
-            custom_id="btn_sp_stop",
-        )
-        stop_btn.callback = self.on_stop_click
-        self.add_item(stop_btn)
+        if self.is_playing:
+            stop_btn = discord.ui.Button(
+                label="⏹️ Detener",
+                style=discord.ButtonStyle.danger,
+                row=row_offset + 2,
+                custom_id="btn_sp_stop",
+            )
+            stop_btn.callback = self.on_stop_click
+            self.add_item(stop_btn)
 
         next_btn = discord.ui.Button(
             label="▶️",
@@ -702,11 +704,27 @@ class SoundpadView(discord.ui.View):
         except Exception as e:
             _log.warning("Failed to stop existing playback: %s", e)
 
+        loop = asyncio.get_running_loop()
+
+        def _after(_err):
+            self.is_playing = False
+            self.setup_components()
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.update_message(interaction, status_text="⏹️ Terminado"), loop
+                )
+            except Exception as e:
+                _log.warning("Error updating soundpad UI after playback: %s", e)
+
+        self.is_playing = True
+        self.setup_components()
+
         try:
             vc.play(
                 discord.FFmpegOpusAudio(
                     filepath, options='-af "dynaudnorm=p=0.95:f=200"'
-                )
+                ),
+                after=_after,
             )
             analytics.capture(
                 "soundpad audio played",
@@ -754,7 +772,8 @@ class SoundpadView(discord.ui.View):
                 vc.play(
                     discord.FFmpegOpusAudio(
                         filepath, options='-af "dynaudnorm=p=0.95:f=200"'
-                    )
+                    ),
+                    after=_after,
                 )
                 analytics.capture(
                     "soundpad audio played",
@@ -884,6 +903,8 @@ class SoundpadView(discord.ui.View):
         """
         if interaction.guild.voice_client:
             interaction.guild.voice_client.stop()
+        self.is_playing = False
+        self.setup_components()
         analytics.capture(
             "soundpad audio stopped",
             user=interaction.user,
@@ -1103,10 +1124,8 @@ async def soundpadLogic(
             voice_channel=ctx.author.voice.channel,
         )
 
-        for item in view.children:
-            item.disabled = True
         try:
-            await message.edit(view=view)
+            await message.edit(view=None)
         except Exception:
             pass
         return
