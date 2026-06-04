@@ -242,6 +242,7 @@ class MusicVote:
         if self._hard_cap_task and not self._hard_cap_task.done():
             self._hard_cap_task.cancel()
         self._hard_cap_task = asyncio.create_task(self._close_after(self.vote_max_sec))
+        playLogger.info(f"[VOTE] Started hard cap timeout {self.vote_max_sec}s")
 
     def register_vote(self, user_id: int, idx: int, *, close_now: bool = False) -> bool:
         """Record one user's vote. Returns True if the vote was accepted.
@@ -256,6 +257,7 @@ class MusicVote:
         if not (0 <= idx < len(self.candidates)):
             return False
         self.votes[user_id] = idx
+        playLogger.info(f"[VOTE] Registered vote for user {user_id} -> option {idx} (close_now={close_now})")
         if close_now:
             # Cancel any pending timeout and resolve right now.
             self._cancel_timers()
@@ -265,6 +267,7 @@ class MusicVote:
         return True
 
     def _schedule_sliding_close(self) -> None:
+        playLogger.info(f"[VOTE] Scheduling sliding close for {self.vote_window_sec}s")
         """(Re)start the sliding close timer at ``vote_window_sec`` from now."""
         if self._sliding_task and not self._sliding_task.done():
             self._sliding_task.cancel()
@@ -282,6 +285,7 @@ class MusicVote:
     async def _close(self) -> None:
         if self._closed:
             return
+        playLogger.info("[VOTE] Closing vote now")
         self._closed = True
         self._cancel_timers()
         # Pop from the active registry so a future query opens a fresh vote.
