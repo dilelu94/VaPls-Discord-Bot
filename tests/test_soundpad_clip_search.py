@@ -5,6 +5,7 @@ These pin the contract callers rely on:
 - join a voice channel (auto-pick when none is supplied),
 - play once and disconnect when the call had to connect itself.
 """
+
 import os
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -46,6 +47,7 @@ def soundpad_dir(tmp_path, monkeypatch):
 
 class _FakeVoiceChannel:
     """Stand-in for ``discord.VoiceChannel`` good enough for our tests."""
+
     def __init__(self, channel_id: int, member_count: int = 0):
         self.id = channel_id
         # Non-bot members; len() is what _pick_populated_voice_channel reads.
@@ -63,6 +65,7 @@ class _FakeVoiceClient:
     ``play`` records the source and immediately fires the ``after`` callback so
     the awaited ``done`` event resolves without real audio.
     """
+
     def __init__(self, channel: _FakeVoiceChannel):
         self.channel = channel
         self.guild = None
@@ -98,7 +101,10 @@ class _FakeVoiceClient:
 def stub_ffmpeg(monkeypatch):
     """Replace FFmpegOpusAudio with a sentinel that remembers the path."""
     import discord
-    factory = MagicMock(side_effect=lambda path, **kwargs: SimpleNamespace(path=path, kwargs=kwargs))
+
+    factory = MagicMock(
+        side_effect=lambda path, **kwargs: SimpleNamespace(path=path, kwargs=kwargs)
+    )
     monkeypatch.setattr(discord, "FFmpegOpusAudio", factory)
     return factory
 
@@ -137,7 +143,9 @@ def test_find_best_match_is_case_and_separator_insensitive(soundpad_dir):
 
 
 def test_find_best_match_returns_none_when_nothing_close_enough(soundpad_dir):
-    assert find_best_match("xyzqwerty asdf nothing here", soundpad_dir, cutoff=0.8) is None
+    assert (
+        find_best_match("xyzqwerty asdf nothing here", soundpad_dir, cutoff=0.8) is None
+    )
 
 
 def test_find_best_match_returns_none_on_empty_dir(tmp_path):
@@ -202,7 +210,9 @@ async def test_play_clip_by_query_uses_explicit_channel_when_passed(soundpad_dir
     assert other.connected_vc is None
 
 
-async def test_play_clip_by_query_returns_none_when_no_voice_channel_available(soundpad_dir):
+async def test_play_clip_by_query_returns_none_when_no_voice_channel_available(
+    soundpad_dir,
+):
     empty = _FakeVoiceChannel(channel_id=20, member_count=0)
     bot = _make_bot()
     guild = _make_guild([empty])
@@ -213,7 +223,9 @@ async def test_play_clip_by_query_returns_none_when_no_voice_channel_available(s
     assert empty.connected_vc is None
 
 
-async def test_play_clip_by_query_disconnects_after_playback_when_it_had_to_connect(soundpad_dir):
+async def test_play_clip_by_query_disconnects_after_playback_when_it_had_to_connect(
+    soundpad_dir,
+):
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     bot = _make_bot()
     guild = _make_guild([channel])
@@ -221,7 +233,9 @@ async def test_play_clip_by_query_disconnects_after_playback_when_it_had_to_conn
     await play_clip_by_query(bot, guild, query="hola che")
 
     assert channel.connected_vc is not None
-    assert channel.connected_vc.disconnected, "one-shot should disconnect after playback"
+    assert channel.connected_vc.disconnected, (
+        "one-shot should disconnect after playback"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -259,6 +273,7 @@ def _make_slash_ctx(channel: _FakeVoiceChannel, guild):
 def no_music_playing(monkeypatch):
     """Stub playCommand.guildPlayers so the music-playing check is a no-op."""
     import playCommand
+
     monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=False)
 
 
@@ -266,6 +281,7 @@ def no_music_playing(monkeypatch):
 def gemini_pool():
     """Drive the gemini key pool from tests without touching disk."""
     import geminiKeys
+
     snapshot = list(geminiKeys._keys)
 
     def _set(entries):
@@ -281,10 +297,17 @@ def gemini_pool():
 @pytest.fixture
 def caller_has_key(gemini_pool):
     """Register a key owned by the default tester (user_id=1)."""
-    gemini_pool([
-        {"key": "AIza" + "x" * 35, "owner_name": "Tester",
-         "owner_id": "1", "note": "", "source": "test"},
-    ])
+    gemini_pool(
+        [
+            {
+                "key": "AIza" + "x" * 35,
+                "owner_name": "Tester",
+                "owner_id": "1",
+                "note": "",
+                "source": "test",
+            },
+        ]
+    )
     return gemini_pool
 
 
@@ -361,12 +384,25 @@ async def test_soundpad_slash_with_query_attaches_stop_button(
 # --------------------------------------------------------------------------
 def test_has_user_key_matches_only_donors_owning_the_id(gemini_pool):
     import geminiKeys
-    gemini_pool([
-        {"key": "AIza" + "a" * 35, "owner_name": "Miles", "owner_id": "42",
-         "note": "", "source": "dm"},
-        {"key": "AIza" + "b" * 35, "owner_name": "unknown", "owner_id": "",
-         "note": "", "source": "env"},
-    ])
+
+    gemini_pool(
+        [
+            {
+                "key": "AIza" + "a" * 35,
+                "owner_name": "Miles",
+                "owner_id": "42",
+                "note": "",
+                "source": "dm",
+            },
+            {
+                "key": "AIza" + "b" * 35,
+                "owner_name": "unknown",
+                "owner_id": "",
+                "note": "",
+                "source": "env",
+            },
+        ]
+    )
     assert geminiKeys.has_user_key(42) is True
     assert geminiKeys.has_user_key("42") is True
     assert geminiKeys.has_user_key(99) is False
@@ -376,12 +412,15 @@ def test_has_user_key_matches_only_donors_owning_the_id(gemini_pool):
 
 def test_format_contributors_line_skips_unknown_and_counts_repeats(gemini_pool):
     import geminiKeys
-    gemini_pool([
-        {"key": "AIza1", "owner_name": "Miles", "owner_id": "1"},
-        {"key": "AIza2", "owner_name": "Miles", "owner_id": "1"},
-        {"key": "AIza3", "owner_name": "Joel", "owner_id": "2"},
-        {"key": "AIza4", "owner_name": "unknown", "owner_id": ""},
-    ])
+
+    gemini_pool(
+        [
+            {"key": "AIza1", "owner_name": "Miles", "owner_id": "1"},
+            {"key": "AIza2", "owner_name": "Miles", "owner_id": "1"},
+            {"key": "AIza3", "owner_name": "Joel", "owner_id": "2"},
+            {"key": "AIza4", "owner_name": "unknown", "owner_id": ""},
+        ]
+    )
     line = geminiKeys.format_contributors_line()
     assert "Miles (2)" in line
     assert "Joel" in line
@@ -390,6 +429,7 @@ def test_format_contributors_line_skips_unknown_and_counts_repeats(gemini_pool):
 
 def test_format_contributors_line_empty_when_no_named_donors(gemini_pool):
     import geminiKeys
+
     gemini_pool([{"key": "x", "owner_name": "unknown", "owner_id": ""}])
     assert geminiKeys.format_contributors_line() == ""
 
@@ -398,10 +438,17 @@ async def test_soundpad_blocks_user_without_key_with_helpful_message(
     soundpad_dir, no_music_playing, gemini_pool
 ):
     # Pool has donors but the caller is not among them.
-    gemini_pool([
-        {"key": "AIza" + "a" * 35, "owner_name": "Miles", "owner_id": "999",
-         "note": "", "source": "dm"},
-    ])
+    gemini_pool(
+        [
+            {
+                "key": "AIza" + "a" * 35,
+                "owner_name": "Miles",
+                "owner_id": "999",
+                "note": "",
+                "source": "dm",
+            },
+        ]
+    )
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     guild = _make_guild([channel])
     guild.id = 999
@@ -480,10 +527,14 @@ async def test_soundpad_slash_handler_defers_and_delegates_when_caller_has_key(
     caller_has_key, monkeypatch
 ):
     import bot as bot_mod
+    import config
+
+    monkeypatch.setattr(config, "INDIO_PLAY_CHANNEL_ID", 0, raising=False)
 
     ctx = MagicMock(name="ApplicationContext")
     ctx.author = SimpleNamespace(id=1, display_name="Tester", name="tester")
     ctx.guild = SimpleNamespace(id=999)
+    ctx.channel_id = 42
     ctx.respond = AsyncMock()
 
     spy_defer = AsyncMock(return_value=True)
@@ -520,11 +571,15 @@ async def test_soundpad_stop_button_stops_playback_and_disables_view():
     await button_item.callback(interaction)
 
     assert not vc.is_playing(), "stop button should halt current playback"
-    assert all(item.disabled for item in view.children), "items should be disabled after click"
+    assert all(item.disabled for item in view.children), (
+        "items should be disabled after click"
+    )
     msg.edit.assert_awaited()
 
 
-async def test_play_clip_by_query_stays_connected_if_bot_was_already_in_voice(soundpad_dir, monkeypatch):
+async def test_play_clip_by_query_stays_connected_if_bot_was_already_in_voice(
+    soundpad_dir, monkeypatch
+):
     channel = _FakeVoiceChannel(channel_id=10, member_count=2)
     existing_vc = _FakeVoiceClient(channel)
     guild = _make_guild([channel])
@@ -533,11 +588,16 @@ async def test_play_clip_by_query_stays_connected_if_bot_was_already_in_voice(so
 
     # discord.utils.get(bot.voice_clients, guild=guild) needs to find our vc.
     import discord
+
     monkeypatch.setattr(
         discord.utils,
         "get",
         lambda iterable, **kwargs: next(
-            (vc for vc in iterable if getattr(vc, "guild", None) is kwargs.get("guild")),
+            (
+                vc
+                for vc in iterable
+                if getattr(vc, "guild", None) is kwargs.get("guild")
+            ),
             None,
         ),
     )
@@ -568,7 +628,9 @@ def _ac_ctx(value: str):
 async def test_autocomplete_returns_suggestion_matching_partial_input(soundpad_dir):
     suggestions = await soundpad_query_autocomplete(_ac_ctx("bob"))
     # The user typed "bob"; they should see the bob-esponja clip among results.
-    assert any("bob" in s.lower().replace("_", " ").replace("-", " ") for s in suggestions)
+    assert any(
+        "bob" in s.lower().replace("_", " ").replace("-", " ") for s in suggestions
+    )
 
 
 async def test_autocomplete_returns_clips_when_input_empty(soundpad_dir):
@@ -589,7 +651,9 @@ async def test_autocomplete_caps_at_25_results(tmp_path, monkeypatch):
 
 
 async def test_autocomplete_returns_empty_when_nothing_matches(soundpad_dir):
-    suggestions = await soundpad_query_autocomplete(_ac_ctx("xyzqwertyabsolutelynothing"))
+    suggestions = await soundpad_query_autocomplete(
+        _ac_ctx("xyzqwertyabsolutelynothing")
+    )
     assert suggestions == []
 
 
@@ -605,8 +669,10 @@ async def test_autocomplete_truncates_choices_over_100_chars(tmp_path, monkeypat
     # Discord rejects the whole autocomplete response (400) when any single
     # choice name exceeds 100 chars — one rogue filename must not nuke the list.
     root = tmp_path / "audio_output"
-    long_stem = ("Iguana lagarto desayuna con wevo jugo de china del Bueno "
-                 "con pulpa sin pulpa Que! Que! toma mango") + "_to_Juji"
+    long_stem = (
+        "Iguana lagarto desayuna con wevo jugo de china del Bueno "
+        "con pulpa sin pulpa Que! Que! toma mango"
+    ) + "_to_Juji"
     assert len(long_stem) > 100  # guard: the fixture must actually be too long
     _touch(str(root / "Juji" / f"{long_stem}.mp3"))
     _touch(str(root / "Juji" / "short_juji.mp3"))

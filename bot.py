@@ -22,6 +22,7 @@ from geminiCommand import vaplsLogic, indioLogic
 from suggestionsCommand import sugerenciasLogic, sugerenciasVerLogic
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
+import flags as cmdflags
 import analytics
 import apiServer
 from apiServer import startApiServer
@@ -397,6 +398,26 @@ def _track_command(ctx, name, extra=None):
     )
 
 
+async def redirect_cmd(ctx, target_id: int | None) -> bool:
+    """If the command was invoked outside its target channel, redirect.
+
+    Returns True when the invocation was redirected (caller should return
+    early). Sets up an ephemeral defer + notification so the user knows
+    where the response went.
+    """
+    source_id = ctx.channel_id
+    will = bool(target_id and source_id and source_id != target_id)
+    if will:
+        await safe_defer(ctx, ephemeral=True)
+        try:
+            await ctx.followup.send(f"➡️ Ejecutando en <#{target_id}>", ephemeral=True)
+        except Exception:
+            pass
+    else:
+        await safe_defer(ctx)
+    return will
+
+
 @bot.slash_command(
     name="dj", description="Abre el menú del modo DJ en el canal de música"
 )
@@ -413,7 +434,8 @@ async def dj(ctx):
     Async:
         This function is a coroutine and must be awaited.
     """
-    await safe_defer(ctx)
+    if await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID):
+        return
     _track_command(ctx, "dj")
     if ctx.guild is None:
         await ctx.followup.send(
@@ -491,7 +513,8 @@ async def play(
     Async:
         This function is a coroutine and must be awaited.
     """
-    await safe_defer(ctx)
+    if await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID):
+        return
     _track_command(ctx, "play", {"query_length": len(query or "")})
     if not query or not query.strip():
         await ctx.followup.send("decime qué reproducir la próxima", ephemeral=True)
@@ -549,7 +572,8 @@ async def soundpad(
         await ctx.respond(msg, ephemeral=True)
         return
 
-    await safe_defer(ctx)
+    if await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID):
+        return
     _track_command(ctx, "soundpad", {"query_length": len(query or "")})
     await soundpadLogic(ctx, query=query)
 
