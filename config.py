@@ -4,6 +4,7 @@ Values are loaded from environment variables (optionally via .env) at import
 time and shared across modules such as bot.py, playCommand.py, soundpadCommand.py,
 apiServer.py, analytics.py, and geminiClient.py.
 """
+
 import os
 from dotenv import load_dotenv
 
@@ -22,7 +23,7 @@ YT_DLP_POT_BASE_URL = os.getenv("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416")
 # Leave empty or unset to register commands globally (may take up to 1h to propagate).
 _guild_ids_raw = os.getenv("DEBUG_GUILD_IDS", "")
 if _guild_ids_raw:
-    DEBUG_GUILD_IDS = [int(x) for x in _guild_ids_raw.split(',') if x.strip()]
+    DEBUG_GUILD_IDS = [int(x) for x in _guild_ids_raw.split(",") if x.strip()]
 else:
     DEBUG_GUILD_IDS = None
 RAM_THRESHOLD_MB = int(os.getenv("RAM_THRESHOLD_MB", "300"))  # default 300 MiB
@@ -37,6 +38,7 @@ API_HOST = os.getenv("API_HOST", "127.0.0.1")
 API_PORT = int(os.getenv("API_PORT", "8080"))
 API_SECRET = os.getenv("API_SECRET", "")
 
+
 # Google Gemini API (https://aistudio.google.com/apikey) - tier gratuito
 # Soporta una sola key (GEMINI_API_KEY) o un pool comma-separated
 # (GEMINI_API_KEYS) que el cliente rota con failover en HTTP 429.
@@ -46,6 +48,7 @@ def _parse_gemini_keys() -> list[str]:
         return [k.strip() for k in multi.split(",") if k.strip()]
     single = os.getenv("GEMINI_API_KEY", "").strip()
     return [single] if single else []
+
 
 GEMINI_API_KEYS: list[str] = _parse_gemini_keys()
 # Back-compat: many call sites still read GEMINI_API_KEY as the "is configured?"
@@ -80,6 +83,12 @@ INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "4516070974326046
 # 0 = comportamiento clasico (responde en el canal del trigger).
 INDIO_REPLY_CHANNEL_ID = int(os.getenv("INDIO_REPLY_CHANNEL_ID", "1490008278275461280"))
 
+# Hugging Face Inference API for /generarimagen (free tier, no API key needed
+# for inference, just a Hugging Face token). Sign up at huggingface.co and
+# create a read token at https://huggingface.co/settings/tokens.
+# Leave HUGGINGFACE_API_TOKEN empty to disable image generation.
+HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
+
 # Canales donde el bot puede postear mensajes publicos. En cualquier otro canal
 # las respuestas de /vapls salen ephemeral (solo las ve el invocador), para no
 # ensuciar canales que no son los del bot.
@@ -96,7 +105,9 @@ PUBLIC_ALLOWED_CHANNEL_IDS = {
 # zones (main bot ↔ userbot vs userbot ↔ Telegram bridge).
 USERBOT_RECORD_URL = os.getenv("USERBOT_RECORD_URL", "").strip()
 USERBOT_RECORD_SECRET = os.getenv("USERBOT_RECORD_SECRET", "").strip()
-USERBOT_RECORD_DEFAULT_DURATION = int(os.getenv("USERBOT_RECORD_DEFAULT_DURATION", "20"))
+USERBOT_RECORD_DEFAULT_DURATION = int(
+    os.getenv("USERBOT_RECORD_DEFAULT_DURATION", "20")
+)
 USERBOT_RECORD_TRIGGER_TIMEOUT = float(os.getenv("USERBOT_RECORD_TRIGGER_TIMEOUT", "5"))
 
 # Cuántos segundos de inactividad (ni reproduciendo ni pausado) tolera el bot
@@ -114,13 +125,19 @@ SUGGESTIONS_MODEL = os.getenv("SUGGESTIONS_MODEL", "gemini-2.5-flash-lite")
 # transcripción. 👍 = entendió bien (no se loggea nada). ❌ = wake-word
 # falso positivo o transcripción mala (se loggea a un JSONL para debug
 # offline del ASR).
-DECIFRAR_FEEDBACK_ENABLED = os.getenv("DECIFRAR_FEEDBACK_ENABLED", "true").lower() == "true"
+DECIFRAR_FEEDBACK_ENABLED = (
+    os.getenv("DECIFRAR_FEEDBACK_ENABLED", "true").lower() == "true"
+)
 # 1 de cada N transcripciones de voz recibe el par de reacciones.
 DECIFRAR_FEEDBACK_SAMPLE_RATE = int(os.getenv("DECIFRAR_FEEDBACK_SAMPLE_RATE", "3"))
 # Minutos antes de que el sweeper limpie las reacciones de un sample que
 # nadie votó.
-DECIFRAR_FEEDBACK_TIMEOUT_MINUTES = float(os.getenv("DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", "60"))
-DECIFRAR_FALSE_POSITIVES_LOG_PATH = os.getenv("DECIFRAR_FALSE_POSITIVES_LOG_PATH", "data/false_positives.jsonl")
+DECIFRAR_FEEDBACK_TIMEOUT_MINUTES = float(
+    os.getenv("DECIFRAR_FEEDBACK_TIMEOUT_MINUTES", "60")
+)
+DECIFRAR_FALSE_POSITIVES_LOG_PATH = os.getenv(
+    "DECIFRAR_FALSE_POSITIVES_LOG_PATH", "data/false_positives.jsonl"
+)
 
 # Auto-DJ: when the queue empties and Auto-DJ is active, the Indio picks the
 # next song from the YouTube Mix of the last track and posts a suggestion.

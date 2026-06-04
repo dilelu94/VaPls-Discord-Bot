@@ -1,14 +1,13 @@
-"""Image generation via Gemini web UI using Playwright browser automation.
+"""⚠️ DEPRECATED — Image generation via Gemini web UI (Playwright).
 
-Free alternative to the paid Imagen/3.1 Flash Image API. Uses a persisted
-Gmail session (storage_state) to access gemini.google.com's native image
-generation without an API key.
+Replaced by ``huggingfaceImage.py`` (Hugging Face Inference API) because the
+free Gemini tier does not support image generation. Kept in-tree for reference
+only — no longer loaded by the bot.
 
-One-time setup::
-    python setup_gemini_session.py   # log in manually, saves auth file
-
-Then the bot loads ``gemini_auth.json`` at startup and reuses it for every
-``/generarimagen`` command.
+Original docstring:
+> Free alternative to the paid Imagen/3.1 Flash Image API. Uses a persisted
+> Gmail session (storage_state) to access gemini.google.com's native image
+> generation without an API key.
 """
 
 import asyncio

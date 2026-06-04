@@ -30,7 +30,7 @@ import errorHandler
 import geminiKeys
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import webhookLogger
-import geminiImage
+import huggingfaceImage
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
@@ -205,10 +205,6 @@ async def on_ready():
     if _webhook_log_handler is not None:
         _webhook_log_handler.start(asyncio.get_running_loop())
     await bot.sync_commands()
-    try:
-        await geminiImage.init()
-    except Exception:
-        log.exception("geminiImage init failed (image gen unavailable)")
     if _api_runner is None:
         try:
             _api_runner = await startApiServer(bot)
@@ -661,7 +657,7 @@ async def indio(
 
 @bot.slash_command(
     name="generarimagen",
-    description="Genera una imagen con Gemini (gratis, sin API key)",
+    description="Genera una imagen con Hugging Face (gratis, requiere token)",
 )
 async def generarimagen(
     ctx,
@@ -669,14 +665,14 @@ async def generarimagen(
         str, description="Descripción de la imagen que querés generar"
     ),
 ):
-    """Slash command: generate an image via Gemini web UI (browser automation).
+    """Slash command: generate an image via Hugging Face Inference API.
 
     Args:
         ctx: Discord application context.
         prompt: Image description.
 
     Side Effects:
-        Launches a headless browser, generates the image, sends it to Discord,
+        Calls Hugging Face Inference API, sends the image to Discord,
         and deletes the temp file.
 
     Async:
@@ -686,9 +682,16 @@ async def generarimagen(
     if not prompt or not prompt.strip():
         await safe_respond(ctx, "decime qué generar")
         return
+    if not config.HUGGINGFACE_API_TOKEN:
+        await safe_respond(
+            ctx,
+            "❌ El token de Hugging Face no está configurado. "
+            "Avisale al admin para que lo agregue al .env",
+        )
+        return
     await safe_defer(ctx)
     await safeEdit(ctx, "⏳ Generando imagen...")
-    path = await geminiImage.generate(prompt)
+    path = await huggingfaceImage.generate(prompt, config.HUGGINGFACE_API_TOKEN)
     if path is None:
         await safeEdit(ctx, "❌ No pude generar la imagen. Probá de nuevo más tarde.")
         return
@@ -1048,8 +1051,8 @@ async def help_cmd(ctx):
             "memoria larga destilada (rasgos, anécdotas, chistes internos). "
             "También responde por voz cuando lo nombrás en un canal donde "
             "está el userbot.\n"
-            "**/generarimagen** `prompt` — genera una imagen con Gemini "
-            "(gratis, sin API key)."
+            "**/generarimagen** `prompt` — genera una imagen con Hugging Face "
+            "(gratis, requiere token)."
         ),
         inline=False,
     )
@@ -1108,7 +1111,3 @@ if __name__ == "__main__":
         bot.run(config.TOKEN)
     finally:
         analytics.shutdown()
-        try:
-            asyncio.run(geminiImage.close())
-        except Exception:
-            pass

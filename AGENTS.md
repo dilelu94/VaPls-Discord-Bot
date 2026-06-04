@@ -10,6 +10,7 @@ proyecto. Es la **fuente canónica** de instrucciones para asistentes de IA.
 > nunca los symlinks.**
 
 ## 🧠 Skills disponibles
+
 - [`behavioral-testing`](.agents/skills/behavioral-testing/SKILL.md): cómo escribir
   tests en este repo. **Usala siempre que escribas o modifiques tests.**
 
@@ -37,6 +38,7 @@ Sin esto el hook no corre. CI es la última barrera, pero el hook local evita
 que un cambio roto llegue siquiera al servidor remoto.
 
 ## 📚 Documentación
+
 - [Arquitectura](docs/architecture.md)
 - [Configuración](docs/configuration.md)
 - [HTTP API](docs/api.md)
@@ -47,19 +49,22 @@ que un cambio roto llegue siquiera al servidor remoto.
 - [Contribución y docstrings](docs/contributing-docs.md)
 
 ## 📋 Descripción General
+
 **VaPls-Discord-Bot** corre en dos procesos:
+
 - **Main bot**: comandos, playback de audio, soundpad, Gemini, HTTP API y puente con Telegram.
-- **Userbot** (alias *Indio*): transcripción de voz (DAVE/E2EE) con `faster-whisper` y captura de voice-reply para Telegram.
+- **Userbot** (alias _Indio_): transcripción de voz (DAVE/E2EE) con `faster-whisper` y captura de voice-reply para Telegram.
 
 ## 🌐 Servidor de producción (2026-05-30)
-| | |
-|---|---|
-| **Host** | `ubuntu@141.148.84.55` |
-| **OS** | Ubuntu 22.04 aarch64 |
-| **Shape** | Oracle VM.Standard.A1.Flex — 4 OCPU / 24 GB RAM / 4 Gbps NIC |
-| **SSH key (local)** | `/var/home/dilelu/.ssh/vapls` |
-| **Repo path** | `/home/ubuntu/vapls-discord-bot/` |
-| **Services** | `discord-bot.service` (main bot) + `vapls-userbot.service` (userbot) |
+
+|                     |                                                                      |
+| ------------------- | -------------------------------------------------------------------- |
+| **Host**            | `ubuntu@141.148.84.55`                                               |
+| **OS**              | Ubuntu 22.04 aarch64                                                 |
+| **Shape**           | Oracle VM.Standard.A1.Flex — 4 OCPU / 24 GB RAM / 4 Gbps NIC         |
+| **SSH key (local)** | `/var/home/dilelu/.ssh/vapls`                                        |
+| **Repo path**       | `/home/ubuntu/vapls-discord-bot/`                                    |
+| **Services**        | `discord-bot.service` (main bot) + `vapls-userbot.service` (userbot) |
 
 **Migrado desde** `ubuntu@129.80.59.99` (Oracle Linux amd64, instancia E2.1.Micro) el 2026-05-30. El server viejo quedó wipe-eado del bot pero sigue prendido para otros usos.
 
@@ -70,6 +75,7 @@ que queden `active`). El server es un **pure deploy target**: no editar archivos
 a mano ahí. Detalle completo en [docs/operations.md](docs/operations.md#cicd-pipeline).
 
 **Deploy manual (fallback):**
+
 ```bash
 rsync -avz -e "ssh -i /var/home/dilelu/.ssh/vapls" \
   <archivos cambiados> ubuntu@141.148.84.55:/home/ubuntu/vapls-discord-bot/
@@ -78,6 +84,7 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 ```
 
 ## 🛠️ Stack Tecnológico y Dependencias
+
 - **Lenguaje:** Python 3.10+
 - **Discord bot:** `py-cord`
 - **Userbot:** `discord.py-self` + `discord-ext-voice-recv`
@@ -89,7 +96,9 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 - **Descargas:** `yt-dlp`
 
 ## 📂 Arquitectura y Estructura de Archivos
+
 Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture.md)):
+
 - `bot.py`: entrada principal y slash commands.
 - `userbot/bot.py`: transcripción de voz y forwarding opcional.
 - `playCommand.py`: cola de música y yt-dlp.
@@ -101,29 +110,35 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `greeting.py` / `users.py`: saludos.
 
 ## 🔬 Detalles de Implementación Clave
+
 ### 1) Parche de DAVE en userbot
+
 El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 `dave.decrypt()` después del AEAD, permitiendo decodificar audio en canales E2EE.
 
 ### 2) Pipeline de transcripción (TranscriberSink)
+
 1. Recibe PCM desde `voice_recv`.
 2. Convierte a mono y re-samplea a 16 kHz.
 3. Ejecuta `faster-whisper` (modelo `small`, `int8`, CPU threads = vCPU count) y genera texto final.
 4. `on_transcript` publica en un canal de texto y/o forwardea por HTTP al main bot (`/indio` para wake word, opcional `/message` con `ENABLE_HTTP_FORWARD`).
 
 ### 3) Playback de música (GuildPlayer)
+
 `/play` descarga con yt-dlp, reproduce con FFmpeg y mantiene cola/estado por
 guild con pre-descarga en segundo plano.
 
 ## 📡 Integración con el bot de Telegram
 
 El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por header `X-API-Secret`) que un bot de Telegram externo usa como puente. Endpoints relevantes:
+
 - `POST /message` — publica texto en un canal de Discord.
 - `POST /play-audio` — descarga un audio de Telegram y lo reproduce en el canal de voz de Discord. Auto-elige canal (preferencia: donde está el Indio; fallback: el más poblado). Acepta un `replyCallbackUrl` opcional.
 - `POST /indio` — invoca al Indio con una pregunta (memoria corta + lore destilado).
 - `GET /status` `GET /members` `GET /user/{id}` `GET /queue` `GET /playing` — read-only.
 
 **Voice-reply flow (Discord → Telegram):**
+
 1. Telegram bridge llama `POST /play-audio` con `replyCallbackUrl=<url Telegram>`.
 2. Main bot reproduce el audio en el canal de voz.
 3. Al terminar, si `USERBOT_RECORD_URL` está seteado, el main bot le pide al **userbot** (loopback `POST 127.0.0.1:8081/record`) que grabe hasta `USERBOT_RECORD_DEFAULT_DURATION` segundos del mismo canal.
@@ -134,6 +149,7 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad del **userbot real** (no con la del bot vapls), llama `POST 127.0.0.1:8081/say` del userbot con `INDIO_RELAY_SECRET`. Útil para que las respuestas autom. en chat parezcan venir del Indio "real".
 
 ## 🛠️ Comandos de Discord (Slash Commands)
+
 - `/play`: reproduce música de YouTube.
 - `/soundpad`: panel de clips locales.
 - `/vapls`: respuestas Gemini sin memoria.
@@ -147,7 +163,7 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 
 El detector de wake-word del userbot corre VOSK con una **gramática restringida**
 (`KaldiRecognizer` con una lista cerrada de frases). Mecanismo clave: VOSK
-*colapsa* todo el audio hacia la entrada más parecida de esa lista. Si la lista
+_colapsa_ todo el audio hacia la entrada más parecida de esa lista. Si la lista
 es muy chica, el ruido y la charla ambiente se fuerzan hacia las frases de
 wake-word → falsos positivos. Si la lista es más grande (más "decoys": muletillas,
 interrogativos, artículos, verbos comunes), VOSK tiene dónde mandar ese audio y
@@ -160,12 +176,12 @@ userbot). **El preset es in-memory y se resetea al default (4) al reiniciar el
 userbot.** Implementación en `userbot/bot.py` (`_PRESETS`, `_build_vosk_grammar`,
 `_set_sensitivity`, `_active_wake_patterns`); comando en `bot.py`.
 
-| Preset | Invocación | Grammar pool | Idea |
-|---|---|---|---|
-| **1** | `che/que/eh indio` + verbos | chico (solo wake-words + decoys mínimos) | El más sensible. |
-| **2** | solo `che indio` + verbos | chico | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`). |
-| **3** | `che/que/eh indio` + verbos | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal. |
-| **4** (default) | solo `che indio` + verbos (igual que preset 2) | chico (igual que preset 2) | Agrega una segunda capa de verificación post-VOSK: corre un pase corto de Whisper sobre el prebuffer (región del wake-word) y descarta el evento si Whisper no detecta la palabra `indio`. Estricto — invocaciones donde Whisper no escucha `indio` se descartan sin correr la transcripción completa. |
+| Preset          | Invocación                                     | Grammar pool                                                                                      | Idea                                                                                                                                                                                                                                                                                                   |
+| --------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **1**           | `che/que/eh indio` + verbos                    | chico (solo wake-words + decoys mínimos)                                                          | El más sensible.                                                                                                                                                                                                                                                                                       |
+| **2**           | solo `che indio` + verbos                      | chico                                                                                             | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`).                                                                                                                                                                                       |
+| **3**           | `che/que/eh indio` + verbos                    | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal.                                                                                                                                                  |
+| **4** (default) | solo `che indio` + verbos (igual que preset 2) | chico (igual que preset 2)                                                                        | Agrega una segunda capa de verificación post-VOSK: corre un pase corto de Whisper sobre el prebuffer (región del wake-word) y descarta el evento si Whisper no detecta la palabra `indio`. Estricto — invocaciones donde Whisper no escucha `indio` se descartan sin correr la transcripción completa. |
 
 **Tuning manual del preset 3:** los bloques de wake-words y filler en
 `userbot/bot.py` están marcados para editarse a mano. Cuando VOSK colapse mal una
@@ -178,6 +194,7 @@ imprimen el texto que VOSK escuchó en cada disparo para guiar ese ajuste.
 El usuario corre **lsyncd** en su PC para mantener `audio_output/` del server espejado con `/home/dilelu/repos/RVC_WebUI/Output/` (donde RVC genera clips de voz). Sin esto, los clips nuevos no llegan al soundpad.
 
 **Config (local, gitignored):** dos archivos en la raíz del repo, ambos con paths absolutos del usuario:
+
 - `lsyncd_rvc.lua` — config de lsyncd (source/target/ssh-key).
 - `lsyncd-rvc.service` — systemd user unit que corre `lsyncd -nodaemon lsyncd_rvc.lua`.
 
@@ -191,6 +208,7 @@ delete = true   -- borra del server lo que se borró en local
 ```
 
 **Instalación en una PC fresh:** symlinkear el unit a `~/.config/systemd/user/` y habilitarlo. Linger se activa para que arranque al boot sin login.
+
 ```bash
 ln -s "$(pwd)/lsyncd-rvc.service" ~/.config/systemd/user/lsyncd-rvc.service
 loginctl enable-linger "$USER"   # solo la primera vez
@@ -199,6 +217,7 @@ systemctl --user enable --now lsyncd-rvc.service
 ```
 
 Comandos útiles:
+
 ```bash
 systemctl --user status lsyncd-rvc.service
 systemctl --user restart lsyncd-rvc.service
@@ -207,35 +226,63 @@ journalctl --user -u lsyncd-rvc.service -f
 
 Si cambia el server / la key SSH, hay que editar `lsyncd_rvc.lua` y `systemctl --user restart lsyncd-rvc.service`.
 
+## 🖼️ Generación de imágenes (/generarimagen)
+
+El comando `/generarimagen` genera imágenes usando la **Hugging Face Inference
+API** (free tier). El módulo que lo implementa es `huggingfaceImage.py`.
+
+**Setup:**
+
+1. Crear cuenta en https://huggingface.co/join
+2. Ir a Settings → Access Tokens → "New token" (tipo **read**)
+3. Poner el token en `.env`: `HUGGINGFACE_API_TOKEN=tu_token`
+
+El módulo usa `black-forest-labs/FLUX.1-dev` con fallback a
+`stabilityai/stable-diffusion-xl-base-1.0`. Tiene reintentos automáticos
+cuando el modelo está cold-loading (común en el free tier).
+
+**Playwright (deprecado):** El intento anterior usaba `geminiImage.py`
+(Playwright + Gemini web UI) pero la UI gratuita de Gemini no admite
+generación de imágenes. El archivo y `setup_gemini_session.py` se quedan
+en el árbol como referencia pero ya no se cargan desde `bot.py`.
+
 ## ⚠️ Errores conocidos y workarounds
 
 ### 1) `Client.__init__() missing 'intents'` en el userbot (provisión fresh)
+
 `discord-ext-voice-recv` arrastra `discord.py` como dep transitiva y le gana el namespace `discord` a `discord.py-self` después de `pip install -r userbot/requirements.txt`. La versión nueva de `discord.py` requiere `intents=...`, lo cual rompe `discord.Client(chunk_guilds_at_startup=False)` en `userbot/bot.py`.
 
 **Workaround (ya bakeado en `deploy.sh`):**
+
 ```bash
 pip install -r userbot/requirements.txt
 pip uninstall -y discord.py 2>/dev/null || true
 pip install --force-reinstall --no-deps \
   "discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self"
 ```
+
 Si encontrás el error a futuro: re-correr los 3 comandos en el venv del userbot.
 
 ### 2) Modelo `faster-whisper` se descarga en el primer arranque
+
 La primera vez que `vapls-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado).
 
 ### 3) DAVE patch en el userbot
+
 El userbot monkey-patchea `PacketDecryptor._decrypt_rtp_*` para aplicar `dave.decrypt()` después del AEAD. **No eliminar** salvo cambio claro en la API de Discord (logs: `"DAVE decrypt monkey-patch installed"`). Si Discord cambia el protocolo DAVE, el userbot queda recibiendo audio cifrado que no puede transcribir.
 
 ### 4) `audio_output/` no está en el repo
+
 El soundpad usa `audio_output/` (configurable con `CUSTOM_AUDIO_PATH`). En el server lo poblá lsyncd (ver sección 📁). En clon nuevo, el directorio queda vacío hasta que lsyncd corra desde tu PC.
 
 ### 5) FFmpeg estático amd64 vs arm64
+
 El branch `dnf` de `deploy.sh` baja un binario estático según `uname -m` (`amd64` o `arm64`). En Ubuntu/Debian usa `apt install ffmpeg` directamente. Si agregás soporte para otra arch, actualizá ambos branches.
 
 ## 🧪 Testing
+
 Los tests viven en `tests/` y corren con **pytest** (+ `pytest-asyncio`). La
-filosofía es testear *comportamiento observable*, no detalle de implementación:
+filosofía es testear _comportamiento observable_, no detalle de implementación:
 se mockea solo en los bordes reales (Discord, la API HTTP de Gemini, PostHog, el
 filesystem) y se asienta sobre los resultados (qué ve el usuario, qué estado
 queda), no sobre el texto exacto ni los conteos de llamadas — así el código se
@@ -257,9 +304,11 @@ Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
 `soundpadCommand`.
 
 ## 📜 Doc generation
+
 Sphinx + napoleon recomendado. Ver [docs/contributing-docs.md](docs/contributing-docs.md).
 
 ## 💡 Guía de Modificación
+
 1. **Tests primero (o junto al cambio):** seguí la skill `behavioral-testing`. No
    marques una tarea como completa sin tests verdes.
 2. **Mantener DAVE patch:** No eliminar el patch en `userbot/bot.py` salvo que
