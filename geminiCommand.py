@@ -3115,18 +3115,18 @@ async def indioLogic(
     reply_handle = None
     try:
         question_header = _format_user_header(ctx, pregunta).rstrip()
-        # Si hubo retry y respondemos en el canal del slash, el header reemplaza
-        # el aviso de rotación que quedó en el deferred. El _post sigue siendo
-        # el fallback (cuando hay override o cuando el edit falla).
+        # Cuando respondemos en el canal del slash, el header edita el
+        # deferred ("thinking..." o aviso de rotación). _post es el fallback
+        # cuando hay override o cuando el edit falla.
         question_msg = None
-        if retry_state["had_retry"] and target_channel is None:
+        if target_channel is None:
             try:
                 question_msg = await ctx.interaction.edit_original_response(
                     content=question_header
                 )
             except Exception:
                 logger.debug(
-                    "indio: edit header onto aviso failed, falling back", exc_info=True
+                    "indio: edit original response failed, falling back", exc_info=True
                 )
                 question_msg = None
         if question_msg is None:
