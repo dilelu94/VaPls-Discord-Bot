@@ -2401,7 +2401,9 @@ _INDIO_PREFIX_RE = re.compile(
 # forbid newlines / nested brackets so we don't eat real bracketed content in
 # the middle of a sentence.
 _LEADING_SPEAKER_PREFIX_RE = re.compile(
-    r"^\s*[\[\(]\s*[^\]\)\n]{1,40}\s*[\]\)]\s*[:\-—]\s*",
+    r"^\s*[\[\(]\s*[^\]\)
+_LITERAL_CMD_RE = re.compile(r"/(play|soundpad)\s+(.+)$", re.MULTILINE | re.IGNORECASE)
+\n]{1,40}\s*[\]\)]\s*[:\-—]\s*",
 )
 
 
@@ -3032,23 +3034,24 @@ async def indioLogic(
     opts_msg_id = None
     reply_handle = None
     try:
-        # Intercept literal /play commands from the Indio to trigger the real slash command
-        _stripped_reply = clean_reply.strip()
-        if _stripped_reply.startswith("/play ") or _stripped_reply.startswith("/soundpad "):
-            _parts = _stripped_reply.split(" ", 1)
-            _cmd = _parts[0][1:]
-            _query = _parts[1] if len(_parts) > 1 else ""
-            _action = "PLAY_MUSIC" if _cmd == "play" else "PLAY_SOUND"
+        # Intercept literal commands (safety net for when it doesn't use the tool)
+        _cmd_match = _LITERAL_CMD_RE.search(clean_reply)
+        if _cmd_match:
+            _cmd_name = _cmd_match.group(1).lower()
+            _cmd_query = _cmd_match.group(2).strip()
+            _action_type = "PLAY_MUSIC" if _cmd_name == "play" else "PLAY_SOUND"
             _spawn(
                 _dispatch_indio_actions(
                     ctx.bot,
                     getattr(ctx.guild, "id", None),
-                    [(_action, _query)],
+                    [(_action_type, _cmd_query)],
                     requester_member=ctx.author,
                 )
             )
-            # Avoid sending the literal text and saving it to history as a chat turn
-            return
+            clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
+            if not clean_reply:
+                return
+
         question_header = _format_user_header(ctx, pregunta).rstrip()
         # Cuando respondemos en el canal del slash, el header edita el
         # deferred ("thinking..." o aviso de rotación). _post es el fallback
@@ -3483,22 +3486,23 @@ async def indioFromVoice(
     # quiere header arriba — la lista de opciones tiene que ir limpia para
     # que las reacciones queden en la primera linea.
     
-    # Intercept literal /play commands from the Indio to trigger the real slash command
-    _stripped_reply = clean_reply.strip()
-    if _stripped_reply.startswith("/play ") or _stripped_reply.startswith("/soundpad "):
-        _parts = _stripped_reply.split(" ", 1)
-        _cmd = _parts[0][1:]
-        _query = _parts[1] if len(_parts) > 1 else ""
-        _action = "PLAY_MUSIC" if _cmd == "play" else "PLAY_SOUND"
+    # Intercept literal commands (safety net)
+    _cmd_match = _LITERAL_CMD_RE.search(clean_reply)
+    if _cmd_match:
+        _cmd_name = _cmd_match.group(1).lower()
+        _cmd_query = _cmd_match.group(2).strip()
+        _action_type = "PLAY_MUSIC" if _cmd_name == "play" else "PLAY_SOUND"
         _spawn(
             _dispatch_indio_actions(
                 bot,
                 guild_id,
-                [(_action, _query)],
+                [(_action_type, _cmd_query)],
                 requester_member=member,
             )
         )
-        return
+        clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
+        if not clean_reply:
+            return
     if redirected and user_id and not vote_open:
         lines = (pregunta or "").splitlines() or [""]
         quoted = "\n".join(f"> {ln}" for ln in lines)
