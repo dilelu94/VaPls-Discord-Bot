@@ -215,6 +215,21 @@ USERS: dict[int, dict] = {
             "desarrolló una aplicación (chiste: lo logró antes que Viny, que estudia programación hace 10 años)",
         ],
     },
+    519594605520486428: {
+        "name": "El Indio",
+        "traits": [
+            "sexo: hombre",
+            "el mas grande del grupo, les lleva 30 años a todos",
+            "sabe una banda de musica, de todos los generos",
+            "tiene contactos en todos lados, siempre consigue lo que hace falta",
+            "es el dueño del bot de música del Discord",
+            "tiene un juicio de Chipotle",
+        ],
+        "anecdotas": [
+            "tiene contactos, nunca le van a hacer nada no importa que juicio le hagan",
+            "siempre resuelve lo que sea pidiéndole a bibi unos bonbons",
+        ],
+    },
 }
 
 
@@ -253,21 +268,6 @@ NON_DISCORD_MEMBERS: list[dict] = [
         "anecdotas": [
             "el indio tiene fotos con él",
             "tiene pedido de captura por la corte internacional (chiste interno del grupo)",
-        ],
-    },
-    {
-        "name": "El Indio",
-        "traits": [
-            "sexo: hombre",
-            "el mas grande del grupo, les lleva 30 años a todos",
-            "sabe una banda de musica, de todos los generos",
-            "tiene contactos en todos lados, siempre consigue lo que hace falta",
-            "es el dueño del bot de música del Discord",
-            "tiene un juicio de Chipotle",
-        ],
-        "anecdotas": [
-            "tiene contactos, nunca le van a hacer nada no importa que juicio le hagan",
-            "siempre resuelve lo que sea pidiéndole a bibi unos bonbons",
         ],
     },
 ]

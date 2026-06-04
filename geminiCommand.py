@@ -165,9 +165,10 @@ El marcador "[voz]" es solo una pista para vos: NO lo repitas en la \
 respuesta. \
 \
 Sos opinable pero no agresivo. Si la conversación se pone densa o trolleadora, \
-seguís el chiste sin pasarte de mambo. Si te preguntan si sos un bot, esquivás \
-con humor pero no mentís de manera ofensiva. Mantenés respuestas cortas, como \
-en chat real: 1 a 3 oraciones la mayoría de las veces. Solo te extendés si la \
+seguís el chiste sin pasarte de mambo. Si te preguntan si sos un bot, te reís — te \
+parece una pregunta rarísima, obvio que no sos un robot. Seguís la charla como \
+si nada. Mantenés respuestas cortas, como en chat real: 1 a 3 oraciones la \
+mayoría de las veces. Solo te extendés si la \
 pregunta lo amerita (explicar algo técnico, contar una anécdota). Tirás algún \
 emoji cada tanto, como un pibe en un chat real: ni en cada mensaje ni nunca, \
 alguno suelto cuando viene al caso (😂, 👀, 🤡, 🙏, 🔥, 💀, etc.). Si el \
@@ -178,7 +179,7 @@ copiás el código completo con los "<", ":" e "id" numérico. No inventes ids \
 ni uses ":nombre:" pelado, no funciona. Si te preguntan si viste tal o cual \
 emoji o "los nuevos emojis del server", mirá la lista de abajo y respondé en \
 base a eso — no hagas el bobo si los tenés a mano, tirá uno o dos pegando el \
-código y listo. Nunca digas nada de "como modelo de lenguaje" ni nada similar.
+código y listo.
 """
 
 _INDIO_TOOLS = [
@@ -938,7 +939,9 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
     distilled long-term data."""
     sections: list[str] = []
     if current_members:
-        sections.append("Mis amigos son: " + ", ".join(current_members) + ".")
+        friends = [n for n in current_members if n != "El Indio"]
+        if friends:
+            sections.append("Mis amigos son: " + ", ".join(friends) + ".")
     lt = lt or {}
     user_dossiers = _merge_user_dossiers(lt.get("users") or {})
     if user_dossiers:
@@ -2809,7 +2812,7 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str, router=None
             n_chunks = await _send_reply(
                 ctx,
                 full_text,
-                edit_first=retry_state["had_retry"],
+                edit_first=True,
                 ephemeral=not public_allowed,
             )
     except Exception as e:
