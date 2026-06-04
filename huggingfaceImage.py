@@ -54,6 +54,13 @@ async def _try_model(model: str, prompt: str, token: str) -> Optional[bytes]:
     headers = {"Authorization": f"Bearer {token}"}
     for attempt in range(MAX_RETRIES):
         try:
+            logger.info(
+                "intentando %s, intento %d/%d con prompt: %.100s",
+                model,
+                attempt + 1,
+                MAX_RETRIES,
+                prompt,
+            )
             async with aiohttp.ClientSession() as s:
                 async with s.post(
                     url,
