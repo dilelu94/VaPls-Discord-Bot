@@ -334,7 +334,31 @@ _INDIO_TOOLS = [
             "required": ["prompt"],
         },
     },
+    {
+        "name": "edit_image",
+        "description": (
+            "Crear una imagen parecida o editar la imagen proporcionada por el usuario según sus indicaciones. "
+            "Úsala únicamente cuando el usuario responda a una imagen existente (que tú puedes ver) "
+            "y ordene explícitamente editarla, modificarla, o hacer una imagen parecida a esa "
+            "(ej: 'haceme una imagen como esta pero con...', 'editame esta foto...'). "
+            "Debes redactar un prompt en español muy descriptivo y detallado indicando los cambios "
+            "o el estilo deseado para la nueva imagen."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "prompt": {
+                    "type": "STRING",
+                    "description": (
+                        "El prompt detallado en español que describe los cambios o la nueva imagen basada en la original."
+                    ),
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
 ]
+
 
 
 _STORED_MSG_MAX_CHARS = 1500
@@ -1327,6 +1351,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "stop_music": ("STOP_MUSIC", None),
     "dj_mode": ("DJ_MODE", None),
     "generate_image": ("GENERATE_IMAGE", "prompt"),
+    "edit_image": ("EDIT_IMAGE", "prompt"),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -1337,7 +1362,9 @@ _ACTION_FALLBACK_TEXT = {
     "STOP_MUSIC": "⏹️ Listo",
     "DJ_MODE": "🎧 Modo DJ",
     "GENERATE_IMAGE": "🎨 Generando imagen...",
+    "EDIT_IMAGE": "🎨 Editando imagen...",
 }
+
 _ACTION_ARG_MAX_CHARS = 200
 
 
@@ -1639,6 +1666,7 @@ _ACTION_SUCCESS_SUFFIX = {
     "RESUME_MUSIC": "listo ✅",
     "STOP_MUSIC": "listo ✅",
     "GENERATE_IMAGE": "listo 🎨",
+    "EDIT_IMAGE": "listo 🎨",
 }
 
 # When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
@@ -1652,7 +1680,9 @@ _ACTION_RELAY_SUCCESS_SUFFIX = {
     "PLAY_MUSIC": "le pasé el tema al /play 🎵",
     "PLAY_SOUND": "le pasé el clip al /soundpad 🔊",
     "GENERATE_IMAGE": "le pasé el prompt al /generarimagen 🎨",
+    "EDIT_IMAGE": "listo 🎨",
 }
+
 
 
 # Per-guild lock so two concurrent indio dispatches in the same guild
@@ -1696,7 +1726,9 @@ _MUSIC_STATUS_PREFIX = {
     "STOP_MUSIC": "stop",
     "DJ_MODE": "dj_mode",
     "GENERATE_IMAGE": "image",
+    "EDIT_IMAGE": "image_edit",
 }
+
 
 
 def _gate_music_action(action: str, member) -> Optional[str]:
@@ -1730,7 +1762,11 @@ async def _dispatch_indio_actions(
     reply_handle=None,
     reply_text: str = "",
     requester_member: "Optional[discord.Member]" = None,
+    *,
+    attachment_urls: Optional[list[dict]] = None,
+    source_message_id: Optional[int] = None,
 ) -> list[str]:
+
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
     real "/play" / "/soundpad" slash commands in the chat. Both land in
@@ -1867,7 +1903,6 @@ async def _dispatch_indio_actions(
                                     content=f"{author_mention}, acá está la imagen que me pediste para: **{arg}**",
                                     file=discord.File(path, filename="imagen.png"),
                                 )
-                                import os
                                 try:
                                     os.unlink(path)
                                 except Exception:
@@ -1881,7 +1916,106 @@ async def _dispatch_indio_actions(
                             msg = f"fallback error: {e}"
                     statuses.append(f"image: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio GENERATE_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
+                elif action == "EDIT_IMAGE":
+                    target_cid = getattr(reply_handle, "channel_id", None) or config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+                    
+                    if not attachment_urls:
+                        ok = False
+                        msg = "no image to edit"
+                        try:
+                            target_channel = bot.get_channel(target_cid)
+                            if target_channel is None:
+                                target_channel = await bot.fetch_channel(target_cid)
+                            await target_channel.send("❌ Tenés que responder a un mensaje con una imagen para que la pueda editar.")
+                        except Exception:
+                            pass
+                    else:
+                        images = [
+                            u for u in attachment_urls
+                            if u.get("mime_type", "").startswith("image/")
+                        ]
+                        if not images:
+                            ok = False
+                            msg = "no image in attachments"
+                            try:
+                                target_channel = bot.get_channel(target_cid)
+                                if target_channel is None:
+                                    target_channel = await bot.fetch_channel(target_cid)
+                                await target_channel.send("❌ El mensaje al que respondiste no tiene ninguna imagen válida.")
+                            except Exception:
+                                pass
+                        else:
+                            img = images[0]
+                            os.makedirs("image_cache", exist_ok=True)
+                            
+                            suffix = os.path.splitext(img.get("filename", "input.png"))[1] or ".png"
+                            input_path = f"image_cache/input_{source_message_id or 'temp'}{suffix}"
+                            
+                            download_ok = False
+                            try:
+                                async with aiohttp.ClientSession() as sess:
+                                    async with sess.get(img["url"], timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                        if resp.status == 200:
+                                            with open(input_path, "wb") as f:
+                                                f.write(await resp.read())
+                                            download_ok = True
+                            except Exception as e:
+                                logger.exception("Failed to download replied image for editing")
+                                ok = False
+                                msg = f"download failed: {e}"
+                                
+                            if download_ok:
+                                try:
+                                    import huggingfaceImage
+                                    import discord
+                                    
+                                    output_path = await huggingfaceImage.generate_img2img(
+                                        arg, input_path, config.HUGGINGFACE_API_TOKEN
+                                    )
+                                    if output_path:
+                                        target_channel = bot.get_channel(target_cid)
+                                        if target_channel is None:
+                                            target_channel = await bot.fetch_channel(target_cid)
+                                        author_mention = f"<@{requester_member.id}>" if requester_member else "Alguien"
+                                        
+                                        await target_channel.send(
+                                            content=f"{author_mention}, acá está la imagen editada para: **{arg}**",
+                                            file=discord.File(output_path, filename="imagen_editada.png"),
+                                        )
+                                        
+                                        try:
+                                            os.unlink(output_path)
+                                        except Exception:
+                                            pass
+                                        ok = True
+                                        msg = "success"
+                                    else:
+                                        ok = False
+                                        msg = "generation failed"
+                                except Exception as e:
+                                    logger.exception("HF image-to-image generation failed")
+                                    ok = False
+                                    msg = str(e)
+                                    try:
+                                        target_channel = bot.get_channel(target_cid)
+                                        if target_channel is None:
+                                            target_channel = await bot.fetch_channel(target_cid)
+                                        error_detail = str(e)
+                                        if "402" in error_detail or "Pago Requerido" in error_detail:
+                                            await target_channel.send(error_detail)
+                                        else:
+                                            await target_channel.send(f"❌ Error al editar la imagen: {e}")
+                                    except Exception:
+                                        pass
+                                finally:
+                                    try:
+                                        os.unlink(input_path)
+                                    except Exception:
+                                        pass
+                    statuses.append(f"image_edit: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio EDIT_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "DJ_MODE":
+
                     # Activate Auto-DJ + post the panel — same handler as /dj.
                     # Use the channel where the Indio just replied so the panel
                     # shows up next to the conversation, not in a fixed channel.
@@ -3261,8 +3395,11 @@ async def indioLogic(
                 reply_handle=reply_handle,
                 reply_text=clean_reply,
                 requester_member=ctx.author,
+                attachment_urls=None,
+                source_message_id=None,
             )
         )
+
 
     # Turnos que dispararon una funcion (play_music, play_sound, etc.) no se
     # guardan en memoria: son mensajes operativos, no conversacionales, y
@@ -3700,8 +3837,11 @@ async def indioFromVoice(
                 reply_handle=reply_handle,
                 reply_text=clean_reply,
                 requester_member=member,
+                attachment_urls=attachment_urls,
+                source_message_id=source_message_id,
             )
         )
+
 
     # No guardar mensajes que activaron una funcion (play_music, etc.) ni
     # transcripciones de voz: son mensajes operativos que contaminan el historial

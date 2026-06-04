@@ -21,9 +21,11 @@ logger = logging.getLogger("bot.huggingface.image")
 
 DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
 FALLBACK_MODEL = "stabilityai/stable-diffusion-3-medium-diffusers"
+IMG2IMG_MODEL = "Qwen/Qwen-Image-Edit"
 MAX_FILE_SIZE = 8 * 1024 * 1024
 TIMEOUT = 60
 MAX_RETRIES = 5
+
 
 
 async def _refine_prompt_with_gemini(prompt: str) -> str:
@@ -101,6 +103,55 @@ async def generate(prompt: str, token: str) -> Optional[str]:
         os.close(fd)
     logger.info("imagen guardada en %s (%d bytes)", path, len(data))
     return path
+
+
+async def generate_img2img(prompt: str, init_image_path: str, token: str) -> Optional[str]:
+    """Generates an edited image from an input image and prompt via Hugging Face Inference Providers.
+
+    Uses Qwen/Qwen-Image-Edit by default.
+    """
+    if not token:
+        logger.error("HUGGINGFACE_API_TOKEN no configurado")
+        return None
+
+    refined_prompt = await _refine_prompt_with_gemini(prompt)
+
+    try:
+        from huggingface_hub import AsyncInferenceClient
+        client = AsyncInferenceClient(api_key=token)
+        
+        logger.info(
+            "intentando img2img con modelo %s y prompt: %.100s",
+            IMG2IMG_MODEL,
+            refined_prompt,
+        )
+        
+        image = await client.image_to_image(
+            image=init_image_path,
+            prompt=refined_prompt,
+            model=IMG2IMG_MODEL
+        )
+        
+        os.makedirs("image_cache", exist_ok=True)
+        fd, path = tempfile.mkstemp(suffix=".png", prefix="hfi2i_", dir="image_cache")
+        try:
+            image.save(path, format="PNG")
+        finally:
+            os.close(fd)
+            
+        logger.info("imagen img2img guardada en %s", path)
+        return path
+    except Exception as e:
+        err_msg = str(e)
+        if "402" in err_msg or "Payment Required" in err_msg or "depleted your monthly included credits" in err_msg:
+            logger.error("Error 402 en Hugging Face: Créditos insuficientes para Inference Providers.")
+            raise RuntimeError(
+                "❌ Pago Requerido (402): Tu token de Hugging Face se quedó sin créditos para proveedores de inferencia. "
+                "Avisale al admin para recargar créditos o usar otro token."
+            ) from e
+        logger.exception("huggingfaceImage.generate_img2img falló")
+        raise e
+
 
 
 async def _try_model(model: str, prompt: str, token: str) -> Optional[bytes]:

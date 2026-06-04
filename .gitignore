@@ -35,3 +35,8 @@ htmlcov/
 lsyncd*.lua
 lsyncd*.service
 lsyncd.status
+
+# Cached image attachments for image-to-image
+image_cache/*
+!image_cache/.gitkeep
+
