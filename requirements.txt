@@ -18,6 +18,4 @@ aiohttp>=3.9
 # The marker is a no-op on <=3.12 where the stdlib module still exists.
 audioop-lts; python_version >= "3.13"
 
-# Image generation via Hugging Face Inference API (free tier).
-huggingface_hub
 

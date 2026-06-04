@@ -1970,7 +1970,7 @@ async def _dispatch_indio_actions(
                                     import discord
                                     
                                     output_path = await huggingfaceImage.generate_img2img(
-                                        arg, input_path, config.HUGGINGFACE_API_TOKEN
+                                        arg, input_path
                                     )
                                     if output_path:
                                         target_channel = bot.get_channel(target_cid)

@@ -11,39 +11,29 @@ import geminiCommand
 from geminiCommand import _dispatch_indio_actions
 
 
-class FakePILImage:
-    """Fake PIL Image returned by AsyncInferenceClient.image_to_image."""
-    def __init__(self):
-        self.saved_path = None
-        self.save_called = False
+class FakeHTTPResponse:
+    def __init__(self, status=200, data=b"fake-image-bytes-data", text_data=""):
+        self.status = status
+        self._data = data
+        self._text_data = text_data
 
-    def save(self, path, format="PNG"):
-        self.save_called = True
-        self.saved_path = path
-        # Write dummy content so the file exists on disk
-        with open(path, "w") as f:
-            f.write("fake-img2img-output-data")
+    async def __aenter__(self):
+        return self
 
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        return False
 
-@pytest.fixture
-def mock_inference_client(monkeypatch):
-    """Fixture to mock AsyncInferenceClient."""
-    fake_client = MagicMock()
-    fake_client.image_to_image = AsyncMock()
-    
-    class FakeClientClass:
-        def __init__(self, api_key):
-            self.api_key = api_key
-        def __getattr__(self, name):
-            return getattr(fake_client, name)
+    async def read(self):
+        return self._data
 
-    monkeypatch.setattr("huggingface_hub.AsyncInferenceClient", FakeClientClass)
-    return fake_client
+    async def text(self):
+        return self._text_data or self._data.decode("utf-8", errors="ignore")
 
 
 @pytest.fixture(autouse=True)
-def default_token(monkeypatch):
-    monkeypatch.setattr(config, "HUGGINGFACE_API_TOKEN", "valid-token", raising=False)
+def default_config(monkeypatch):
+    monkeypatch.setattr(config, "CLOUDFLARE_ACCOUNT_ID", "valid-account-id", raising=False)
+    monkeypatch.setattr(config, "CLOUDFLARE_API_TOKEN", "valid-api-token", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -57,9 +47,20 @@ def mock_refine_prompt(monkeypatch):
 # Low-level generate_img2img Tests
 # ==============================================================================
 
-async def test_generate_img2img_success(mock_inference_client):
-    fake_img = FakePILImage()
-    mock_inference_client.image_to_image.return_value = fake_img
+async def test_generate_img2img_success(monkeypatch):
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def post(self, url, **kwargs):
+            assert "api.cloudflare.com" in url
+            assert kwargs["headers"]["Authorization"] == "Bearer valid-api-token"
+            assert "prompt" in kwargs["json"]
+            assert "image_b64" in kwargs["json"]
+            return FakeHTTPResponse(status=200, data=b"generated-output-image-bytes")
+
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
 
     # Create dummy input image
     input_path = "image_cache/test_input.png"
@@ -69,16 +70,19 @@ async def test_generate_img2img_success(mock_inference_client):
 
     try:
         out_path = await huggingfaceImage.generate_img2img(
-            prompt="futuristic sports car",
-            init_image_path=input_path,
-            token="valid-token"
+            prompt="make it blue",
+            init_image_path=input_path
         )
 
         assert out_path is not None
         assert os.path.exists(out_path)
-        assert "hfi2i_" in out_path
-        assert fake_img.save_called
+        assert "cfi2i_" in out_path
         
+        # Verify saved contents
+        with open(out_path, "rb") as f:
+            saved_bytes = f.read()
+        assert saved_bytes == b"generated-output-image-bytes"
+
         # Cleanup
         if os.path.exists(out_path):
             os.unlink(out_path)
@@ -87,72 +91,74 @@ async def test_generate_img2img_success(mock_inference_client):
             os.unlink(input_path)
 
 
-async def test_generate_img2img_payment_required_402(mock_inference_client):
-    # Simulate a 402 Payment Required error from Inference Provider
-    mock_inference_client.image_to_image.side_effect = Exception(
-        "402 Client Error: Payment Required for url: ..."
-    )
+async def test_generate_img2img_missing_config(monkeypatch):
+    monkeypatch.setattr(config, "CLOUDFLARE_ACCOUNT_ID", "", raising=False)
 
     with pytest.raises(RuntimeError) as exc_info:
         await huggingfaceImage.generate_img2img(
-            prompt="futuristic sports car",
-            init_image_path="dummy.png",
-            token="valid-token"
+            prompt="make it blue",
+            init_image_path="dummy.png"
         )
-    assert "Pago Requerido" in str(exc_info.value)
-    assert "créditos" in str(exc_info.value)
+    assert "Configuración Faltante" in str(exc_info.value)
+    assert "CLOUDFLARE_ACCOUNT_ID" in str(exc_info.value)
 
 
-async def test_generate_img2img_missing_token():
-    out_path = await huggingfaceImage.generate_img2img(
-        prompt="some prompt",
-        init_image_path="dummy.png",
-        token=""
-    )
-    assert out_path is None
+async def test_generate_img2img_api_failure(monkeypatch):
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        def post(self, url, **kwargs):
+            return FakeHTTPResponse(status=400, text_data="Bad Request Error")
+
+    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
+
+    # Create dummy input image
+    input_path = "image_cache/test_input.png"
+    os.makedirs("image_cache", exist_ok=True)
+    with open(input_path, "w") as f:
+        f.write("dummy-input-data")
+
+    try:
+        with pytest.raises(RuntimeError) as exc_info:
+            await huggingfaceImage.generate_img2img(
+                prompt="make it blue",
+                init_image_path=input_path
+            )
+        assert "Cloudflare Workers AI falló" in str(exc_info.value)
+        assert "400" in str(exc_info.value)
+    finally:
+        if os.path.exists(input_path):
+            os.unlink(input_path)
 
 
 # ==============================================================================
 # _dispatch_indio_actions EDIT_IMAGE Integration Tests
 # ==============================================================================
 
-class FakeHTTPResponse:
-    def __init__(self, status=200, data=b"replied-image-data"):
-        self.status = status
-        self._data = data
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        return False
-
-    async def read(self):
-        return self._data
-
-
 @pytest.fixture
-def mock_aiohttp_get(monkeypatch):
-    """Fixture to fake image download requests."""
-    spy_get = []
-    
+def mock_aiohttp_session(monkeypatch):
+    """Fixture to fake all HTTP get (downloads) and post (Cloudflare AI) requests."""
+    spy_calls = []
+
     class FakeSession:
         async def __aenter__(self):
             return self
         async def __aexit__(self, *args):
             return False
         def get(self_sess, url, **kwargs):
-            spy_get.append({"url": url, "kwargs": kwargs})
-            return FakeHTTPResponse(status=200, data=b"input-image-data")
+            spy_calls.append({"method": "GET", "url": url, "kwargs": kwargs})
+            return FakeHTTPResponse(status=200, data=b"downloaded-input-image-bytes")
+        def post(self_sess, url, **kwargs):
+            spy_calls.append({"method": "POST", "url": url, "kwargs": kwargs})
+            return FakeHTTPResponse(status=200, data=b"generated-output-image-bytes")
 
     monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
-    return spy_get
+    return spy_calls
 
 
-async def test_dispatch_edit_image_success(mock_inference_client, mock_aiohttp_get, monkeypatch):
-    fake_img = FakePILImage()
-    mock_inference_client.image_to_image.return_value = fake_img
-
+async def test_dispatch_edit_image_success(mock_aiohttp_session, monkeypatch):
     # Spy on os.unlink to check file cleanup
     deleted_paths = []
     original_unlink = os.unlink
@@ -194,9 +200,12 @@ async def test_dispatch_edit_image_success(mock_inference_client, mock_aiohttp_g
     assert len(statuses) == 1
     assert "image_edit: ok — success" in statuses[0]
 
-    # Verify input image was downloaded
-    assert len(mock_aiohttp_get) == 1
-    assert mock_aiohttp_get[0]["url"] == "https://cdn.discord/attachments/1.png"
+    # Verify input image was downloaded and post to Cloudflare occurred
+    assert len(mock_aiohttp_session) == 2
+    assert mock_aiohttp_session[0]["method"] == "GET"
+    assert mock_aiohttp_session[0]["url"] == "https://cdn.discord/attachments/1.png"
+    assert mock_aiohttp_session[1]["method"] == "POST"
+    assert "api.cloudflare.com" in mock_aiohttp_session[1]["url"]
 
     # Verify it posted output image to correct channel
     assert mock_channel.send.call_count == 1
@@ -209,8 +218,8 @@ async def test_dispatch_edit_image_success(mock_inference_client, mock_aiohttp_g
     assert len(deleted_paths) == 2
     # Input was f"image_cache/input_999.png"
     assert any("input_999" in p for p in deleted_paths)
-    # Output was f"image_cache/hfi2i_..."
-    assert any("hfi2i_" in p for p in deleted_paths)
+    # Output was f"image_cache/cfi2i_..."
+    assert any("cfi2i_" in p for p in deleted_paths)
     assert not os.path.exists("image_cache/input_999.png")
 
 
@@ -249,10 +258,8 @@ async def test_dispatch_edit_image_no_attachments():
     assert "Tenés que responder a un mensaje con una imagen" in get_send_content(mock_channel.send.call_args)
 
 
-async def test_dispatch_edit_image_payment_required_402_handling(mock_inference_client, mock_aiohttp_get, monkeypatch):
-    mock_inference_client.image_to_image.side_effect = Exception(
-        "402 Client Error: Payment Required"
-    )
+async def test_dispatch_edit_image_missing_config_handling(mock_aiohttp_session, monkeypatch):
+    monkeypatch.setattr(config, "CLOUDFLARE_ACCOUNT_ID", "", raising=False)
 
     mock_channel = AsyncMock()
     mock_bot = MagicMock()
@@ -282,10 +289,9 @@ async def test_dispatch_edit_image_payment_required_402_handling(mock_inference_
     )
 
     assert "image_edit: fail" in statuses[0]
-    assert "Pago Requerido" in statuses[0] or "402" in statuses[0]
+    assert "Configuración Faltante" in statuses[0]
     
     # User-friendly warning was sent to channel
     assert mock_channel.send.call_count == 1
-    assert "Pago Requerido" in get_send_content(mock_channel.send.call_args)
-    assert "créditos" in get_send_content(mock_channel.send.call_args)
-
+    assert "Configuración Faltante" in get_send_content(mock_channel.send.call_args)
+    assert "CLOUDFLARE_ACCOUNT_ID" in get_send_content(mock_channel.send.call_args)

@@ -89,6 +89,12 @@ INDIO_REPLY_CHANNEL_ID = int(os.getenv("INDIO_REPLY_CHANNEL_ID", "14900082782754
 # Leave HUGGINGFACE_API_TOKEN empty to disable image generation.
 HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
 
+# Cloudflare Workers AI for free image-to-image / image-editing.
+# Sign up for a free account at cloudflare.com (no credit card required for the free tier).
+# Create an API token with "Workers AI" permissions and find your Account ID in the dashboard.
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+
 # Canales donde el bot puede postear mensajes publicos. En cualquier otro canal
 # las respuestas de /vapls salen ephemeral (solo las ve el invocador), para no
 # ensuciar canales que no son los del bot.

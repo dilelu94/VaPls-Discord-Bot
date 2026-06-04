@@ -21,7 +21,6 @@ logger = logging.getLogger("bot.huggingface.image")
 
 DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
 FALLBACK_MODEL = "stabilityai/stable-diffusion-3-medium-diffusers"
-IMG2IMG_MODEL = "Qwen/Qwen-Image-Edit"
 MAX_FILE_SIZE = 8 * 1024 * 1024
 TIMEOUT = 60
 MAX_RETRIES = 5
@@ -105,51 +104,78 @@ async def generate(prompt: str, token: str) -> Optional[str]:
     return path
 
 
-async def generate_img2img(prompt: str, init_image_path: str, token: str) -> Optional[str]:
-    """Generates an edited image from an input image and prompt via Hugging Face Inference Providers.
+async def generate_img2img(prompt: str, init_image_path: str) -> Optional[str]:
+    """Generates an edited image from an input image and prompt via Cloudflare Workers AI.
 
-    Uses Qwen/Qwen-Image-Edit by default.
+    Uses @cf/runwayml/stable-diffusion-v1-5-img2img.
     """
-    if not token:
-        logger.error("HUGGINGFACE_API_TOKEN no configurado")
-        return None
+    import config
+
+    account_id = config.CLOUDFLARE_ACCOUNT_ID
+    cf_token = config.CLOUDFLARE_API_TOKEN
+
+    if not account_id or not cf_token:
+        logger.error("CLOUDFLARE_ACCOUNT_ID o CLOUDFLARE_API_TOKEN no configurado en .env")
+        raise RuntimeError(
+            "❌ Configuración Faltante: Para editar imágenes gratis, el admin debe configurar "
+            "CLOUDFLARE_ACCOUNT_ID y CLOUDFLARE_API_TOKEN en el archivo .env (no requiere tarjeta)."
+        )
 
     refined_prompt = await _refine_prompt_with_gemini(prompt)
 
     try:
-        from huggingface_hub import AsyncInferenceClient
-        client = AsyncInferenceClient(api_key=token)
-        
+        import base64
+        import aiohttp
+
+        # Read input image and encode to base64
+        with open(init_image_path, "rb") as f:
+            img_bytes = f.read()
+
+        b64_data = base64.b64encode(img_bytes).decode("utf-8")
+
+        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
+        headers = {
+            "Authorization": f"Bearer {cf_token}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "prompt": refined_prompt,
+            "image_b64": b64_data,
+            "strength": 0.5
+        }
+
         logger.info(
-            "intentando img2img con modelo %s y prompt: %.100s",
-            IMG2IMG_MODEL,
+            "intentando img2img con Cloudflare Workers AI y prompt: %.100s",
             refined_prompt,
         )
-        
-        image = await client.image_to_image(
-            image=init_image_path,
-            prompt=refined_prompt,
-            model=IMG2IMG_MODEL
-        )
-        
+
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=45)
+            ) as resp:
+                if resp.status != 200:
+                    body = await resp.text()
+                    logger.error("Cloudflare Workers AI HTTP %d: %.200s", resp.status, body)
+                    raise RuntimeError(f"Cloudflare Workers AI falló (HTTP {resp.status}): {body[:150]}")
+
+                data = await resp.read()
+
         os.makedirs("image_cache", exist_ok=True)
-        fd, path = tempfile.mkstemp(suffix=".png", prefix="hfi2i_", dir="image_cache")
+        fd, path = tempfile.mkstemp(suffix=".png", prefix="cfi2i_", dir="image_cache")
         try:
-            image.save(path, format="PNG")
+            with open(path, "wb") as f:
+                f.write(data)
         finally:
             os.close(fd)
-            
-        logger.info("imagen img2img guardada en %s", path)
+
+        logger.info("imagen img2img de Cloudflare guardada en %s (%d bytes)", path, len(data))
         return path
     except Exception as e:
-        err_msg = str(e)
-        if "402" in err_msg or "Payment Required" in err_msg or "depleted your monthly included credits" in err_msg:
-            logger.error("Error 402 en Hugging Face: Créditos insuficientes para Inference Providers.")
-            raise RuntimeError(
-                "❌ Pago Requerido (402): Tu token de Hugging Face se quedó sin créditos para proveedores de inferencia. "
-                "Avisale al admin para recargar créditos o usar otro token."
-            ) from e
-        logger.exception("huggingfaceImage.generate_img2img falló")
+        logger.exception("Cloudflare Workers AI generate_img2img falló")
         raise e
 
 
