@@ -55,6 +55,12 @@ que un cambio roto llegue siquiera al servidor remoto.
 - **Main bot**: comandos, playback de audio, soundpad, Gemini, HTTP API y puente con Telegram.
 - **Userbot** (alias _Indio_): transcripción de voz (DAVE/E2EE) con `faster-whisper` y captura de voice-reply para Telegram.
 
+## 🛠️ Principios de Programación de Lógica
+
+- **Centralización en "vapls":** Los comandos y la lógica de interacción principal deben programarse siempre en el **Main bot** ("vapls").
+- **El Userbot es un usuario:** El *Indio* (userbot) debe ser tratado como un usuario más. Si se le pide realizar una tarea, debe utilizar los comandos de "vapls" (ej. `/play`, `/soundpad`) como si fuera un usuario humano.
+- **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea estrictamente necesario por limitaciones técnicas (ej. algo que no pueda implementarse desde el bot "vapls").
+
 ## 🌐 Servidor de producción (2026-05-30)
 
 |                     |                                                                      |
