@@ -26,6 +26,13 @@ STORAGE_STATE_PATH = "gemini_auth.json"
 GEMINI_URL = "https://gemini.google.com/"
 MAX_FILE_SIZE = 8 * 1024 * 1024
 GENERATE_TIMEOUT = 90
+STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+window.navigator.chrome = { runtime: {} };
+Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+Object.defineProperty(navigator, 'languages', { get: () => ['es-ES', 'es', 'en-US', 'en'] });
+Object.defineProperty(navigator, 'platform', { get: () => 'Linux x86_64' });
+"""
 
 _browser = None
 _context = None
@@ -51,10 +58,12 @@ async def init(storage_path: str = STORAGE_STATE_PATH) -> bool:
             "--disable-gpu",
             "--no-sandbox",
             "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
         ],
     )
     if os.path.exists(storage_path):
         _context = await _browser.new_context(storage_state=storage_path)
+        await _context.add_init_script(STEALTH_JS)
         logger.info("browser ready (session from %s)", storage_path)
         return True
 
@@ -62,6 +71,7 @@ async def init(storage_path: str = STORAGE_STATE_PATH) -> bool:
         "no auth file at %s — run setup_gemini_session.py first", storage_path
     )
     _context = await _browser.new_context()
+    await _context.add_init_script(STEALTH_JS)
     return False
 
 
@@ -80,16 +90,59 @@ async def generate(prompt: str) -> Optional[str]:
 
     page = await _context.new_page()
     try:
+        logger.info("navigating to %s", GEMINI_URL)
         await page.goto(GEMINI_URL, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(2000)
+        logger.info("page loaded, title=%s", await page.title())
+        await page.wait_for_timeout(3000)
 
-        ta = page.locator("textarea").first
-        await ta.wait_for(state="visible", timeout=15000)
+        url = page.url
+        logger.info("current url=%s", url)
+
+        # Check if Google redirected to login page
+        if "accounts.google.com" in url or "ServiceLogin" in url:
+            logger.warning(
+                "⚠️  SESION DE GEMINI EXPIRADA — redirigió a login. "
+                "Ejecutá setup_gemini_session.py de nuevo."
+            )
+            return None
+
+        # Dismiss any promo overlays (I/O 2026 card etc.)
+        for btn in await page.locator(
+            'button:has-text("Got it"), button:has-text("Close"), button:has-text("Dismiss"), [aria-label*=Close]'
+        ).all():
+            if await btn.is_visible(timeout=1000):
+                await btn.click(force=True)
+                logger.info("dismissed overlay")
+                await page.wait_for_timeout(500)
+
+        ta = page.locator("div[role=textbox]").first
+        logger.info("waiting for text input to be visible")
+        try:
+            await ta.wait_for(state="attached", timeout=15000)
+        except Exception:
+            logger.error("text input not found, saving screenshot")
+            try:
+                await page.screenshot(path="/tmp/gemini_debug.png", full_page=True)
+                logger.info("screenshot saved to /tmp/gemini_debug.png")
+            except Exception as e:
+                logger.warning("screenshot failed: %s", e)
+            raise
+
+        logger.info("text input found, filling prompt")
         await ta.fill(prompt)
-        await ta.press("Enter")
+        await page.wait_for_timeout(500)
+        await page.keyboard.press("Enter")
+        logger.info("prompt submitted, waiting for image")
+        await page.wait_for_timeout(3000)
+        got_it = page.locator("button", has_text="Got it").first
+        if await got_it.is_visible(timeout=5000):
+            await got_it.click(force=True)
+            logger.info("dismissed Got it overlay")
+            await page.wait_for_timeout(2000)
 
         img_data = await _wait_for_image(page)
         if img_data is None:
+            logger.warning("no image data returned")
             return None
         if len(img_data) > MAX_FILE_SIZE:
             logger.warning("image %d bytes exceeds 8 MB limit", len(img_data))
@@ -100,12 +153,24 @@ async def generate(prompt: str) -> Optional[str]:
             os.write(fd, img_data)
         finally:
             os.close(fd)
+        logger.info("image saved to %s (%d bytes)", path, len(img_data))
         return path
     except Exception:
         logger.exception("image generation failed")
         return None
     finally:
         await page.close()
+
+
+async def _find_session_issue(page) -> Optional[str]:
+    """Check page for session-expired signals and return a message if found."""
+    try:
+        url = page.url
+        if "accounts.google.com" in url or "ServiceLogin" in url:
+            return "redirigió a pantalla de login"
+    except Exception:
+        pass
+    return None
 
 
 async def _wait_for_image(page, timeout: int = GENERATE_TIMEOUT) -> Optional[bytes]:
@@ -118,6 +183,17 @@ async def _wait_for_image(page, timeout: int = GENERATE_TIMEOUT) -> Optional[byt
         if remaining <= 0:
             logger.warning("timeout waiting for generated image")
             return None
+
+        # Periodic session health check
+        if int(remaining) % 10 == 0:
+            issue = await _find_session_issue(page)
+            if issue:
+                logger.warning(
+                    "⚠️  SESION DE GEMINI EXPIRADA — %s. "
+                    "Ejecutá setup_gemini_session.py de nuevo.",
+                    issue,
+                )
+                return None
 
         try:
             imgs = await page.locator("img").all()
@@ -133,10 +209,10 @@ async def _wait_for_image(page, timeout: int = GENERATE_TIMEOUT) -> Optional[byt
                 await img.wait_for(state="visible", timeout=2000)
             except PwTimeout:
                 continue
-            w = await img.get_attribute("naturalWidth") or "0"
-            if not w.isdigit() or int(w) < 50:
+            w = await img.evaluate("el => el.naturalWidth") or 0
+            if w < 50:
                 continue
-            data = await _fetch_image(src)
+            data = await _fetch_image(src, page)
             if data and len(data) > 4096:
                 return data
 
@@ -144,10 +220,12 @@ async def _wait_for_image(page, timeout: int = GENERATE_TIMEOUT) -> Optional[byt
 
 
 def _looks_like_generated(src: str) -> bool:
-    """Heuristic: real generated images are large data URIs or come from
-    Google's image-serving CDNs. Icons and avatars are filtered out."""
+    """Heuristic: real generated images are large data URIs, blob URLs,
+    or come from Google's image-serving CDNs. Icons are filtered out."""
     if not src:
         return False
+    if src.startswith("blob:"):
+        return True
     if src.startswith("data:image/") and len(src) > 20000:
         return True
     if "googleusercontent.com" in src:
@@ -157,12 +235,25 @@ def _looks_like_generated(src: str) -> bool:
     return False
 
 
-async def _fetch_image(src: str) -> Optional[bytes]:
-    """Download an image from a data URI or HTTP(S) URL."""
+async def _fetch_image(src: str, page=None) -> Optional[bytes]:
+    """Download an image from a data URI, blob URL, or HTTP(S) URL."""
     try:
         if src.startswith("data:"):
             _, encoded = src.split(",", 1)
             return base64.b64decode(encoded)
+        if src.startswith("blob:") and page is not None:
+            b64 = await page.evaluate(
+                """async (src) => {
+                const r = await fetch(src);
+                const buf = await r.arrayBuffer();
+                const bytes = new Uint8Array(buf);
+                let bin = '';
+                for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                return btoa(bin);
+            }""",
+                src,
+            )
+            return base64.b64decode(b64)
         async with aiohttp.ClientSession() as s:
             async with s.get(src, timeout=aiohttp.ClientTimeout(total=15)) as r:
                 if r.status == 200:
