@@ -17,3 +17,7 @@ aiohttp>=3.9
 # so userbot/recording.py can import it if the server's Python is ever upgraded.
 # The marker is a no-op on <=3.12 where the stdlib module still exists.
 audioop-lts; python_version >= "3.13"
+
+# Browser automation for free image generation via Gemini web UI.
+# After installing, run:  python -m playwright install --with-deps chromium
+playwright>=1.50

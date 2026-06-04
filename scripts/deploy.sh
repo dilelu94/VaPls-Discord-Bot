@@ -67,6 +67,14 @@ if [ -z "$DEPS_REINSTALLED" ]; then
     echo "==> No dependency files changed — skipping pip install."
 fi
 
+# ── 5b. Playwright browser install (idempotent) ───────────────────────────
+# Only needed when playwright is installed (fresh venv or version bump).
+# If already installed, this is a quick no-op.
+if python -c "import playwright" 2>/dev/null; then
+    echo "==> playwright detected — ensuring chromium is installed"
+    python -m playwright install --with-deps chromium 2>&1 || true
+fi
+
 # ── 6. Restart services ───────────────────────────────────────────────────────
 echo "==> Restarting discord-bot and vapls-userbot..."
 sudo systemctl restart discord-bot vapls-userbot
