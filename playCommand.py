@@ -212,9 +212,13 @@ class MusicVote:
         self.reaction_channel_id: Optional[int] = None
         self.source_message_id: Optional[int] = None
     def _cancel_timers(self) -> None:
-        if self._hard_cap_task and not self._hard_cap_task.done():
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if self._hard_cap_task and self._hard_cap_task is not current and not self._hard_cap_task.done():
             self._hard_cap_task.cancel()
-        if self._sliding_task and not self._sliding_task.done():
+        if self._sliding_task and self._sliding_task is not current and not self._sliding_task.done():
             self._sliding_task.cancel()
 
 
