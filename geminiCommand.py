@@ -1823,6 +1823,11 @@ async def _dispatch_indio_actions(
     # slash interactions concurrently. Held across the action loop AND
     # the result-feedback edit.
     async with _dispatch_lock_for(int(guild_id)):
+        # When set, the result delivery skips the reply_text prefix so the
+        # failure message replaces the indio's text entirely instead of
+        # appending to it. Used for voice PLAY_SOUND rejection so the user
+        # sees just "no se puede, hay música sonando" without "🔊 Tomá — ".
+        _skip_reply_prefix = False
         for action, arg in actions:
             try:
                 if action in _MUSIC_ACTIONS:
@@ -1854,6 +1859,8 @@ async def _dispatch_indio_actions(
                     # the current song.
                     _player = playCommand.guildPlayers.get(int(guild_id))
                     if _player is not None and _player.currentSong:
+                        if from_voice:
+                            _skip_reply_prefix = True
                         statuses.append("sound: fail — music playing")
                         logger.info("indio PLAY_SOUND rejected: music is playing")
                         continue
@@ -2265,7 +2272,11 @@ async def _dispatch_indio_actions(
                     )
                     edited = False
                     if single:
-                        new_content = f"{reply_text} — {result_line}"
+                        new_content = (
+                            result_line
+                            if _skip_reply_prefix
+                            else f"{reply_text} — {result_line}"
+                        )
                         if via_relay:
                             msg_id = getattr(reply_handle, "message_id", None)
                             if ch_id and msg_id:
