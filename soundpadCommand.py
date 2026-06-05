@@ -1081,6 +1081,7 @@ async def soundpadLogic(
                     )
                 except Exception:
                     pass
+                return
             return await ctx.followup.send(
                 "⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.",
                 ephemeral=True,
