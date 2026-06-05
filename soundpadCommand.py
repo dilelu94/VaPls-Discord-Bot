@@ -117,12 +117,16 @@ def find_best_match(query: str, output_dir: str, cutoff: float = 0.4):
         return None
     names = [name for _, name in clips]
     matches = difflib.get_close_matches(normalized_query, names, n=1, cutoff=cutoff)
-    if not matches:
-        return None
-    best = matches[0]
+    if matches:
+        best = matches[0]
+        for path, name in clips:
+            if name == best:
+                return path
+
     for path, name in clips:
-        if name == best:
+        if normalized_query in name:
             return path
+
     return None
 
 
