@@ -1547,8 +1547,14 @@ def _gate_play_music_actions(
     """Filtra play_music espurios. Solo deja pasar cuando el mensaje del
     usuario tiene un verbo imperativo de reproducción (tirá, poneme, metele,
     etc.). Sin verbo no hay pedido musical. El resto de las acciones pasa
-    intacto."""
+    intacto.
+
+    Los mensajes de voz (``[voz]``) se saltan el gate porque la ASR puede
+    distorsionar el verbo (ej. "Pone" → "Opres") — Gemini ya decidió llamar
+    play_music y confiamos en su criterio para transcripciones ruidosas."""
     if not actions:
+        return actions
+    if raw_text and raw_text.strip().startswith("[voz]"):
         return actions
     has_order = _has_play_sound_order(raw_text)
     kept: list[tuple[str, str]] = []
@@ -3862,7 +3868,9 @@ async def indioFromVoice(
             return None
 
     try:
-        if vote_open:
+        if not clean_reply and not vote_open:
+            reply_handle = None
+        elif vote_open:
             # Vote options: capture the message id so we can react on it.
             if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
                 opts_msg_id = await _relay_say(channel_id, clean_reply)
