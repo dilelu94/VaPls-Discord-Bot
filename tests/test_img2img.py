@@ -1,33 +1,21 @@
 import asyncio
-import base64
-import io
 import os
 import pytest
 import aiohttp
 import discord
 from unittest.mock import AsyncMock, MagicMock, patch
-from PIL import Image
 
 import config
 import huggingfaceImage
 import geminiCommand
 from geminiCommand import _dispatch_indio_actions
 
-MINI_PNG: bytes
-_img = Image.new("RGB", (2, 2), color="red")
-_buf = io.BytesIO()
-_img.save(_buf, format="PNG")
-MINI_PNG = _buf.getvalue()
-
 
 class FakeHTTPResponse:
-    def __init__(
-        self, status=200, data=b"fake-image-bytes-data", text_data="", json_data=None
-    ):
+    def __init__(self, status=200, data=b"fake-image-bytes-data", text_data=""):
         self.status = status
         self._data = data
         self._text_data = text_data
-        self._json_data = json_data
 
     async def __aenter__(self):
         return self
@@ -40,9 +28,6 @@ class FakeHTTPResponse:
 
     async def text(self):
         return self._text_data or self._data.decode("utf-8", errors="ignore")
-
-    async def json(self):
-        return self._json_data or {}
 
 
 @pytest.fixture(autouse=True)
@@ -69,8 +54,6 @@ def mock_refine_prompt(monkeypatch):
 
 
 async def test_generate_img2img_success(monkeypatch):
-    flux_resp = {"image": base64.b64encode(MINI_PNG).decode()}
-
     class FakeSession:
         async def __aenter__(self):
             return self
@@ -81,28 +64,33 @@ async def test_generate_img2img_success(monkeypatch):
         def post(self, url, **kwargs):
             assert "api.cloudflare.com" in url
             assert kwargs["headers"]["Authorization"] == "Bearer valid-api-token"
-            return FakeHTTPResponse(status=200, json_data=flux_resp)
+            assert "prompt" in kwargs["json"]
+            assert "image_b64" in kwargs["json"]
+            return FakeHTTPResponse(status=200, data=b"generated-output-image-bytes")
 
     monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
 
+    # Create dummy input image
     input_path = "image_cache/test_input.png"
     os.makedirs("image_cache", exist_ok=True)
-    with open(input_path, "wb") as f:
-        f.write(MINI_PNG)
+    with open(input_path, "w") as f:
+        f.write("dummy-input-data")
 
     try:
         out_path = await huggingfaceImage.generate_img2img(
-            prompt="make it blue", init_image_paths=[input_path]
+            prompt="make it blue", init_image_path=input_path
         )
 
         assert out_path is not None
         assert os.path.exists(out_path)
         assert "cfi2i_" in out_path
 
+        # Verify saved contents
         with open(out_path, "rb") as f:
             saved_bytes = f.read()
-        assert saved_bytes == MINI_PNG
+        assert saved_bytes == b"generated-output-image-bytes"
 
+        # Cleanup
         if os.path.exists(out_path):
             os.unlink(out_path)
     finally:
@@ -110,53 +98,12 @@ async def test_generate_img2img_success(monkeypatch):
             os.unlink(input_path)
 
 
-async def test_generate_img2img_success_multi_ref(monkeypatch):
-    flux_resp = {"image": base64.b64encode(MINI_PNG).decode()}
-
-    class FakeSession:
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args):
-            return False
-
-        def post(self, url, **kwargs):
-            assert "api.cloudflare.com" in url
-            return FakeHTTPResponse(status=200, json_data=flux_resp)
-
-    monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
-
-    os.makedirs("image_cache", exist_ok=True)
-    paths = []
-    for i in range(3):
-        p = f"image_cache/test_input_{i}.png"
-        with open(p, "wb") as f:
-            f.write(MINI_PNG)
-        paths.append(p)
-
-    try:
-        out_path = await huggingfaceImage.generate_img2img(
-            prompt="style image 1 like image 0", init_image_paths=paths
-        )
-
-        assert out_path is not None
-        assert os.path.exists(out_path)
-        assert "cfi2i_" in out_path
-
-        if os.path.exists(out_path):
-            os.unlink(out_path)
-    finally:
-        for p in paths:
-            if os.path.exists(p):
-                os.unlink(p)
-
-
 async def test_generate_img2img_missing_config(monkeypatch):
     monkeypatch.setattr(config, "CLOUDFLARE_ACCOUNT_ID", "", raising=False)
 
     with pytest.raises(RuntimeError) as exc_info:
         await huggingfaceImage.generate_img2img(
-            prompt="make it blue", init_image_paths=["dummy.png"]
+            prompt="make it blue", init_image_path="dummy.png"
         )
     assert "Configuración Faltante" in str(exc_info.value)
     assert "CLOUDFLARE_ACCOUNT_ID" in str(exc_info.value)
@@ -175,17 +122,18 @@ async def test_generate_img2img_api_failure(monkeypatch):
 
     monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
 
+    # Create dummy input image
     input_path = "image_cache/test_input.png"
     os.makedirs("image_cache", exist_ok=True)
-    with open(input_path, "wb") as f:
-        f.write(MINI_PNG)
+    with open(input_path, "w") as f:
+        f.write("dummy-input-data")
 
     try:
         with pytest.raises(RuntimeError) as exc_info:
             await huggingfaceImage.generate_img2img(
-                prompt="make it blue", init_image_paths=[input_path]
+                prompt="make it blue", init_image_path=input_path
             )
-        assert "FLUX.2 [dev] falló" in str(exc_info.value)
+        assert "Cloudflare Workers AI falló" in str(exc_info.value)
         assert "400" in str(exc_info.value)
     finally:
         if os.path.exists(input_path):
@@ -202,8 +150,6 @@ def mock_aiohttp_session(monkeypatch):
     """Fixture to fake all HTTP get (downloads) and post (Cloudflare AI) requests."""
     spy_calls = []
 
-    flux_resp = {"image": base64.b64encode(MINI_PNG).decode()}
-
     class FakeSession:
         async def __aenter__(self):
             return self
@@ -213,17 +159,18 @@ def mock_aiohttp_session(monkeypatch):
 
         def get(self_sess, url, **kwargs):
             spy_calls.append({"method": "GET", "url": url, "kwargs": kwargs})
-            return FakeHTTPResponse(status=200, data=MINI_PNG)
+            return FakeHTTPResponse(status=200, data=b"downloaded-input-image-bytes")
 
         def post(self_sess, url, **kwargs):
             spy_calls.append({"method": "POST", "url": url, "kwargs": kwargs})
-            return FakeHTTPResponse(status=200, json_data=flux_resp)
+            return FakeHTTPResponse(status=200, data=b"generated-output-image-bytes")
 
     monkeypatch.setattr(aiohttp, "ClientSession", FakeSession)
     return spy_calls
 
 
 async def test_dispatch_edit_image_success(mock_aiohttp_session, monkeypatch):
+    # Spy on os.unlink to check file cleanup
     deleted_paths = []
     original_unlink = os.unlink
 
@@ -233,10 +180,12 @@ async def test_dispatch_edit_image_success(mock_aiohttp_session, monkeypatch):
 
     monkeypatch.setattr(os, "unlink", spy_unlink)
 
+    # Set up mocks for Discord Bot and Channel
     mock_channel = AsyncMock()
     mock_bot = MagicMock()
     mock_bot.get_channel.return_value = mock_channel
 
+    # User context and replied message attachment URLs
     requester = MagicMock(spec=discord.Member)
     requester.id = 123
     attachment_urls = [
@@ -262,81 +211,31 @@ async def test_dispatch_edit_image_success(mock_aiohttp_session, monkeypatch):
         source_message_id=999,
     )
 
+    # Verify status logs success
     assert len(statuses) == 1
     assert "image_edit: ok — success" in statuses[0]
 
+    # Verify input image was downloaded and post to Cloudflare occurred
     assert len(mock_aiohttp_session) == 2
     assert mock_aiohttp_session[0]["method"] == "GET"
     assert mock_aiohttp_session[0]["url"] == "https://cdn.discord/attachments/1.png"
     assert mock_aiohttp_session[1]["method"] == "POST"
     assert "api.cloudflare.com" in mock_aiohttp_session[1]["url"]
 
+    # Verify it posted output image to correct channel
     assert mock_channel.send.call_count == 1
     _, send_kwargs = mock_channel.send.call_args
     assert send_kwargs.get("file").filename == "imagen_editada.png"
     assert "<@123>" in send_kwargs.get("content")
     assert "make it blue" in send_kwargs.get("content")
 
+    # Verify BOTH input image and output image were unlinked (cleaned up)
     assert len(deleted_paths) == 2
-    assert any("input_999_0" in p for p in deleted_paths)
+    # Input was f"image_cache/input_999.png"
+    assert any("input_999" in p for p in deleted_paths)
+    # Output was f"image_cache/cfi2i_..."
     assert any("cfi2i_" in p for p in deleted_paths)
-
-
-async def test_dispatch_edit_image_multi_attachment(mock_aiohttp_session, monkeypatch):
-    deleted_paths = []
-    original_unlink = os.unlink
-
-    def spy_unlink(path):
-        deleted_paths.append(path)
-        original_unlink(path)
-
-    monkeypatch.setattr(os, "unlink", spy_unlink)
-
-    mock_channel = AsyncMock()
-    mock_bot = MagicMock()
-    mock_bot.get_channel.return_value = mock_channel
-
-    requester = MagicMock(spec=discord.Member)
-    requester.id = 456
-    attachment_urls = [
-        {
-            "url": "https://cdn.discord/attachments/style.png",
-            "mime_type": "image/png",
-            "filename": "style.png",
-        },
-        {
-            "url": "https://cdn.discord/attachments/subject.png",
-            "mime_type": "image/png",
-            "filename": "subject.png",
-        },
-    ]
-
-    actions = [("EDIT_IMAGE", "style image 1 like image 0")]
-    reply_handle = MagicMock()
-    reply_handle.channel_id = 456
-
-    statuses = await _dispatch_indio_actions(
-        bot=mock_bot,
-        guild_id=789,
-        actions=actions,
-        reply_handle=reply_handle,
-        reply_text="🎨 Editando imagen...",
-        requester_member=requester,
-        attachment_urls=attachment_urls,
-        source_message_id=888,
-    )
-
-    assert "image_edit: ok — success" in statuses[0]
-
-    assert len(mock_aiohttp_session) == 3
-    assert mock_aiohttp_session[0]["url"] == "https://cdn.discord/attachments/style.png"
-    assert (
-        mock_aiohttp_session[1]["url"] == "https://cdn.discord/attachments/subject.png"
-    )
-    assert mock_aiohttp_session[2]["method"] == "POST"
-
-    assert any("input_888_0" in p for p in deleted_paths)
-    assert any("input_888_1" in p for p in deleted_paths)
+    assert not os.path.exists("image_cache/input_999.png")
 
 
 def get_send_content(call_args):
@@ -369,6 +268,7 @@ async def test_dispatch_edit_image_no_attachments():
     )
 
     assert "image_edit: fail — no image to edit" in statuses[0]
+    # Warning message sent
     assert mock_channel.send.call_count == 1
     assert "Tenés que responder a un mensaje con una imagen" in get_send_content(
         mock_channel.send.call_args
@@ -412,6 +312,7 @@ async def test_dispatch_edit_image_missing_config_handling(
     assert "image_edit: fail" in statuses[0]
     assert "Configuración Faltante" in statuses[0]
 
+    # User-friendly warning was sent to channel
     assert mock_channel.send.call_count == 1
     assert "Configuración Faltante" in get_send_content(mock_channel.send.call_args)
     assert "CLOUDFLARE_ACCOUNT_ID" in get_send_content(mock_channel.send.call_args)

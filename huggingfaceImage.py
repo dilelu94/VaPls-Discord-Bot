@@ -105,11 +105,10 @@ async def generate(prompt: str, token: str) -> Optional[str]:
     return path
 
 
-async def generate_img2img(prompt: str, init_image_paths: list[str]) -> Optional[str]:
-    """Generates an edited image from input images and prompt via Cloudflare Workers AI FLUX.2 [dev].
+async def generate_img2img(prompt: str, init_image_path: str) -> Optional[str]:
+    """Generates an edited image from an input image and prompt via Cloudflare Workers AI.
 
-    Uses @cf/black-forest-labs/flux-2-dev with multipart form data.
-    Accepts up to 4 input images (each resized to ≤512×512).
+    Uses @cf/runwayml/stable-diffusion-v1-5-img2img.
     """
     import config
 
@@ -129,37 +128,24 @@ async def generate_img2img(prompt: str, init_image_paths: list[str]) -> Optional
 
     try:
         import base64
-        import io
         import aiohttp
-        from PIL import Image
 
-        form = aiohttp.FormData()
-        form.add_field("prompt", refined_prompt)
+        # Read input image and encode to base64
+        with open(init_image_path, "rb") as f:
+            img_bytes = f.read()
 
-        for i, path in enumerate(init_image_paths[:4]):
-            img = Image.open(path)
-            if img.width > 512 or img.height > 512:
-                img.thumbnail((512, 512), Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            buf.seek(0)
-            form.add_field(
-                f"input_image_{i}",
-                buf,
-                content_type="image/png",
-                filename=f"input_{i}.png",
-            )
+        b64_data = base64.b64encode(img_bytes).decode("utf-8")
 
-        form.add_field("steps", "25")
-        form.add_field("guidance", "3.5")
-        form.add_field("width", "512")
-        form.add_field("height", "512")
+        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
+        headers = {
+            "Authorization": f"Bearer {cf_token}",
+            "Content-Type": "application/json",
+        }
 
-        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-2-dev"
-        headers = {"Authorization": f"Bearer {cf_token}"}
+        payload = {"prompt": refined_prompt, "image_b64": b64_data, "strength": 0.5}
 
         logger.info(
-            "intentando img2img con FLUX.2 [dev] y prompt: %.100s",
+            "intentando img2img con Cloudflare Workers AI y prompt: %.100s",
             refined_prompt,
         )
 
@@ -167,40 +153,34 @@ async def generate_img2img(prompt: str, init_image_paths: list[str]) -> Optional
             async with sess.post(
                 url,
                 headers=headers,
-                data=form,
-                timeout=aiohttp.ClientTimeout(total=120),
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=45),
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
-                    logger.error("FLUX.2 [dev] HTTP %d: %.200s", resp.status, body)
+                    logger.error(
+                        "Cloudflare Workers AI HTTP %d: %.200s", resp.status, body
+                    )
                     raise RuntimeError(
-                        f"FLUX.2 [dev] falló (HTTP {resp.status}): {body[:150]}"
+                        f"Cloudflare Workers AI falló (HTTP {resp.status}): {body[:150]}"
                     )
 
-                result = await resp.json()
-                if "image" not in result:
-                    raise RuntimeError(
-                        f"FLUX.2 [dev] respuesta sin campo 'image': {result}"
-                    )
-
-                img_bytes = base64.b64decode(result["image"])
+                data = await resp.read()
 
         os.makedirs("image_cache", exist_ok=True)
         fd, path = tempfile.mkstemp(suffix=".png", prefix="cfi2i_", dir="image_cache")
         try:
             with open(path, "wb") as f:
-                f.write(img_bytes)
+                f.write(data)
         finally:
             os.close(fd)
 
         logger.info(
-            "imagen img2img de FLUX.2 [dev] guardada en %s (%d bytes)",
-            path,
-            len(img_bytes),
+            "imagen img2img de Cloudflare guardada en %s (%d bytes)", path, len(data)
         )
         return path
     except Exception as e:
-        logger.exception("FLUX.2 [dev] generate_img2img falló")
+        logger.exception("Cloudflare Workers AI generate_img2img falló")
         raise e
 
 

@@ -1984,32 +1984,29 @@ async def _dispatch_indio_actions(
                             except Exception:
                                 pass
                         else:
+                            img = images[0]
                             os.makedirs("image_cache", exist_ok=True)
 
-                            input_paths = []
+                            suffix = (
+                                os.path.splitext(img.get("filename", "input.png"))[1]
+                                or ".png"
+                            )
+                            input_path = f"image_cache/input_{source_message_id or 'temp'}{suffix}"
+
                             download_ok = False
                             try:
                                 async with aiohttp.ClientSession() as sess:
-                                    for i, img in enumerate(images[:4]):
-                                        suffix = (
-                                            os.path.splitext(
-                                                img.get("filename", "input.png")
-                                            )[1]
-                                            or ".png"
-                                        )
-                                        path = f"image_cache/input_{source_message_id or 'temp'}_{i}{suffix}"
-                                        async with sess.get(
-                                            img["url"],
-                                            timeout=aiohttp.ClientTimeout(total=15),
-                                        ) as resp:
-                                            if resp.status == 200:
-                                                with open(path, "wb") as f:
-                                                    f.write(await resp.read())
-                                                input_paths.append(path)
-                                download_ok = len(input_paths) > 0
+                                    async with sess.get(
+                                        img["url"],
+                                        timeout=aiohttp.ClientTimeout(total=15),
+                                    ) as resp:
+                                        if resp.status == 200:
+                                            with open(input_path, "wb") as f:
+                                                f.write(await resp.read())
+                                            download_ok = True
                             except Exception as e:
                                 logger.exception(
-                                    "Failed to download replied images for editing"
+                                    "Failed to download replied image for editing"
                                 )
                                 ok = False
                                 msg = f"download failed: {e}"
@@ -2021,7 +2018,7 @@ async def _dispatch_indio_actions(
 
                                     output_path = (
                                         await huggingfaceImage.generate_img2img(
-                                            arg, input_paths
+                                            arg, input_path
                                         )
                                     )
                                     if output_path:
@@ -2053,9 +2050,20 @@ async def _dispatch_indio_actions(
                                     else:
                                         ok = False
                                         msg = "generation failed"
+                                        try:
+                                            target_channel = bot.get_channel(target_cid)
+                                            if target_channel is None:
+                                                target_channel = (
+                                                    await bot.fetch_channel(target_cid)
+                                                )
+                                            await target_channel.send(
+                                                f"❌ No se pudo generar la imagen editada para: **{arg}**"
+                                            )
+                                        except Exception:
+                                            pass
                                 except Exception as e:
                                     logger.exception(
-                                        "FLUX.2 image-to-image generation failed"
+                                        "Cloudflare image-to-image generation failed"
                                     )
                                     ok = False
                                     msg = str(e)
@@ -2078,11 +2086,10 @@ async def _dispatch_indio_actions(
                                     except Exception:
                                         pass
                                 finally:
-                                    for p in input_paths:
-                                        try:
-                                            os.unlink(p)
-                                        except Exception:
-                                            pass
+                                    try:
+                                        os.unlink(input_path)
+                                    except Exception:
+                                        pass
                     statuses.append(f"image_edit: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio EDIT_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "DJ_MODE":

@@ -3,10 +3,6 @@
 # Free alternative to the paid Imagen/3.1 Flash Image API. Uses a persisted
 # Gmail session (storage_state) to access gemini.google.com's native image
 # generation without an API key.
-# 
-# NOTE: This module is currently out of use / inactive due to Google login security blocks.
-# The active integration has been commented out, and the original implementation is preserved here
-# and in geminiImage_legacy.py.
 # """
 # 
 # import asyncio

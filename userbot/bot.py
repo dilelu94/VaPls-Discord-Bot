@@ -913,14 +913,29 @@ def _new_vosk_recognizer():
         rec = vosk.KaldiRecognizer(model, 16000, _VOSK_GRAMMAR)
         # Tag the recognizer with the grammar generation it was built from.
         rec._grammar_generation = _vosk_grammar_generation
-        if config.VOSK_MAX_ALTERNATIVES > 0:
+        # Preset 4 needs per-word timestamps to slice the exact "indio" audio
+        # for the Whisper confirmation. VOSK gives word timings (SetWords) OR
+        # N-best alternatives (SetMaxAlternatives), not both — so preset 4 runs
+        # single-best + words, other presets keep N-best for detection recall.
+        if _SENSITIVITY_PRESET == 4:
+            rec._words_mode = True
             try:
-                rec.SetMaxAlternatives(config.VOSK_MAX_ALTERNATIVES)
+                rec.SetWords(True)
             except Exception as e:
-                log.exception("[VOSK] SetMaxAlternatives failed")
+                log.exception("[VOSK] SetWords failed")
                 analytics.capture_exception(
-                    e, properties={"action": "vosk_set_max_alternatives_failed"}
+                    e, properties={"action": "vosk_set_words_failed"}
                 )
+        else:
+            rec._words_mode = False
+            if config.VOSK_MAX_ALTERNATIVES > 0:
+                try:
+                    rec.SetMaxAlternatives(config.VOSK_MAX_ALTERNATIVES)
+                except Exception as e:
+                    log.exception("[VOSK] SetMaxAlternatives failed")
+                    analytics.capture_exception(
+                        e, properties={"action": "vosk_set_max_alternatives_failed"}
+                    )
         return rec
     except Exception as e:
         log.exception("[VOSK] failed to create recognizer")
@@ -1093,6 +1108,12 @@ class WakeWordSink(voice_recv.AudioSink):
         # word in the middle of a longer conversation would drag unrelated
         # context into the indio's prompt.
         self.prebuffers: dict[int, deque] = {}
+        # Per-user buffer of ALL audio fed to VOSK in the CURRENT segment (since
+        # the last final result / Reset). Unlike the trailing prebuffer this is
+        # not trimmed, so VOSK word timestamps map directly to byte offsets in
+        # it — preset 4 uses that to slice the exact "indio" audio. Cleared on
+        # every finalized segment and on silence reset, so it stays small.
+        self.vosk_audio: dict[int, bytearray] = {}
         # Per-user voice-activity tracking: the last timestamp we saw a frame
         # above the silence threshold. Used to decide when to reset the
         # prebuffer and the VOSK recognizer.
@@ -1123,6 +1144,7 @@ class WakeWordSink(voice_recv.AudioSink):
         self.recognizers.clear()
         self.resample_states.clear()
         self.prebuffers.clear()
+        self.vosk_audio.clear()
         self.captures.clear()
 
     # ---- packet ingestion -------------------------------------------------
@@ -1196,6 +1218,17 @@ class WakeWordSink(voice_recv.AudioSink):
             if rec is None:
                 return
             accepted = rec.AcceptWaveform(data_16k)
+            # Accumulate the current VOSK segment's audio so the recognizer's
+            # word timestamps map straight to byte offsets (preset 4 slices the
+            # exact "indio" word out of this for Whisper). Bounded: it's popped
+            # on every finalized segment (below) and on silence reset.
+            seg = self.vosk_audio.get(user_id)
+            if seg is None:
+                seg = bytearray()
+                self.vosk_audio[user_id] = seg
+            seg.extend(data_16k)
+            if len(seg) > _BYTES_PER_SECOND_16K * 15:  # runaway guard
+                self.vosk_audio.pop(user_id, None)
             matched, vosk_result = _vosk_heard_wake_word(rec, accepted)
             if matched:
                 _matched_text = (
@@ -1216,9 +1249,26 @@ class WakeWordSink(voice_recv.AudioSink):
                         "guild_id": getattr(getattr(source, "guild", None), "id", None),
                     },
                 )
+                # Preset 4: slice the exact "indio" audio (VOSK word span) so
+                # Whisper confirms just the wake word, independent of where in
+                # the phrase VOSK fired. Falls back to None → prebuffer slice.
+                wake_confirm_pcm = None
+                if _SENSITIVITY_PRESET == 4:
+                    try:
+                        span = _extract_indio_span(vosk_result)
+                        if span is not None:
+                            wake_confirm_pcm = _slice_wake_audio(bytes(seg), span)
+                            log.info(
+                                "[WAKE] user=%s preset4: 'indio' span=%.2f-%.2fs "
+                                "→ %d bytes for Whisper confirm",
+                                user_id, span[0], span[1],
+                                len(wake_confirm_pcm or b""),
+                            )
+                    except Exception:
+                        log.exception("[WAKE] preset4 indio-span slice failed")
                 self._wake_triggerer_id = user_id
                 self._wake_in_progress = True
-                self._start_capture(user_id, now, vosk_result)
+                self._start_capture(user_id, now, vosk_result, wake_confirm_pcm)
                 # Preset 4 defers the wake sound until Whisper confirms "indio"
                 # (see _transcribe_and_dispatch) so it doesn't beep on events
                 # that the Whisper filter will discard. Other presets play it
@@ -1229,6 +1279,10 @@ class WakeWordSink(voice_recv.AudioSink):
                     rec.Reset()
                 except Exception:
                     log.warning("[WAKE] rec.Reset() failed")
+            if accepted:
+                # VOSK finalized this segment (matched or not) → start a fresh
+                # segment buffer so word timestamps stay relative to it.
+                self.vosk_audio.pop(user_id, None)
         except Exception as e:
             log.exception("[WAKE] write error")
             analytics.capture_exception(e, properties={"action": "wake_write_error"})
@@ -1247,6 +1301,9 @@ class WakeWordSink(voice_recv.AudioSink):
         buf = self.prebuffers.get(user_id)
         if buf:
             buf.clear()
+        # The VOSK segment buffer is tied to the recognizer stream — clear it
+        # alongside the Reset so word timestamps stay aligned.
+        self.vosk_audio.pop(user_id, None)
         rec = self.recognizers.get(user_id)
         if rec is not None:
             try:
@@ -1290,7 +1347,11 @@ class WakeWordSink(voice_recv.AudioSink):
         return rec
 
     def _start_capture(
-        self, user_id: int, now: float, vosk_result: Optional[dict] = None
+        self,
+        user_id: int,
+        now: float,
+        vosk_result: Optional[dict] = None,
+        wake_confirm_pcm: Optional[bytes] = None,
     ) -> None:
         # Seed the capture buffer with the prebuffer contents so Whisper sees
         # whatever the user said leading up to and including the wake word.
@@ -1303,6 +1364,9 @@ class WakeWordSink(voice_recv.AudioSink):
             "last_voice_ts": now,
             "vosk_result": vosk_result,
             "prebuffer_len": len(seed),  # bytes of prebuffer seeded into buf
+            # Preset 4: the exact "indio" audio sliced from VOSK word timings,
+            # used as the Whisper confirmation clip (None → fall back to prebuf).
+            "wake_confirm_pcm": wake_confirm_pcm,
         }
 
     def _extend_capture(
@@ -1358,6 +1422,7 @@ class WakeWordSink(voice_recv.AudioSink):
         secs = len(pcm) / (16000 * 2)
         vosk_result = capture.get("vosk_result")
         prebuffer_len = capture.get("prebuffer_len", 0)
+        wake_confirm_pcm = capture.get("wake_confirm_pcm")
         with self._active_lock:
             limit = (
                 config.MAX_CONCURRENT_WHILE_PLAYING
@@ -1375,7 +1440,7 @@ class WakeWordSink(voice_recv.AudioSink):
             self._active_count += 1
         asyncio.run_coroutine_threadsafe(
             self._transcribe_and_dispatch(
-                user_id, pcm, secs, vosk_result, prebuffer_len
+                user_id, pcm, secs, vosk_result, prebuffer_len, wake_confirm_pcm
             ),
             self._client_ref.loop,
         )
@@ -1435,16 +1500,23 @@ class WakeWordSink(voice_recv.AudioSink):
         duration: float,
         vosk_result: Optional[dict] = None,
         prebuffer_len: int = 0,
+        wake_confirm_pcm: Optional[bytes] = None,
     ) -> None:
         try:
-            # Preset 4: before transcribing the full command, confirm the wake
-            # word on the PREBUFFER region with a dedicated short Whisper pass.
-            # Whisper drops the brief leading "che indio" when a command follows
-            # (it transcribes only "ponete un tema…"), so checking the full
-            # transcript yields false negatives; the short wake-region clip
-            # transcribes "che indio" reliably (see _run_whisper_wake).
+            # Preset 4: confirm the wake word with a dedicated short Whisper
+            # pass. Best clip is the exact "indio" audio sliced from VOSK's word
+            # timestamps (wake_confirm_pcm) — that isolates the wake word no
+            # matter where in the phrase VOSK fired. If word timing wasn't
+            # available we fall back to the trailing prebuffer slice. (Checking
+            # the FULL transcript fails: Whisper drops the brief leading "che
+            # indio" when a command follows.)
             if _SENSITIVITY_PRESET == 4:
-                wake_pcm = pcm_16k[:prebuffer_len] if prebuffer_len else pcm_16k
+                if wake_confirm_pcm:
+                    wake_pcm = wake_confirm_pcm
+                elif prebuffer_len:
+                    wake_pcm = pcm_16k[:prebuffer_len]
+                else:
+                    wake_pcm = pcm_16k
                 wake_text = await asyncio.to_thread(_run_whisper_wake, wake_pcm)
                 if not _whisper_confirms_indio(wake_text):
                     log.info(
@@ -1575,6 +1647,50 @@ def _whisper_confirms_indio(text: str) -> bool:
     # within a token so glued/punctuated forms ("cheindio", "indio,", "indios")
     # count, while unrelated words like "individuo" do not.
     return any(("indio" in tok or "india" in tok) for tok in norm.split())
+
+
+# s16le mono @16kHz: bytes per second of audio (2 bytes/sample × 16000).
+_BYTES_PER_SECOND_16K = 16000 * 2
+
+
+def _extract_indio_span(vosk_result: Optional[dict]) -> Optional[tuple[float, float]]:
+    """Return (start, end) seconds of the "indio" word inside a SetWords VOSK
+    result, or None when there are no per-word timings or no "indio" word.
+
+    Preset 4 runs VOSK single-best with ``SetWords(True)``, so ``Result()``
+    carries ``{"result": [{"word","start","end"}, ...], "text": ...}``. We use
+    the "indio" word's span to slice exactly that audio for Whisper.
+    """
+    if not vosk_result:
+        return None
+    words = vosk_result.get("result")
+    if not isinstance(words, list):
+        return None
+    for w in words:
+        try:
+            if "indio" in _normalize(str(w.get("word", ""))):
+                return (float(w["start"]), float(w["end"]))
+        except Exception:
+            continue
+    return None
+
+
+def _slice_wake_audio(
+    segment: bytes, span: tuple[float, float], pad_s: float = 0.25
+) -> bytes:
+    """Slice [start-pad, end+pad] seconds out of a 16k mono s16le ``segment``.
+
+    Times are seconds from the start of the segment (which aligns with the
+    VOSK recognizer stream). Returns b"" if the window is empty/out of range.
+    """
+    start_s, end_s = span
+    s = max(0, int((start_s - pad_s) * _BYTES_PER_SECOND_16K))
+    e = min(len(segment), int((end_s + pad_s) * _BYTES_PER_SECOND_16K))
+    s -= s % 2  # keep 16-bit sample alignment
+    e -= e % 2
+    if e <= s:
+        return b""
+    return bytes(segment[s:e])
 
 
 # Cached "is the main bot playing audio" check — polled cheaply.
@@ -3275,91 +3391,91 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
-async def _relay_invoke_banana(request: web.Request) -> web.Response:
-    """Ask the userbot to invoke VaPls's /banana slash command with a
-    ``query`` (used as prompt) argument so the image is generated under the
-    real user account. Mirrors :func:`_relay_invoke_play`."""
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        channel_id = int(data["channel_id"])
-        query = str(data["query"]).strip()
-    except Exception as e:
-        log.warning("[RELAY-BANANA] rejected invalid body: %s", e)
-        return web.json_response({"error": "invalid body"}, status=400)
-    if not query:
-        return web.json_response({"error": "empty query"}, status=400)
-    if not client.is_ready():
-        return web.json_response({"error": "userbot not ready"}, status=503)
-
-    channel = client.get_channel(channel_id)
-    if channel is None:
-        try:
-            channel = await client.fetch_channel(channel_id)
-        except Exception as e:
-            return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not (
-        hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
-    ):
-        return web.json_response(
-            {"error": "channel has no slash command API"}, status=400
-        )
-
-    try:
-        cmds = await _resolve_slash_commands(
-            channel,
-            "banana",
-            timeout=config.INDIO_RELAY_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        log.warning(
-            "[RELAY-BANANA] slash_commands() timed out for channel %s", channel_id
-        )
-        return web.json_response({"error": "slash_commands() timed out"}, status=504)
-    except Exception as e:
-        log.exception("[RELAY-BANANA] slash_commands() failed")
-        analytics.capture_exception(
-            e, properties={"action": "relay_banana_slash_commands_failed"}
-        )
-        return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
-
-    gen_cmd = _pick_vapls_command(cmds, "banana")
-    if gen_cmd is None:
-        log.warning(
-            "[RELAY-BANANA] VaPls /banana not found in channel %s (saw %d candidates)",
-            channel_id,
-            len(cmds),
-        )
-        return web.json_response(
-            {"error": "banana command not found in channel"}, status=404
-        )
-
-    try:
-        await gen_cmd(prompt=query)
-        log.info(
-            f"[RELAY-BANANA] invoked /banana prompt={query!r} in channel={channel_id}"
-        )
-        return web.json_response({"invoked": True, "query": query})
-    except discord.HTTPException as e:
-        if getattr(e, "status", None) == 429:
-            log.warning(
-                "[RELAY-BANANA] Discord rate-limited /banana invocation: %s", e
-            )
-            return web.json_response({"error": f"rate-limited: {e}"}, status=429)
-        log.exception("[RELAY-BANANA] invocation failed")
-        analytics.capture_exception(
-            e, properties={"action": "relay_banana_invocation_failed"}
-        )
-        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
-    except Exception as e:
-        log.exception("[RELAY-BANANA] invocation failed")
-        analytics.capture_exception(
-            e, properties={"action": "relay_banana_invocation_failed"}
-        )
-        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+# async def _relay_invoke_banana(request: web.Request) -> web.Response:
+#     """Ask the userbot to invoke VaPls's /banana slash command with a
+#     ``query`` (used as prompt) argument so the image is generated under the
+#     real user account. Mirrors :func:`_relay_invoke_play`."""
+#     if not config.RELAY_SECRET:
+#         return web.json_response({"error": "relay disabled"}, status=503)
+#     if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+#         return web.json_response({"error": "unauthorized"}, status=401)
+#     try:
+#         data = await request.json()
+#         channel_id = int(data["channel_id"])
+#         query = str(data["query"]).strip()
+#     except Exception as e:
+#         log.warning("[RELAY-BANANA] rejected invalid body: %s", e)
+#         return web.json_response({"error": "invalid body"}, status=400)
+#     if not query:
+#         return web.json_response({"error": "empty query"}, status=400)
+#     if not client.is_ready():
+#         return web.json_response({"error": "userbot not ready"}, status=503)
+# 
+#     channel = client.get_channel(channel_id)
+#     if channel is None:
+#         try:
+#             channel = await client.fetch_channel(channel_id)
+#         except Exception as e:
+#             return web.json_response({"error": f"channel not found: {e}"}, status=404)
+#     if not (
+#         hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
+#     ):
+#         return web.json_response(
+#             {"error": "channel has no slash command API"}, status=400
+#         )
+# 
+#     try:
+#         cmds = await _resolve_slash_commands(
+#             channel,
+#             "banana",
+#             timeout=config.INDIO_RELAY_TIMEOUT,
+#         )
+#     except asyncio.TimeoutError:
+#         log.warning(
+#             "[RELAY-BANANA] slash_commands() timed out for channel %s", channel_id
+#         )
+#         return web.json_response({"error": "slash_commands() timed out"}, status=504)
+#     except Exception as e:
+#         log.exception("[RELAY-BANANA] slash_commands() failed")
+#         analytics.capture_exception(
+#             e, properties={"action": "relay_banana_slash_commands_failed"}
+#         )
+#         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
+# 
+#     gen_cmd = _pick_vapls_command(cmds, "banana")
+#     if gen_cmd is None:
+#         log.warning(
+#             "[RELAY-BANANA] VaPls /banana not found in channel %s (saw %d candidates)",
+#             channel_id,
+#             len(cmds),
+#         )
+#         return web.json_response(
+#             {"error": "banana command not found in channel"}, status=404
+#         )
+# 
+#     try:
+#         await gen_cmd(prompt=query)
+#         log.info(
+#             f"[RELAY-BANANA] invoked /banana prompt={query!r} in channel={channel_id}"
+#         )
+#         return web.json_response({"invoked": True, "query": query})
+#     except discord.HTTPException as e:
+#         if getattr(e, "status", None) == 429:
+#             log.warning(
+#                 "[RELAY-BANANA] Discord rate-limited /banana invocation: %s", e
+#             )
+#             return web.json_response({"error": f"rate-limited: {e}"}, status=429)
+#         log.exception("[RELAY-BANANA] invocation failed")
+#         analytics.capture_exception(
+#             e, properties={"action": "relay_banana_invocation_failed"}
+#         )
+#         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+#     except Exception as e:
+#         log.exception("[RELAY-BANANA] invocation failed")
+#         analytics.capture_exception(
+#             e, properties={"action": "relay_banana_invocation_failed"}
+#         )
+#         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
 async def _relay_join(request: web.Request) -> web.Response:
@@ -3587,7 +3703,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
     app.router.add_post("/invoke_generarimagen", _relay_invoke_generarimagen)
-    app.router.add_post("/invoke_banana", _relay_invoke_banana)
+    # app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)

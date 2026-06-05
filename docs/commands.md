@@ -8,7 +8,7 @@
 | `/soundpad` | Abre el panel de Soundpad para reproducir clips locales. | `soundpadCommand`, `config`, `analytics` |
 | `/vapls` | Pregunta al bot Gemini sin memoria. | `geminiCommand`, `geminiClient`, `analytics` |
 | `/indio` | Conversación con memoria corta por guild + memoria de largo plazo (rasgos, anécdotas, chistes internos) destilada por Gemini. | `geminiCommand`, `geminiClient`, `analytics` |
-| `/banana` | Genera una imagen con Gemini usando Playwright (gratis, sin API key). | `geminiImage`, `config`, `analytics`, Playwright |
+| `/banana` (Pausado) | Genera una imagen con Gemini usando Playwright (gratis, sin API key). Actualmente en desuso por bloqueos de seguridad de Google. | `geminiImage`, `config`, `analytics`, Playwright |
 | `/sugerencias` | Manda una idea/feature. Gemini Flash-Lite la categoriza (la agrupa con ideas parecidas o abre un grupo nuevo) y **solo se persiste si logró categorizar**; el usuario recibe feedback de a qué grupo quedó (y cuántos lo pidieron antes). | `suggestionsCommand`, `geminiClient`, `analytics` |
 | `/sugerencias-ver` | Lista los grupos de sugerencias existentes, ordenados por las más pedidas. | `suggestionsCommand`, `analytics` |
 | `/quit` | Desconecta el bot del canal de voz sin tocar la cola. | `bot.py`, `analytics` |
