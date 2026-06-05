@@ -350,6 +350,39 @@ async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
     assert "🔊" in combined  # sound-specific suffix
 
 
+async def test_dispatch_sound_rejected_when_music_playing(monkeypatch):
+    """PLAY_SOUND must be rejected when music is currently playing,
+    to avoid interrupting the ongoing playback."""
+    import geminiCommand
+    import playCommand
+
+    vc = MagicMock()
+    vc.is_playing.return_value = True
+    player = types.SimpleNamespace(
+        vc=vc,
+        currentSong={"id": "x", "title": "Queen - Bohemian Rhapsody"},
+    )
+    monkeypatch.setattr(playCommand, "guildPlayers", {100: player}, raising=True)
+
+    edited = []
+    handle = _make_handle(via_relay=False, edited_content=edited)
+
+    await geminiCommand._dispatch_indio_actions(
+        MagicMock(),
+        100,
+        [("PLAY_SOUND", "risas")],
+        reply_handle=handle,
+        reply_text="tomá",
+        requester_member=_member_in_voice(),
+    )
+
+    assert edited, "expected the reply to be edited with a failure reason"
+    combined = edited[0]
+    assert "tomá" in combined
+    assert "no se puede" in combined.lower()
+    assert "música" in combined.lower() or "musica" in combined.lower()
+
+
 async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
     """When the reply was split into several messages we must NOT rewrite one
     chunk with the whole reply (that duplicates earlier chunks / risks the

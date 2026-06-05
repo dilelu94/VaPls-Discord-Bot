@@ -1634,6 +1634,7 @@ _ACTION_FAILURE_MESSAGES = {
     "resume: no voice channel to rejoin": "no hay nadie en voz al que pueda conectarme",
     "resume: nothing to resume": "no me acuerdo qué estaba sonando, decime qué pongo",
     "pause: not playing": "no estaba sonando nada, no tengo qué pausar",
+    "sound: fail — music playing": "no se puede, hay música sonando",
 }
 
 
@@ -1849,6 +1850,13 @@ async def _dispatch_indio_actions(
                     statuses.append(f"music: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_MUSIC '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "PLAY_SOUND":
+                    # Block soundpad when music is playing — would interrupt
+                    # the current song.
+                    _player = playCommand.guildPlayers.get(int(guild_id))
+                    if _player is not None and _player.currentSong:
+                        statuses.append("sound: fail — music playing")
+                        logger.info("indio PLAY_SOUND rejected: music is playing")
+                        continue
                     ok, msg = await _invoke_slash_via_userbot(
                         "invoke_soundpad",
                         channel_id=config.INDIO_PLAY_CHANNEL_ID,
