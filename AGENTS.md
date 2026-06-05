@@ -244,9 +244,9 @@ Hay dos comandos para generar imágenes de manera gratuita:
    2. Ir a Settings → Access Tokens → "New token" (tipo **read**)
    3. Poner el token en `.env`: `HUGGINGFACE_API_TOKEN=tu_token`
 
-2. **`/banana` (Playwright / Gemini web UI) [PAUSADO/INACTIVO]**:
-   Genera imágenes usando automatización de navegador con Playwright conectándose a la UI de Gemini. El módulo es `geminiImage.py`. Actualmente inactivo debido a los estrictos controles de seguridad de login de Google (bloqueo de cuentas automatizadas).
-   **Setup (cuando se reactive):**
+2. **`/banana` (Playwright / Gemini web UI) [EN DESUSO / INACTIVO]**:
+   Genera imágenes usando automatización de navegador con Playwright conectándose a la UI de Gemini. Este comando ha quedado en desuso por un tiempo debido a los constantes bloqueos de seguridad de Google a cuentas automatizadas y las restricciones de login. El código se encuentra extraído y comentado en `geminiImage_legacy.py` y `geminiImage.py`.
+   **Setup (si se llega a reactivar en el futuro):**
    1. Ejecutar `python setup_gemini_session.py` para abrir Chromium en modo interactivo, logearse con una cuenta de Google en Gemini y crear el archivo `/tmp/gemini_ready` para guardar la sesión en `gemini_auth.json`.
 
 ## ⚠️ Errores conocidos y workarounds

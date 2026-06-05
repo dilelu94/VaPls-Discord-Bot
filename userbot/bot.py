@@ -1675,13 +1675,12 @@ def _extract_indio_span(vosk_result: Optional[dict]) -> Optional[tuple[float, fl
     return None
 
 
-def _slice_wake_audio(
-    segment: bytes, span: tuple[float, float], pad_s: float = 0.25
-) -> bytes:
+def _slice_wake_audio(segment, span, pad_s=0.25):
     """Slice [start-pad, end+pad] seconds out of a 16k mono s16le ``segment``.
 
-    Times are seconds from the start of the segment (which aligns with the
-    VOSK recognizer stream). Returns b"" if the window is empty/out of range.
+    ``segment`` is bytes; ``span`` is a (start, end) tuple in seconds from the
+    start of the segment (which aligns with the VOSK recognizer stream).
+    Returns b"" if the window is empty/out of range.
     """
     start_s, end_s = span
     s = max(0, int((start_s - pad_s) * _BYTES_PER_SECOND_16K))
