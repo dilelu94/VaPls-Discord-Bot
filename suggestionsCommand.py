@@ -112,6 +112,7 @@ class Group:
     summary: str
     created_at: str
     updated_at: str
+    issue_number: Optional[int] = None
     submissions: list[Submission] = field(default_factory=list)
 
     @property
@@ -123,7 +124,7 @@ class Group:
         self.updated_at = sub.at
 
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "id": self.id,
             "title": self.title,
             "summary": self.summary,
@@ -131,16 +132,27 @@ class Group:
             "updated_at": self.updated_at,
             "submissions": [s.to_dict() for s in self.submissions],
         }
+        if self.issue_number is not None:
+            d["issue_number"] = self.issue_number
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Group":
         subs = d.get("submissions")
+        issue_raw = d.get("issue_number")
+        issue_number: Optional[int] = None
+        if issue_raw is not None:
+            try:
+                issue_number = int(issue_raw)
+            except (ValueError, TypeError):
+                pass
         return cls(
             id=str(d.get("id") or _new_group_id()),
             title=str(d.get("title", "")),
             summary=str(d.get("summary", "")),
             created_at=str(d.get("created_at", "")) or _now_iso(),
             updated_at=str(d.get("updated_at", "")) or _now_iso(),
+            issue_number=issue_number,
             submissions=[Submission.from_dict(s) for s in subs]
             if isinstance(subs, list)
             else [],
@@ -213,10 +225,14 @@ grupos existentes o si abre un grupo nuevo.
 
 Devolves SOLO un JSON con esta forma exacta, sin markdown ni explicacion:
 
-  Si encaja en un grupo existente:
+  Si encaja en un grupo existente (idea similar, sin info nueva relevante):
     {"match_id": "<id del grupo>"}
 
-  Si es una idea nueva:
+  Si encaja en un grupo existente Y APORTA informacion nueva o un enfoque
+  distinto que no esta cubierto por el titulo/resumen actual:
+    {"match_id": "<id del grupo>", "update_title": "<nuevo titulo o null si no cambia>", "update_summary": "<resumen expandido que incorpora la/s idea/s>"}
+
+  Si es una idea nueva (no encaja en ningun grupo):
     {"new_title": "<titulo corto, <=80 chars>", "new_summary": "<resumen 1-2 frases, <=240 chars>"}
 
 Reglas:
@@ -225,6 +241,8 @@ Reglas:
   que separar.
 - El titulo y resumen van en castellano rioplatense, sin emojis, sin comillas.
 - Si la idea es ambigua, intenta capturar la intencion general en el resumen.
+- El update_title es opcional: solo si el titulo actual se queda corto para
+  cubrir el alcance combinado. Si no cambia, poner null.
 """
 
 
@@ -264,6 +282,8 @@ class Classification:
     match_id: Optional[str] = None
     new_title: Optional[str] = None
     new_summary: Optional[str] = None
+    update_title: Optional[str] = None
+    update_summary: Optional[str] = None
 
 
 async def _classify(idea: str, groups: list[Group]) -> Optional[Classification]:
@@ -285,9 +305,22 @@ async def _classify(idea: str, groups: list[Group]) -> Optional[Classification]:
         return None
     match_id = parsed.get("match_id")
     if isinstance(match_id, str) and match_id.strip():
-        # Validate the id actually exists; otherwise treat as no-match.
         if any(g.id == match_id.strip() for g in groups):
-            return Classification(match_id=match_id.strip())
+            update_title = parsed.get("update_title")
+            update_summary = parsed.get("update_summary")
+            return Classification(
+                match_id=match_id.strip(),
+                update_title=(
+                    update_title.strip()[:_MAX_TITLE_CHARS]
+                    if isinstance(update_title, str) and update_title.strip()
+                    else None
+                ),
+                update_summary=(
+                    update_summary.strip()[:_MAX_SUMMARY_CHARS]
+                    if isinstance(update_summary, str) and update_summary.strip()
+                    else None
+                ),
+            )
         logger.warning("suggestions: classifier returned unknown match_id %r", match_id)
     title = parsed.get("new_title")
     summary = parsed.get("new_summary")
@@ -299,6 +332,67 @@ async def _classify(idea: str, groups: list[Group]) -> Optional[Classification]:
             ),
         )
     return None
+
+
+# --------------------------------------------------------------------------
+# GitHub Issues helpers
+# --------------------------------------------------------------------------
+def _build_issue_body(group: Group) -> str:
+    lines = [
+        f"## Resumen\n{group.summary or '(sin descripcion)'}",
+        "",
+        "## Sugerencias recibidas",
+    ]
+    for s in group.submissions:
+        lines.append(f'- **{s.user_name}**: "{s.text}" ({s.at})')
+    lines.extend(["", "---", "*Creado automáticamente desde VaPls Discord Bot*"])
+    return "\n".join(lines)
+
+
+def _build_comment(sub: Submission) -> str:
+    return f'+1 de **{sub.user_name}** — "{sub.text}" ({sub.at})'
+
+
+async def _sync_github_created(group: Group) -> Optional[int]:
+    """Create a GitHub issue for a newly created group. Returns issue number."""
+    import githubIssues
+
+    title = f"[{config.GITHUB_ISSUE_LABEL}] {group.title}"
+    body = _build_issue_body(group)
+    label = config.GITHUB_ISSUE_LABEL
+    return await githubIssues.create_issue(
+        title=title,
+        body=body,
+        labels=[label] if label else None,
+    )
+
+
+async def _sync_github_matched(
+    group: Group, sub: Submission, cls: Classification
+) -> None:
+    """Add a comment for a matched suggestion. Optionally update issue body
+    when the classifier detected new info (update_title / update_summary)."""
+    import githubIssues
+
+    if group.issue_number is None:
+        return
+
+    comment = _build_comment(sub)
+    await githubIssues.add_comment(group.issue_number, body=comment)
+
+    if cls.update_title is not None or cls.update_summary is not None:
+        new_title = None
+        if cls.update_title is not None:
+            new_title = f"[{config.GITHUB_ISSUE_LABEL}] {cls.update_title}"
+        new_body = None
+        if cls.update_summary is not None:
+            group.summary = cls.update_summary
+            new_body = _build_issue_body(group)
+        await githubIssues.update_issue(
+            group.issue_number,
+            title=new_title,
+            body=new_body,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -341,6 +435,10 @@ async def submit_suggestion(
             await store.save(groups)
             result = SubmissionResult(action="matched", group=target, prior_count=prior)
             _track(result, user_id)
+            await _sync_github_matched(target, sub, cls)
+            if cls.update_summary is not None:
+                target.summary = cls.update_summary
+                await store.save(groups)
             return result
 
     group = Group(
@@ -356,6 +454,10 @@ async def submit_suggestion(
     await store.save(groups)
     result = SubmissionResult(action="created", group=group, prior_count=0)
     _track(result, user_id)
+    issue_number = await _sync_github_created(group)
+    if issue_number is not None:
+        group.issue_number = issue_number
+        await store.save(groups)
     return result
 
 
@@ -481,6 +583,50 @@ async def sugerenciasVerLogic(ctx) -> None:
         "suggestions_viewed", distinct_id=str(getattr(ctx.author, "id", "0"))
     )
     await _send(ctx, _format_listing(groups))
+
+
+# --------------------------------------------------------------------------
+# Migration
+# --------------------------------------------------------------------------
+async def migrate_existing_suggestions(dry_run: bool = False) -> str:
+    """Create GitHub issues for existing groups that don't have one yet.
+
+    Returns a human-readable summary of what was done.
+    If ``dry_run=True``, only counts what would be created.
+    """
+    import githubIssues
+
+    if not bool(config.GITHUB_TOKEN and config.GITHUB_REPO):
+        return "GitHub no configurado (GITHUB_TOKEN/GITHUB_REPO) — no se puede migrar."
+
+    store = _store()
+    groups = await asyncio.to_thread(store.load)
+    pending = [g for g in groups if g.issue_number is None]
+
+    if not pending:
+        return "Todos los grupos ya tienen issue de GitHub."
+
+    if dry_run:
+        return f"{len(pending)} grupo(s) sin issue de GitHub."
+
+    ok = 0
+    fail = 0
+    for g in pending:
+        issue_number = await _sync_github_created(g)
+        if issue_number is not None:
+            g.issue_number = issue_number
+            ok += 1
+        else:
+            fail += 1
+
+    if ok:
+        await store.save(groups)
+
+    if fail:
+        return (
+            f"Migrados {ok}/{len(pending)} grupo(s). {fail} fallaron — revisá los logs."
+        )
+    return f"Migrados {ok} grupo(s) a GitHub Issues correctamente."
 
 
 async def _send(ctx, message: str) -> None:

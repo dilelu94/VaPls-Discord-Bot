@@ -19,7 +19,11 @@ from playCommand import playLogic, openDjMenu
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic
-from suggestionsCommand import sugerenciasLogic, sugerenciasVerLogic
+from suggestionsCommand import (
+    sugerenciasLogic,
+    sugerenciasVerLogic,
+    migrate_existing_suggestions,
+)
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics
@@ -716,15 +720,15 @@ async def generarimagen(
 #     ),
 # ):
 #     """Slash command: generate an image via Gemini web UI (browser automation).
-# 
+#
 #     Args:
 #         ctx: Discord application context.
 #         prompt: Image description.
-# 
+#
 #     Side Effects:
 #         Launches a headless browser, generates the image, sends it to Discord,
 #         and deletes the temp file.
-# 
+#
 #     Async:
 #         This function is a coroutine and must be awaited.
 #     """
@@ -786,6 +790,37 @@ async def sugerencias_ver(ctx):
         log.warning("sugerencias-ver defer failed: %s", e)
     _track_command(ctx, "sugerencias-ver", {})
     await sugerenciasVerLogic(ctx)
+
+
+@bot.slash_command(
+    name="sugerencias-migrar",
+    description="[Admin] Migra sugerencias existentes a GitHub Issues",
+)
+async def sugerencias_migrar(
+    ctx,
+    dry_run: discord.Option(
+        bool,
+        description="Solo mostrar cuántas faltan sin crear issues",
+        required=False,
+        default=True,
+    ) = True,
+):
+    """Slash command: migrate existing suggestion groups to GitHub Issues.
+
+    By default runs as a dry-run showing how many groups need migration.
+    Pass ``dry_run=False`` to actually create the issues.
+    """
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception as e:
+        log.warning("sugerencias-migrar defer failed: %s", e)
+    _track_command(ctx, "sugerencias-migrar", {"dry_run": dry_run})
+    result = await migrate_existing_suggestions(dry_run=dry_run)
+    try:
+        await ctx.followup.send(result, ephemeral=True)
+    except Exception:
+        log.exception("sugerencias-migrar: reply failed")
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
@@ -1133,7 +1168,7 @@ if __name__ == "__main__":
         analytics.shutdown()
         # try:
         #     import asyncio
-        # 
+        #
         #     asyncio.run(geminiImage.close())
         # except Exception:
         #     pass

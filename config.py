@@ -125,6 +125,13 @@ VOICE_IDLE_TIMEOUT_SECONDS = float(os.getenv("VOICE_IDLE_TIMEOUT_SECONDS", "1"))
 SUGGESTIONS_PATH = os.getenv("SUGGESTIONS_PATH", "data/suggestions.json")
 SUGGESTIONS_MODEL = os.getenv("SUGGESTIONS_MODEL", "gemini-2.5-flash-lite")
 
+# GitHub Issues for /sugerencias: when GITHUB_TOKEN is set, each suggestion
+# group becomes a GitHub issue with label "sugerencia". Matched suggestions
+# add +1 comments. Leave GITHUB_TOKEN empty for local-only.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GITHUB_REPO = os.getenv("GITHUB_REPO", "dilelu94/VaPls-Discord-Bot").strip()
+GITHUB_ISSUE_LABEL = os.getenv("GITHUB_ISSUE_LABEL", "sugerencia").strip()
+
 # --- ASR-quality feedback (inline reactions) -------------------------------
 # Cada transcripción de voz que entra al `/indio` puede ser sampleada para
 # pedir feedback de calidad del ASR: el bot agrega 👍 / ❌ al mensaje de
