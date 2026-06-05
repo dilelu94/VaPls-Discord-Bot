@@ -164,7 +164,7 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 - `/quit`: desconecta sin limpiar cola.
 - `/entraindio`: hace que el userbot (Indio) entre al canal de voz del invocador (relay `/join`).
 - `/sensibilidad` `1|2|3`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
-- `/banana`: genera una imagen con Gemini (gratis, sin API key, usando Playwright).
+- `/banana` (Pausado/Inactivo): genera una imagen con Gemini (gratis, sin API key, usando Playwright). Actualmente en pausa por bloqueos de autenticación de Google.
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
@@ -244,9 +244,9 @@ Hay dos comandos para generar imágenes de manera gratuita:
    2. Ir a Settings → Access Tokens → "New token" (tipo **read**)
    3. Poner el token en `.env`: `HUGGINGFACE_API_TOKEN=tu_token`
 
-2. **`/banana` (Playwright / Gemini web UI)**:
-   Genera imágenes usando automatización de navegador con Playwright conectándose a la UI de Gemini. El módulo es `geminiImage.py`.
-   **Setup:**
+2. **`/banana` (Playwright / Gemini web UI) [PAUSADO/INACTIVO]**:
+   Genera imágenes usando automatización de navegador con Playwright conectándose a la UI de Gemini. El módulo es `geminiImage.py`. Actualmente inactivo debido a los estrictos controles de seguridad de login de Google (bloqueo de cuentas automatizadas).
+   **Setup (cuando se reactive):**
    1. Ejecutar `python setup_gemini_session.py` para abrir Chromium en modo interactivo, logearse con una cuenta de Google en Gemini y crear el archivo `/tmp/gemini_ready` para guardar la sesión en `gemini_auth.json`.
 
 ## ⚠️ Errores conocidos y workarounds

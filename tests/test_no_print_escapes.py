@@ -39,6 +39,10 @@ _SKIP_DIRS = {
 _ALLOW_PRINT = {
     "posthog_client.py",  # has debug prints guarded by if/else
     "setup_gemini_session.py",  # standalone CLI utility for Gemini session setup
+    "setup_gemini_auto.py",  # standalone CLI utility for Gemini auto-setup
+    "dump_elements.py",  # one-off debug script
+    "test_app_url.py",  # one-off debug script
+    "test_app_url_headful.py",  # one-off debug script
 }
 
 # Patterns that are allowed after ``except`` without logging.

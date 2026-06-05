@@ -525,7 +525,9 @@ async def play(
     Async:
         This function is a coroutine and must be awaited.
     """
-    will_redirect = config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    will_redirect = (
+        config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    )
     await safe_defer(ctx, ephemeral=will_redirect)
     redirect_ch = None
     if will_redirect:
@@ -596,7 +598,9 @@ async def soundpad(
         await ctx.respond(msg, ephemeral=True)
         return
 
-    will_redirect = config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    will_redirect = (
+        config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    )
     await safe_defer(ctx, ephemeral=will_redirect)
     redirect_ch = None
     if will_redirect:
@@ -1130,6 +1134,7 @@ if __name__ == "__main__":
         analytics.shutdown()
         try:
             import asyncio
+
             asyncio.run(geminiImage.close())
         except Exception:
             pass

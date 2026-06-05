@@ -360,9 +360,7 @@ _INDIO_TOOLS = [
             "required": ["prompt"],
         },
     },
-
 ]
-
 
 
 _STORED_MSG_MAX_CHARS = 1500
@@ -913,7 +911,13 @@ async def _maybe_refresh_current_members(mem_key: str, guild_id: Optional[int]) 
         )
 
 
-_INDIO_USER_FIELDS: tuple[str, ...] = ("traits", "preguntas_tipicas", "anecdotas", "descripcion", "fotos")
+_INDIO_USER_FIELDS: tuple[str, ...] = (
+    "traits",
+    "preguntas_tipicas",
+    "anecdotas",
+    "descripcion",
+    "fotos",
+)
 
 
 def _static_user_traits() -> dict[str, dict[str, list[str]]]:
@@ -1688,7 +1692,6 @@ _ACTION_RELAY_SUCCESS_SUFFIX = {
 }
 
 
-
 # Per-guild lock so two concurrent indio dispatches in the same guild
 # (e.g. text /indio + voice wake word firing back-to-back) serialize their
 # play/sound invocations. Without this, two relay calls race the userbot
@@ -1734,7 +1737,6 @@ _MUSIC_STATUS_PREFIX = {
 }
 
 
-
 def _gate_music_action(action: str, member) -> Optional[str]:
     """Return a status string when the music action must be blocked, or None
     when it should proceed.
@@ -1770,7 +1772,6 @@ async def _dispatch_indio_actions(
     attachment_urls: Optional[list[dict]] = None,
     source_message_id: Optional[int] = None,
 ) -> list[str]:
-
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
     real "/play" / "/soundpad" slash commands in the chat. Both land in
@@ -1880,7 +1881,11 @@ async def _dispatch_indio_actions(
                     statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "GENERATE_IMAGE":
-                    target_cid = getattr(reply_handle, "channel_id", None) or config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+                    target_cid = (
+                        getattr(reply_handle, "channel_id", None)
+                        or config.INDIO_REPLY_CHANNEL_ID
+                        or 1490008278275461280
+                    )
                     ok, msg = await _invoke_slash_via_userbot(
                         "invoke_generarimagen",
                         channel_id=target_cid,
@@ -1896,13 +1901,24 @@ async def _dispatch_indio_actions(
                         try:
                             import huggingfaceImage
                             import discord
-                            path = await huggingfaceImage.generate(arg, config.HUGGINGFACE_API_TOKEN)
+
+                            path = await huggingfaceImage.generate(
+                                arg, config.HUGGINGFACE_API_TOKEN
+                            )
                             if path:
-                                target_channel_id = config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+                                target_channel_id = (
+                                    config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
+                                )
                                 target_channel = bot.get_channel(target_channel_id)
                                 if target_channel is None:
-                                    target_channel = await bot.fetch_channel(target_channel_id)
-                                author_mention = f"<@{requester_member.id}>" if requester_member else "Alguien"
+                                    target_channel = await bot.fetch_channel(
+                                        target_channel_id
+                                    )
+                                author_mention = (
+                                    f"<@{requester_member.id}>"
+                                    if requester_member
+                                    else "Alguien"
+                                )
                                 await target_channel.send(
                                     content=f"{author_mention}, acá está la imagen que me pediste para: **{arg}**",
                                     file=discord.File(path, filename="imagen.png"),
@@ -1916,13 +1932,21 @@ async def _dispatch_indio_actions(
                             else:
                                 msg = "generation failed"
                         except Exception as e:
-                            logger.exception("direct HF image generation fallback failed")
+                            logger.exception(
+                                "direct HF image generation fallback failed"
+                            )
                             msg = f"fallback error: {e}"
                     statuses.append(f"image: {'ok' if ok else 'fail'} — {msg}")
-                    logger.info("indio GENERATE_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
+                    logger.info(
+                        "indio GENERATE_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg
+                    )
                 elif action == "EDIT_IMAGE":
-                    target_cid = getattr(reply_handle, "channel_id", None) or config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
-                    
+                    target_cid = (
+                        getattr(reply_handle, "channel_id", None)
+                        or config.INDIO_REPLY_CHANNEL_ID
+                        or 1490008278275461280
+                    )
+
                     if not attachment_urls:
                         ok = False
                         msg = "no image to edit"
@@ -1930,12 +1954,15 @@ async def _dispatch_indio_actions(
                             target_channel = bot.get_channel(target_cid)
                             if target_channel is None:
                                 target_channel = await bot.fetch_channel(target_cid)
-                            await target_channel.send("❌ Tenés que responder a un mensaje con una imagen para que la pueda editar.")
+                            await target_channel.send(
+                                "❌ Tenés que responder a un mensaje con una imagen para que la pueda editar."
+                            )
                         except Exception:
                             pass
                     else:
                         images = [
-                            u for u in attachment_urls
+                            u
+                            for u in attachment_urls
                             if u.get("mime_type", "").startswith("image/")
                         ]
                         if not images:
@@ -1945,48 +1972,69 @@ async def _dispatch_indio_actions(
                                 target_channel = bot.get_channel(target_cid)
                                 if target_channel is None:
                                     target_channel = await bot.fetch_channel(target_cid)
-                                await target_channel.send("❌ El mensaje al que respondiste no tiene ninguna imagen válida.")
+                                await target_channel.send(
+                                    "❌ El mensaje al que respondiste no tiene ninguna imagen válida."
+                                )
                             except Exception:
                                 pass
                         else:
                             img = images[0]
                             os.makedirs("image_cache", exist_ok=True)
-                            
-                            suffix = os.path.splitext(img.get("filename", "input.png"))[1] or ".png"
+
+                            suffix = (
+                                os.path.splitext(img.get("filename", "input.png"))[1]
+                                or ".png"
+                            )
                             input_path = f"image_cache/input_{source_message_id or 'temp'}{suffix}"
-                            
+
                             download_ok = False
                             try:
                                 async with aiohttp.ClientSession() as sess:
-                                    async with sess.get(img["url"], timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                                    async with sess.get(
+                                        img["url"],
+                                        timeout=aiohttp.ClientTimeout(total=15),
+                                    ) as resp:
                                         if resp.status == 200:
                                             with open(input_path, "wb") as f:
                                                 f.write(await resp.read())
                                             download_ok = True
                             except Exception as e:
-                                logger.exception("Failed to download replied image for editing")
+                                logger.exception(
+                                    "Failed to download replied image for editing"
+                                )
                                 ok = False
                                 msg = f"download failed: {e}"
-                                
+
                             if download_ok:
                                 try:
                                     import huggingfaceImage
                                     import discord
-                                    
-                                    output_path = await huggingfaceImage.generate_img2img(
-                                        arg, input_path
+
+                                    output_path = (
+                                        await huggingfaceImage.generate_img2img(
+                                            arg, input_path
+                                        )
                                     )
                                     if output_path:
                                         target_channel = bot.get_channel(target_cid)
                                         if target_channel is None:
-                                            target_channel = await bot.fetch_channel(target_cid)
-                                        author_mention = f"<@{requester_member.id}>" if requester_member else "Alguien"
-                                        
+                                            target_channel = await bot.fetch_channel(
+                                                target_cid
+                                            )
+                                        author_mention = (
+                                            f"<@{requester_member.id}>"
+                                            if requester_member
+                                            else "Alguien"
+                                        )
+
                                         await target_channel.send(
                                             content=f"{author_mention}, acá está la imagen editada para: **{arg}**",
-                                            file=discord.File(output_path, filename="imagen_editada.png"),
+                                            file=discord.File(
+                                                output_path,
+                                                filename="imagen_editada.png",
+                                            ),
                                         )
-                                        
+
                                         try:
                                             os.unlink(output_path)
                                         except Exception:
@@ -1997,18 +2045,27 @@ async def _dispatch_indio_actions(
                                         ok = False
                                         msg = "generation failed"
                                 except Exception as e:
-                                    logger.exception("HF image-to-image generation failed")
+                                    logger.exception(
+                                        "HF image-to-image generation failed"
+                                    )
                                     ok = False
                                     msg = str(e)
                                     try:
                                         target_channel = bot.get_channel(target_cid)
                                         if target_channel is None:
-                                            target_channel = await bot.fetch_channel(target_cid)
+                                            target_channel = await bot.fetch_channel(
+                                                target_cid
+                                            )
                                         error_detail = str(e)
-                                        if "402" in error_detail or "Pago Requerido" in error_detail:
+                                        if (
+                                            "402" in error_detail
+                                            or "Pago Requerido" in error_detail
+                                        ):
                                             await target_channel.send(error_detail)
                                         else:
-                                            await target_channel.send(f"❌ Error al editar la imagen: {e}")
+                                            await target_channel.send(
+                                                f"❌ Error al editar la imagen: {e}"
+                                            )
                                     except Exception:
                                         pass
                                 finally:
@@ -2019,7 +2076,6 @@ async def _dispatch_indio_actions(
                     statuses.append(f"image_edit: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio EDIT_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "DJ_MODE":
-
                     # Activate Auto-DJ + post the panel — same handler as /dj.
                     # Use the channel where the Indio just replied so the panel
                     # shows up next to the conversation, not in a fixed channel.
@@ -2141,6 +2197,27 @@ async def _dispatch_indio_actions(
         if reply_handle is not None and statuses:
             try:
                 primary_action = actions[0][0] if actions else ""
+                # Resolve voice channel name to include in PLAY_MUSIC success text
+                voice_channel_name = None
+                if requester_member is not None:
+                    voice = getattr(requester_member, "voice", None)
+                    if voice is not None:
+                        vc = getattr(voice, "channel", None)
+                        if vc is not None:
+                            voice_channel_name = getattr(vc, "name", None)
+                if voice_channel_name is None and guild_id is not None:
+                    try:
+                        import playCommand as _pc
+
+                        _pl = _pc.guildPlayers.get(int(guild_id))
+                        if _pl is not None:
+                            _pvc = getattr(_pl, "vc", None)
+                            if _pvc is not None:
+                                _pch = getattr(_pvc, "channel", None)
+                                if _pch is not None:
+                                    voice_channel_name = getattr(_pch, "name", None)
+                    except Exception:
+                        pass
                 first_failure = next(
                     (s for s in statuses if _failure_feedback(s) is not None), None
                 )
@@ -2150,12 +2227,18 @@ async def _dispatch_indio_actions(
                     # Userbot relay ack — playback may still fail in VaPls
                     # downstream and we won't know. Soften the wording so the
                     # indio doesn't falsely claim audio that may never play.
-                    result_line = _ACTION_RELAY_SUCCESS_SUFFIX.get(
+                    suffix = _ACTION_RELAY_SUCCESS_SUFFIX.get(
                         primary_action,
                         _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅"),
                     )
+                    if primary_action == "PLAY_MUSIC" and voice_channel_name:
+                        suffix = suffix.replace("🎵", f"en **{voice_channel_name}** 🎵")
+                    result_line = suffix
                 else:
-                    result_line = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
+                    suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
+                    if primary_action == "PLAY_MUSIC" and voice_channel_name:
+                        suffix = suffix.replace("🎵", f"en **{voice_channel_name}** 🎵")
+                    result_line = suffix
                 if result_line:
                     via_relay = getattr(reply_handle, "via_relay", False)
                     ch_id = getattr(reply_handle, "channel_id", None)
@@ -2612,8 +2695,6 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
         analytics.capture_exception(
             e, properties={"action": "indio_play_chosen_song_failed"}
         )
-
-
 
 
 _INDIO_PREFIX_RE = re.compile(
@@ -3404,7 +3485,6 @@ async def indioLogic(
             )
         )
 
-
     # Turnos que dispararon una funcion (play_music, play_sound, etc.) no se
     # guardan en memoria: son mensajes operativos, no conversacionales, y
     # contaminan el historial si persisten (feedback loop "voz → play_music").
@@ -3592,9 +3672,7 @@ async def indioFromVoice(
     # relevantes (sea del mensaje original o del reply).
     if attachment_urls:
         images = [
-            u
-            for u in attachment_urls
-            if u.get("mime_type", "").startswith("image/")
+            u for u in attachment_urls if u.get("mime_type", "").startswith("image/")
         ][:3]
         if images:
             downloaded = []
@@ -3729,7 +3807,7 @@ async def indioFromVoice(
     # redirige a otro canal (asi el user recibe notificacion). Vota-open no
     # quiere header arriba — la lista de opciones tiene que ir limpia para
     # que las reacciones queden en la primera linea.
-    
+
     # Intercept literal commands (safety net)
     _cmd_match = _LITERAL_CMD_RE.search(clean_reply)
     if _cmd_match:
@@ -3851,7 +3929,6 @@ async def indioFromVoice(
                 source_message_id=source_message_id,
             )
         )
-
 
     # No guardar mensajes que activaron una funcion (play_music, etc.) ni
     # transcripciones de voz: son mensajes operativos que contaminan el historial

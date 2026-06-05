@@ -43,3 +43,10 @@ image_cache/*
 # Gemini Playwright Gmail session authentication state
 gemini_auth.json
 
+# One-off scripts (not part of the project)
+setup_gemini_auto.py
+setup_gemini_session.py
+dump_elements.py
+test_app_url.py
+test_app_url_headful.py
+
