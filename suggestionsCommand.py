@@ -142,8 +142,6 @@ class Group:
         }
         if self.issue_number is not None:
             d["issue_number"] = self.issue_number
-        if self.completed:
-            d["completed"] = True
         return d
 
     @classmethod
@@ -601,8 +599,10 @@ async def sugerenciasVerLogic(ctx) -> None:
 # Migration
 # --------------------------------------------------------------------------
 async def sync_closed_issues() -> str:
-    """Check GitHub for closed suggestion issues and mark groups as completed.
+    """Check GitHub for closed suggestion issues and delete matching groups.
 
+    When a GitHub issue with the configured label is closed, the corresponding
+    local group is removed so the suggestion no longer appears in listings.
     Returns a human-readable summary.
     """
     import githubIssues
@@ -617,15 +617,18 @@ async def sync_closed_issues() -> str:
 
     store = _store()
     groups = await asyncio.to_thread(store.load)
-    marked = 0
+    deleted = 0
+    remaining: list[Group] = []
     for g in groups:
-        if g.issue_number is not None and g.issue_number in closed and not g.completed:
-            g.completed = True
-            marked += 1
+        if g.issue_number is not None and g.issue_number in closed:
+            deleted += 1
+        else:
+            remaining.append(g)
 
-    if marked:
+    if deleted:
+        groups[:] = remaining
         await store.save(groups)
-        return f"{marked} grupo(s) marcados como completados."
+        return f"{deleted} grupo(s) eliminados porque su issue de GitHub fue cerrado."
 
     return "Ningún grupo pendiente corresponde a issues cerrados."
 

@@ -58,7 +58,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 ## 🛠️ Principios de Programación de Lógica
 
 - **Centralización en "vapls":** Los comandos y la lógica de interacción principal deben programarse siempre en el **Main bot** ("vapls").
-- **El Userbot es un usuario:** El *Indio* (userbot) debe ser tratado como un usuario más. Si se le pide realizar una tarea, debe invocar los comandos de "vapls" programáticamente mediante una función que ejecute el comando slash con sus argumentos (ya que no puede usar comandos slash literales por texto).
+- **El Userbot es un usuario:** El _Indio_ (userbot) debe ser tratado como un usuario más. Si se le pide realizar una tarea, debe invocar los comandos de "vapls" programáticamente mediante una función que ejecute el comando slash con sus argumentos (ya que no puede usar comandos slash literales por texto).
 - **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea estrictamente necesario por limitaciones técnicas o para su funcionamiento como IA que simula ser una persona real (ej. lógica de personalidad, comportamiento humano o integraciones que no puedan delegarse al bot "vapls").
 
 ## 🌐 Servidor de producción (2026-05-30)
@@ -183,12 +183,12 @@ userbot). **El preset es in-memory y se resetea al default (4) al reiniciar el
 userbot.** Implementación en `userbot/bot.py` (`_PRESETS`, `_build_vosk_grammar`,
 `_set_sensitivity`, `_active_wake_patterns`); comando en `bot.py`.
 
-| Preset          | Invocación                                     | Grammar pool                                                                                      | Idea                                                                                                                                                                                                                                                                                                   |
-| --------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **1**           | `che/que/eh indio` + verbos                    | chico (solo wake-words + decoys mínimos)                                                          | El más sensible.                                                                                                                                                                                                                                                                                       |
-| **2**           | solo `che indio` + verbos                      | chico                                                                                             | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`).                                                                                                                                                                                       |
-| **3**           | `che/que/eh indio` + verbos                    | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal.                                                                                                                                                  |
-| **4** (default) | solo `che indio` + verbos (igual que preset 2), pero single-best + `SetWords(True)` | chico (igual que preset 2) | Segunda capa post-VOSK: usa los **timestamps por palabra** de VOSK para cortar el audio EXACTO de la palabra `indio` (desde el buffer del segmento), y corre un pase corto de Whisper (`_run_whisper_wake`) solo sobre ese recorte. Si Whisper no confirma `indio`, descarta sin transcribir el comando. Aísla la wake word sin importar dónde dispare VOSK (vs. el prebuffer fijo, que fallaba cuando VOSK disparaba tarde sobre el verbo). |
+| Preset          | Invocación                                                                          | Grammar pool                                                                                      | Idea                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1**           | `che/que/eh indio` + verbos                                                         | chico (solo wake-words + decoys mínimos)                                                          | El más sensible.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **2**           | solo `che indio` + verbos                                                           | chico                                                                                             | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`).                                                                                                                                                                                                                                                                                                                             |
+| **3**           | `che/que/eh indio` + verbos                                                         | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal.                                                                                                                                                                                                                                                                                        |
+| **4** (default) | solo `che indio` + verbos (igual que preset 2), pero single-best + `SetWords(True)` | chico (igual que preset 2)                                                                        | Segunda capa post-VOSK: usa los **timestamps por palabra** de VOSK para cortar el audio EXACTO de la palabra `indio` (desde el buffer del segmento), y corre un pase corto de Whisper (`_run_whisper_wake`) solo sobre ese recorte. Si Whisper no confirma `indio`, descarta sin transcribir el comando. Aísla la wake word sin importar dónde dispare VOSK (vs. el prebuffer fijo, que fallaba cuando VOSK disparaba tarde sobre el verbo). |
 
 **Tuning manual del preset 3:** los bloques de wake-words y filler en
 `userbot/bot.py` están marcados para editarse a mano. Cuando VOSK colapse mal una
@@ -309,6 +309,88 @@ Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
 ## 📜 Doc generation
 
 Sphinx + napoleon recomendado. Ver [docs/contributing-docs.md](docs/contributing-docs.md).
+
+## 💡 Sistema de Sugerencias (/sugerencias)
+
+Integración con GitHub Issues para rastrear y gestionar features pedidas por los usuarios.
+
+### Flujo
+
+1. User ejecuta `/sugerencias <idea>`
+2. **Gemini Flash-Lite** clasifica: encaja en grupo existente o crea uno nuevo
+3. Se persiste en disco (`data/suggestions.json`, en `.gitignore`)
+4. Se crea/comenta el issue de GitHub:
+   - **Grupo nuevo** → `POST /repos/{repo}/issues` con label `sugerencia`
+   - **Match existente** → `POST /repos/{repo}/issues/{n}/comments` con +1, y opcional `PATCH` del body si Gemini detectó info nueva
+5. Reply ephemeral al usuario (`ctx.followup.send`)
+
+### Limpieza (issue cerrado en GitHub)
+
+Cuando un issue se cierra, el grupo local se **elimina** del archivo. Dos mecanismos:
+
+- **Startup sync**: `on_ready` (bot.py:224-234) llama `sync_closed_issues()` que consulta `GET /repos/{repo}/issues?state=closed` y borra los grupos cuyo `issue_number` esté en la respuesta.
+- **Webhook en tiempo real**: `POST /github-webhook` recibe el evento `action=closed` de GitHub y ejecuta la misma sync.
+
+### Archivos clave
+
+| Archivo                 | Rol                                                                                                             |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `suggestionsCommand.py` | Toda la lógica: modelo (`Group`, `Submission`), store, clasificación, GitHub sync                               |
+| `githubIssues.py`       | Cliente asincrónico de la GitHub REST API (`create_issue`, `add_comment`, `update_issue`, `list_closed_issues`) |
+| `bot.py:224-234`        | `on_ready`: auto-migrate + auto-sync al arrancar                                                                |
+| `apiServer.py:808-839`  | Endpoint `/github-webhook`                                                                                      |
+
+### Modelo de datos (`data/suggestions.json`)
+
+```json
+{
+  "groups": [
+    {
+      "id": "g_<uuid4-short>",
+      "title": "Comando para X",
+      "summary": "Que el bot haga Y cuando Z",
+      "created_at": "2026-05-30T12:34:56Z",
+      "updated_at": "2026-05-30T12:34:56Z",
+      "issue_number": 49,
+      "submissions": [
+        {
+          "user_id": "123",
+          "user_name": "Mati",
+          "text": "podrias agregar Y para que pase Z",
+          "at": "2026-05-30T12:34:56Z"
+        }
+      ]
+    }
+  ]
+}
+```
+
+El campo `completed` existe en el dataclass para backward compat pero **ya no se escribe** en nuevos archivos — los grupos se borran directamente al cerrar el issue.
+
+### Config necesaria (`.env`)
+
+| Variable             | Ejemplo                      | Descripción                               |
+| -------------------- | ---------------------------- | ----------------------------------------- |
+| `GITHUB_TOKEN`       | `ghp_...`                    | Token de GitHub con permisos de issues    |
+| `GITHUB_REPO`        | `dilelu94/VaPls-Discord-Bot` | Repo dueño/nombre                         |
+| `GITHUB_ISSUE_LABEL` | `sugerencia`                 | Label para identificar issues del sistema |
+
+### Infraestructura webhook
+
+El endpoint `/github-webhook` está protegido por el middleware `X-API-Secret` como todos los endpoints del API. Para que GitHub pueda llegar sin conocer el secret, hay un **nginx** como reverse proxy:
+
+- **Nginx** en el puerto 80 (`0.0.0.0:80`)
+- Proxy reverso a `127.0.0.1:8080` (el API del bot)
+- Solo para `/github-webhook` inyecta el header `X-API-Secret`
+- Los demás endpoints pasan sin modificación (cada cliente debe enviar su propio secret)
+
+**Firewall**: el server corre en Oracle Cloud. Además de iptables (puertos 22, 80, 443 abiertos), hay que agregar una regla **Ingress** en la **Security List** de la VCN para puerto 80.
+
+### Estado actual en producción
+
+- 9 grupos migrados a issues **#49–#57** (todos con label `sugerencia`)
+- Auto-sync corre en cada reinicio del bot
+- Nginx instalado y configurado, esperando regla de Security List en Oracle Cloud Console
 
 ## 💡 Guía de Modificación
 
