@@ -1862,7 +1862,13 @@ async def _dispatch_indio_actions(
                         if from_voice:
                             _skip_reply_prefix = True
                         statuses.append("sound: fail — music playing")
-                        logger.info("indio PLAY_SOUND rejected: music is playing")
+                        logger.info(
+                            "indio PLAY_SOUND rejected: music playing"
+                            " (guild=%s from_voice=%s reply_handle=%s)",
+                            guild_id,
+                            from_voice,
+                            reply_handle is not None,
+                        )
                         continue
                     ok, msg = await _invoke_slash_via_userbot(
                         "invoke_soundpad",

@@ -383,6 +383,45 @@ async def test_dispatch_sound_rejected_when_music_playing(monkeypatch):
     assert "música" in combined.lower() or "musica" in combined.lower()
 
 
+async def test_dispatch_sound_rejected_with_skip_prefix_when_from_voice(monkeypatch):
+    """When from_voice=True and music is playing, PLAY_SOUND must be rejected
+    AND the failure message must REPLACE the reply_text (not append to it),
+    so the user sees just "no se puede, hay música sonando" without the
+    "🔊 Tomá — " prefix."""
+    import geminiCommand
+    import playCommand
+
+    vc = MagicMock()
+    vc.is_playing.return_value = True
+    player = types.SimpleNamespace(
+        vc=vc,
+        currentSong={"id": "x", "title": "Queen - Bohemian Rhapsody"},
+    )
+    monkeypatch.setattr(playCommand, "guildPlayers", {100: player}, raising=True)
+
+    edited = []
+    handle = _make_handle(via_relay=False, edited_content=edited)
+
+    await geminiCommand._dispatch_indio_actions(
+        MagicMock(),
+        100,
+        [("PLAY_SOUND", "risas")],
+        reply_handle=handle,
+        reply_text="🔊 Tomá",
+        requester_member=_member_in_voice(),
+        from_voice=True,
+    )
+
+    assert edited, "expected the reply to be edited with a failure reason"
+    combined = edited[0]
+    # Must NOT contain the reply_text prefix
+    assert "Tomá" not in combined, (
+        "must NOT include reply_text prefix when from_voice=True"
+    )
+    assert "no se puede" in combined.lower()
+    assert "música" in combined.lower() or "musica" in combined.lower()
+
+
 async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
     """When the reply was split into several messages we must NOT rewrite one
     chunk with the whole reply (that duplicates earlier chunks / risks the

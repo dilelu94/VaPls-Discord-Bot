@@ -674,6 +674,10 @@ class SoundpadView(discord.ui.View):
         if interaction.guild.id in guildPlayers:
             player = guildPlayers[interaction.guild.id]
             if player.currentSong:
+                _log.info(
+                    "soundpad UI gated: music playing (guild %s)",
+                    interaction.guild.id,
+                )
                 return await interaction.followup.send(
                     "⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.",
                     ephemeral=True,
@@ -1075,6 +1079,10 @@ async def soundpadLogic(
         player = guildPlayers[ctx.guild.id]
         if player.currentSong:
             if redirect_channel is not None:
+                _log.info(
+                    "soundpad gated: music playing (redirect from %s)",
+                    ctx.channel_id,
+                )
                 try:
                     await ctx.interaction.edit_original_response(
                         content="❌ No se puede, hay música sonando"
@@ -1082,6 +1090,7 @@ async def soundpadLogic(
                 except Exception:
                     pass
                 return
+            _log.info("soundpad gated: music playing (direct in play channel)")
             return await ctx.followup.send(
                 "⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.",
                 ephemeral=True,

@@ -358,7 +358,7 @@ async def _sync_github_created(group: Group) -> Optional[int]:
     """Create a GitHub issue for a newly created group. Returns issue number."""
     import githubIssues
 
-    title = f"[{config.GITHUB_ISSUE_LABEL}] {group.title}"
+    title = group.title
     body = _build_issue_body(group)
     label = config.GITHUB_ISSUE_LABEL
     return await githubIssues.create_issue(
@@ -384,7 +384,7 @@ async def _sync_github_matched(
     if cls.update_title is not None or cls.update_summary is not None:
         new_title = None
         if cls.update_title is not None:
-            new_title = f"[{config.GITHUB_ISSUE_LABEL}] {cls.update_title}"
+            new_title = cls.update_title
         new_body = None
         if cls.update_summary is not None:
             group.summary = cls.update_summary
