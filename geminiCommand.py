@@ -2233,6 +2233,10 @@ async def _dispatch_indio_actions(
                                 _pch = getattr(_pvc, "channel", None)
                                 if _pch is not None:
                                     voice_channel_name = getattr(_pch, "name", None)
+                        if voice_channel_name is None:
+                            _ch = _pc._pick_voice_channel(bot, int(guild_id))
+                            if _ch is not None:
+                                voice_channel_name = getattr(_ch, "name", None)
                     except Exception:
                         pass
                 first_failure = next(

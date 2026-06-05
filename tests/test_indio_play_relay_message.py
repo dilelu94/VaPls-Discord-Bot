@@ -14,6 +14,7 @@ userbot's HTTP endpoint) and ``playCommand.playFromIndio`` (the local
 playback engine — we don't have FFmpeg or a real guild here). All other
 dispatch logic runs for real.
 """
+
 from __future__ import annotations
 
 import types
@@ -45,13 +46,13 @@ def _make_handle(edited_list):
     )
 
 
-def _member_in_voice(user_id=42, channel_id=99):
+def _member_in_voice(user_id=42, channel_id=99, channel_name=None):
     """Requester stand-in that satisfies the music-action gating
     in ``_dispatch_indio_actions`` (has ``id`` + ``voice.channel``)."""
     return types.SimpleNamespace(
         id=user_id,
         voice=types.SimpleNamespace(
-            channel=types.SimpleNamespace(id=channel_id),
+            channel=types.SimpleNamespace(id=channel_id, name=channel_name),
         ),
     )
 
@@ -73,7 +74,9 @@ async def test_play_music_via_relay_uses_softer_success_suffix(monkeypatch):
     handle = _make_handle(edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("PLAY_MUSIC", "despacito")],
+        MagicMock(),
+        100,
+        [("PLAY_MUSIC", "despacito")],
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(),
@@ -112,7 +115,9 @@ async def test_play_music_via_fallback_keeps_strong_success_suffix(monkeypatch):
     handle = _make_handle(edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("PLAY_MUSIC", "despacito")],
+        MagicMock(),
+        100,
+        [("PLAY_MUSIC", "despacito")],
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(),
@@ -142,7 +147,9 @@ async def test_play_sound_via_relay_uses_softer_success_suffix(monkeypatch):
     handle = _make_handle(edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("PLAY_SOUND", "risa-de-tobi")],
+        MagicMock(),
+        100,
+        [("PLAY_SOUND", "risa-de-tobi")],
         reply_handle=handle,
         reply_text="va eso",
     )
@@ -166,7 +173,9 @@ async def test_generate_image_via_relay_uses_softer_success_suffix(monkeypatch):
     handle = _make_handle(edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("GENERATE_IMAGE", "un perrito")],
+        MagicMock(),
+        100,
+        [("GENERATE_IMAGE", "un perrito")],
         reply_handle=handle,
         reply_text="ahí va la imagen",
     )
@@ -213,7 +222,9 @@ async def test_generate_image_via_fallback(monkeypatch):
 
     try:
         await geminiCommand._dispatch_indio_actions(
-            mock_bot, 100, [("GENERATE_IMAGE", "un perrito")],
+            mock_bot,
+            100,
+            [("GENERATE_IMAGE", "un perrito")],
             reply_handle=handle,
             reply_text="ahí va la imagen",
             requester_member=_member_in_voice(),
@@ -230,3 +241,65 @@ async def test_generate_image_via_fallback(monkeypatch):
     assert "image: ok" in combined or "listo" in combined.lower()
     assert fake_chan.send.call_count == 1
     assert spy_unlink.call_count == 1
+
+
+async def test_play_music_via_relay_includes_voice_channel_name(monkeypatch):
+    """Relay path: the success suffix should mention the voice channel name."""
+    import geminiCommand
+
+    monkeypatch.setattr(
+        geminiCommand,
+        "_invoke_slash_via_userbot",
+        AsyncMock(return_value=(True, "despacito")),
+    )
+
+    edited: list[str] = []
+    handle = _make_handle(edited)
+
+    await geminiCommand._dispatch_indio_actions(
+        MagicMock(),
+        100,
+        [("PLAY_MUSIC", "despacito")],
+        reply_handle=handle,
+        reply_text="dale, va",
+        requester_member=_member_in_voice(channel_name="Música"),
+    )
+
+    assert edited, "expected the reply to be edited with a result line"
+    combined = edited[0]
+    assert "Música" in combined
+    assert "🎵" in combined
+
+
+async def test_play_music_via_fallback_includes_voice_channel_name(monkeypatch):
+    """Fallback path: the success suffix should mention the voice channel name."""
+    import geminiCommand
+    import playCommand
+
+    monkeypatch.setattr(
+        geminiCommand,
+        "_invoke_slash_via_userbot",
+        AsyncMock(return_value=(False, "relay error")),
+    )
+    monkeypatch.setattr(
+        playCommand,
+        "playFromIndio",
+        AsyncMock(return_value=(True, "Despacito - Luis Fonsi")),
+    )
+
+    edited: list[str] = []
+    handle = _make_handle(edited)
+
+    await geminiCommand._dispatch_indio_actions(
+        MagicMock(),
+        100,
+        [("PLAY_MUSIC", "despacito")],
+        reply_handle=handle,
+        reply_text="dale, va",
+        requester_member=_member_in_voice(channel_name="Música"),
+    )
+
+    assert edited, "expected the reply to be edited with a result line"
+    combined = edited[0]
+    assert "Música" in combined
+    assert "🎵" in combined

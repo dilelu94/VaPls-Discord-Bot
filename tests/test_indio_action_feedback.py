@@ -9,6 +9,7 @@ edit-in-place behavior through ``_dispatch_indio_actions``.
 Pure ``_failure_feedback`` translation tests are kept unchanged — they test the
 same pure function and remain valid.
 """
+
 from __future__ import annotations
 
 import types
@@ -19,11 +20,13 @@ import pytest
 
 # --- Pure translation: status string → user-facing message ----------------
 
+
 def test_resume_not_paused_gets_friendly_message():
     """The most common failure mode after a restart: resume_music with no
     paused player. The user spoke an order, the indio promised it would
     happen, the tool can't deliver — the message has to say so."""
     from geminiCommand import _failure_feedback
+
     msg = _failure_feedback("resume: not paused")
     assert msg and "pausado" in msg.lower()
 
@@ -32,9 +35,12 @@ def test_no_active_player_messages_speak_in_first_person():
     """``{action}: no active player`` is what every control tool emits when
     the player got wiped (e.g. a restart). One message covers all of them."""
     from geminiCommand import _failure_feedback
-    for status in ("resume_music: no active player",
-                   "skip_music: no active player",
-                   "stop_music: no active player"):
+
+    for status in (
+        "resume_music: no active player",
+        "skip_music: no active player",
+        "stop_music: no active player",
+    ):
         msg = _failure_feedback(status)
         assert msg, f"expected feedback for {status}"
         assert "no" in msg.lower()
@@ -44,6 +50,7 @@ def test_music_fail_surfaces_the_reason():
     """yt-dlp/voice-connect failures already carry an actionable reason — the
     feedback should pass it through verbatim so the user can fix it."""
     from geminiCommand import _failure_feedback
+
     msg = _failure_feedback("music: fail — no hay nadie en un canal de voz")
     assert msg
     assert "no hay nadie en un canal de voz" in msg
@@ -53,6 +60,7 @@ def test_success_status_returns_none():
     """A successful action must NOT trigger a feedback message — otherwise
     every play would get a noisy "uh, I did the thing" reply."""
     from geminiCommand import _failure_feedback
+
     assert _failure_feedback("music: ok — algun tema") is None
     assert _failure_feedback("skip: ok") is None
     assert _failure_feedback("pause: ok") is None
@@ -60,20 +68,28 @@ def test_success_status_returns_none():
 
 # --- End-to-end: _dispatch_indio_actions edits reply in place on failure ----
 
-def _member_in_voice(user_id=42, channel_id=99):
+
+def _member_in_voice(user_id=42, channel_id=99, channel_name=None):
     """A minimal Member stand-in that satisfies the music-action gating
     in ``_dispatch_indio_actions``: it has an ``id`` and a ``voice.channel``
     so the requester counts as 'in voice'."""
     return types.SimpleNamespace(
         id=user_id,
         voice=types.SimpleNamespace(
-            channel=types.SimpleNamespace(id=channel_id),
+            channel=types.SimpleNamespace(id=channel_id, name=channel_name),
         ),
     )
 
 
-def _make_handle(*, via_relay=False, channel_id=42, message_id=None,
-                 edited_content=None, single=True, sent_content=None):
+def _make_handle(
+    *,
+    via_relay=False,
+    channel_id=42,
+    message_id=None,
+    edited_content=None,
+    single=True,
+    sent_content=None,
+):
     """Build a reply handle mirroring what indioLogic / indioFromVoice produce.
 
     The ``edited_content`` list (pass a mutable list) is populated by the fake
@@ -115,7 +131,8 @@ def _make_handle(*, via_relay=False, channel_id=42, message_id=None,
 
 
 async def test_dispatch_edits_reply_with_failure_reason_when_resume_finds_no_player(
-        monkeypatch):
+    monkeypatch,
+):
     """The Tobi case from the logs: bot just restarted, ``resume_music``
     finds no player, the indio already said "dale, va". The dispatcher must
     EDIT the original reply message to include the failure reason instead of
@@ -130,7 +147,9 @@ async def test_dispatch_edits_reply_with_failure_reason_when_resume_finds_no_pla
     handle = _make_handle(via_relay=False, edited_content=edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        MagicMock(),
+        100,
+        [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(),
@@ -139,12 +158,13 @@ async def test_dispatch_edits_reply_with_failure_reason_when_resume_finds_no_pla
     # The original message was edited (not a new send) to include the reason.
     assert edited, "expected the reply message to be edited in place"
     combined = edited[0]
-    assert "dale, va" in combined         # base text preserved
-    assert "no" in combined.lower()       # failure indicator present
+    assert "dale, va" in combined  # base text preserved
+    assert "no" in combined.lower()  # failure indicator present
 
 
 async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
-        monkeypatch):
+    monkeypatch,
+):
     """A successful resume edits the reply to add a success marker — no
     separate 'apology' or noise message is posted."""
     import geminiCommand
@@ -155,20 +175,24 @@ async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
     vc.is_playing.return_value = False
 
     player = types.SimpleNamespace(
-        vc=vc, currentSong={"id": "x", "title": "t"},
+        vc=vc,
+        currentSong={"id": "x", "title": "t"},
         interrupted=False,
         togglePausePlay=AsyncMock(),
     )
     monkeypatch.setattr(playCommand, "guildPlayers", {100: player}, raising=True)
     # Relay for the #sick-tunes mirror returns a list (truthy).
-    monkeypatch.setattr(geminiCommand, "_relay_to_userbot",
-                        AsyncMock(return_value=[999]))
+    monkeypatch.setattr(
+        geminiCommand, "_relay_to_userbot", AsyncMock(return_value=[999])
+    )
 
     edited = []
     handle = _make_handle(via_relay=False, edited_content=edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        MagicMock(),
+        100,
+        [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, retomando",
         requester_member=_member_in_voice(),
@@ -177,13 +201,12 @@ async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
     # Edit happened and includes a success marker (not a failure message).
     assert edited, "expected the reply message to be edited"
     combined = edited[0]
-    assert "dale, retomando" in combined   # base text preserved
+    assert "dale, retomando" in combined  # base text preserved
     # Success marker present; no apology language.
     assert "listo" in combined.lower()
 
 
-async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(
-        monkeypatch):
+async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(monkeypatch):
     """When the original reply went via the userbot relay, the dispatcher must
     call ``_edit_via_userbot`` (not the Discord .edit()) to patch it."""
     import geminiCommand
@@ -194,9 +217,9 @@ async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(
     edit_calls: list[dict] = []
 
     async def _fake_edit(channel_id, message_id, content):
-        edit_calls.append({"channel_id": channel_id,
-                           "message_id": message_id,
-                           "content": content})
+        edit_calls.append(
+            {"channel_id": channel_id, "message_id": message_id, "content": content}
+        )
         return True
 
     monkeypatch.setattr(geminiCommand, "_edit_via_userbot", _fake_edit)
@@ -209,7 +232,9 @@ async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(
     )
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        MagicMock(),
+        100,
+        [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(),
@@ -219,8 +244,8 @@ async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(
     call = edit_calls[0]
     assert call["channel_id"] == 55
     assert call["message_id"] == 777
-    assert "dale, va" in call["content"]     # base text in the edit
-    assert "no" in call["content"].lower()   # failure reason present
+    assert "dale, va" in call["content"]  # base text in the edit
+    assert "no" in call["content"].lower()  # failure reason present
 
 
 async def test_dispatch_no_edit_when_no_handle_provided(monkeypatch):
@@ -232,13 +257,15 @@ async def test_dispatch_no_edit_when_no_handle_provided(monkeypatch):
     monkeypatch.setattr(playCommand, "guildPlayers", {}, raising=True)
 
     statuses = await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        MagicMock(),
+        100,
+        [("RESUME_MUSIC", None)],
         reply_handle=None,
         reply_text="",
         requester_member=_member_in_voice(),
     )
 
-    assert statuses                        # action was attempted
+    assert statuses  # action was attempted
     assert any("no active player" in s for s in statuses)
 
 
@@ -254,7 +281,9 @@ async def test_dispatch_no_separate_channel_send_on_failure(monkeypatch):
     handle = _make_handle(via_relay=False, edited_content=edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        MagicMock(),
+        100,
+        [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(),
@@ -273,14 +302,17 @@ async def test_dispatch_music_success_adds_music_suffix(monkeypatch):
     import geminiCommand
 
     # Relay-based play succeeds.
-    monkeypatch.setattr(geminiCommand, "_invoke_slash_via_userbot",
-                        AsyncMock(return_value=(True, "ok")))
+    monkeypatch.setattr(
+        geminiCommand, "_invoke_slash_via_userbot", AsyncMock(return_value=(True, "ok"))
+    )
 
     edited = []
     handle = _make_handle(via_relay=False, edited_content=edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("PLAY_MUSIC", "Queen")],
+        MagicMock(),
+        100,
+        [("PLAY_MUSIC", "Queen")],
         reply_handle=handle,
         reply_text="dale, va Queen",
         requester_member=_member_in_voice(),
@@ -289,21 +321,24 @@ async def test_dispatch_music_success_adds_music_suffix(monkeypatch):
     assert edited
     combined = edited[0]
     assert "dale, va Queen" in combined
-    assert "🎵" in combined          # music-specific suffix
+    assert "🎵" in combined  # music-specific suffix
 
 
 async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
     """PLAY_SOUND success appends the sound-specific success marker."""
     import geminiCommand
 
-    monkeypatch.setattr(geminiCommand, "_invoke_slash_via_userbot",
-                        AsyncMock(return_value=(True, "ok")))
+    monkeypatch.setattr(
+        geminiCommand, "_invoke_slash_via_userbot", AsyncMock(return_value=(True, "ok"))
+    )
 
     edited = []
     handle = _make_handle(via_relay=False, edited_content=edited)
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("PLAY_SOUND", "risas")],
+        MagicMock(),
+        100,
+        [("PLAY_SOUND", "risas")],
         reply_handle=handle,
         reply_text="tomá",
         requester_member=_member_in_voice(),
@@ -312,7 +347,7 @@ async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
     assert edited
     combined = edited[0]
     assert "tomá" in combined
-    assert "🔊" in combined          # sound-specific suffix
+    assert "🔊" in combined  # sound-specific suffix
 
 
 async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
@@ -327,11 +362,14 @@ async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
 
     edited = []
     sent = []
-    handle = _make_handle(via_relay=False, edited_content=edited,
-                          sent_content=sent, single=False)
+    handle = _make_handle(
+        via_relay=False, edited_content=edited, sent_content=sent, single=False
+    )
 
     await geminiCommand._dispatch_indio_actions(
-        MagicMock(), 100, [("RESUME_MUSIC", None)],
+        MagicMock(),
+        100,
+        [("RESUME_MUSIC", None)],
         reply_handle=handle,
         reply_text="una respuesta larga partida en varios mensajes",
         requester_member=_member_in_voice(),
@@ -341,4 +379,4 @@ async def test_dispatch_multi_chunk_reply_posts_standalone_result(monkeypatch):
     # standalone message instead.
     assert not edited, "must not overwrite a chunk with the full reply"
     assert sent, "expected a standalone result message"
-    assert "no" in sent[0].lower()   # failure reason surfaced
+    assert "no" in sent[0].lower()  # failure reason surfaced
