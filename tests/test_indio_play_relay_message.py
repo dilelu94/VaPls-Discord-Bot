@@ -263,6 +263,7 @@ async def test_play_music_via_relay_includes_voice_channel_name(monkeypatch):
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(channel_name="Música"),
+        from_voice=True,
     )
 
     assert edited, "expected the reply to be edited with a result line"
@@ -297,6 +298,7 @@ async def test_play_music_via_fallback_includes_voice_channel_name(monkeypatch):
         reply_handle=handle,
         reply_text="dale, va",
         requester_member=_member_in_voice(channel_name="Música"),
+        from_voice=True,
     )
 
     assert edited, "expected the reply to be edited with a result line"

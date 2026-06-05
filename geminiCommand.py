@@ -1777,6 +1777,7 @@ async def _dispatch_indio_actions(
     *,
     attachment_urls: Optional[list[dict]] = None,
     source_message_id: Optional[int] = None,
+    from_voice: bool = False,
 ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
@@ -2214,31 +2215,16 @@ async def _dispatch_indio_actions(
         if reply_handle is not None and statuses:
             try:
                 primary_action = actions[0][0] if actions else ""
-                # Resolve voice channel name to include in PLAY_MUSIC success text
+                # Resolve voice channel name to include in PLAY_MUSIC success text.
+                # Only applies to FROM_VOICE dispatch — text commands keep the
+                # original suffix without channel reference.
                 voice_channel_name = None
-                if requester_member is not None:
+                if from_voice and requester_member is not None:
                     voice = getattr(requester_member, "voice", None)
                     if voice is not None:
                         vc = getattr(voice, "channel", None)
                         if vc is not None:
                             voice_channel_name = getattr(vc, "name", None)
-                if voice_channel_name is None and guild_id is not None:
-                    try:
-                        import playCommand as _pc
-
-                        _pl = _pc.guildPlayers.get(int(guild_id))
-                        if _pl is not None:
-                            _pvc = getattr(_pl, "vc", None)
-                            if _pvc is not None:
-                                _pch = getattr(_pvc, "channel", None)
-                                if _pch is not None:
-                                    voice_channel_name = getattr(_pch, "name", None)
-                        if voice_channel_name is None:
-                            _ch = _pc._pick_voice_channel(bot, int(guild_id))
-                            if _ch is not None:
-                                voice_channel_name = getattr(_ch, "name", None)
-                    except Exception:
-                        pass
                 first_failure = next(
                     (s for s in statuses if _failure_feedback(s) is not None), None
                 )
@@ -3950,6 +3936,7 @@ async def indioFromVoice(
                 requester_member=member,
                 attachment_urls=attachment_urls,
                 source_message_id=source_message_id,
+                from_voice=from_voice,
             )
         )
 
