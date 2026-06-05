@@ -1207,6 +1207,13 @@ class WakeWordSink(voice_recv.AudioSink):
                 # wake word already fired. Whisper sees the full phrase.
                 return
 
+            # While a wake transcription is still being processed, don't
+            # re-feed VOSK. The capture was already closed and sent to
+            # Whisper; re-triggering would only queue redundant wake
+            # confirms on the same model, compounding latency.
+            if self._wake_in_progress:
+                return
+
             # Buffer ALL frames (voice + short silences) so the audio stays
             # continuous when concatenated. The silence reset above already
             # guarantees the prebuffer doesn't span a real utterance boundary,
@@ -1261,7 +1268,9 @@ class WakeWordSink(voice_recv.AudioSink):
                             log.info(
                                 "[WAKE] user=%s preset4: 'indio' span=%.2f-%.2fs "
                                 "→ %d bytes for Whisper confirm",
-                                user_id, span[0], span[1],
+                                user_id,
+                                span[0],
+                                span[1],
                                 len(wake_confirm_pcm or b""),
                             )
                     except Exception:
@@ -1377,9 +1386,17 @@ class WakeWordSink(voice_recv.AudioSink):
             capture["last_voice_ts"] = now
 
         # Close conditions: sustained silence OR max-capture timeout.
+        # While the wake confirm hasn't finished yet, use a longer silence
+        # threshold so the capture doesn't close before Whisper confirms
+        # the wake word and we lose the trailing command audio.
+        silence_thresh = (
+            config.WAKE_WORD_SILENCE_FINAL_SECONDS * 2
+            if self._wake_in_progress
+            else config.WAKE_WORD_SILENCE_FINAL_SECONDS
+        )
         silence_for = now - capture["last_voice_ts"]
         duration = now - capture["started_at"]
-        if silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS:
+        if silence_for > silence_thresh:
             log.info(
                 f"[WAKE] user={user_id} closing capture on silence "
                 f"({silence_for:.2f}s, dur={duration:.2f}s)"
@@ -1475,8 +1492,13 @@ class WakeWordSink(voice_recv.AudioSink):
                         continue
                     silence_for = now - cap["last_voice_ts"]
                     duration = now - cap["started_at"]
+                    silence_thresh = (
+                        config.WAKE_WORD_SILENCE_FINAL_SECONDS * 2
+                        if self._wake_in_progress
+                        else config.WAKE_WORD_SILENCE_FINAL_SECONDS
+                    )
                     if (
-                        silence_for > config.WAKE_WORD_SILENCE_FINAL_SECONDS
+                        silence_for > silence_thresh
                         or duration >= config.WAKE_WORD_MAX_CAPTURE_SECONDS
                     ):
                         log.info(
@@ -3374,7 +3396,8 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
     except discord.HTTPException as e:
         if getattr(e, "status", None) == 429:
             log.warning(
-                "[RELAY-GENIMAGEN] Discord rate-limited /generarimagen invocation: %s", e
+                "[RELAY-GENIMAGEN] Discord rate-limited /generarimagen invocation: %s",
+                e,
             )
             return web.json_response({"error": f"rate-limited: {e}"}, status=429)
         log.exception("[RELAY-GENIMAGEN] invocation failed")
@@ -3409,7 +3432,7 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
 #         return web.json_response({"error": "empty query"}, status=400)
 #     if not client.is_ready():
 #         return web.json_response({"error": "userbot not ready"}, status=503)
-# 
+#
 #     channel = client.get_channel(channel_id)
 #     if channel is None:
 #         try:
@@ -3422,7 +3445,7 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
 #         return web.json_response(
 #             {"error": "channel has no slash command API"}, status=400
 #         )
-# 
+#
 #     try:
 #         cmds = await _resolve_slash_commands(
 #             channel,
@@ -3440,7 +3463,7 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
 #             e, properties={"action": "relay_banana_slash_commands_failed"}
 #         )
 #         return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
-# 
+#
 #     gen_cmd = _pick_vapls_command(cmds, "banana")
 #     if gen_cmd is None:
 #         log.warning(
@@ -3451,7 +3474,7 @@ async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
 #         return web.json_response(
 #             {"error": "banana command not found in channel"}, status=404
 #         )
-# 
+#
 #     try:
 #         await gen_cmd(prompt=query)
 #         log.info(
