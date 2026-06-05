@@ -69,27 +69,27 @@ def _is_active(vc) -> bool:
     except Exception:
         # Soundpad module may be unavailable in some test setups — fail open.
         pass
-        try:
-            from playCommand import guildPlayers
+    try:
+        from playCommand import guildPlayers
 
-            guild = getattr(vc, "guild", None)
-            guild_id = getattr(guild, "id", None)
-            if guild_id is not None:
-                player = guildPlayers.get(guild_id)
-                if player is not None:
-                    if getattr(player, "isDownloading", False):
+        guild = getattr(vc, "guild", None)
+        guild_id = getattr(guild, "id", None)
+        if guild_id is not None:
+            player = guildPlayers.get(guild_id)
+            if player is not None:
+                if getattr(player, "isDownloading", False):
+                    return True
+                if getattr(player, "isStartingPlayback", False):
+                    return True
+                if player.autodj_active:
+                    humans = sum(1 for m in vc.channel.members if not m.bot)
+                    if humans > 0:
+                        logger.debug(
+                            "idle watchdog: staying — Auto-DJ active (guild=%s, humans=%d)",
+                            guild_id,
+                            humans,
+                        )
                         return True
-                    if getattr(player, "isStartingPlayback", False):
-                        return True
-                    if player.autodj_active:
-                        humans = sum(1 for m in vc.channel.members if not m.bot)
-                        if humans > 0:
-                            logger.debug(
-                                "idle watchdog: staying — Auto-DJ active (guild=%s, humans=%d)",
-                                guild_id,
-                                humans,
-                            )
-                            return True
     except Exception:
         pass
     return False
