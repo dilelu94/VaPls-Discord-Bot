@@ -13,6 +13,7 @@ pytest-cov>=5
 py-cord>=2.8
 aiohttp>=3.9
 python-dotenv
+Pillow>=10.0.0
 # audioop was removed from the stdlib in Python 3.13. This backport re-adds it
 # so userbot/recording.py (and its tests) can import it on Python >=3.13.
 # The marker is a no-op on <=3.12 where the stdlib module still exists.
