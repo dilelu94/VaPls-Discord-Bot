@@ -338,19 +338,20 @@ async def _classify(idea: str, groups: list[Group]) -> Optional[Classification]:
 # GitHub Issues helpers
 # --------------------------------------------------------------------------
 def _build_issue_body(group: Group) -> str:
+    n = group.size
+    p = "persona" if n == 1 else "personas"
+    plural = "" if n == 1 else "s"
     lines = [
         f"## Resumen\n{group.summary or '(sin descripcion)'}",
         "",
-        "## Sugerencias recibidas",
+        f"**{n} {p} pidió{plural} esto.**",
     ]
-    for s in group.submissions:
-        lines.append(f'- **{s.user_name}**: "{s.text}" ({s.at})')
     lines.extend(["", "---", "*Creado automáticamente desde VaPls Discord Bot*"])
     return "\n".join(lines)
 
 
-def _build_comment(sub: Submission) -> str:
-    return f'+1 de **{sub.user_name}** — "{sub.text}" ({sub.at})'
+def _build_comment(_sub: Submission) -> str:
+    return "Otra persona también quiere esta funcionalidad."
 
 
 async def _sync_github_created(group: Group) -> Optional[int]:
