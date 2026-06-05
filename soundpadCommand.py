@@ -1070,6 +1070,13 @@ async def soundpadLogic(
     if ctx.guild.id in guildPlayers:
         player = guildPlayers[ctx.guild.id]
         if player.currentSong:
+            if redirect_channel is not None:
+                try:
+                    await ctx.interaction.edit_original_response(
+                        content="❌ No se puede, hay música sonando"
+                    )
+                except Exception:
+                    pass
             return await ctx.followup.send(
                 "⚠️ El bot está reproduciendo música. Por favor, detén la música antes de usar el Soundpad.",
                 ephemeral=True,
