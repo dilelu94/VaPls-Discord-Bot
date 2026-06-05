@@ -10,7 +10,8 @@ _BOT_PATH = __import__("config").__file__.rsplit("/", 1)[0] + "/bot.py"
 def _get_slash_command_names():
     with open(_BOT_PATH) as f:
         text = f.read()
-    return re.findall(r'^\s*@bot\.slash_command[^)]*name="([^"]+)"', text, re.MULTILINE)
+    text = re.sub(r"(?m)^#.*$", "", text)
+    return re.findall(r'@bot\.slash_command[^)]*name="([^"]+)"', text)
 
 
 def test_all_commands_have_valid_flags():
