@@ -120,6 +120,7 @@ class Group:
     created_at: str
     updated_at: str
     issue_number: Optional[int] = None
+    completed: bool = False
     submissions: list[Submission] = field(default_factory=list)
 
     @property
@@ -141,6 +142,8 @@ class Group:
         }
         if self.issue_number is not None:
             d["issue_number"] = self.issue_number
+        if self.completed:
+            d["completed"] = True
         return d
 
     @classmethod
@@ -160,6 +163,7 @@ class Group:
             created_at=str(d.get("created_at", "")) or _now_iso(),
             updated_at=str(d.get("updated_at", "")) or _now_iso(),
             issue_number=issue_number,
+            completed=bool(d.get("completed", False)),
             submissions=[Submission.from_dict(s) for s in subs]
             if isinstance(subs, list)
             else [],
@@ -596,6 +600,36 @@ async def sugerenciasVerLogic(ctx) -> None:
 # --------------------------------------------------------------------------
 # Migration
 # --------------------------------------------------------------------------
+async def sync_closed_issues() -> str:
+    """Check GitHub for closed suggestion issues and mark groups as completed.
+
+    Returns a human-readable summary.
+    """
+    import githubIssues
+
+    if not bool(config.GITHUB_TOKEN and config.GITHUB_REPO):
+        return "GitHub no configurado — no se puede sincronizar."
+
+    label = config.GITHUB_ISSUE_LABEL
+    closed = await githubIssues.list_closed_issues(labels=[label] if label else None)
+    if not closed:
+        return "No hay issues cerrados con el label especificado."
+
+    store = _store()
+    groups = await asyncio.to_thread(store.load)
+    marked = 0
+    for g in groups:
+        if g.issue_number is not None and g.issue_number in closed and not g.completed:
+            g.completed = True
+            marked += 1
+
+    if marked:
+        await store.save(groups)
+        return f"{marked} grupo(s) marcados como completados."
+
+    return "Ningún grupo pendiente corresponde a issues cerrados."
+
+
 async def migrate_existing_suggestions(dry_run: bool = False) -> str:
     """Create GitHub issues for existing groups that don't have one yet.
 

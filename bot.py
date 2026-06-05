@@ -23,6 +23,7 @@ from suggestionsCommand import (
     sugerenciasLogic,
     sugerenciasVerLogic,
     migrate_existing_suggestions,
+    sync_closed_issues,
 )
 from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
@@ -219,10 +220,18 @@ async def on_ready():
         await decifrarVoting.start(bot)
     except Exception:
         log.exception("decifrar voting startup failed")
-    # try:
-    #     await geminiImage.init()
-    # except Exception:
-    #     log.exception("geminiImage init failed (image gen unavailable)")
+
+    # Auto-sync suggestions with GitHub Issues on startup.
+    try:
+        result = await migrate_existing_suggestions(dry_run=False)
+        log.info("suggestions auto-migrate: %s", result)
+    except Exception:
+        log.exception("suggestions auto-migrate failed")
+    try:
+        result = await sync_closed_issues()
+        log.info("suggestions auto-sync: %s", result)
+    except Exception:
+        log.exception("suggestions auto-sync failed")
 
 
 @bot.event
@@ -790,37 +799,6 @@ async def sugerencias_ver(ctx):
         log.warning("sugerencias-ver defer failed: %s", e)
     _track_command(ctx, "sugerencias-ver", {})
     await sugerenciasVerLogic(ctx)
-
-
-@bot.slash_command(
-    name="sugerencias-migrar",
-    description="[Admin] Migra sugerencias existentes a GitHub Issues",
-)
-async def sugerencias_migrar(
-    ctx,
-    dry_run: discord.Option(
-        bool,
-        description="Solo mostrar cuántas faltan sin crear issues",
-        required=False,
-        default=True,
-    ) = True,
-):
-    """Slash command: migrate existing suggestion groups to GitHub Issues.
-
-    By default runs as a dry-run showing how many groups need migration.
-    Pass ``dry_run=False`` to actually create the issues.
-    """
-    try:
-        if not ctx.response.is_done():
-            await ctx.defer(ephemeral=True)
-    except Exception as e:
-        log.warning("sugerencias-migrar defer failed: %s", e)
-    _track_command(ctx, "sugerencias-migrar", {"dry_run": dry_run})
-    result = await migrate_existing_suggestions(dry_run=dry_run)
-    try:
-        await ctx.followup.send(result, ephemeral=True)
-    except Exception:
-        log.exception("sugerencias-migrar: reply failed")
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")

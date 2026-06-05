@@ -143,3 +143,44 @@ async def update_issue(
     except Exception:
         logger.exception("GitHub update issue network error")
         return False
+
+
+async def list_closed_issues(*, labels: Optional[list[str]] = None) -> list[int]:
+    """List issue numbers of closed issues matching the given labels.
+
+    Returns a list of issue numbers (empty list on failure or if GitHub
+    is not configured).
+    """
+    if not _enabled():
+        return []
+
+    params: list[tuple[str, str]] = [("state", "closed"), ("per_page", "100")]
+    if labels:
+        params.append(("labels", ",".join(labels)))
+    qs = "&".join(f"{k}={v}" for k, v in params)
+    url = f"{_API_BASE}/repos/{config.GITHUB_REPO}/issues?{qs}"
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SEC)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(url, headers=_headers()) as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error(
+                        "GitHub list closed issues failed (HTTP %d): %s",
+                        resp.status,
+                        text[:500],
+                    )
+                    return []
+                data = await resp.json()
+                numbers = [
+                    item["number"]
+                    for item in data
+                    if isinstance(item, dict)
+                    and "number" in item
+                    and "pull_request" not in item
+                ]
+                return numbers
+    except Exception:
+        logger.exception("GitHub list closed issues network error")
+        return []

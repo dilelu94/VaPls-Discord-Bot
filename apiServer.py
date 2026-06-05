@@ -805,6 +805,39 @@ def makeApp(bot: discord.Bot) -> web.Application:
         channels = [{"id": ch.id, "name": ch.name} for ch in guild.text_channels]
         return web.json_response({"text_channels": channels})
 
+    async def githubWebhook(request: web.Request) -> web.Response:
+        """Receive GitHub issue webhooks and mark groups as completed.
+
+        When an issue with the configured label is closed, the matching group
+        in the local suggestions store is flagged as completed.
+
+        Requires X-API-Secret header like all other endpoints. For production
+        use, configure a reverse proxy (e.g. nginx) to inject the secret when
+        forwarding from GitHub's webhook.
+        """
+        from suggestionsCommand import sync_closed_issues
+
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+
+        action = data.get("action")
+        issue = data.get("issue")
+        if not isinstance(issue, dict):
+            return web.json_response({"error": "missing issue"}, status=400)
+
+        if action != "closed":
+            return web.json_response({"ok": True, "skipped": f"action={action}"})
+
+        issue_labels = [lbl.get("name", "") for lbl in (issue.get("labels") or [])]
+        if config.GITHUB_ISSUE_LABEL and config.GITHUB_ISSUE_LABEL not in issue_labels:
+            return web.json_response({"ok": True, "skipped": "label mismatch"})
+
+        result = await sync_closed_issues()
+        logger.info("github webhook: %s", result)
+        return web.json_response({"ok": True, "result": result})
+
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
@@ -815,6 +848,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
     app.router.add_get("/channels", textChannels)
+    app.router.add_post("/github-webhook", githubWebhook)
     return app
 
 
