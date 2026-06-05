@@ -211,16 +211,24 @@ class MusicVote:
         self.reaction_message_id: Optional[int] = None
         self.reaction_channel_id: Optional[int] = None
         self.source_message_id: Optional[int] = None
+
     def _cancel_timers(self) -> None:
         try:
             current = asyncio.current_task()
         except RuntimeError:
             current = None
-        if self._hard_cap_task and self._hard_cap_task is not current and not self._hard_cap_task.done():
+        if (
+            self._hard_cap_task
+            and self._hard_cap_task is not current
+            and not self._hard_cap_task.done()
+        ):
             self._hard_cap_task.cancel()
-        if self._sliding_task and self._sliding_task is not current and not self._sliding_task.done():
+        if (
+            self._sliding_task
+            and self._sliding_task is not current
+            and not self._sliding_task.done()
+        ):
             self._sliding_task.cancel()
-
 
     @property
     def closed(self) -> bool:
@@ -257,7 +265,9 @@ class MusicVote:
         if not (0 <= idx < len(self.candidates)):
             return False
         self.votes[user_id] = idx
-        playLogger.info(f"[VOTE] Registered vote for user {user_id} -> option {idx} (close_now={close_now})")
+        playLogger.info(
+            f"[VOTE] Registered vote for user {user_id} -> option {idx} (close_now={close_now})"
+        )
         if close_now:
             # Cancel any pending timeout and resolve right now.
             self._cancel_timers()
@@ -271,9 +281,9 @@ class MusicVote:
         """(Re)start the sliding close timer at ``vote_window_sec`` from now."""
         if self._sliding_task and not self._sliding_task.done():
             self._sliding_task.cancel()
-        self._sliding_task = asyncio.create_task(self._close_after(self.vote_window_sec))
-
-
+        self._sliding_task = asyncio.create_task(
+            self._close_after(self.vote_window_sec)
+        )
 
     async def _close_after(self, delay: float) -> None:
         try:
@@ -907,6 +917,7 @@ class GuildPlayer:
         self.isPrevious = False
         self.lastRequester = None  # discord.Member of the user who last queued songs
         self.isDownloading = False
+        self.isStartingPlayback = False
         self.downloadingIds = set()
         self.preDownloadTask = None
         self.activeDownloadProc = None
@@ -1640,14 +1651,18 @@ class GuildPlayer:
         view = None
         if len(songs) > 1:
             if isFirst:
-                view = CancelDownloadView(self, songs[0]["id"], f"Playlist ({len(songs)} canciones)")
+                view = CancelDownloadView(
+                    self, songs[0]["id"], f"Playlist ({len(songs)} canciones)"
+                )
                 msg_content = f"✅ Descargando playlist (se añadieron **{len(songs)}** canciones, iniciando con **{songs[0]['title']}**... <t:{estimatedTime}:R>)"
             else:
                 msg_content = f"✅ Se añadieron **{len(songs)}** canciones a la cola."
         else:
             if isFirst:
                 view = CancelDownloadView(self, songs[0]["id"], songs[0]["title"])
-                msg_content = f"✅ Descargando: **{songs[0]['title']}**... <t:{estimatedTime}:R>"
+                msg_content = (
+                    f"✅ Descargando: **{songs[0]['title']}**... <t:{estimatedTime}:R>"
+                )
             else:
                 msg_content = f"✅ Se añadió **{songs[0]['title']}** a la cola."
 
@@ -1662,7 +1677,7 @@ class GuildPlayer:
                     "duration": songs[0].get("duration_string") or "",
                     "isFirst": True,
                     "video_id": songs[0]["id"],
-                    "source": "slash"
+                    "source": "slash",
                 }
         elif isFirst:
             await ctx.interaction.edit_original_response(content=msg_content, view=view)
@@ -1697,6 +1712,7 @@ class GuildPlayer:
         self.queue.clear()
         self.currentSong = None
         self.isDownloading = False
+        self.isStartingPlayback = False
         self.downloadingIds.discard(videoId)
         self.initialCtx = None
         # If we deferred the voice connect, drop the pending target so a later
@@ -1909,6 +1925,8 @@ class GuildPlayer:
                 self.downloadingIds.discard(videoId)
                 self.activeDownloadProc = None
 
+        self.isStartingPlayback = True
+
         # Lazy voice-connect: when /play was issued without an existing voice
         # client we deferred joining until now. Joining at this point (file
         # ready on disk → ffmpeg starts immediately) keeps the silent-in-channel
@@ -1942,6 +1960,7 @@ class GuildPlayer:
                     except Exception:
                         pass
                     self.initialCtx = None
+                self.isStartingPlayback = False
                 if self.controlMessage is not None:
                     await self.updateControlMessage(
                         f"❌ No pude conectarme a voz para reproducir **{videoTitle}**: {e}"
@@ -1950,6 +1969,7 @@ class GuildPlayer:
                 return
 
         if not self.vc:
+            self.isStartingPlayback = False
             playLogger.error(
                 "[PLAYBACK ERROR] vc=None and no pending channel; aborting '%s'",
                 videoTitle,
@@ -1983,6 +2003,7 @@ class GuildPlayer:
                 )
 
             self.vc.play(audioSource, after=afterCallback)
+            self.isStartingPlayback = False
             # Reset elapsed-time tracking. When resuming from a seek the
             # virtual start is shifted back so ``_currentElapsedSeconds``
             # continues to report the real position within the song.
@@ -2034,6 +2055,7 @@ class GuildPlayer:
             # Start background pre-downloading of the queue
             self.startPreDownloading()
         except Exception as e:
+            self.isStartingPlayback = False
             analytics.capture_exception(
                 e,
                 user=self.lastRequester,
@@ -2186,6 +2208,7 @@ class GuildPlayer:
             await self.startPlayingCurrent()
         else:
             self.currentSong = None
+            self.isStartingPlayback = False
             if self._autodj_should_continue():
                 await self._autodj_propose_next()
             else:
@@ -2362,6 +2385,7 @@ class GuildPlayer:
         self.isStopping = True
         self.queue.clear()
         self.isDownloading = False
+        self.isStartingPlayback = False
         # Soltar el handle del mensaje progresivo del indio (idem cancelDownload).
         self.indioProgressMessage = None
         self.indioProgressMeta = {}
