@@ -2215,16 +2215,6 @@ async def _dispatch_indio_actions(
         if reply_handle is not None and statuses:
             try:
                 primary_action = actions[0][0] if actions else ""
-                # Resolve voice channel name to include in PLAY_MUSIC success text.
-                # Only applies to FROM_VOICE dispatch — text commands keep the
-                # original suffix without channel reference.
-                voice_channel_name = None
-                if from_voice and requester_member is not None:
-                    voice = getattr(requester_member, "voice", None)
-                    if voice is not None:
-                        vc = getattr(voice, "channel", None)
-                        if vc is not None:
-                            voice_channel_name = getattr(vc, "name", None)
                 first_failure = next(
                     (s for s in statuses if _failure_feedback(s) is not None), None
                 )
@@ -2238,13 +2228,21 @@ async def _dispatch_indio_actions(
                         primary_action,
                         _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅"),
                     )
-                    if primary_action == "PLAY_MUSIC" and voice_channel_name:
-                        suffix = suffix.replace("🎵", f"en **{voice_channel_name}** 🎵")
+                    if (
+                        from_voice
+                        and primary_action == "PLAY_MUSIC"
+                        and config.INDIO_PLAY_CHANNEL_ID
+                    ):
+                        suffix += f" <#{config.INDIO_PLAY_CHANNEL_ID}>"
                     result_line = suffix
                 else:
                     suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
-                    if primary_action == "PLAY_MUSIC" and voice_channel_name:
-                        suffix = suffix.replace("🎵", f"en **{voice_channel_name}** 🎵")
+                    if (
+                        from_voice
+                        and primary_action == "PLAY_MUSIC"
+                        and config.INDIO_PLAY_CHANNEL_ID
+                    ):
+                        suffix += f" <#{config.INDIO_PLAY_CHANNEL_ID}>"
                     result_line = suffix
                 if result_line:
                     via_relay = getattr(reply_handle, "via_relay", False)

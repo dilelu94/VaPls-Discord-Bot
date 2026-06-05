@@ -243,10 +243,13 @@ async def test_generate_image_via_fallback(monkeypatch):
     assert spy_unlink.call_count == 1
 
 
-async def test_play_music_via_relay_includes_voice_channel_name(monkeypatch):
-    """Relay path: the success suffix should mention the voice channel name."""
+async def test_play_music_via_relay_includes_channel_mention(monkeypatch):
+    """Relay path: the success suffix should include a clickable link
+    to the designated play channel via Discord's ``<#id>`` mention format."""
     import geminiCommand
+    import config
 
+    monkeypatch.setattr(config, "INDIO_PLAY_CHANNEL_ID", 451607097432604672)
     monkeypatch.setattr(
         geminiCommand,
         "_invoke_slash_via_userbot",
@@ -262,21 +265,24 @@ async def test_play_music_via_relay_includes_voice_channel_name(monkeypatch):
         [("PLAY_MUSIC", "despacito")],
         reply_handle=handle,
         reply_text="dale, va",
-        requester_member=_member_in_voice(channel_name="Música"),
+        requester_member=_member_in_voice(),
         from_voice=True,
     )
 
     assert edited, "expected the reply to be edited with a result line"
     combined = edited[0]
-    assert "Música" in combined
+    assert "<#451607097432604672>" in combined
     assert "🎵" in combined
 
 
-async def test_play_music_via_fallback_includes_voice_channel_name(monkeypatch):
-    """Fallback path: the success suffix should mention the voice channel name."""
+async def test_play_music_via_fallback_includes_channel_mention(monkeypatch):
+    """Fallback path: the success suffix should include a clickable link
+    to the designated play channel via Discord's ``<#id>`` mention format."""
     import geminiCommand
+    import config
     import playCommand
 
+    monkeypatch.setattr(config, "INDIO_PLAY_CHANNEL_ID", 451607097432604672)
     monkeypatch.setattr(
         geminiCommand,
         "_invoke_slash_via_userbot",
@@ -297,11 +303,11 @@ async def test_play_music_via_fallback_includes_voice_channel_name(monkeypatch):
         [("PLAY_MUSIC", "despacito")],
         reply_handle=handle,
         reply_text="dale, va",
-        requester_member=_member_in_voice(channel_name="Música"),
+        requester_member=_member_in_voice(),
         from_voice=True,
     )
 
     assert edited, "expected the reply to be edited with a result line"
     combined = edited[0]
-    assert "Música" in combined
+    assert "<#451607097432604672>" in combined
     assert "🎵" in combined
