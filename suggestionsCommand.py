@@ -73,6 +73,13 @@ def _new_group_id() -> str:
     return f"g_{uuid.uuid4().hex[:8]}"
 
 
+def _format_date(iso: str) -> str:
+    """'2026-06-05T06:53:15Z' → '2026-06-05'"""
+    if iso and "T" in iso:
+        return iso[:10]
+    return iso[:10] if len(iso) >= 10 else iso
+
+
 # --------------------------------------------------------------------------
 # Data model
 # --------------------------------------------------------------------------
@@ -237,8 +244,9 @@ Devolves SOLO un JSON con esta forma exacta, sin markdown ni explicacion:
 
 Reglas:
 - "Encaja" significa que apunta al mismo cambio/feature, no solo al mismo tema.
-- Si dudas entre encajar y crear, preferi crear: es mas facil mergear despues
-  que separar.
+- Prioriza encajar cuando coincida el nombre del comando (ej. "/eco" encaja
+  en "Comando /eco") o la intencion sea claramente la misma, aunque el texto
+  sea mas corto. Solo crea grupo nuevo si es inequivocamente otra cosa.
 - El titulo y resumen van en castellano rioplatense, sin emojis, sin comillas.
 - Si la idea es ambigua, intenta capturar la intencion general en el resumen.
 - El update_title es opcional: solo si el titulo actual se queda corto para
@@ -338,20 +346,19 @@ async def _classify(idea: str, groups: list[Group]) -> Optional[Classification]:
 # GitHub Issues helpers
 # --------------------------------------------------------------------------
 def _build_issue_body(group: Group) -> str:
-    n = group.size
-    p = "persona" if n == 1 else "personas"
-    plural = "" if n == 1 else "s"
     lines = [
         f"## Resumen\n{group.summary or '(sin descripcion)'}",
         "",
-        f"**{n} {p} pidió{plural} esto.**",
+        "## Sugerencias recibidas",
     ]
+    for s in group.submissions:
+        lines.append(f'- "{s.text}" ({_format_date(s.at)})')
     lines.extend(["", "---", "*Creado automáticamente desde VaPls Discord Bot*"])
     return "\n".join(lines)
 
 
-def _build_comment(_sub: Submission) -> str:
-    return "Otra persona también quiere esta funcionalidad."
+def _build_comment(sub: Submission) -> str:
+    return f'+1 — "{sub.text}" ({_format_date(sub.at)})'
 
 
 async def _sync_github_created(group: Group) -> Optional[int]:
