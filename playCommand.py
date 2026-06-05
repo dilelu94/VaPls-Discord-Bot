@@ -79,7 +79,7 @@ _PLAY_AUTOPLAY_RATIO = 0.55
 # queries ("el infierno", "rock") are inherently ambiguous — even if the top
 # hit contains them verbatim, the user is usually browsing, not asking for
 # a specific track. The picker handles that case better.
-_PLAY_AUTOPLAY_MIN_TOKENS = 3
+_PLAY_AUTOPLAY_MIN_TOKENS = 2
 
 
 def _normalize_for_match(s: str) -> str:
