@@ -13,6 +13,7 @@ opentelemetry-api>=1.25.0
 opentelemetry-sdk>=1.25.0
 opentelemetry-exporter-otlp>=1.25.0
 aiohttp>=3.9
+Pillow>=10.0.0
 # audioop was removed from the stdlib in Python 3.13. This backport re-adds it
 # so userbot/recording.py can import it if the server's Python is ever upgraded.
 # The marker is a no-op on <=3.12 where the stdlib module still exists.

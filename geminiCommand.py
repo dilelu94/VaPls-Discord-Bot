@@ -1984,29 +1984,32 @@ async def _dispatch_indio_actions(
                             except Exception:
                                 pass
                         else:
-                            img = images[0]
                             os.makedirs("image_cache", exist_ok=True)
 
-                            suffix = (
-                                os.path.splitext(img.get("filename", "input.png"))[1]
-                                or ".png"
-                            )
-                            input_path = f"image_cache/input_{source_message_id or 'temp'}{suffix}"
-
+                            input_paths = []
                             download_ok = False
                             try:
                                 async with aiohttp.ClientSession() as sess:
-                                    async with sess.get(
-                                        img["url"],
-                                        timeout=aiohttp.ClientTimeout(total=15),
-                                    ) as resp:
-                                        if resp.status == 200:
-                                            with open(input_path, "wb") as f:
-                                                f.write(await resp.read())
-                                            download_ok = True
+                                    for i, img in enumerate(images[:4]):
+                                        suffix = (
+                                            os.path.splitext(
+                                                img.get("filename", "input.png")
+                                            )[1]
+                                            or ".png"
+                                        )
+                                        path = f"image_cache/input_{source_message_id or 'temp'}_{i}{suffix}"
+                                        async with sess.get(
+                                            img["url"],
+                                            timeout=aiohttp.ClientTimeout(total=15),
+                                        ) as resp:
+                                            if resp.status == 200:
+                                                with open(path, "wb") as f:
+                                                    f.write(await resp.read())
+                                                input_paths.append(path)
+                                download_ok = len(input_paths) > 0
                             except Exception as e:
                                 logger.exception(
-                                    "Failed to download replied image for editing"
+                                    "Failed to download replied images for editing"
                                 )
                                 ok = False
                                 msg = f"download failed: {e}"
@@ -2018,7 +2021,7 @@ async def _dispatch_indio_actions(
 
                                     output_path = (
                                         await huggingfaceImage.generate_img2img(
-                                            arg, input_path
+                                            arg, input_paths
                                         )
                                     )
                                     if output_path:
@@ -2052,7 +2055,7 @@ async def _dispatch_indio_actions(
                                         msg = "generation failed"
                                 except Exception as e:
                                     logger.exception(
-                                        "HF image-to-image generation failed"
+                                        "FLUX.2 image-to-image generation failed"
                                     )
                                     ok = False
                                     msg = str(e)
@@ -2075,10 +2078,11 @@ async def _dispatch_indio_actions(
                                     except Exception:
                                         pass
                                 finally:
-                                    try:
-                                        os.unlink(input_path)
-                                    except Exception:
-                                        pass
+                                    for p in input_paths:
+                                        try:
+                                            os.unlink(p)
+                                        except Exception:
+                                            pass
                     statuses.append(f"image_edit: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio EDIT_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "DJ_MODE":

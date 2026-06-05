@@ -26,7 +26,6 @@ TIMEOUT = 60
 MAX_RETRIES = 5
 
 
-
 async def _refine_prompt_with_gemini(prompt: str) -> str:
     """Uses Gemini to translate and optimize the image generation prompt to English.
 
@@ -49,7 +48,9 @@ async def _refine_prompt_with_gemini(prompt: str) -> str:
         keys = []
 
     if not keys:
-        logger.info("Gemini no configurado para traducción de prompt, usando prompt original")
+        logger.info(
+            "Gemini no configurado para traducción de prompt, usando prompt original"
+        )
         return prompt
 
     sys_inst = (
@@ -104,10 +105,11 @@ async def generate(prompt: str, token: str) -> Optional[str]:
     return path
 
 
-async def generate_img2img(prompt: str, init_image_path: str) -> Optional[str]:
-    """Generates an edited image from an input image and prompt via Cloudflare Workers AI.
+async def generate_img2img(prompt: str, init_image_paths: list[str]) -> Optional[str]:
+    """Generates an edited image from input images and prompt via Cloudflare Workers AI FLUX.2 [dev].
 
-    Uses @cf/runwayml/stable-diffusion-v1-5-img2img.
+    Uses @cf/black-forest-labs/flux-2-dev with multipart form data.
+    Accepts up to 4 input images (each resized to ≤512×512).
     """
     import config
 
@@ -115,7 +117,9 @@ async def generate_img2img(prompt: str, init_image_path: str) -> Optional[str]:
     cf_token = config.CLOUDFLARE_API_TOKEN
 
     if not account_id or not cf_token:
-        logger.error("CLOUDFLARE_ACCOUNT_ID o CLOUDFLARE_API_TOKEN no configurado en .env")
+        logger.error(
+            "CLOUDFLARE_ACCOUNT_ID o CLOUDFLARE_API_TOKEN no configurado en .env"
+        )
         raise RuntimeError(
             "❌ Configuración Faltante: Para editar imágenes gratis, el admin debe configurar "
             "CLOUDFLARE_ACCOUNT_ID y CLOUDFLARE_API_TOKEN en el archivo .env (no requiere tarjeta)."
@@ -125,28 +129,37 @@ async def generate_img2img(prompt: str, init_image_path: str) -> Optional[str]:
 
     try:
         import base64
+        import io
         import aiohttp
+        from PIL import Image
 
-        # Read input image and encode to base64
-        with open(init_image_path, "rb") as f:
-            img_bytes = f.read()
+        form = aiohttp.FormData()
+        form.add_field("prompt", refined_prompt)
 
-        b64_data = base64.b64encode(img_bytes).decode("utf-8")
+        for i, path in enumerate(init_image_paths[:4]):
+            img = Image.open(path)
+            if img.width > 512 or img.height > 512:
+                img.thumbnail((512, 512), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            buf.seek(0)
+            form.add_field(
+                f"input_image_{i}",
+                buf,
+                content_type="image/png",
+                filename=f"input_{i}.png",
+            )
 
-        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/runwayml/stable-diffusion-v1-5-img2img"
-        headers = {
-            "Authorization": f"Bearer {cf_token}",
-            "Content-Type": "application/json"
-        }
+        form.add_field("steps", "25")
+        form.add_field("guidance", "3.5")
+        form.add_field("width", "512")
+        form.add_field("height", "512")
 
-        payload = {
-            "prompt": refined_prompt,
-            "image_b64": b64_data,
-            "strength": 0.5
-        }
+        url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/run/@cf/black-forest-labs/flux-2-dev"
+        headers = {"Authorization": f"Bearer {cf_token}"}
 
         logger.info(
-            "intentando img2img con Cloudflare Workers AI y prompt: %.100s",
+            "intentando img2img con FLUX.2 [dev] y prompt: %.100s",
             refined_prompt,
         )
 
@@ -154,30 +167,41 @@ async def generate_img2img(prompt: str, init_image_path: str) -> Optional[str]:
             async with sess.post(
                 url,
                 headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=45)
+                data=form,
+                timeout=aiohttp.ClientTimeout(total=120),
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
-                    logger.error("Cloudflare Workers AI HTTP %d: %.200s", resp.status, body)
-                    raise RuntimeError(f"Cloudflare Workers AI falló (HTTP {resp.status}): {body[:150]}")
+                    logger.error("FLUX.2 [dev] HTTP %d: %.200s", resp.status, body)
+                    raise RuntimeError(
+                        f"FLUX.2 [dev] falló (HTTP {resp.status}): {body[:150]}"
+                    )
 
-                data = await resp.read()
+                result = await resp.json()
+                if "image" not in result:
+                    raise RuntimeError(
+                        f"FLUX.2 [dev] respuesta sin campo 'image': {result}"
+                    )
+
+                img_bytes = base64.b64decode(result["image"])
 
         os.makedirs("image_cache", exist_ok=True)
         fd, path = tempfile.mkstemp(suffix=".png", prefix="cfi2i_", dir="image_cache")
         try:
             with open(path, "wb") as f:
-                f.write(data)
+                f.write(img_bytes)
         finally:
             os.close(fd)
 
-        logger.info("imagen img2img de Cloudflare guardada en %s (%d bytes)", path, len(data))
+        logger.info(
+            "imagen img2img de FLUX.2 [dev] guardada en %s (%d bytes)",
+            path,
+            len(img_bytes),
+        )
         return path
     except Exception as e:
-        logger.exception("Cloudflare Workers AI generate_img2img falló")
+        logger.exception("FLUX.2 [dev] generate_img2img falló")
         raise e
-
 
 
 async def _try_model(model: str, prompt: str, token: str) -> Optional[bytes]:
@@ -280,8 +304,13 @@ async def generarimagenLogic(ctx, prompt: str):
     target_channel = None
     if is_outside:
         from unittest.mock import Mock
-        has_real_bot = hasattr(ctx, "bot") and ctx.bot is not None and (
-            not isinstance(ctx.bot, Mock) or "_mock_custom_bot" in ctx.bot.__dict__
+
+        has_real_bot = (
+            hasattr(ctx, "bot")
+            and ctx.bot is not None
+            and (
+                not isinstance(ctx.bot, Mock) or "_mock_custom_bot" in ctx.bot.__dict__
+            )
         )
         if has_real_bot:
             target_channel = ctx.bot.get_channel(target_channel_id)
@@ -332,4 +361,3 @@ async def generarimagenLogic(ctx, prompt: str):
             os.unlink(path)
         except Exception:
             logger.warning("could not delete temp image %s", path)
-
