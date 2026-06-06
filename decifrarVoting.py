@@ -142,6 +142,16 @@ async def handle_reaction_vote(
         _entries.pop(message_id, None)
 
 
+def is_tracked(message_id: int) -> bool:
+    """Return True if ``message_id`` is currently tracked by decifrar voting.
+
+    Used by the MMR system to skip logging reactions on messages that are
+    part of the ASR-quality feedback loop — those 👍/❌ are voting, not
+    genuine engagement.
+    """
+    return message_id in _entries
+
+
 def _log_false_positive(entry: dict, *, voter_id: int) -> None:
     path = getattr(
         config, "DECIFRAR_FALSE_POSITIVES_LOG_PATH", "data/false_positives.jsonl"

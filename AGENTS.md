@@ -324,12 +324,15 @@ Integración con GitHub Issues para rastrear y gestionar features pedidas por lo
    - **Match existente** → `POST /repos/{repo}/issues/{n}/comments` con +1, y opcional `PATCH` del body si Gemini detectó info nueva
 5. Reply ephemeral al usuario (`ctx.followup.send`)
 
-### Limpieza (issue cerrado en GitHub)
+### Sincronización con GitHub Issues (cerrar/reabrir)
 
-Cuando un issue se cierra, el grupo local se **elimina** del archivo. Dos mecanismos:
+Cuando un issue se cierra, el grupo local se **oculta** (`hidden: True`) en vez de borrarse. Si se reabre, el grupo se restaura automáticamente. Dos mecanismos:
 
-- **Startup sync**: `on_ready` (bot.py:224-234) llama `sync_closed_issues()` que consulta `GET /repos/{repo}/issues?state=closed` y borra los grupos cuyo `issue_number` esté en la respuesta.
-- **Webhook en tiempo real**: `POST /github-webhook` recibe el evento `action=closed` de GitHub y ejecuta la misma sync.
+- **Startup sync**: `on_ready` llama `sync_closed_issues()` que consulta `GET /repos/{repo}/issues?state=closed` y oculta los grupos cuyo `issue_number` esté en la respuesta.
+- **Webhook en tiempo real**: `POST /github-webhook` maneja eventos:
+  - `action=closed` → oculta el grupo (`hidden: True`)
+  - `action=reopened` → restaura el grupo (`hidden: False`)
+  - Ignora issues sin la label configurada (`GITHUB_ISSUE_LABEL`)
 
 ### Archivos clave
 
@@ -352,6 +355,7 @@ Cuando un issue se cierra, el grupo local se **elimina** del archivo. Dos mecani
       "created_at": "2026-05-30T12:34:56Z",
       "updated_at": "2026-05-30T12:34:56Z",
       "issue_number": 49,
+      "hidden": true,
       "submissions": [
         {
           "user_id": "123",
@@ -365,7 +369,11 @@ Cuando un issue se cierra, el grupo local se **elimina** del archivo. Dos mecani
 }
 ```
 
-El campo `completed` existe en el dataclass para backward compat pero **ya no se escribe** en nuevos archivos — los grupos se borran directamente al cerrar el issue.
+El campo `completed` existe en el dataclass para backward compat pero **ya no se escribe** en nuevos archivos. El campo `hidden` se escribe solo cuando es `True` (grupo oculto por issue cerrado). Los grupos ocultos:
+
+- No aparecen en `/sugerencias-ver`
+- No se pasan al clasificador de Gemini (no se pueden matchear sugerencias nuevas contra ellos)
+- Se restauran automáticamente si el issue se reabre
 
 ### Config necesaria (`.env`)
 
@@ -388,9 +396,10 @@ El endpoint `/github-webhook` está protegido por el middleware `X-API-Secret` c
 
 ### Estado actual en producción
 
-- 9 grupos migrados a issues **#49–#57** (todos con label `sugerencia`)
+- Grupos migrados a issues **#49–#57** (todos con label `sugerencia`)
 - Auto-sync corre en cada reinicio del bot
-- Nginx instalado y configurado, esperando regla de Security List en Oracle Cloud Console
+- Nginx en puerto 80 como reverse proxy para webhook (Security List de Oracle Cloud abierta)
+- Webhook de GitHub configurado para eventos `issues` → `http://141.148.84.55/github-webhook`
 
 ## 💡 Guía de Modificación
 

@@ -121,6 +121,7 @@ class Group:
     updated_at: str
     issue_number: Optional[int] = None
     completed: bool = False
+    hidden: bool = False
     submissions: list[Submission] = field(default_factory=list)
 
     @property
@@ -142,6 +143,8 @@ class Group:
         }
         if self.issue_number is not None:
             d["issue_number"] = self.issue_number
+        if self.hidden:
+            d["hidden"] = True
         return d
 
     @classmethod
@@ -162,6 +165,7 @@ class Group:
             updated_at=str(d.get("updated_at", "")) or _now_iso(),
             issue_number=issue_number,
             completed=bool(d.get("completed", False)),
+            hidden=bool(d.get("hidden", False)),
             submissions=[Submission.from_dict(s) for s in subs]
             if isinstance(subs, list)
             else [],
@@ -430,15 +434,18 @@ async def submit_suggestion(
 
     store = _store()
     groups = await asyncio.to_thread(store.load)
+    active = [g for g in groups if not g.hidden]
 
-    cls = await _classify(text, groups)
+    cls = await _classify(text, active)
     if cls is None:
         return None  # categorized-or-nothing: do not persist.
 
     sub = Submission(user_id=user_id, user_name=user_name, text=text, at=_now_iso())
 
     if cls.match_id:
-        target = next((g for g in groups if g.id == cls.match_id), None)
+        target = next(
+            (g for g in groups if g.id == cls.match_id and not g.hidden), None
+        )
         if target is not None:
             prior = target.size
             target.add(sub)
@@ -552,7 +559,8 @@ async def sugerenciasLogic(ctx, idea: str) -> None:
 # View
 # --------------------------------------------------------------------------
 def _format_listing(groups: list[Group]) -> str:
-    ranked = sorted(groups, key=lambda g: (g.size, g.updated_at), reverse=True)
+    visible = [g for g in groups if not g.hidden]
+    ranked = sorted(visible, key=lambda g: (g.size, g.updated_at), reverse=True)
     lines = ["💡 **Sugerencias acumuladas** (ordenadas por más pedidas):", ""]
     for g in ranked[:_VER_MAX_GROUPS]:
         n = g.size
@@ -617,18 +625,15 @@ async def sync_closed_issues() -> str:
 
     store = _store()
     groups = await asyncio.to_thread(store.load)
-    deleted = 0
-    remaining: list[Group] = []
+    hidden = 0
     for g in groups:
-        if g.issue_number is not None and g.issue_number in closed:
-            deleted += 1
-        else:
-            remaining.append(g)
+        if g.issue_number is not None and g.issue_number in closed and not g.hidden:
+            g.hidden = True
+            hidden += 1
 
-    if deleted:
-        groups[:] = remaining
+    if hidden:
         await store.save(groups)
-        return f"{deleted} grupo(s) eliminados porque su issue de GitHub fue cerrado."
+        return f"{hidden} grupo(s) ocultos porque su issue de GitHub fue cerrado."
 
     return "Ningún grupo pendiente corresponde a issues cerrados."
 

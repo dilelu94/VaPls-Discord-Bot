@@ -14,6 +14,7 @@ Library stack: discord.py-self (user-token client) + discord-ext-voice-recv
 
 import asyncio
 import audioop
+import base64
 import json
 import logging
 import os
@@ -48,6 +49,7 @@ try:
 except Exception:
     _USERS = {}
 import webhookLogger  # parent dir; wired after basicConfig() below
+import activity_db as adb
 
 
 def _name_for(user_id: int, member=None) -> str:
@@ -354,6 +356,7 @@ class TranscriberSink(voice_recv.AudioSink):
         self._rms_seen: dict[int, int] = {}
         self._stopped = False
         self._idle_loop_started = False
+        self.user_guilds: dict[int, int] = {}
 
     def wants_opus(self) -> bool:
         return False
@@ -419,8 +422,10 @@ class TranscriberSink(voice_recv.AudioSink):
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
-        # Mute non-requesters while a music vote is open in this guild.
         guild_id = getattr(getattr(source, "guild", None), "id", None)
+        if guild_id is not None:
+            self.user_guilds[user_id] = guild_id
+        # Mute non-requesters while a music vote is open in this guild.
         if not _is_speaker_allowed(guild_id, user_id):
             return
         pcm_data = data.pcm
@@ -497,6 +502,14 @@ class TranscriberSink(voice_recv.AudioSink):
             )
             return
         log.info(f"[WHISPER-FINAL] user={user_id} finalizing {secs:.2f}s")
+
+        guild_id = self.user_guilds.get(user_id)
+        if guild_id is not None:
+            try:
+                if _channel_has_others(guild_id):
+                    adb.log_activity(user_id, guild_id, "voice_vad", duration_secs=secs)
+            except Exception as e:
+                log.warning(f"[MMR] failed to log voice activity for {user_id}: {e}")
 
         with self._active_lock:
             limit = self._concurrency_limit()
@@ -1131,6 +1144,7 @@ class WakeWordSink(voice_recv.AudioSink):
         # not going to act on anyway. Cleared in _transcribe_and_dispatch().
         self._wake_in_progress = False
         self._wake_triggerer_id: Optional[int] = None
+        self.user_guilds: dict[int, int] = {}
 
     def wants_opus(self) -> bool:
         return False
@@ -1153,10 +1167,12 @@ class WakeWordSink(voice_recv.AudioSink):
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
+        guild_id = getattr(getattr(source, "guild", None), "id", None)
+        if guild_id is not None:
+            self.user_guilds[user_id] = guild_id
         # Mute non-requesters while a music vote is open in this guild — the
         # main bot toggles _vote_restrictions via the /restrict_speaker relay
         # endpoint. Sits before any audio work so non-requesters cost zero.
-        guild_id = getattr(getattr(source, "guild", None), "id", None)
         if not _is_speaker_allowed(guild_id, user_id):
             return
         pcm_data = data.pcm
@@ -1437,6 +1453,13 @@ class WakeWordSink(voice_recv.AudioSink):
             self._wake_triggerer_id = None
             return
         secs = len(pcm) / (16000 * 2)
+        guild_id = self.user_guilds.get(user_id)
+        if guild_id is not None:
+            try:
+                if _channel_has_others(guild_id):
+                    adb.log_activity(user_id, guild_id, "voice_vad", duration_secs=secs)
+            except Exception as e:
+                log.warning(f"[MMR] failed to log voice activity for {user_id}: {e}")
         vosk_result = capture.get("vosk_result")
         prebuffer_len = capture.get("prebuffer_len", 0)
         wake_confirm_pcm = capture.get("wake_confirm_pcm")
@@ -2046,6 +2069,17 @@ async def _dispatch_to_indio(
 # `intents` AND fail user login (HTTP 401) against current Discord, so we stay
 # on the pinned version that authenticates.
 client = discord.Client(chunk_guilds_at_startup=False)
+
+
+def _channel_has_others(guild_id: int) -> bool:
+    """Return True if the userbot's voice channel has >= 2 non-bot users."""
+    for vc in client.voice_clients:
+        if vc.guild.id == guild_id and vc.channel:
+            non_bot = sum(
+                1 for m in vc.channel.members if not m.bot and m.id != client.user.id
+            )
+            return non_bot >= 2
+    return False
 
 
 def _guild_allowed(guild_id: int) -> bool:
@@ -3712,6 +3746,277 @@ async def _relay_toggle_wake_sound(request: web.Request) -> web.Response:
     return web.json_response({"enabled": _wake_sound_enabled})
 
 
+# ---------- Activity/MMR relay endpoints -----------------------------------
+# These let the main bot log and query activity data through the userbot's
+# SQLite database. The /admin/* endpoints use HTTP Basic Auth for the web UI.
+
+
+def _check_admin_auth(request: web.Request) -> bool:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth[6:]).decode("utf-8")
+        user, _, passwd = decoded.partition(":")
+        return user == "dilelu" and passwd == "indiovapls"
+    except Exception:
+        return False
+
+
+async def _relay_activity_log(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        user_id = int(data["user_id"])
+        guild_id = int(data["guild_id"])
+        activity_type = str(data["activity_type"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    channel_type = str(data.get("channel_type", ""))
+    duration_secs = float(data.get("duration_secs", 0))
+    quality_score = float(data["quality_score"]) if "quality_score" in data else None
+    value = float(data.get("value", 1.0))
+    metadata = data.get("metadata")
+    is_premium = bool(data.get("is_premium", False))
+    try:
+        delta = adb.log_activity(
+            user_id,
+            guild_id,
+            activity_type,
+            channel_type=channel_type,
+            duration_secs=duration_secs,
+            quality_score=quality_score,
+            value=value,
+            metadata=metadata,
+            is_premium=is_premium,
+        )
+        return web.json_response({"ok": True, "delta": delta})
+    except Exception as e:
+        log.exception("[ACTIVITY] log_activity failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_activity_list(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        guild_id = int(request.query.get("guild_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid guild_id"}, status=400)
+    limit_str = request.query.get("limit", "50")
+    try:
+        limit = int(limit_str)
+    except (TypeError, ValueError):
+        limit = 50
+    try:
+        rows = adb.get_recent_activity(guild_id, limit)
+        return web.json_response({"activities": rows})
+    except Exception as e:
+        log.exception("[ACTIVITY] get_recent_activity failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_activity_user(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        user_id = int(request.query.get("user_id", 0))
+        guild_id = int(request.query.get("guild_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid user_id or guild_id"}, status=400)
+    if not user_id or not guild_id:
+        return web.json_response({"error": "user_id and guild_id required"}, status=400)
+    try:
+        stats = adb.get_user_stats(user_id, guild_id)
+        if stats is None:
+            return web.json_response({"stats": None})
+        return web.json_response({"stats": stats})
+    except Exception as e:
+        log.exception("[ACTIVITY] get_user_stats failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_activity_leaderboard(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        guild_id = int(request.query.get("guild_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid guild_id"}, status=400)
+    limit_str = request.query.get("limit", "20")
+    try:
+        limit = int(limit_str)
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        rows = adb.get_leaderboard(guild_id, limit)
+        return web.json_response({"leaderboard": rows})
+    except Exception as e:
+        log.exception("[ACTIVITY] get_leaderboard failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+_ADMIN_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head><meta charset="utf-8"><title>VaPls MMR Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#1a1a2e;color:#eee;padding:20px}
+h1{color:#e94560;margin-bottom:20px}
+h2{color:#0f3460;background:#e94560;display:inline-block;padding:4px 12px;border-radius:4px;margin:20px 0 10px}
+table{width:100%;border-collapse:collapse;margin-bottom:20px}
+th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #333}
+th{background:#16213e;color:#e94560;position:sticky;top:0}
+tr:hover{background:#16213e}
+td{font-size:13px;font-family:monospace}
+.section{background:#16213e;padding:16px;border-radius:8px;margin-bottom:20px}
+label{display:block;margin:8px 0 4px;color:#aaa;font-size:12px;text-transform:uppercase}
+input,select{width:100%;padding:8px;border:1px solid #333;border-radius:4px;background:#1a1a2e;color:#eee;font-size:14px}
+button{background:#e94560;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;font-size:14px;margin-top:12px}
+button:hover{background:#c73650}
+.msg{padding:10px;border-radius:4px;margin:10px 0;display:none}
+.msg.ok{background:#1b5e20;display:block}
+.msg.err{background:#b71c1c;display:block}
+.nav{display:flex;gap:10px;margin-bottom:20px}
+.nav a{color:#e94560;text-decoration:none;padding:8px 16px;border:1px solid #e94560;border-radius:4px}
+.nav a:hover{background:#e94560;color:#fff}
+</style></head>
+<body>
+<h1>VaPls MMR Admin</h1>
+<div class="nav">
+  <a href="#" onclick="showTab('weights')">Weights</a>
+  <a href="#" onclick="showTab('config')">Config</a>
+  <a href="#" onclick="showTab('mmr')">MMR</a>
+  <a href="#" onclick="showTab('activity')">Activity</a>
+</div>
+<div id="tab-weights" class="section"></div>
+<div id="tab-config" class="section"></div>
+<div id="tab-mmr" class="section"></div>
+<div id="tab-activity" class="section"></div>
+<div id="msg" class="msg"></div>
+<script>
+let allData = {};
+function showTab(name) {
+  document.querySelectorAll('.section').forEach(el => el.style.display = 'none');
+  document.getElementById('tab-' + name).style.display = 'block';
+  renderTab(name);
+}
+async function loadData() {
+  const r = await fetch('/admin/api/data');
+  allData = await r.json();
+  showTab('weights');
+}
+function renderTab(name) {
+  const el = document.getElementById('tab-' + name);
+  if (name === 'weights') renderWeights(el);
+  else if (name === 'config') renderConfig(el);
+  else if (name === 'mmr') renderMmr(el);
+  else if (name === 'activity') renderActivity(el);
+}
+function renderWeights(el) {
+  let h = '<h2>Activity Weights</h2><table><tr><th>Activity</th><th>Weight</th><th>Action</th></tr>';
+  for (const [k, v] of Object.entries(allData.config || {})) {
+    if (!k.startsWith('weight_')) continue;
+    const act = k.slice(7);
+    h += '<tr><td>' + act + '</td><td><input id="w-' + act + '" value="' + v + '" size="6"></td>'
+      + '<td><button onclick="saveWeight(\'' + act + '\')">Save</button></td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderConfig(el) {
+  let h = '<h2>System Config</h2><table><tr><th>Key</th><th>Value</th><th>Action</th></tr>';
+  for (const [k, v] of Object.entries(allData.config || {})) {
+    if (k.startsWith('weight_')) continue;
+    h += '<tr><td>' + k + '</td><td><input id="c-' + k + '" value="' + v + '" size="10"></td>'
+      + '<td><button onclick="saveConfig(\'' + k + '\')">Save</button></td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderMmr(el) {
+  let h = '<h2>MMR Rankings</h2><table><tr><th>User ID</th><th>Guild ID</th><th>Rating</th><th>Deviation</th><th>Activities</th><th>Premium</th></tr>';
+  for (const row of (allData.mmr || [])) {
+    h += '<tr><td>' + row.user_id + '</td><td>' + row.guild_id + '</td><td>' + row.rating + '</td><td>' + row.deviation + '</td><td>' + row.total_activities + '</td><td>' + (row.premium ? 'Y' : 'N') + '</td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderActivity(el) {
+  let h = '<h2>Recent Activity</h2><table><tr><th>ID</th><th>User</th><th>Type</th><th>Duration</th><th>Quality</th><th>Delta</th><th>Date</th></tr>';
+  for (const row of (allData.activity || [])) {
+    const d = new Date((row.created_at || 0) * 1000).toLocaleString();
+    h += '<tr><td>' + row.id + '</td><td>' + row.user_id + '</td><td>' + row.activity_type + '</td><td>' + (row.duration_secs || '-') + '</td><td>' + row.quality_score + '</td><td>' + (row.rating_delta || 0) + '</td><td>' + d + '</td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+async function saveWeight(act) {
+  const v = document.getElementById('w-' + act).value;
+  await fetch('/admin/api/weights', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({weight_' + act: v})});
+  msg('Weight saved', 'ok');
+  await loadData();
+}
+async function saveConfig(k) {
+  const v = document.getElementById('c-' + k).value;
+  await fetch('/admin/api/weights', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[k]: v})});
+  msg('Config saved', 'ok');
+  await loadData();
+}
+function msg(text, type) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg ' + type;
+  setTimeout(() => el.style.display = 'none', 3000);
+}
+loadData();
+</script></body></html>"""
+
+
+async def _relay_admin_page(request: web.Request) -> web.Response:
+    if not _check_admin_auth(request):
+        resp = web.Response(status=401, text="Unauthorized")
+        resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
+        return resp
+    return web.Response(text=_ADMIN_HTML, content_type="text/html")
+
+
+async def _relay_admin_data(request: web.Request) -> web.Response:
+    if not _check_admin_auth(request):
+        resp = web.Response(status=401, text="Unauthorized")
+        resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
+        return resp
+    try:
+        return web.json_response(adb.get_all_data())
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_admin_weights(request: web.Request) -> web.Response:
+    if not _check_admin_auth(request):
+        resp = web.Response(status=401, text="Unauthorized")
+        resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
+        return resp
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not isinstance(data, dict):
+        return web.json_response({"error": "body must be a JSON object"}, status=400)
+    for k, v in data.items():
+        adb.set_config(k, str(v))
+    return web.json_response({"ok": True, "updated": list(data.keys())})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -3730,6 +4035,13 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
     app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)
+    app.router.add_post("/activity/log", _relay_activity_log)
+    app.router.add_get("/activity", _relay_activity_list)
+    app.router.add_get("/activity/user", _relay_activity_user)
+    app.router.add_get("/activity/leaderboard", _relay_activity_leaderboard)
+    app.router.add_get("/admin", _relay_admin_page)
+    app.router.add_get("/admin/api/data", _relay_admin_data)
+    app.router.add_post("/admin/api/weights", _relay_admin_weights)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)
@@ -3749,6 +4061,7 @@ async def main():
     if not config.USER_TOKEN:
         log.error("USER_TOKEN is not set. See .env.example for setup instructions.")
         sys.exit(1)
+    adb.init_db(config.ACTIVITY_DB_PATH)
     relay_runner = await _start_relay()
     try:
         await client.start(config.USER_TOKEN)

@@ -1,4 +1,5 @@
 """Runtime configuration for the voice transcription userbot."""
+
 import os
 from dotenv import load_dotenv
 
@@ -53,10 +54,14 @@ VOSK_MODEL_PATH = os.getenv(
 WAKE_WORD_PREBUFFER_SECONDS = float(os.getenv("WAKE_WORD_PREBUFFER_SECONDS", "1.5"))
 # Hard upper bound on how long we keep capturing audio after the wake word.
 # Protects against runaway buffers if silence detection misfires.
-WAKE_WORD_MAX_CAPTURE_SECONDS = float(os.getenv("WAKE_WORD_MAX_CAPTURE_SECONDS", "12.0"))
+WAKE_WORD_MAX_CAPTURE_SECONDS = float(
+    os.getenv("WAKE_WORD_MAX_CAPTURE_SECONDS", "12.0")
+)
 # Sustained silence inside a capture that closes it. Keep it close to the
 # regular VAD final-silence threshold (~0.8s) so users feel a natural cutoff.
-WAKE_WORD_SILENCE_FINAL_SECONDS = float(os.getenv("WAKE_WORD_SILENCE_FINAL_SECONDS", "0.8"))
+WAKE_WORD_SILENCE_FINAL_SECONDS = float(
+    os.getenv("WAKE_WORD_SILENCE_FINAL_SECONDS", "0.8")
+)
 # Number of alternative transcriptions VOSK returns for each finalized
 # segment (N-best decoding). Higher = better recall on borderline pronunciations
 # — if the speaker says "indio dale" but VOSK ranks "indio" #1 and "indio dale"
@@ -83,9 +88,7 @@ ENABLE_HTTP_FORWARD = os.getenv("ENABLE_HTTP_FORWARD", "false").lower() == "true
 # = listen everywhere the user account is a member of.
 _guild_ids_raw = os.getenv("GUILD_ALLOWLIST", "")
 GUILD_ALLOWLIST = (
-    {int(x) for x in _guild_ids_raw.split(",") if x.strip()}
-    if _guild_ids_raw
-    else None
+    {int(x) for x in _guild_ids_raw.split(",") if x.strip()} if _guild_ids_raw else None
 )
 
 # Comma-separated user IDs to ignore (e.g. the main bot, other bots).
@@ -144,7 +147,9 @@ RECORD_MIN_SECONDS = float(os.getenv("RECORD_MIN_SECONDS", "0.6"))
 # per-channel to avoid burning the Gemini free tier on chatty conversations.
 
 # Master toggle. Defaults to false so the feature is opt-in.
-INDIO_AUTO_REPLY_ENABLED = os.getenv("INDIO_AUTO_REPLY_ENABLED", "false").lower() == "true"
+INDIO_AUTO_REPLY_ENABLED = (
+    os.getenv("INDIO_AUTO_REPLY_ENABLED", "false").lower() == "true"
+)
 
 # Per-channel cooldown in seconds: ignore further matches in the same channel
 # for this long after firing once.
@@ -152,7 +157,9 @@ INDIO_AUTO_REPLY_COOLDOWN_SEC = float(os.getenv("INDIO_AUTO_REPLY_COOLDOWN_SEC",
 
 # Per-guild hourly cap to keep us safely under the Gemini free-tier ceiling
 # (250 RPD shared across /indio slash, voice wake word, and auto-reply).
-INDIO_AUTO_REPLY_GUILD_HOURLY_CAP = int(os.getenv("INDIO_AUTO_REPLY_GUILD_HOURLY_CAP", "30"))
+INDIO_AUTO_REPLY_GUILD_HOURLY_CAP = int(
+    os.getenv("INDIO_AUTO_REPLY_GUILD_HOURLY_CAP", "30")
+)
 
 # Seconds without any human present in any voice channel of a guild before
 # the userbot disconnects. The timer is cancelled the moment a human
@@ -189,5 +196,10 @@ WAKE_SOUND_PATH = os.getenv("WAKE_SOUND_PATH", "")
 # throttle (cada detección suena), útil mientras se calibra la wake word.
 # Subir si en producción molesta el spam.
 WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "0.0"))
+
+# --- Activity/MMR tracking database ---------------------------------------
+# Path to the SQLite database for the Glicko-based MMR system. Created
+# automatically on first use.
+ACTIVITY_DB_PATH = os.getenv("ACTIVITY_DB_PATH", "data/activity.db")
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

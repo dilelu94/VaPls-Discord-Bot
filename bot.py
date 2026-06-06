@@ -9,6 +9,7 @@ import sys
 import os
 import logging
 import asyncio
+import re
 import time
 from urllib.parse import urljoin
 import aiohttp
@@ -33,6 +34,7 @@ from apiServer import startApiServer
 import decifrarVoting
 import errorHandler
 import geminiKeys
+import decifrarVoting
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import webhookLogger
 import huggingfaceImage
@@ -140,6 +142,131 @@ async def safeEdit(ctx, message):
         await safe_respond(ctx, message)
 
 
+# ---- Activity/MMR relay helper -------------------------------------------
+# The main bot logs Discord activities by POSTing to the userbot's relay
+# endpoint, since the userbot owns the SQLite DB. Silently skipped when the
+# relay URL is not configured.
+
+
+async def _log_activity(
+    user_id: int,
+    guild_id: int,
+    activity_type: str,
+    *,
+    channel_type: str = "",
+    duration_secs: float = 0.0,
+    quality_score: float | None = None,
+    value: float = 1.0,
+    metadata: dict | None = None,
+):
+    if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
+        return
+    url = urljoin(config.INDIO_RELAY_URL, "/activity/log")
+    payload = {
+        "user_id": user_id,
+        "guild_id": guild_id,
+        "activity_type": activity_type,
+        "channel_type": channel_type,
+        "duration_secs": duration_secs,
+        "value": value,
+        "metadata": metadata or {},
+    }
+    if quality_score is not None:
+        payload["quality_score"] = quality_score
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=3)
+        ) as sess:
+            async with sess.post(
+                url,
+                json=payload,
+                headers={"X-API-Secret": config.INDIO_RELAY_SECRET},
+            ) as resp:
+                if resp.status >= 400:
+                    log.warning(
+                        f"[MMR] log_activity HTTP {resp.status}: "
+                        f"{(await resp.text())[:100]}"
+                    )
+    except Exception as e:
+        log.warning(f"[MMR] log_activity failed: {e}")
+
+
+async def _fetch_activity(endpoint: str, params: dict) -> dict | None:
+    """Fetch data from a userbot relay activity endpoint (GET)."""
+    if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
+        return None
+    url = urljoin(config.INDIO_RELAY_URL, endpoint)
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as sess:
+            async with sess.get(
+                url,
+                params=params,
+                headers={"X-API-Secret": config.INDIO_RELAY_SECRET},
+            ) as resp:
+                if resp.status >= 400:
+                    return None
+                return await resp.json()
+    except Exception:
+        return None
+
+
+_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+
+
+async def _classify_and_log_message(
+    message, user_id: int, guild_id: int, content: str, channel_type: str
+):
+    """Classify a guild message and log the appropriate activity to MMR."""
+    tasks = []
+
+    stickers = getattr(message, "stickers", None) or []
+    if stickers:
+        for _sticker in stickers:
+            tasks.append(
+                _log_activity(user_id, guild_id, "sticker", channel_type=channel_type)
+            )
+
+    attachments = getattr(message, "attachments", None) or []
+    has_image = False
+    has_file = False
+    for a in attachments:
+        ct = (a.content_type or "").lower()
+        if ct.startswith("image/"):
+            has_image = True
+        else:
+            has_file = True
+
+    if has_image:
+        tasks.append(
+            _log_activity(user_id, guild_id, "image", channel_type=channel_type)
+        )
+    if has_file:
+        tasks.append(
+            _log_activity(user_id, guild_id, "file", channel_type=channel_type)
+        )
+
+    poll = getattr(message, "poll", None)
+    if poll is not None:
+        tasks.append(
+            _log_activity(user_id, guild_id, "poll_create", channel_type=channel_type)
+        )
+
+    if content:
+        if _URL_RE.search(content):
+            tasks.append(
+                _log_activity(user_id, guild_id, "link", channel_type=channel_type)
+            )
+        else:
+            tasks.append(
+                _log_activity(user_id, guild_id, "message", channel_type=channel_type)
+            )
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 geminiKeys.load_from_disk()
 
 intents = discord.Intents.default()
@@ -234,78 +361,231 @@ async def on_ready():
         log.exception("suggestions auto-sync failed")
 
 
+# ---- Voice state tracking for MMR -----------------------------------------
+# Per-guild per-user join timestamps for duration calculation.
+_voice_joins: dict[int, dict[int, float]] = {}
+# Per-guild per-user watch-stream start timestamps.
+_watch_start: dict[int, dict[int, float]] = {}
+# Per-guild per-user cumulative watch-stream seconds today.
+_watch_today: dict[int, dict[int, float]] = {}
+_watch_date: str = ""
+_WATCH_DAILY_MAX = 600.0  # 10 minutes
+
+
+def _has_others(channel) -> bool:
+    if channel is None:
+        return False
+    return sum(1 for m in channel.members if not m.bot) >= 2
+
+
+def _streamers_in(channel) -> list[int]:
+    if channel is None:
+        return []
+    return [
+        m.id for m in channel.members if not m.bot and m.voice and m.voice.self_stream
+    ]
+
+
+def _finalize_watch(user_id: int, guild_id: int) -> None:
+    global _watch_date, _watch_today
+    guild_watch = _watch_start.get(guild_id, {})
+    start = guild_watch.pop(user_id, None)
+    if start is None:
+        return
+    today = time.strftime("%Y-%m-%d")
+    if today != _watch_date:
+        _watch_today.clear()
+        _watch_date = today
+    guild_today = _watch_today.setdefault(guild_id, {})
+    used = guild_today.get(user_id, 0.0)
+    remaining = max(0.0, _WATCH_DAILY_MAX - used)
+    duration = min(time.time() - start, remaining)
+    if duration > 0:
+        guild_today[user_id] = used + duration
+        asyncio.create_task(
+            _log_activity(
+                user_id, guild_id, "watch_stream", duration_secs=round(duration, 1)
+            )
+        )
+
+
 @bot.event
 async def on_voice_state_update(member, before, after):
-    """Track the bot's own voice state for analytics and greetings.
+    """Track the bot's own voice state for analytics and greetings,
+    and track ALL members' voice/camera/stream activities for MMR.
 
     Async:
         This function is a coroutine and must be awaited by the Discord client.
     """
-    # The bot no longer auto-joins voice channels — that's the userbot's job
-    # now. We only track the bot's own voice state for analytics and greetings
-    # (when it joins via /play or /soundpad).
-    if member != bot.user:
-        return
-    if not before.channel and after.channel:
-        analytics.capture(
-            "voice channel joined",
-            guild=after.channel.guild,
-            properties={
-                "channel_id": str(after.channel.id),
-                "channel_name": after.channel.name,
-                "trigger": "state_update",
-            },
-        )
-        asyncio.create_task(trigger_soundboard_entry(after.channel))
-        try:
-            start_idle_watchdog(bot, after.channel.guild.id)
-        except Exception:
-            log.exception("failed to start idle watchdog")
-    elif before.channel and after.channel and before.channel.id != after.channel.id:
-        asyncio.create_task(trigger_soundboard_entry(after.channel))
-    elif before.channel and not after.channel:
-        analytics.capture(
-            "voice channel left",
-            guild=before.channel.guild,
-            properties={
-                "channel_id": str(before.channel.id),
-                "channel_name": before.channel.name,
-                "trigger": "state_update",
-            },
-        )
-        try:
-            stop_idle_watchdog(before.channel.guild.id)
-        except Exception:
-            log.exception("failed to stop idle watchdog")
-        # If a GuildPlayer still has a currentSong, this disconnect was
-        # involuntary (kick, network drop, /quit) — /parar would have removed
-        # the entry from guildPlayers via clearGuildPlayer. Snapshot the
-        # elapsed position so the next /play (or indio resume_music) can
-        # restart from where we left off.
-        try:
-            from playCommand import guildPlayers
+    # Bot-only logic for analytics, greetings, idle watchdog
+    if member == bot.user:
+        if not before.channel and after.channel:
+            analytics.capture(
+                "voice channel joined",
+                guild=after.channel.guild,
+                properties={
+                    "channel_id": str(after.channel.id),
+                    "channel_name": after.channel.name,
+                    "trigger": "state_update",
+                },
+            )
+            asyncio.create_task(trigger_soundboard_entry(after.channel))
+            try:
+                start_idle_watchdog(bot, after.channel.guild.id)
+            except Exception:
+                log.exception("failed to start idle watchdog")
+        elif before.channel and after.channel and before.channel.id != after.channel.id:
+            asyncio.create_task(trigger_soundboard_entry(after.channel))
+        elif before.channel and not after.channel:
+            analytics.capture(
+                "voice channel left",
+                guild=before.channel.guild,
+                properties={
+                    "channel_id": str(before.channel.id),
+                    "channel_name": before.channel.name,
+                    "trigger": "state_update",
+                },
+            )
+            try:
+                stop_idle_watchdog(before.channel.guild.id)
+            except Exception:
+                log.exception("failed to stop idle watchdog")
+            try:
+                from playCommand import guildPlayers
 
-            _player = guildPlayers.get(before.channel.guild.id)
-            if _player is not None and _player.currentSong is not None:
-                _player.mark_interrupted()
-        except Exception:
-            log.exception("failed to mark player as interrupted")
+                _player = guildPlayers.get(before.channel.guild.id)
+                if _player is not None and _player.currentSong is not None:
+                    _player.mark_interrupted()
+            except Exception:
+                log.exception("failed to mark player as interrupted")
+        return
+
+    if member.bot:
+        return
+
+    guild_id = (after.channel or before.channel).guild.id
+
+    # ---- Voice join/leave with occupancy check ----
+    if before.channel is None and after.channel is not None:
+        _voice_joins.setdefault(guild_id, {})[member.id] = time.time()
+        if _has_others(after.channel):
+            asyncio.create_task(_log_activity(member.id, guild_id, "voice_vad"))
+        # Start watch tracking if someone is streaming
+        if _streamers_in(after.channel):
+            _watch_start.setdefault(guild_id, {})[member.id] = time.time()
+
+    elif before.channel is not None and after.channel is None:
+        guild_joins = _voice_joins.get(guild_id, {})
+        join_time = guild_joins.pop(member.id, None)
+        duration = (time.time() - join_time) if join_time else 0
+        if join_time and _has_others(before.channel):
+            asyncio.create_task(
+                _log_activity(
+                    member.id, guild_id, "voice_vad", duration_secs=round(duration, 1)
+                )
+            )
+        _finalize_watch(member.id, guild_id)
+
+    elif (
+        before.channel is not None
+        and after.channel is not None
+        and before.channel.id != after.channel.id
+    ):
+        guild_joins = _voice_joins.setdefault(guild_id, {})
+        join_time = guild_joins.get(member.id)
+        if join_time and _has_others(before.channel):
+            duration = time.time() - join_time
+            asyncio.create_task(
+                _log_activity(
+                    member.id, guild_id, "voice_vad", duration_secs=round(duration, 1)
+                )
+            )
+        guild_joins[member.id] = time.time()
+        if _has_others(after.channel):
+            asyncio.create_task(_log_activity(member.id, guild_id, "voice_vad"))
+        _finalize_watch(member.id, guild_id)
+        if _streamers_in(after.channel):
+            _watch_start.setdefault(guild_id, {})[member.id] = time.time()
+
+    # ---- Camera tracking ----
+    try:
+        if not before.self_video and after.self_video and after.channel:
+            if _has_others(after.channel):
+                asyncio.create_task(_log_activity(member.id, guild_id, "camera"))
+    except Exception:
+        pass
+
+    # ---- Stream + watch_stream tracking ----
+    try:
+        if not before.self_stream and after.self_stream and after.channel:
+            viewers = sum(
+                1 for m in after.channel.members if not m.bot and m.id != member.id
+            )
+            quality = 1.0 if viewers > 0 else 0.3
+            asyncio.create_task(
+                asyncio.create_task(
+                    _log_activity(member.id, guild_id, "stream", quality_score=quality)
+                )
+            )
+            # Existing channel members start watching this stream
+            for m in after.channel.members:
+                if not m.bot and m.id != member.id:
+                    if m.id not in _watch_start.get(guild_id, {}):
+                        _watch_start.setdefault(guild_id, {})[m.id] = time.time()
+
+        if before.self_stream and not after.self_stream and before.channel:
+            # Stream ended: finalize watch for current viewers
+            for m in before.channel.members:
+                if not m.bot and m.id != member.id:
+                    _finalize_watch(m.id, guild_id)
+    except Exception:
+        pass
+
+    # ---- Stream + watch_stream tracking ----
+    try:
+        if not before.self_stream and after.self_stream and after.channel:
+            viewers = sum(
+                1 for m in after.channel.members if not m.bot and m.id != member.id
+            )
+            quality = 1.0 if viewers > 0 else 0.3
+            asyncio.create_task(
+                _log_activity(member.id, guild_id, "stream", quality_score=quality)
+            )
+            # Existing channel members start watching this stream
+            for m in after.channel.members:
+                if not m.bot and m.id != member.id:
+                    if m.id not in _watch_start.get(guild_id, {}):
+                        _watch_start.setdefault(guild_id, {})[m.id] = time.time()
+
+        if before.self_stream and not after.self_stream and before.channel:
+            # Stream ended: finalize watch for current viewers
+            for m in before.channel.members:
+                if not m.bot and m.id != member.id:
+                    _finalize_watch(m.id, guild_id)
+    except Exception:
+        pass
 
 
 @bot.event
 async def on_message(message):
-    """DM handler that absorbs Gemini API keys.
+    """Log activities from guild messages + DM handler for Gemini API keys.
 
-    When a user DMs the bot and the message contains one or more strings that
-    look like Gemini API keys (``AIzaSy…`` or ``AQ.Ab8RN6…``), we hot-add them
-    to the pool and reply with a short confirmation crediting the donor.
-    Messages in guild channels (slash commands, anything else) are ignored —
-    this is purely an opt-in donation channel.
+    Guild messages are tracked for MMR: text, images, files, links, stickers,
+    and polls. DMs containing Gemini API keys are forwarded to the key pool.
     """
     if message.author is None or message.author.bot:
         return
+
     if message.guild is not None:
-        return  # solo DMs
+        content = (message.content or "").strip()
+        guild_id = message.guild.id
+        user_id = message.author.id
+        channel_type = str(getattr(message.channel, "type", "") or "")
+        asyncio.create_task(
+            _classify_and_log_message(message, user_id, guild_id, content, channel_type)
+        )
+        return
+
     content = (message.content or "").strip()
     if not content:
         return
@@ -358,13 +638,14 @@ async def on_message(message):
 
 @bot.event
 async def on_raw_reaction_add(payload):
-    """Route emoji reactions to the relevant subsystems.
+    """Route emoji reactions to the relevant subsystems + MMR tracking.
 
-    Two consumers:
+    Three consumers:
       - ``geminiCommand.register_reaction_vote``: counts keycap reactions on
         an open music-vote options message.
       - ``decifrarVoting.handle_reaction_vote``: resolves 👍/❌ on sampled
         voice-transcript messages (ASR-quality feedback).
+      - MMR: logs reactions as activity, skipping decifrar voting reactions.
     """
     try:
         if bot.user is not None and payload.user_id == bot.user.id:
@@ -387,8 +668,125 @@ async def on_raw_reaction_add(payload):
             user_id=payload.user_id,
             added=True,
         )
+
+        # MMR: log reactions as activity, skipping decifrar voting reactions
+        if payload.guild_id and not decifrarVoting.is_tracked(payload.message_id):
+            asyncio.create_task(
+                _log_activity(
+                    payload.user_id,
+                    payload.guild_id,
+                    "reaction",
+                    channel_type=str(payload.channel_id),
+                )
+            )
     except Exception:
         log.exception("on_raw_reaction_add failed")
+
+
+@bot.event
+async def on_thread_create(thread):
+    """Track thread creation and posts for MMR."""
+    try:
+        if thread.guild is None:
+            return
+        guild_id = thread.guild.id
+        owner_id = getattr(thread, "owner_id", None)
+        if owner_id is None:
+            return
+        # New thread creation
+        asyncio.create_task(
+            _log_activity(
+                owner_id,
+                guild_id,
+                "thread_create",
+                channel_type="thread",
+            )
+        )
+    except Exception:
+        log.exception("on_thread_create failed")
+
+
+@bot.event
+async def on_guild_channel_create(channel):
+    """Track channel creation for MMR."""
+    try:
+        guild_id = getattr(channel, "guild", None)
+        if guild_id is None:
+            return
+        guild_id = guild_id.id
+        # We don't know who created it (Discord doesn't expose that in the
+        # event), so we log it under guild_id as user_id 0 (system).
+        asyncio.create_task(
+            _log_activity(
+                0, guild_id, "channel_create", channel_type=str(type(channel).__name__)
+            )
+        )
+    except Exception:
+        log.exception("on_guild_channel_create failed")
+
+
+@bot.event
+async def on_member_update(before, after):
+    """Detect premium (boost) status changes for MMR."""
+    try:
+        guild_id = getattr(after, "guild", None)
+        if guild_id is None:
+            return
+        guild_id = guild_id.id
+        before_premium = getattr(before, "premium_since", None)
+        after_premium = getattr(after, "premium_since", None)
+        if bool(after_premium) != bool(before_premium):
+            # Premium status changed; the userbot relay will be queried
+            # by the /actividad command or the admin page. We don't set
+            # premium in the DB here because the userbot owns the DB.
+            log.info(
+                "[MMR] premium changed for user %s in guild %s: %s → %s",
+                after.id,
+                guild_id,
+                bool(before_premium),
+                bool(after_premium),
+            )
+    except Exception:
+        log.exception("on_member_update failed")
+
+
+@bot.event
+async def on_raw_poll_vote_add(payload):
+    """Track poll votes for MMR."""
+    try:
+        if bot.user is not None and payload.user_id == bot.user.id:
+            return
+        guild_id = payload.guild_id
+        if guild_id is None:
+            return
+        asyncio.create_task(_log_activity(payload.user_id, guild_id, "poll_vote"))
+    except Exception:
+        log.exception("on_raw_poll_vote_add failed")
+
+
+@bot.event
+async def on_guild_scheduled_event_create(event):
+    """Track event creation for MMR."""
+    try:
+        guild_id = getattr(event, "guild_id", None)
+        creator_id = getattr(event, "creator_id", None) or 0
+        if guild_id is None:
+            return
+        asyncio.create_task(_log_activity(creator_id, guild_id, "event_create"))
+    except Exception:
+        log.exception("on_guild_scheduled_event_create failed")
+
+
+@bot.event
+async def on_guild_scheduled_event_subscribe(event, user_id):
+    """Track event subscription (join) for MMR."""
+    try:
+        guild_id = getattr(event, "guild_id", None)
+        if guild_id is None:
+            return
+        asyncio.create_task(_log_activity(user_id, guild_id, "event_join"))
+    except Exception:
+        log.exception("on_guild_scheduled_event_subscribe failed")
 
 
 @bot.event
@@ -987,6 +1385,138 @@ async def sensibilidad(
     await safe_respond(
         ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"
     )
+
+
+@bot.slash_command(
+    name="ranking",
+    description="Muestra el ranking MMR de actividad en el servidor",
+)
+async def ranking(ctx):
+    """Slash command: show the MMR leaderboard for this guild."""
+    await safe_defer(ctx)
+    _track_command(ctx, "ranking")
+    if ctx.guild is None:
+        await safe_respond(ctx, "❌ Este comando solo funciona en un servidor.")
+        return
+
+    data = await _fetch_activity(
+        "/activity/leaderboard", {"guild_id": ctx.guild.id, "limit": "15"}
+    )
+    if data is None:
+        await safe_respond(ctx, "❌ No pude obtener el ranking (relay no disponible).")
+        return
+
+    rows = data.get("leaderboard", [])
+    if not rows:
+        await safe_respond(
+            ctx, "📊 Todavía no hay datos de actividad en este servidor."
+        )
+        return
+
+    embed = discord.Embed(
+        title="🏆 Ranking de Actividad",
+        description="Top 15 usuarios por MMR en este servidor",
+        color=0xE94560,
+    )
+    medals = ["🥇", "🥈", "🥉"]
+    for i, row in enumerate(rows[:15]):
+        uid = row["user_id"]
+        rating = round(row["rating"], 1)
+        deviation = round(row["deviation"], 1)
+        total = row["total_activities"]
+        prefix = medals[i] if i < 3 else f"**{i + 1}.**"
+        member = ctx.guild.get_member(uid)
+        name = member.display_name if member else f"Usuario {uid}"
+        embed.add_field(
+            name=f"{prefix} {name}",
+            value=f"Rating: **{rating}** | σ: {deviation} | Actividades: {total}",
+            inline=False,
+        )
+    embed.set_footer(
+        text="El rating MMR se ajusta según calidad y frecuencia de actividad."
+    )
+    try:
+        await ctx.followup.send(embed=embed)
+    except Exception:
+        await safe_respond(ctx, "No pude mostrar el ranking.")
+
+
+@bot.slash_command(
+    name="actividad",
+    description="Muestra tus estadísticas de actividad (solo owner)",
+)
+async def actividad(ctx):
+    """Slash command (owner-only): show personal MMR stats.
+
+    Can be used in DMs to the bot. Only the configured OWNER_ID may invoke it.
+    """
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "actividad")
+    if ctx.author.id != config.OWNER_ID:
+        await safe_respond(
+            ctx, "❌ Este comando es solo para el owner del bot.", ephemeral=True
+        )
+        return
+
+    guild = ctx.guild
+    if guild is None:
+        # Try to pick the first mutual guild for the owner
+        for g in bot.guilds:
+            if g.get_member(ctx.author.id):
+                guild = g
+                break
+    if guild is None:
+        await safe_respond(
+            ctx, "❌ No estás en ningún servidor con el bot.", ephemeral=True
+        )
+        return
+
+    data = await _fetch_activity(
+        "/activity/user",
+        {"user_id": ctx.author.id, "guild_id": guild.id},
+    )
+    if data is None:
+        await safe_respond(
+            ctx,
+            "❌ No pude obtener estadísticas (relay no disponible).",
+            ephemeral=True,
+        )
+        return
+
+    stats = data.get("stats")
+    if stats is None:
+        await safe_respond(
+            ctx,
+            "📊 Todavía no tenés actividad registrada en este servidor.",
+            ephemeral=True,
+        )
+        return
+
+    rating = round(stats.get("rating", 1500), 1)
+    deviation = round(stats.get("deviation", 350), 1)
+    total = stats.get("total_activities", 0)
+    premium = "Sí" if stats.get("premium") else "No"
+    recent = stats.get("recent_activities", [])
+
+    lines = [
+        f"📊 **Actividad en {guild.name}**",
+        "",
+        f"Rating MMR: **{rating}**",
+        f"Desviación: {deviation}",
+        f"Actividades totales: {total}",
+        f"Premium: {premium}",
+    ]
+    if recent:
+        lines.append("")
+        lines.append("**Últimos 7 días:**")
+        for act in recent[:10]:
+            atype = act.get("activity_type", "?")
+            cnt = act.get("cnt", 0)
+            delta = round(act.get("total_delta", 0), 2)
+            sign = "+" if delta >= 0 else ""
+            lines.append(f"• {atype}: {cnt}x ({sign}{delta})")
+
+    await safe_respond(ctx, "\n".join(lines), ephemeral=True)
 
 
 @bot.slash_command(

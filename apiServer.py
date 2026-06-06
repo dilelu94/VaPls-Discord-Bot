@@ -806,37 +806,66 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.json_response({"text_channels": channels})
 
     async def githubWebhook(request: web.Request) -> web.Response:
-        """Receive GitHub issue webhooks and mark groups as completed.
+        """Receive GitHub issue webhooks and sync groups with issue state.
 
         When an issue with the configured label is closed, the matching group
-        in the local suggestions store is flagged as completed.
+        is hidden. When it is reopened, the group is unhidden.
 
         Requires X-API-Secret header like all other endpoints. For production
         use, configure a reverse proxy (e.g. nginx) to inject the secret when
         forwarding from GitHub's webhook.
         """
-        from suggestionsCommand import sync_closed_issues
+        from suggestionsCommand import _store
 
         try:
             data = await request.json()
         except Exception:
             return web.json_response({"error": "invalid body"}, status=400)
 
+        # GitHub ping event — no issue/action, just a connectivity check
+        if "zen" in data and "hook_id" in data:
+            return web.json_response({"ok": True, "event": "ping"})
+
         action = data.get("action")
         issue = data.get("issue")
         if not isinstance(issue, dict):
             return web.json_response({"error": "missing issue"}, status=400)
 
-        if action != "closed":
-            return web.json_response({"ok": True, "skipped": f"action={action}"})
+        issue_number = issue.get("number")
+        if not isinstance(issue_number, int):
+            return web.json_response({"error": "missing issue number"}, status=400)
 
         issue_labels = [lbl.get("name", "") for lbl in (issue.get("labels") or [])]
         if config.GITHUB_ISSUE_LABEL and config.GITHUB_ISSUE_LABEL not in issue_labels:
             return web.json_response({"ok": True, "skipped": "label mismatch"})
 
-        result = await sync_closed_issues()
-        logger.info("github webhook: %s", result)
-        return web.json_response({"ok": True, "result": result})
+        store = _store()
+        groups = await asyncio.to_thread(store.load)
+        target = next((g for g in groups if g.issue_number == issue_number), None)
+        if target is None:
+            return web.json_response({"ok": True, "skipped": "no matching group"})
+
+        if action == "closed" and not target.hidden:
+            target.hidden = True
+            await store.save(groups)
+            logger.info(
+                "github webhook: ocultado grupo %s (issue #%d cerrado)",
+                target.id,
+                issue_number,
+            )
+            return web.json_response({"ok": True, "result": "hidden"})
+
+        if action == "reopened" and target.hidden:
+            target.hidden = False
+            await store.save(groups)
+            logger.info(
+                "github webhook: restaurado grupo %s (issue #%d reabierto)",
+                target.id,
+                issue_number,
+            )
+            return web.json_response({"ok": True, "result": "restored"})
+
+        return web.json_response({"ok": True, "skipped": f"action={action}"})
 
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)

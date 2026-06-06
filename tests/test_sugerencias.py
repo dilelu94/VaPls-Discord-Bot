@@ -34,8 +34,8 @@ def _seed(path, groups):
         json.dump({"groups": groups}, f, ensure_ascii=False)
 
 
-def _group(gid, title, summary, n_subs):
-    return {
+def _group(gid, title, summary, n_subs, issue_number=None):
+    d = {
         "id": gid,
         "title": title,
         "summary": summary,
@@ -43,6 +43,9 @@ def _group(gid, title, summary, n_subs):
         "updated_at": _NOW,
         "submissions": [_sub(user_id=str(i)) for i in range(n_subs)],
     }
+    if issue_number is not None:
+        d["issue_number"] = issue_number
+    return d
 
 
 def _read(path):
@@ -361,7 +364,7 @@ async def test_migration_creates_issues(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------
 # sync_closed_issues: deletes groups when GitHub issue is closed.
 # --------------------------------------------------------------------------
-async def test_sync_closed_issues_deletes_group(monkeypatch, tmp_path):
+async def test_sync_closed_issues_hides_group(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "GITHUB_TOKEN", "fake-token", raising=False)
     monkeypatch.setattr(config, "GITHUB_REPO", "user/repo", raising=False)
 
@@ -370,15 +373,10 @@ async def test_sync_closed_issues_deletes_group(monkeypatch, tmp_path):
     _seed(
         path,
         [
-            _group("g_a", "Grupo A", "xa", 1),
-            _group("g_b", "Grupo B", "xb", 2),
+            _group("g_a", "Grupo A", "xa", 1, issue_number=42),
+            _group("g_b", "Grupo B", "xb", 2, issue_number=99),
         ],
     )
-    data = _read(path)
-    data["groups"][0]["issue_number"] = 42
-    data["groups"][1]["issue_number"] = 99
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
 
     import githubIssues
 
@@ -387,17 +385,17 @@ async def test_sync_closed_issues_deletes_group(monkeypatch, tmp_path):
     )
 
     result = await sc.sync_closed_issues()
-    assert "eliminados" in result
+    assert "ocultos" in result
     assert "1" in result
 
     data = _read(path)
-    assert len(data["groups"]) == 1
-    assert data["groups"][0]["id"] == "g_b"
+    assert len(data["groups"]) == 2
+    assert data["groups"][0]["hidden"] is True
+    assert data["groups"][0]["id"] == "g_a"
+    assert data["groups"][1].get("hidden") is None
 
 
-async def test_sync_closed_issues_multiple_deleted(
-    monkeypatch, tmp_path
-):
+async def test_sync_closed_issues_multiple_hidden(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "GITHUB_TOKEN", "fake-token", raising=False)
     monkeypatch.setattr(config, "GITHUB_REPO", "user/repo", raising=False)
 
@@ -406,17 +404,11 @@ async def test_sync_closed_issues_multiple_deleted(
     _seed(
         path,
         [
-            _group("g_a", "Grupo A", "xa", 1),
-            _group("g_b", "Grupo B", "xb", 2),
-            _group("g_c", "Grupo C", "xc", 3),
+            _group("g_a", "Grupo A", "xa", 1, issue_number=42),
+            _group("g_b", "Grupo B", "xb", 2, issue_number=99),
+            _group("g_c", "Grupo C", "xc", 3, issue_number=7),
         ],
     )
-    data = _read(path)
-    data["groups"][0]["issue_number"] = 42
-    data["groups"][1]["issue_number"] = 99
-    data["groups"][2]["issue_number"] = 7
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
 
     import githubIssues
 
@@ -428,8 +420,10 @@ async def test_sync_closed_issues_multiple_deleted(
     assert "2" in result
 
     data = _read(path)
-    assert len(data["groups"]) == 1
-    assert data["groups"][0]["id"] == "g_c"
+    assert len(data["groups"]) == 3
+    assert data["groups"][0]["hidden"] is True
+    assert data["groups"][1]["hidden"] is True
+    assert data["groups"][2].get("hidden") is None
 
 
 async def test_sync_closed_issues_no_match(monkeypatch, tmp_path):
@@ -438,11 +432,7 @@ async def test_sync_closed_issues_no_match(monkeypatch, tmp_path):
 
     path = tmp_path / "suggestions.json"
     monkeypatch.setattr(config, "SUGGESTIONS_PATH", str(path), raising=False)
-    _seed(path, [_group("g_a", "Grupo A", "xa", 1)])
-    data = _read(path)
-    data["groups"][0]["issue_number"] = 42
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
+    _seed(path, [_group("g_a", "Grupo A", "xa", 1, issue_number=42)])
 
     import githubIssues
 
@@ -455,6 +445,7 @@ async def test_sync_closed_issues_no_match(monkeypatch, tmp_path):
 
     data = _read(path)
     assert len(data["groups"]) == 1
+    assert data["groups"][0].get("hidden") is None
 
 
 async def test_sync_closed_issues_no_github_config(monkeypatch, tmp_path):
@@ -475,11 +466,7 @@ async def test_sync_closed_issues_no_closed(monkeypatch, tmp_path):
 
     path = tmp_path / "suggestions.json"
     monkeypatch.setattr(config, "SUGGESTIONS_PATH", str(path), raising=False)
-    _seed(path, [_group("g_a", "Grupo A", "xa", 1)])
-    data = _read(path)
-    data["groups"][0]["issue_number"] = 42
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
+    _seed(path, [_group("g_a", "Grupo A", "xa", 1, issue_number=42)])
 
     import githubIssues
 
@@ -498,11 +485,7 @@ async def test_sync_closed_issues_idempotent(monkeypatch, tmp_path):
 
     path = tmp_path / "suggestions.json"
     monkeypatch.setattr(config, "SUGGESTIONS_PATH", str(path), raising=False)
-    _seed(path, [_group("g_a", "Grupo A", "xa", 1)])
-    data = _read(path)
-    data["groups"][0]["issue_number"] = 42
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False)
+    _seed(path, [_group("g_a", "Grupo A", "xa", 1, issue_number=42)])
 
     import githubIssues
 
@@ -511,9 +494,9 @@ async def test_sync_closed_issues_idempotent(monkeypatch, tmp_path):
     )
 
     result = await sc.sync_closed_issues()
-    assert "eliminados" in result
+    assert "ocultos" in result
 
-    # Second run: group already gone, no-op
+    # Second run: group already hidden, no-op
     result = await sc.sync_closed_issues()
     assert "Ningún grupo" in result
 
@@ -570,3 +553,99 @@ async def test_group_completed_backward_compat_reads_old():
     }
     restored = sc.Group.from_dict(d)
     assert restored.completed is True
+
+
+# --------------------------------------------------------------------------
+# hidden field
+# --------------------------------------------------------------------------
+async def test_group_hidden_written_to_dict():
+    g = sc.Group(
+        id="g_test",
+        title="Test",
+        summary="x",
+        created_at="2026-06-01T00:00:00Z",
+        updated_at="2026-06-01T00:00:00Z",
+        hidden=True,
+    )
+    d = g.to_dict()
+    assert d.get("hidden") is True
+
+
+async def test_group_hidden_default_false():
+    g = sc.Group(
+        id="g_test",
+        title="Test",
+        summary="x",
+        created_at="2026-06-01T00:00:00Z",
+        updated_at="2026-06-01T00:00:00Z",
+    )
+    assert g.hidden is False
+
+
+async def test_group_hidden_backward_compat():
+    d = {
+        "id": "g_test",
+        "title": "Test",
+        "summary": "x",
+        "created_at": "2026-06-01T00:00:00Z",
+        "updated_at": "2026-06-01T00:00:00Z",
+        "submissions": [],
+    }
+    restored = sc.Group.from_dict(d)
+    assert restored.hidden is False
+
+
+async def test_group_hidden_reads_old():
+    d = {
+        "id": "g_test",
+        "title": "Test",
+        "summary": "x",
+        "created_at": "2026-06-01T00:00:00Z",
+        "updated_at": "2026-06-01T00:00:00Z",
+        "submissions": [],
+        "hidden": True,
+    }
+    restored = sc.Group.from_dict(d)
+    assert restored.hidden is True
+
+
+async def test_hidden_group_not_shown_in_listing(ctx_factory, store):
+    _seed(
+        store,
+        [
+            _group("g_vis", "Visible", "x", 2),
+            _group("g_hid", "Oculta", "x", 5),
+        ],
+    )
+    data = _read(store)
+    data["groups"][1]["hidden"] = True
+    with open(store, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+    ctx = ctx_factory()
+    await sc.sugerenciasVerLogic(ctx)
+    out = joined(ctx)
+    assert "Visible" in out
+    assert "Oculta" not in out
+
+
+async def test_sync_closed_issues_does_not_rehide(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "GITHUB_TOKEN", "fake-token", raising=False)
+    monkeypatch.setattr(config, "GITHUB_REPO", "user/repo", raising=False)
+
+    path = tmp_path / "suggestions.json"
+    monkeypatch.setattr(config, "SUGGESTIONS_PATH", str(path), raising=False)
+    _seed(path, [_group("g_a", "Grupo A", "xa", 1, issue_number=42)])
+    data = _read(path)
+    data["groups"][0]["hidden"] = True
+    with open(path, "w") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+    import githubIssues
+
+    monkeypatch.setattr(
+        githubIssues, "list_closed_issues", AsyncMock(return_value=[42])
+    )
+
+    result = await sc.sync_closed_issues()
+    assert "Ningún grupo" in result
