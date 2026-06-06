@@ -8,6 +8,7 @@ config.API_HOST:config.API_PORT (default 127.0.0.1:8080).
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import time
@@ -64,6 +65,9 @@ async def authMiddleware(request: web.Request, handler):
     Async:
         This function is a coroutine and must be awaited by aiohttp.
     """
+    # Admin routes use Basic Auth instead of X-API-Secret.
+    if request.path.startswith("/admin"):
+        return await handler(request)
     err = _checkAuth(request)
     if err is not None:
         return err
@@ -171,6 +175,172 @@ def _resolveGuild(bot: discord.Bot, guildId: int) -> Optional[discord.Guild]:
         Guild instance if cached; otherwise None.
     """
     return bot.get_guild(guildId)
+
+
+# ---- MMR Admin (proxied to userbot relay) ---------------------------------
+
+_ADMIN_HTML = """<!DOCTYPE html><html lang="es"><head>
+<meta charset="utf-8">
+<title>VaPls MMR Admin</title>
+<style>
+body{background:#1a1a2e;color:#eee;font-family:sans-serif;margin:20px}
+h1{color:#e94560}
+table{width:100%;border-collapse:collapse;margin:10px 0}
+td,th{border:1px solid #333;padding:8px;text-align:left}
+th{background:#16213e}
+input{background:#0f3460;color:#fff;border:1px solid #e94560;padding:4px;border-radius:3px}
+button{background:#e94560;color:#fff;border:none;padding:6px 12px;border-radius:3px;cursor:pointer}
+button:hover{background:#c73650}
+.msg{display:none;padding:10px;margin:10px 0;border-radius:4px}
+.msg.ok{background:#1b5e20;display:block}
+.msg.err{background:#b71c1c;display:block}
+.nav{display:flex;gap:10px;margin-bottom:20px}
+.nav a{color:#e94560;text-decoration:none;padding:8px 16px;border:1px solid #e94560;border-radius:4px}
+.nav a:hover{background:#e94560;color:#fff}
+</style></head><body>
+<h1>VaPls MMR Admin</h1>
+<div class="nav">
+  <a href="#" onclick="showTab('weights')">Weights</a>
+  <a href="#" onclick="showTab('config')">Config</a>
+  <a href="#" onclick="showTab('mmr')">MMR</a>
+  <a href="#" onclick="showTab('activity')">Activity</a>
+</div>
+<div id="tab-weights" class="section"></div>
+<div id="tab-config" class="section"></div>
+<div id="tab-mmr" class="section"></div>
+<div id="tab-activity" class="section"></div>
+<div id="msg" class="msg"></div>
+<script>
+let allData = {};
+function showTab(name) {
+  document.querySelectorAll('.section').forEach(el => el.style.display = 'none');
+  document.getElementById('tab-' + name).style.display = 'block';
+  renderTab(name);
+}
+async function loadData() {
+  const r = await fetch('/admin/api/data');
+  allData = await r.json();
+  showTab('weights');
+}
+function renderTab(name) {
+  const el = document.getElementById('tab-' + name);
+  if (name === 'weights') renderWeights(el);
+  else if (name === 'config') renderConfig(el);
+  else if (name === 'mmr') renderMmr(el);
+  else if (name === 'activity') renderActivity(el);
+}
+function renderWeights(el) {
+  let h = '<h2>Activity Weights</h2><table><tr><th>Activity</th><th>Weight</th><th>Action</th></tr>';
+  for (const [k, v] of Object.entries(allData.config || {})) {
+    if (!k.startsWith('weight_')) continue;
+    const act = k.slice(7);
+    h += '<tr><td>' + act + '</td><td><input id="w-' + act + '" value="' + v + '" size="6"></td>'
+      + '<td><button onclick="saveWeight(\'' + act + '\')">Save</button></td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderConfig(el) {
+  let h = '<h2>System Config</h2><table><tr><th>Key</th><th>Value</th><th>Action</th></tr>';
+  for (const [k, v] of Object.entries(allData.config || {})) {
+    if (k.startsWith('weight_')) continue;
+    h += '<tr><td>' + k + '</td><td><input id="c-' + k + '" value="' + v + '" size="10"></td>'
+      + '<td><button onclick="saveConfig(\'' + k + '\')">Save</button></td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderMmr(el) {
+  let h = '<h2>MMR Rankings</h2><table><tr><th>User ID</th><th>Guild ID</th><th>Rating</th><th>Deviation</th><th>Activities</th><th>Premium</th></tr>';
+  for (const row of (allData.mmr || [])) {
+    h += '<tr><td>' + row.user_id + '</td><td>' + row.guild_id + '</td><td>' + row.rating + '</td><td>' + row.deviation + '</td><td>' + row.total_activities + '</td><td>' + (row.premium ? 'Y' : 'N') + '</td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderActivity(el) {
+  let h = '<h2>Recent Activity</h2><table><tr><th>ID</th><th>User</th><th>Type</th><th>Duration</th><th>Quality</th><th>Delta</th><th>Date</th></tr>';
+  for (const row of (allData.activity || [])) {
+    const d = new Date((row.created_at || 0) * 1000).toLocaleString();
+    h += '<tr><td>' + row.id + '</td><td>' + row.user_id + '</td><td>' + row.activity_type + '</td><td>' + (row.duration_secs || '-') + '</td><td>' + row.quality_score + '</td><td>' + (row.rating_delta || 0) + '</td><td>' + d + '</td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+async function saveWeight(act) {
+  const v = document.getElementById('w-' + act).value;
+  const r = await fetch('/admin/api/weights', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({['weight_' + act]: v})});
+  if (!r.ok) { msg('Error saving', 'err'); return; }
+  msg('Weight saved', 'ok');
+  await loadData();
+}
+async function saveConfig(k) {
+  const v = document.getElementById('c-' + k).value;
+  const r = await fetch('/admin/api/weights', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[k]: v})});
+  if (!r.ok) { msg('Error saving', 'err'); return; }
+  msg('Config saved', 'ok');
+  await loadData();
+}
+function msg(text, type) {
+  const el = document.getElementById('msg');
+  el.textContent = text;
+  el.className = 'msg ' + type;
+  setTimeout(() => el.style.display = 'none', 3000);
+}
+loadData();
+</script></body></html>"""
+
+
+_ADMIN_AUTH_USER = "dilelu"
+_ADMIN_AUTH_PASS = "indiovapls"
+
+
+def _checkAdminAuth(request: web.Request) -> bool:
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Basic "):
+        return False
+    try:
+        decoded = base64.b64decode(auth[6:]).decode("utf-8")
+        user, _, passwd = decoded.partition(":")
+        return user == _ADMIN_AUTH_USER and passwd == _ADMIN_AUTH_PASS
+    except Exception:
+        return False
+
+
+async def _admin_proxy(path: str, request: web.Request) -> web.Response:
+    """Proxy a request to the userbot relay admin endpoint."""
+    relay = config.INDIO_RELAY_URL
+    if not relay:
+        return web.json_response({"error": "relay not configured"}, status=503)
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as sess:
+            url = relay.rstrip("/") + path
+            headers = {}
+            auth = request.headers.get("Authorization")
+            if auth:
+                headers["Authorization"] = auth
+            if request.method == "POST":
+                body = await request.read()
+                ct = request.headers.get("Content-Type", "application/json")
+                async with sess.post(url, data=body, headers=headers) as resp:
+                    data = await resp.read()
+                    return web.Response(
+                        status=resp.status,
+                        body=data,
+                        content_type=resp.content_type or "application/json",
+                    )
+            else:
+                async with sess.get(url, headers=headers) as resp:
+                    data = await resp.read()
+                    return web.Response(
+                        status=resp.status,
+                        body=data,
+                        content_type=resp.content_type or "application/json",
+                    )
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
 
 
 def makeApp(bot: discord.Bot) -> web.Application:
@@ -866,6 +1036,33 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return web.json_response({"ok": True, "result": "restored"})
 
         return web.json_response({"ok": True, "skipped": f"action={action}"})
+
+    # ---- MMR Admin routes (Basic Auth) --------------------------------
+
+    async def adminPage(request: web.Request) -> web.Response:
+        if not _checkAdminAuth(request):
+            resp = web.Response(status=401, text="Unauthorized")
+            resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
+            return resp
+        return web.Response(text=_ADMIN_HTML, content_type="text/html")
+
+    async def adminData(request: web.Request) -> web.Response:
+        if not _checkAdminAuth(request):
+            resp = web.Response(status=401, text="Unauthorized")
+            resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
+            return resp
+        return await _admin_proxy("/admin/api/data", request)
+
+    async def adminWeights(request: web.Request) -> web.Response:
+        if not _checkAdminAuth(request):
+            resp = web.Response(status=401, text="Unauthorized")
+            resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
+            return resp
+        return await _admin_proxy("/admin/api/weights", request)
+
+    app.router.add_get("/admin", adminPage)
+    app.router.add_get("/admin/api/data", adminData)
+    app.router.add_post("/admin/api/weights", adminWeights)
 
     app.router.add_get("/status", status)
     app.router.add_get("/members", members)
