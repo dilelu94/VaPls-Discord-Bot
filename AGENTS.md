@@ -433,12 +433,126 @@ weights, config y activity. Se compone de:
 6. **Tooltips descriptivos** (`902cdd5`): tooltips mucho mas detallados explicando
    cada columna y cada valor uno por uno.
 
+## 🏆 Sistema MMR (Glicko-1)
+
+### Base de datos (`userbot/activity_db.py`)
+
+SQLite con 4 tablas:
+
+- **`user_mmr`**: rating, deviation, volatility, total_activities, premium, por (user_id, guild_id).
+- **`activity_log`**: cada evento individual con activity_type, duration_secs, quality_score, value, rating_delta.
+- **`daily_stats`**: agregación diaria (voice_seconds, activity_count, mmr_delta, peak_rating).
+- **`config`**: key-value store para pesos y configuración.
+
+### Pesos default
+
+| Actividad       | Peso |
+|----------------|------|
+| voice_vad      | 0.4  |
+| camera         | 0.8  |
+| stream         | 1.5  |
+| watch_stream   | 0.1  |
+| message        | 0.3  |
+| image          | 0.8  |
+| file           | 0.6  |
+| link           | 0.2  |
+| sticker        | 0.05 |
+| thread_post    | 1.5  |
+| thread_create  | 5.0  |
+| forum_post     | 2.0  |
+| forum_create   | 8.0  |
+| reaction       | 0.15 |
+| slash_command  | 0.5  |
+| event_create   | 6.0  |
+| event_join     | 1.0  |
+| channel_create | 5.0  |
+| poll_create    | 3.0  |
+| poll_vote      | 0.3  |
+
+### Config default
+
+| Key                  | Default | Efecto                                        |
+|----------------------|---------|-----------------------------------------------|
+| initial_rating       | 1500    | Rating con el que arranca un usuario nuevo    |
+| initial_deviation    | 350     | RD inicial (máxima incertidumbre)             |
+| min_deviation        | 30      | Piso de RD (nunca baja de esto)               |
+| max_deviation        | 500     | Techo de RD                                   |
+| decay_per_day        | 10      | Cuánto sube la RD por día sin actividad       |
+| decay_rating_per_day | 1       | Cuánto rating pierde por día sin actividad    |
+| spam_window_seconds  | 10      | Ventana de tiempo para detectar spam          |
+| spam_max_events      | 5       | Máximo de eventos del mismo tipo en la ventana|
+| premium_multiplier   | 0.85    | Multiplicador de quality para usuarios premium|
+| k_factor             | 1.0     | Escala del delta Glicko                       |
+
+### Fórmula Glicko-1
+
+1. `expected = _expected_score(r, rd)` — probabilidad de que el usuario "gane" la actividad (default vs system rating 1500/350).
+2. `actual = 0.5 + (quality - 0.5) * weight_factor` — qué tan bien le fue, modulado por el peso de la actividad.
+3. `delta = new_r - r` — ajuste Glicko-1 estándar con `g`, `d2`.
+4. **Spam detection**: si hay más de `spam_max_events` del mismo tipo en `spam_window_seconds`, la calidad se reduce (0.5 → 0.3 → 0.1).
+5. **Premium**: multiplica quality por `premium_multiplier` (0.85).
+6. **Decay**: si pasó >1 día sin actividad, la RD sube y el rating converge a 1500.
+
+### Cómo se disparan las actividades (`bot.py`)
+
+Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userbot (`/activity/log`):
+
+| Evento | Actividad | Condición |
+|--------|-----------|-----------|
+| Usuario habla en voz (whisper final) | `voice_vad` | Con duración, solo si hay ≥2 humanos en el canal |
+| Usuario entra a voz | `voice_vad` | Una vez, solo si hay ≥2 humanos |
+| Usuario se va de voz | `voice_vad` | Con duración acumulada |
+| Usuario cambia de canal | `voice_vad` | Duración parcial + nuevo evento |
+| Usuario prende cámara | `camera` | Solo si hay ≥2 humanos |
+| Usuario empieza a streamear | `stream` | Solo si hay ≥1 viewer; quality escala 0.4/0.6/0.8/1.0 según viewers |
+| Viewer mirando stream | `watch_stream` | Con duración, capped a 10 min/día |
+| Mensaje de texto | `message` / `link` / `sticker` / `image` / `file` | Según contenido |
+| Creación de poll/channel/event/thread/forum | `poll_create` / `channel_create` / etc. | Según tipo |
+| Votar en poll | `poll_vote` | |
+| Unirse a evento | `event_join` | |
+
+### Stream cap
+
+- **Sin viewers**: no se loggea (0 puntos).
+- **Con viewers**: quality = `min(1.0, 0.2 + 0.2 * viewers)` (1 viewer=0.4, 2=0.6, 3=0.8, 4+=1.0).
+- **Daily cap**: máximo `_STREAM_DAILY_MAX` (5) streams que puntúan por día por usuario.
+- **Watch_stream**: capped a `_WATCH_DAILY_MAX` (600s = 10 min) por día por usuario.
+
+### Relay HTTP endpoints (`userbot/bot.py`)
+
+| Endpoint | Método | Uso |
+|----------|--------|-----|
+| `/activity/log` | POST | Loggear una actividad (usado por main bot) |
+| `/activity` | GET | Listar actividades recientes (query: guild_id, limit) |
+| `/activity/user` | GET | Stats de un usuario (query: user_id, guild_id) |
+| `/activity/leaderboard` | GET | Top N por guild (query: guild_id, limit) |
+| `/admin` | GET | Admin page HTML (Basic Auth) |
+| `/admin/api/data` | GET | JSON dump completo (Basic Auth) |
+| `/admin/api/weights` | POST | Actualizar config/pesos (Basic Auth) |
+
+### Proxy del main bot (`apiServer.py`)
+
+- `GET /admin` → fetchea `relay/admin/api/data` server-side, enriquece cada row de mmr/activity con `user_name` y `user_display` desde `USERS` (cache de Discord del main bot), embehe todo en el HTML.
+- `GET /admin/api/data` → proxy al relay (para refresh JS).
+- `POST /admin/api/weights` → proxy al relay.
+
 ### Config
 
 - `USERBOT_USER_ID` — excluye al Indio del conteo de ocupación en canales de voz
   para que su presencia no active actividades MMR que requieren ≥2 humanos.
   `_has_others()` en `bot.py` filtra `m.id != config.USERBOT_USER_ID`.
   Default: `0` (sin filtro). En prod: `519594605520486428`.
+
+### Bugs conocidos (historial)
+
+1. (e1e9a22) URL joining roto: `relay.rstrip("/") + path` → `urljoin`.
+2. (10e73d4) Credenciales hardcodeadas → `config.ADMIN_USER`/`ADMIN_PASS`.
+3. (a1e1934) Auth en JS fetch: server-side embed en vez de JS fetch.
+4. (3504842) JS SyntaxError por escapes en Python `"""`.
+5. (08e650d) Faltaban tooltips y columna Name.
+6. (902cdd5) Tooltips más detallados.
+7. (2026-06-07) Código JS huérfano en `apiServer.py:313-342` que rompía el render de las tabs. Fix: eliminado.
+8. (2026-06-07) Bloque duplicado de stream+watch_stream tracking en `bot.py:547-569`. Fix: eliminado, y el restante ahora requiere viewers > 0 con quality escalada por cantidad de viewers + daily cap.
 
 ## 💡 Guía de Modificación
 

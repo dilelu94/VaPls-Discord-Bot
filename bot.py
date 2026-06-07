@@ -158,6 +158,7 @@ async def _log_activity(
     quality_score: float | None = None,
     value: float = 1.0,
     metadata: dict | None = None,
+    display_name: str = "",
 ):
     if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
         return
@@ -170,6 +171,7 @@ async def _log_activity(
         "duration_secs": duration_secs,
         "value": value,
         "metadata": metadata or {},
+        "display_name": display_name,
     }
     if quality_score is not None:
         payload["quality_score"] = quality_score
@@ -216,7 +218,12 @@ _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
 
 
 async def _classify_and_log_message(
-    message, user_id: int, guild_id: int, content: str, channel_type: str
+    message,
+    user_id: int,
+    guild_id: int,
+    content: str,
+    channel_type: str,
+    display_name: str = "",
 ):
     """Classify a guild message and log the appropriate activity to MMR."""
     tasks = []
@@ -225,7 +232,13 @@ async def _classify_and_log_message(
     if stickers:
         for _sticker in stickers:
             tasks.append(
-                _log_activity(user_id, guild_id, "sticker", channel_type=channel_type)
+                _log_activity(
+                    user_id,
+                    guild_id,
+                    "sticker",
+                    channel_type=channel_type,
+                    display_name=display_name,
+                )
             )
 
     attachments = getattr(message, "attachments", None) or []
@@ -240,27 +253,57 @@ async def _classify_and_log_message(
 
     if has_image:
         tasks.append(
-            _log_activity(user_id, guild_id, "image", channel_type=channel_type)
+            _log_activity(
+                user_id,
+                guild_id,
+                "image",
+                channel_type=channel_type,
+                display_name=display_name,
+            )
         )
     if has_file:
         tasks.append(
-            _log_activity(user_id, guild_id, "file", channel_type=channel_type)
+            _log_activity(
+                user_id,
+                guild_id,
+                "file",
+                channel_type=channel_type,
+                display_name=display_name,
+            )
         )
 
     poll = getattr(message, "poll", None)
     if poll is not None:
         tasks.append(
-            _log_activity(user_id, guild_id, "poll_create", channel_type=channel_type)
+            _log_activity(
+                user_id,
+                guild_id,
+                "poll_create",
+                channel_type=channel_type,
+                display_name=display_name,
+            )
         )
 
     if content:
         if _URL_RE.search(content):
             tasks.append(
-                _log_activity(user_id, guild_id, "link", channel_type=channel_type)
+                _log_activity(
+                    user_id,
+                    guild_id,
+                    "link",
+                    channel_type=channel_type,
+                    display_name=display_name,
+                )
             )
         else:
             tasks.append(
-                _log_activity(user_id, guild_id, "message", channel_type=channel_type)
+                _log_activity(
+                    user_id,
+                    guild_id,
+                    "message",
+                    channel_type=channel_type,
+                    display_name=display_name,
+                )
             )
 
     if tasks:
@@ -370,6 +413,10 @@ _watch_start: dict[int, dict[int, float]] = {}
 _watch_today: dict[int, dict[int, float]] = {}
 _watch_date: str = ""
 _WATCH_DAILY_MAX = 600.0  # 10 minutes
+# Per-guild per-user daily stream start count (anti-farming cap).
+_stream_today: dict[int, dict[int, int]] = {}
+_stream_date: str = ""
+_STREAM_DAILY_MAX = 5  # max stream starts per day that earn points
 
 
 def _has_others(channel) -> bool:
@@ -468,11 +515,14 @@ async def on_voice_state_update(member, before, after):
 
     guild_id = (after.channel or before.channel).guild.id
 
+    n = member.display_name
     # ---- Voice join/leave with occupancy check ----
     if before.channel is None and after.channel is not None:
         _voice_joins.setdefault(guild_id, {})[member.id] = time.time()
         if _has_others(after.channel):
-            asyncio.create_task(_log_activity(member.id, guild_id, "voice_vad"))
+            asyncio.create_task(
+                _log_activity(member.id, guild_id, "voice_vad", display_name=n)
+            )
         # Start watch tracking if someone is streaming
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
@@ -484,7 +534,11 @@ async def on_voice_state_update(member, before, after):
         if join_time and _has_others(before.channel):
             asyncio.create_task(
                 _log_activity(
-                    member.id, guild_id, "voice_vad", duration_secs=round(duration, 1)
+                    member.id,
+                    guild_id,
+                    "voice_vad",
+                    duration_secs=round(duration, 1),
+                    display_name=n,
                 )
             )
         _finalize_watch(member.id, guild_id)
@@ -500,12 +554,18 @@ async def on_voice_state_update(member, before, after):
             duration = time.time() - join_time
             asyncio.create_task(
                 _log_activity(
-                    member.id, guild_id, "voice_vad", duration_secs=round(duration, 1)
+                    member.id,
+                    guild_id,
+                    "voice_vad",
+                    duration_secs=round(duration, 1),
+                    display_name=n,
                 )
             )
         guild_joins[member.id] = time.time()
         if _has_others(after.channel):
-            asyncio.create_task(_log_activity(member.id, guild_id, "voice_vad"))
+            asyncio.create_task(
+                _log_activity(member.id, guild_id, "voice_vad", display_name=n)
+            )
         _finalize_watch(member.id, guild_id)
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
@@ -514,46 +574,39 @@ async def on_voice_state_update(member, before, after):
     try:
         if not before.self_video and after.self_video and after.channel:
             if _has_others(after.channel):
-                asyncio.create_task(_log_activity(member.id, guild_id, "camera"))
-    except Exception:
-        pass
-
-    # ---- Stream + watch_stream tracking ----
-    try:
-        if not before.self_stream and after.self_stream and after.channel:
-            viewers = sum(
-                1 for m in after.channel.members if not m.bot and m.id != member.id
-            )
-            quality = 1.0 if viewers > 0 else 0.3
-            asyncio.create_task(
                 asyncio.create_task(
-                    _log_activity(member.id, guild_id, "stream", quality_score=quality)
+                    _log_activity(member.id, guild_id, "camera", display_name=n)
                 )
-            )
-            # Existing channel members start watching this stream
-            for m in after.channel.members:
-                if not m.bot and m.id != member.id:
-                    if m.id not in _watch_start.get(guild_id, {}):
-                        _watch_start.setdefault(guild_id, {})[m.id] = time.time()
-
-        if before.self_stream and not after.self_stream and before.channel:
-            # Stream ended: finalize watch for current viewers
-            for m in before.channel.members:
-                if not m.bot and m.id != member.id:
-                    _finalize_watch(m.id, guild_id)
     except Exception:
         pass
 
-    # ---- Stream + watch_stream tracking ----
+    # ---- Stream + watch_stream tracking (with viewer-based quality + daily cap) ----
     try:
         if not before.self_stream and after.self_stream and after.channel:
             viewers = sum(
                 1 for m in after.channel.members if not m.bot and m.id != member.id
             )
-            quality = 1.0 if viewers > 0 else 0.3
-            asyncio.create_task(
-                _log_activity(member.id, guild_id, "stream", quality_score=quality)
-            )
+            if viewers > 0:
+                # Scale quality by viewer count: 1 viewer=0.4, 2=0.6, 3=0.8, 4+=1.0
+                q = min(1.0, 0.2 + 0.2 * viewers)
+                # Daily cap: only count first N stream starts per user
+                today = time.strftime("%Y-%m-%d")
+                if today != _stream_date:
+                    _stream_today.clear()
+                    _stream_date = today
+                guild_stream = _stream_today.setdefault(guild_id, {})
+                used = guild_stream.get(member.id, 0)
+                if used < _STREAM_DAILY_MAX:
+                    guild_stream[member.id] = used + 1
+                    asyncio.create_task(
+                        _log_activity(
+                            member.id,
+                            guild_id,
+                            "stream",
+                            quality_score=q,
+                            display_name=n,
+                        )
+                    )
             # Existing channel members start watching this stream
             for m in after.channel.members:
                 if not m.bot and m.id != member.id:
@@ -585,7 +638,14 @@ async def on_message(message):
         user_id = message.author.id
         channel_type = str(getattr(message.channel, "type", "") or "")
         asyncio.create_task(
-            _classify_and_log_message(message, user_id, guild_id, content, channel_type)
+            _classify_and_log_message(
+                message,
+                user_id,
+                guild_id,
+                content,
+                channel_type,
+                display_name=message.author.display_name,
+            )
         )
         return
 
@@ -1417,7 +1477,7 @@ async def ranking(ctx):
         return
 
     embed = discord.Embed(
-        title="🏆 Ranking de Actividad",
+        title="🏆 Ranking MMR",
         description="Top 15 usuarios por MMR en este servidor",
         color=0xE94560,
     )
@@ -1425,19 +1485,19 @@ async def ranking(ctx):
     for i, row in enumerate(rows[:15]):
         uid = row["user_id"]
         rating = round(row["rating"], 1)
-        deviation = round(row["deviation"], 1)
-        total = row["total_activities"]
         prefix = medals[i] if i < 3 else f"**{i + 1}.**"
         member = ctx.guild.get_member(uid)
-        name = member.display_name if member else f"Usuario {uid}"
+        name = (
+            member.display_name
+            if member
+            else (row.get("display_name") or f"Usuario {uid}")
+        )
         embed.add_field(
             name=f"{prefix} {name}",
-            value=f"Rating: **{rating}** | σ: {deviation} | Actividades: {total}",
+            value=f"MMR: **{rating}**",
             inline=False,
         )
-    embed.set_footer(
-        text="El rating MMR se ajusta según calidad y frecuencia de actividad."
-    )
+
     try:
         await ctx.followup.send(embed=embed)
     except Exception:

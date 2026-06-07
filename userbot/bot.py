@@ -3781,6 +3781,7 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
     value = float(data.get("value", 1.0))
     metadata = data.get("metadata")
     is_premium = bool(data.get("is_premium", False))
+    display_name = str(data.get("display_name", ""))
     try:
         delta = adb.log_activity(
             user_id,
@@ -3792,6 +3793,7 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
             value=value,
             metadata=metadata,
             is_premium=is_premium,
+            display_name=display_name,
         )
         return web.json_response({"ok": True, "delta": delta})
     except Exception as e:

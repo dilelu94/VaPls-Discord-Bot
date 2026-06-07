@@ -79,7 +79,6 @@ def init_db(db_path: str | None = None) -> None:
     _conn.execute("PRAGMA journal_mode=WAL")
     _conn.execute("PRAGMA busy_timeout=5000")
     _schema()
-    _seed_defaults()
 
 
 def _ensure_dir(path: str) -> None:
@@ -100,6 +99,7 @@ def _schema() -> None:
             total_activities INTEGER NOT NULL DEFAULT 0,
             premium INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT 0,
+            display_name TEXT DEFAULT '',
             PRIMARY KEY (user_id, guild_id)
         );
 
@@ -140,9 +140,14 @@ def _schema() -> None:
         CREATE INDEX IF NOT EXISTS daily_stats_date_idx
             ON daily_stats(date);
     """)
+    _migrate_v1()
 
 
-def _seed_defaults() -> None:
+def _migrate_v1() -> None:
+    try:
+        _conn.execute("ALTER TABLE user_mmr ADD COLUMN display_name TEXT DEFAULT ''")
+    except Exception:
+        pass
     for k, v in DEFAULT_WEIGHTS.items():
         cur = _conn.execute("SELECT 1 FROM config WHERE key=?", (f"weight_{k}",))
         if cur.fetchone() is None:
@@ -275,6 +280,7 @@ def log_activity(
     value: float = 1.0,
     metadata: dict | None = None,
     is_premium: bool = False,
+    display_name: str = "",
 ) -> float:
     """Log an activity and update the user's MMR.
 
@@ -336,8 +342,9 @@ def log_activity(
     _conn.execute(
         """INSERT OR REPLACE INTO user_mmr
            (user_id, guild_id, rating, deviation, volatility,
-            last_activity_at, total_activities, premium, updated_at)
-           VALUES (?, ?, ?, ?, 0.06, ?, ?, ?, ?)""",
+            last_activity_at, total_activities, premium, updated_at,
+            display_name)
+           VALUES (?, ?, ?, ?, 0.06, ?, ?, ?, ?, ?)""",
         (
             user_id,
             guild_id,
@@ -347,6 +354,7 @@ def log_activity(
             total + 1,
             1 if is_premium else 0,
             now,
+            display_name or "",
         ),
     )
     _conn.execute(
@@ -406,7 +414,7 @@ def get_leaderboard(guild_id: int, limit: int = 20) -> list[dict]:
         return []
     cur = _conn.execute(
         """SELECT user_id, rating, deviation, total_activities,
-                  last_activity_at
+                  last_activity_at, display_name
            FROM user_mmr WHERE guild_id=?
            ORDER BY rating DESC LIMIT ?""",
         (guild_id, limit),

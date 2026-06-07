@@ -310,36 +310,6 @@ function renderActivity(el) {
   h += '</table>';
   el.innerHTML = h;
 }
-  var h = '<h2>Recent Activity</h2>';
-  h += '<div style="margin:10px 0;padding:10px;background:#16213e;border-radius:4px">';
-  h += '<strong style="color:#e94560">Frecuencia por tipo:</strong><br>';
-  var types = Object.keys(counts).sort();
-  for (var j = 0; j < types.length; j++) {
-    var t = types[j];
-    var active = _activityFilter === t ? ' style="background:#e94560;color:#fff"' : '';
-    h += '<span' + active + ' onclick="_activityFilter=\\'' + t + '\\';renderActivity(el)" title=\"Filtrar solo ' + t + '. Clic de nuevo para ver todos.\" style="display:inline-block;margin:4px 6px 4px 0;padding:4px 10px;background:#0f3460;border-radius:4px;cursor:pointer;border:1px solid #e94560">' + t + ': ' + counts[t] + '</span>';
-  }
-  if (_activityFilter) {
-    h += '<span onclick="_activityFilter=\\'\';renderActivity(el)" title=\"Quitar filtro y mostrar todas las actividades\" style="display:inline-block;margin:4px 6px 4px 0;padding:4px 10px;background:#333;border-radius:4px;cursor:pointer;border:1px solid #888">✕ Quitar filtro</span>';
-  }
-  h += '</div>';
-  h += '<table><tr><th title=\"ID autoincremental del registro en la base de datos. Identifica univocamente cada actividad.\">ID</th><th title=\"Nombre del usuario que realizo la actividad. Coincide con el User ID de la pestana MMR.\">User</th><th title=\"Tipo de actividad: voice_vad (actividad de voz), etc. Cada tipo tiene su propio peso configurable en la pestana Weights.\">Type</th><th title=\"Duracion de la actividad en segundos. '-' significa que la actividad no tiene duracion medible.\">Duration</th><th title=\"Multiplicador de calidad (0.0 a 1.0 tipicamente). Ajusta el impacto de la actividad: 1.0 = calidad maxima, 0.5 = mitad del impacto.\">Quality</th><th title=\"Cambio neto en el rating Glicko-1 del usuario que resulto de esta actividad. Positivo = subio, Negativo = bajo, 0 = sin cambio.\">Delta</th><th title=\"Fecha y hora en que se registro la actividad en el servidor.\">Date</th></tr>';
-  for (var i = 0; i < allData.activity.length; i++) {
-    var row = allData.activity[i];
-    if (_activityFilter && row.activity_type !== _activityFilter) continue;
-    var d = new Date((row.created_at || 0) * 1000).toLocaleString();
-    var uname = row.user_name || row.user_id;
-    h += '<tr><td title=\"Registro #' + row.id + ' en la base de datos. Sirve para referenciar esta actividad especifica.\">' + row.id + '</td>'
-      + '<td title=\"Nombre del usuario: ' + uname + '.\">' + uname + '</td>'
-      + '<td title=\"Tipo: ' + row.activity_type + '. El peso de este tipo se configura en la pestana Weights.\">' + row.activity_type + '</td>'
-      + '<td title=\"Duracion: ' + (row.duration_secs || 0) + ' segundos. Cuanto mas dura la actividad, mas impacto tiene en el rating.\">' + (row.duration_secs || '-') + '</td>'
-      + '<td title=\"Calidad: ' + (row.quality_score || 0) + '. Multiplica el impacto base de la actividad.\">' + row.quality_score + '</td>'
-      + '<td title=\"Delta de rating: ' + (row.rating_delta || 0) + ' puntos Glicko-1.\">' + (row.rating_delta || 0) + '</td>'
-      + '<td title=\"Fecha: ' + d + '\">' + d + '</td></tr>';
-  }
-  h += '</table>';
-  el.innerHTML = h;
-}
 function api(path, body) {
   var opts = {headers: {'Content-Type': 'application/json'}};
   if (AUTH) opts.headers.Authorization = AUTH;
