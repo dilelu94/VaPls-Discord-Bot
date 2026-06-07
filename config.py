@@ -33,6 +33,10 @@ PLAY_COOLDOWN = float(os.getenv("PLAY_COOLDOWN", "5"))  # seconds
 # /actividad for the MMR ranking system.
 OWNER_ID = int(os.getenv("OWNER_ID", "211354006805676032"))
 
+# Discord user ID of the userbot (Indio). Excluded from occupancy counts
+# so its presence doesn't trigger or extend MMR activities meant for ≥2 humans.
+USERBOT_USER_ID = int(os.getenv("USERBOT_USER_ID", "0"))
+
 # PostHog product analytics
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")
 POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")

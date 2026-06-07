@@ -430,6 +430,15 @@ weights, config y activity. Se compone de:
 
 5. **Tooltips + columna Name** (`08e650d`): `title` attributes en español en todas
    las celdas de las 4 tabs, y columna "Name" en tabla MMR.
+6. **Tooltips descriptivos** (`902cdd5`): tooltips mucho mas detallados explicando
+   cada columna y cada valor uno por uno.
+
+### Config
+
+- `USERBOT_USER_ID` — excluye al Indio del conteo de ocupación en canales de voz
+  para que su presencia no active actividades MMR que requieren ≥2 humanos.
+  `_has_others()` en `bot.py` filtra `m.id != config.USERBOT_USER_ID`.
+  Default: `0` (sin filtro). En prod: `519594605520486428`.
 
 ## 💡 Guía de Modificación
 

@@ -26,6 +26,7 @@ import config
 import geminiCommand
 import geminiKeys
 from playCommand import guildPlayers
+from users import USERS
 
 logger = logging.getLogger("apiServer")
 
@@ -201,10 +202,10 @@ button:hover{background:#c73650}
 </style></head><body>
 <h1>VaPls MMR Admin</h1>
 <div class="nav">
-  <a href="#" onclick="showTab('weights')">Weights</a>
-  <a href="#" onclick="showTab('config')">Config</a>
-  <a href="#" onclick="showTab('mmr')">MMR</a>
-  <a href="#" onclick="showTab('activity')">Activity</a>
+  <a href="#" onclick="showTab('weights')" title="Pesos de cada tipo de actividad. Determinan cuanto impacto tiene cada accion en el rating Glicko-1.">Weights</a>
+  <a href="#" onclick="showTab('config')" title="Variables de configuracion interna del sistema MMR. No incluye pesos de actividades.">Config</a>
+  <a href="#" onclick="showTab('mmr')" title="Ranking MMR (Glicko-1) de todos los usuarios. Rating, desviacion, actividades totales y premium.">MMR</a>
+  <a href="#" onclick="showTab('activity')" title="Historial de actividades recientes. Cada fila es un evento que impacto el rating de un usuario.">Activity</a>
 </div>
 <div id="tab-weights" class="section"></div>
 <div id="tab-config" class="section"></div>
@@ -227,58 +228,58 @@ function renderTab(name) {
   else if (name === 'activity') renderActivity(el);
 }
 function renderWeights(el) {
-  var h = '<h2>Activity Weights</h2><table><tr><th title=\"Tipo de actividad\">Activity</th><th title=\"Peso multiplicador\">Weight</th><th title=\"Guardar cambios\">Action</th></tr>';
+  var h = '<h2>Activity Weights</h2><table><tr><th title=\"Nombre unico de la actividad, se usa como clave interna con prefijo weight_\">Activity</th><th title=\"Peso multiplicador: determina cuanto impacta esta actividad en el rating Glicko-1. Tipico: 0.1 a 2.0\">Weight</th><th title=\"Haz clic para guardar el peso modificado en la base de datos\">Action</th></tr>';
   for (var k in allData.config) {
     if (!k.startsWith('weight_')) continue;
     var act = k.slice(7);
-    h += '<tr><td title=\"Actividad: ' + act + '\">' + act + '</td>'
-      + '<td><input id=\"w-' + act + '\" title=\"Peso para ' + act + '\" value=\"' + allData.config[k] + '\" size=\"6\"></td>'
-      + '<td><button title=\"Guardar peso de ' + act + '\" onclick=\"saveWeight(\\'' + act + '\\')\">Save</button></td></tr>';
+    h += '<tr><td title=\"Clave interna: weight_' + act + '. Esta actividad se dispara cuando el usuario hace ' + act + '\">' + act + '</td>'
+      + '<td><input id=\"w-' + act + '\" title=\"Valor numerico del peso para ' + act + '. A mayor valor, mas impacto en el rating. Guarda y recarga la pagina para ver el efecto.\" value=\"' + allData.config[k] + '\" size=\"6\"></td>'
+      + '<td><button title=\"Persiste el nuevo peso de ' + act + ' en la base de datos y recarga los datos\" onclick=\"saveWeight(\\'' + act + '\\')\">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderConfig(el) {
-  var h = '<h2>System Config</h2><table><tr><th title=\"Nombre de configuracion\">Key</th><th title=\"Valor actual\">Value</th><th title=\"Guardar cambios\">Action</th></tr>';
+  var h = '<h2>System Config</h2><table><tr><th title=\"Nombre de la variable de configuracion del sistema MMR\">Key</th><th title=\"Valor actual de la configuracion. Editalo y presiona Save para persistir el cambio.\">Value</th><th title=\"Guarda el nuevo valor en la base de datos y recarga la pagina\">Action</th></tr>';
   for (var k in allData.config) {
     if (k.startsWith('weight_')) continue;
-    h += '<tr><td title=\"Config: ' + k + '\">' + k + '</td>'
-      + '<td><input id=\"c-' + k + '\" title=\"Valor de ' + k + '\" value=\"' + allData.config[k] + '\" size=\"10\"></td>'
-      + '<td><button title=\"Guardar ' + k + '\" onclick=\"saveConfig(\\'' + k + '\\')\">Save</button></td></tr>';
+    h += '<tr><td title=\"Variable de configuracion: ' + k + '. Cambia este valor para ajustar el comportamiento del sistema MMR.\">' + k + '</td>'
+      + '<td><input id=\"c-' + k + '\" title=\"Valor actual de ' + k + '. Modificalo y presiona Save para aplicar el cambio.\" value=\"' + allData.config[k] + '\" size=\"10\"></td>'
+      + '<td><button title=\"Persiste el cambio de ' + k + ' en la base de datos\" onclick=\"saveConfig(\\'' + k + '\\')\">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderMmr(el) {
-  var h = '<h2>MMR Rankings</h2><table><tr><th title=\"ID de Discord del usuario\">User ID</th><th title=\"Nombre de Discord\">Name</th><th title=\"ID del servidor\">Guild ID</th><th title=\"Rating Glicko-1 actual\">Rating</th><th title=\"Desviacion (menor = mas preciso)\">Deviation</th><th title=\"Total de actividades\">Activities</th><th title=\"Multiplicador premium activo\">Premium</th></tr>';
+  var h = '<h2>MMR Rankings</h2><table><tr><th title=\"ID numerico unico de Discord del usuario. Si no se muestra nombre es porque el bot no lo tiene en cache.\">User ID</th><th title=\"Nombre global de Discord del usuario. Se obtiene de la cache del bot al cargar la pagina.\">Name</th><th title=\"ID numerico del servidor (guild) de Discord donde se registraron las actividades.\">Guild ID</th><th title=\"Puntaje Glicko-1 actual del usuario. Mientras mas alto, mejor rendimiento historico. Aprox. 1500 = nuevo, 2000+ = avanzado.\">Rating</th><th title=\"Desviacion del rating (RD). Un numero mas bajo significa que el sistema tiene mas certeza sobre el rating de este usuario. Baja cuando juega mas partidas.\">Deviation</th><th title=\"Cantidad total de actividades registradas que contribuyen al calculo del rating.\">Activities</th><th title=\"Indica si el usuario tiene multiplicador premium activo. Y = Si (paga mas), N = No.\">Premium</th></tr>';
   for (var i = 0; i < allData.mmr.length; i++) {
     var row = allData.mmr[i];
     var name = row.user_name || row.user_id;
     var disp = row.user_display || name;
-    h += '<tr><td title=\"ID de Discord: ' + row.user_id + '\">' + row.user_id + '</td>'
-      + '<td title=\"Nombre: ' + name + '\">' + disp + '</td>'
-      + '<td title=\"Servidor: ' + row.guild_id + '\">' + row.guild_id + '</td>'
-      + '<td title=\"Rating: ' + row.rating + '\">' + row.rating + '</td>'
-      + '<td title=\"Desviacion: ' + row.deviation + '\">' + row.deviation + '</td>'
-      + '<td title=\"Actividades: ' + row.total_activities + '\">' + row.total_activities + '</td>'
-      + '<td title=\"Premium: ' + (row.premium ? 'Si' : 'No') + '\">' + (row.premium ? 'Y' : 'N') + '</td></tr>';
+    h += '<tr><td title=\"ID numerico de Discord del usuario. Usa este ID para buscar al usuario en Discord o en otras tablas.\">' + row.user_id + '</td>'
+      + '<td title=\"Nombre de Discord: ' + name + '. Si ves el ID numerico en vez de un nombre es porque el bot aun no ha cargado los datos de este usuario.\">' + disp + '</td>'
+      + '<td title=\"ID del servidor de Discord donde se registro la actividad. Todos los usuarios de un mismo servidor comparten el mismo Guild ID.\">' + row.guild_id + '</td>'
+      + '<td title=\"Rating Glicko-1 actual: ' + row.rating + '. Este numero sube o baja segun las actividades registradas y los pesos configurados en la pestana Weights.\">' + row.rating + '</td>'
+      + '<td title=\"Desviacion del rating (RD): ' + row.deviation + '. Un RD bajo (< 100) significa que el rating es confiable. Un RD alto (> 200) significa que el sistema aun esta calibrando a este usuario.\">' + row.deviation + '</td>'
+      + '<td title=\"Total de actividades: ' + row.total_activities + '. Cantidad de eventos (voz, etc.) que han contribuido al rating de este usuario.\">' + row.total_activities + '</td>'
+      + '<td title=\"Premium: ' + (row.premium ? 'Si, tiene multiplicador premium activo' : 'No, no tiene multiplicador premium') + '\">' + (row.premium ? 'Y' : 'N') + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderActivity(el) {
-  var h = '<h2>Recent Activity</h2><table><tr><th title=\"ID del registro en BD\">ID</th><th title=\"Usuario que realizo la actividad\">User</th><th title=\"Tipo de actividad\">Type</th><th title=\"Duracion en segundos\">Duration</th><th title=\"Multiplicador de calidad\">Quality</th><th title=\"Cambio de rating\">Delta</th><th title=\"Fecha del registro\">Date</th></tr>';
+  var h = '<h2>Recent Activity</h2><table><tr><th title=\"ID autoincremental del registro en la base de datos. Identifica univocamente cada actividad.\">ID</th><th title=\"ID de Discord del usuario que realizo la actividad. Coincide con el User ID de la pestana MMR.\">User</th><th title=\"Tipo de actividad: voice_vad (actividad de voz), etc. Cada tipo tiene su propio peso configurable en la pestana Weights.\">Type</th><th title=\"Duracion de la actividad en segundos. '-' significa que la actividad no tiene duracion medible.\">Duration</th><th title=\"Multiplicador de calidad (0.0 a 1.0 tipicamente). Ajusta el impacto de la actividad: 1.0 = calidad maxima, 0.5 = mitad del impacto.\">Quality</th><th title=\"Cambio neto en el rating Glicko-1 del usuario que resulto de esta actividad. Positivo = subio, Negativo = bajo, 0 = sin cambio.\">Delta</th><th title=\"Fecha y hora en que se registro la actividad en el servidor.\">Date</th></tr>';
   for (var i = 0; i < allData.activity.length; i++) {
     var row = allData.activity[i];
     var d = new Date((row.created_at || 0) * 1000).toLocaleString();
     var uname = row.user_name || row.user_id;
-    h += '<tr><td title=\"Registro #' + row.id + '\">' + row.id + '</td>'
-      + '<td title=\"Usuario: ' + uname + '\">' + uname + '</td>'
-      + '<td title=\"Tipo: ' + row.activity_type + '\">' + row.activity_type + '</td>'
-      + '<td title=\"Duracion: ' + (row.duration_secs || 0) + 's\">' + (row.duration_secs || '-') + '</td>'
-      + '<td title=\"Calidad: ' + row.quality_score + '\">' + row.quality_score + '</td>'
-      + '<td title=\"Delta: ' + (row.rating_delta || 0) + '\">' + (row.rating_delta || 0) + '</td>'
-      + '<td title=\"' + d + '\">' + d + '</td></tr>';
+    h += '<tr><td title=\"Registro #' + row.id + ' en la base de datos. Sirve para referenciar esta actividad especifica.\">' + row.id + '</td>'
+      + '<td title=\"ID de Discord del usuario: ' + uname + '. Busca este ID en la pestana MMR para ver su rating actual.\">' + uname + '</td>'
+      + '<td title=\"Tipo: ' + row.activity_type + '. El peso de este tipo de actividad se configura en la pestana Weights.\">' + row.activity_type + '</td>'
+      + '<td title=\"Duracion: ' + (row.duration_secs || 0) + ' segundos. Cuanto mas dura la actividad, mas impacto tiene en el rating.\">' + (row.duration_secs || '-') + '</td>'
+      + '<td title=\"Calidad: ' + (row.quality_score || 0) + '. Multiplica el impacto base de la actividad. Lo define el sistema segun la participacion del usuario.\">' + row.quality_score + '</td>'
+      + '<td title=\"Delta de rating: ' + (row.rating_delta || 0) + ' puntos Glicko-1. Este es el cambio real en el rating del usuario por esta actividad.\">' + (row.rating_delta || 0) + '</td>'
+      + '<td title=\"Fecha de creacion: ' + d + '\">' + d + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
@@ -1078,7 +1079,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     hdrs = {"Authorization": auth} if auth else {}
                     async with sess.get(url, headers=hdrs) as resp:
                         if resp.status == 200:
-                            data_json = await resp.text()
+                            data: dict = await resp.json()
+                            for row in data.get("mmr") or []:
+                                uid = int(row.get("user_id", 0))
+                                u = USERS.get(uid)
+                                if u:
+                                    row["user_name"] = u["name"]
+                                    row["user_display"] = u["name"]
+                            for row in data.get("activity") or []:
+                                uid = int(row.get("user_id", 0))
+                                u = USERS.get(uid)
+                                if u:
+                                    row["user_name"] = u["name"]
+                                    row["user_display"] = u["name"]
+                            data_json = json.dumps(data)
         except Exception:
             data_json = "{}"
         html = _ADMIN_HTML.replace("/*AUTH*/", json.dumps(auth)).replace(
