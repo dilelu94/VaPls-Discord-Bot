@@ -232,7 +232,7 @@ function renderWeights(el) {
     if (!k.startsWith('weight_')) continue;
     var act = k.slice(7);
     h += '<tr><td>' + act + '</td><td><input id="w-' + act + '" value="' + allData.config[k] + '" size="6"></td>'
-      + '<td><button onclick="saveWeight(\'' + act + '\')">Save</button></td></tr>';
+      + '<td><button onclick="saveWeight(\\'' + act + '\\')">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
@@ -242,7 +242,7 @@ function renderConfig(el) {
   for (var k in allData.config) {
     if (k.startsWith('weight_')) continue;
     h += '<tr><td>' + k + '</td><td><input id="c-' + k + '" value="' + allData.config[k] + '" size="10"></td>'
-      + '<td><button onclick="saveConfig(\'' + k + '\')">Save</button></td></tr>';
+      + '<td><button onclick="saveConfig(\\'' + k + '\\')">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
