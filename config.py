@@ -38,7 +38,7 @@ POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")
 POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
 
 # HTTP API for telegram bridge
-API_HOST = os.getenv("API_HOST", "127.0.0.1")
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8080"))
 API_SECRET = os.getenv("API_SECRET", "")
 
