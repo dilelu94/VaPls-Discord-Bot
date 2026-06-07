@@ -1082,12 +1082,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                             data: dict = await resp.json()
                             for row in data.get("mmr") or []:
                                 uid = int(row.get("user_id", 0))
+                                row["user_id"] = str(uid)
+                                row["guild_id"] = str(row.get("guild_id", ""))
                                 u = USERS.get(uid)
                                 if u:
                                     row["user_name"] = u["name"]
                                     row["user_display"] = u["name"]
                             for row in data.get("activity") or []:
                                 uid = int(row.get("user_id", 0))
+                                row["user_id"] = str(uid)
                                 u = USERS.get(uid)
                                 if u:
                                     row["user_name"] = u["name"]
