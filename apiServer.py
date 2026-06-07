@@ -13,6 +13,7 @@ import json
 import os
 import time
 import uuid
+from urllib.parse import urljoin
 import logging
 from typing import Any, Optional
 
@@ -316,7 +317,7 @@ async def _admin_proxy(path: str, request: web.Request) -> web.Response:
         async with aiohttp.ClientSession(
             timeout=aiohttp.ClientTimeout(total=10)
         ) as sess:
-            url = relay.rstrip("/") + path
+            url = urljoin(relay, path)
             headers = {}
             auth = request.headers.get("Authorization")
             if auth:
