@@ -227,41 +227,58 @@ function renderTab(name) {
   else if (name === 'activity') renderActivity(el);
 }
 function renderWeights(el) {
-  var h = '<h2>Activity Weights</h2><table><tr><th>Activity</th><th>Weight</th><th>Action</th></tr>';
+  var h = '<h2>Activity Weights</h2><table><tr><th title=\"Tipo de actividad\">Activity</th><th title=\"Peso multiplicador\">Weight</th><th title=\"Guardar cambios\">Action</th></tr>';
   for (var k in allData.config) {
     if (!k.startsWith('weight_')) continue;
     var act = k.slice(7);
-    h += '<tr><td>' + act + '</td><td><input id="w-' + act + '" value="' + allData.config[k] + '" size="6"></td>'
-      + '<td><button onclick="saveWeight(\\'' + act + '\\')">Save</button></td></tr>';
+    h += '<tr><td title=\"Actividad: ' + act + '\">' + act + '</td>'
+      + '<td><input id=\"w-' + act + '\" title=\"Peso para ' + act + '\" value=\"' + allData.config[k] + '\" size=\"6\"></td>'
+      + '<td><button title=\"Guardar peso de ' + act + '\" onclick=\"saveWeight(\\'' + act + '\\')\">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderConfig(el) {
-  var h = '<h2>System Config</h2><table><tr><th>Key</th><th>Value</th><th>Action</th></tr>';
+  var h = '<h2>System Config</h2><table><tr><th title=\"Nombre de configuracion\">Key</th><th title=\"Valor actual\">Value</th><th title=\"Guardar cambios\">Action</th></tr>';
   for (var k in allData.config) {
     if (k.startsWith('weight_')) continue;
-    h += '<tr><td>' + k + '</td><td><input id="c-' + k + '" value="' + allData.config[k] + '" size="10"></td>'
-      + '<td><button onclick="saveConfig(\\'' + k + '\\')">Save</button></td></tr>';
+    h += '<tr><td title=\"Config: ' + k + '\">' + k + '</td>'
+      + '<td><input id=\"c-' + k + '\" title=\"Valor de ' + k + '\" value=\"' + allData.config[k] + '\" size=\"10\"></td>'
+      + '<td><button title=\"Guardar ' + k + '\" onclick=\"saveConfig(\\'' + k + '\\')\">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderMmr(el) {
-  var h = '<h2>MMR Rankings</h2><table><tr><th>User ID</th><th>Guild ID</th><th>Rating</th><th>Deviation</th><th>Activities</th><th>Premium</th></tr>';
+  var h = '<h2>MMR Rankings</h2><table><tr><th title=\"ID de Discord del usuario\">User ID</th><th title=\"Nombre de Discord\">Name</th><th title=\"ID del servidor\">Guild ID</th><th title=\"Rating Glicko-1 actual\">Rating</th><th title=\"Desviacion (menor = mas preciso)\">Deviation</th><th title=\"Total de actividades\">Activities</th><th title=\"Multiplicador premium activo\">Premium</th></tr>';
   for (var i = 0; i < allData.mmr.length; i++) {
     var row = allData.mmr[i];
-    h += '<tr><td>' + row.user_id + '</td><td>' + row.guild_id + '</td><td>' + row.rating + '</td><td>' + row.deviation + '</td><td>' + row.total_activities + '</td><td>' + (row.premium ? 'Y' : 'N') + '</td></tr>';
+    var name = row.user_name || row.user_id;
+    var disp = row.user_display || name;
+    h += '<tr><td title=\"ID de Discord: ' + row.user_id + '\">' + row.user_id + '</td>'
+      + '<td title=\"Nombre: ' + name + '\">' + disp + '</td>'
+      + '<td title=\"Servidor: ' + row.guild_id + '\">' + row.guild_id + '</td>'
+      + '<td title=\"Rating: ' + row.rating + '\">' + row.rating + '</td>'
+      + '<td title=\"Desviacion: ' + row.deviation + '\">' + row.deviation + '</td>'
+      + '<td title=\"Actividades: ' + row.total_activities + '\">' + row.total_activities + '</td>'
+      + '<td title=\"Premium: ' + (row.premium ? 'Si' : 'No') + '\">' + (row.premium ? 'Y' : 'N') + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderActivity(el) {
-  var h = '<h2>Recent Activity</h2><table><tr><th>ID</th><th>User</th><th>Type</th><th>Duration</th><th>Quality</th><th>Delta</th><th>Date</th></tr>';
+  var h = '<h2>Recent Activity</h2><table><tr><th title=\"ID del registro en BD\">ID</th><th title=\"Usuario que realizo la actividad\">User</th><th title=\"Tipo de actividad\">Type</th><th title=\"Duracion en segundos\">Duration</th><th title=\"Multiplicador de calidad\">Quality</th><th title=\"Cambio de rating\">Delta</th><th title=\"Fecha del registro\">Date</th></tr>';
   for (var i = 0; i < allData.activity.length; i++) {
     var row = allData.activity[i];
     var d = new Date((row.created_at || 0) * 1000).toLocaleString();
-    h += '<tr><td>' + row.id + '</td><td>' + row.user_id + '</td><td>' + row.activity_type + '</td><td>' + (row.duration_secs || '-') + '</td><td>' + row.quality_score + '</td><td>' + (row.rating_delta || 0) + '</td><td>' + d + '</td></tr>';
+    var uname = row.user_name || row.user_id;
+    h += '<tr><td title=\"Registro #' + row.id + '\">' + row.id + '</td>'
+      + '<td title=\"Usuario: ' + uname + '\">' + uname + '</td>'
+      + '<td title=\"Tipo: ' + row.activity_type + '\">' + row.activity_type + '</td>'
+      + '<td title=\"Duracion: ' + (row.duration_secs || 0) + 's\">' + (row.duration_secs || '-') + '</td>'
+      + '<td title=\"Calidad: ' + row.quality_score + '\">' + row.quality_score + '</td>'
+      + '<td title=\"Delta: ' + (row.rating_delta || 0) + '\">' + (row.rating_delta || 0) + '</td>'
+      + '<td title=\"' + d + '\">' + d + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
