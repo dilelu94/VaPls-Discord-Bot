@@ -212,83 +212,91 @@ button:hover{background:#c73650}
 <div id="tab-activity" class="section"></div>
 <div id="msg" class="msg"></div>
 <script>
-let allData = {};
+var AUTH = /*AUTH*/;
+var allData = /*DATA*/;
 function showTab(name) {
-  document.querySelectorAll('.section').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.section').forEach(function(el) { el.style.display = 'none'; });
   document.getElementById('tab-' + name).style.display = 'block';
   renderTab(name);
 }
-async function loadData() {
-  const r = await fetch('/admin/api/data');
-  allData = await r.json();
-  showTab('weights');
-}
 function renderTab(name) {
-  const el = document.getElementById('tab-' + name);
+  var el = document.getElementById('tab-' + name);
   if (name === 'weights') renderWeights(el);
   else if (name === 'config') renderConfig(el);
   else if (name === 'mmr') renderMmr(el);
   else if (name === 'activity') renderActivity(el);
 }
 function renderWeights(el) {
-  let h = '<h2>Activity Weights</h2><table><tr><th>Activity</th><th>Weight</th><th>Action</th></tr>';
-  for (const [k, v] of Object.entries(allData.config || {})) {
+  var h = '<h2>Activity Weights</h2><table><tr><th>Activity</th><th>Weight</th><th>Action</th></tr>';
+  for (var k in allData.config) {
     if (!k.startsWith('weight_')) continue;
-    const act = k.slice(7);
-    h += '<tr><td>' + act + '</td><td><input id="w-' + act + '" value="' + v + '" size="6"></td>'
+    var act = k.slice(7);
+    h += '<tr><td>' + act + '</td><td><input id="w-' + act + '" value="' + allData.config[k] + '" size="6"></td>'
       + '<td><button onclick="saveWeight(\'' + act + '\')">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderConfig(el) {
-  let h = '<h2>System Config</h2><table><tr><th>Key</th><th>Value</th><th>Action</th></tr>';
-  for (const [k, v] of Object.entries(allData.config || {})) {
+  var h = '<h2>System Config</h2><table><tr><th>Key</th><th>Value</th><th>Action</th></tr>';
+  for (var k in allData.config) {
     if (k.startsWith('weight_')) continue;
-    h += '<tr><td>' + k + '</td><td><input id="c-' + k + '" value="' + v + '" size="10"></td>'
+    h += '<tr><td>' + k + '</td><td><input id="c-' + k + '" value="' + allData.config[k] + '" size="10"></td>'
       + '<td><button onclick="saveConfig(\'' + k + '\')">Save</button></td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderMmr(el) {
-  let h = '<h2>MMR Rankings</h2><table><tr><th>User ID</th><th>Guild ID</th><th>Rating</th><th>Deviation</th><th>Activities</th><th>Premium</th></tr>';
-  for (const row of (allData.mmr || [])) {
+  var h = '<h2>MMR Rankings</h2><table><tr><th>User ID</th><th>Guild ID</th><th>Rating</th><th>Deviation</th><th>Activities</th><th>Premium</th></tr>';
+  for (var i = 0; i < allData.mmr.length; i++) {
+    var row = allData.mmr[i];
     h += '<tr><td>' + row.user_id + '</td><td>' + row.guild_id + '</td><td>' + row.rating + '</td><td>' + row.deviation + '</td><td>' + row.total_activities + '</td><td>' + (row.premium ? 'Y' : 'N') + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
 function renderActivity(el) {
-  let h = '<h2>Recent Activity</h2><table><tr><th>ID</th><th>User</th><th>Type</th><th>Duration</th><th>Quality</th><th>Delta</th><th>Date</th></tr>';
-  for (const row of (allData.activity || [])) {
-    const d = new Date((row.created_at || 0) * 1000).toLocaleString();
+  var h = '<h2>Recent Activity</h2><table><tr><th>ID</th><th>User</th><th>Type</th><th>Duration</th><th>Quality</th><th>Delta</th><th>Date</th></tr>';
+  for (var i = 0; i < allData.activity.length; i++) {
+    var row = allData.activity[i];
+    var d = new Date((row.created_at || 0) * 1000).toLocaleString();
     h += '<tr><td>' + row.id + '</td><td>' + row.user_id + '</td><td>' + row.activity_type + '</td><td>' + (row.duration_secs || '-') + '</td><td>' + row.quality_score + '</td><td>' + (row.rating_delta || 0) + '</td><td>' + d + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
 }
+function api(path, body) {
+  var opts = {headers: {'Content-Type': 'application/json'}};
+  if (AUTH) opts.headers.Authorization = AUTH;
+  if (body) { opts.method = 'POST'; opts.body = JSON.stringify(body); }
+  return fetch(path, opts);
+}
 async function saveWeight(act) {
-  const v = document.getElementById('w-' + act).value;
-  const r = await fetch('/admin/api/weights', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({['weight_' + act]: v})});
+  var v = document.getElementById('w-' + act).value;
+  var r = await api('/admin/api/weights', {['weight_' + act]: v});
   if (!r.ok) { msg('Error saving', 'err'); return; }
   msg('Weight saved', 'ok');
-  await loadData();
+  var data = await api('/admin/api/data');
+  if (data.ok) allData = await data.json();
+  renderTab(document.querySelector('.section[style*="block"]') ? 'weights' : 'weights');
 }
 async function saveConfig(k) {
-  const v = document.getElementById('c-' + k).value;
-  const r = await fetch('/admin/api/weights', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[k]: v})});
+  var v = document.getElementById('c-' + k).value;
+  var r = await api('/admin/api/weights', {[k]: v});
   if (!r.ok) { msg('Error saving', 'err'); return; }
   msg('Config saved', 'ok');
-  await loadData();
+  var data = await api('/admin/api/data');
+  if (data.ok) allData = await data.json();
+  renderTab(document.querySelector('.section[style*="block"]') ? 'config' : 'config');
 }
+showTab('weights');
 function msg(text, type) {
-  const el = document.getElementById('msg');
+  var el = document.getElementById('msg');
   el.textContent = text;
   el.className = 'msg ' + type;
-  setTimeout(() => el.style.display = 'none', 3000);
+  setTimeout(function() { el.style.display = 'none'; }, 3000);
 }
-loadData();
 </script></body></html>"""
 
 
@@ -1041,7 +1049,25 @@ def makeApp(bot: discord.Bot) -> web.Application:
             resp = web.Response(status=401, text="Unauthorized")
             resp.headers["WWW-Authenticate"] = 'Basic realm="VaPls MMR Admin"'
             return resp
-        return web.Response(text=_ADMIN_HTML, content_type="text/html")
+        auth = request.headers.get("Authorization", "") or ""
+        data_json = "{}"
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as sess:
+                relay = config.INDIO_RELAY_URL
+                if relay:
+                    url = urljoin(relay, "/admin/api/data")
+                    hdrs = {"Authorization": auth} if auth else {}
+                    async with sess.get(url, headers=hdrs) as resp:
+                        if resp.status == 200:
+                            data_json = await resp.text()
+        except Exception:
+            data_json = "{}"
+        html = _ADMIN_HTML.replace("/*AUTH*/", json.dumps(auth)).replace(
+            "/*DATA*/", data_json
+        )
+        return web.Response(text=html, content_type="text/html")
 
     async def adminData(request: web.Request) -> web.Response:
         if not _checkAdminAuth(request):
