@@ -401,6 +401,36 @@ El endpoint `/github-webhook` está protegido por el middleware `X-API-Secret` c
 - Nginx en puerto 80 como reverse proxy para webhook (Security List de Oracle Cloud abierta)
 - Webhook de GitHub configurado para eventos `issues` → `http://141.148.84.55/github-webhook`
 
+## 📊 Admin page MMR
+
+La página de admin en `http://141.148.84.55/admin` muestra datos de MMR,
+weights, config y activity. Se compone de:
+
+- **`_ADMIN_HTML`** (en `apiServer.py`): template HTML con JavaScript inline.
+  Usa placeholders `/*AUTH*/` y `/*DATA*/` que el servidor reemplaza.
+- **`_checkAdminAuth()`**: Basic Auth contra `config.ADMIN_USER`/`config.ADMIN_PASS`.
+- **`adminPage()`**: obtiene datos del relay server-side, embebe auth+data en HTML.
+- **`adminData()` / `adminWeights()`**: endpoints REST proxy al userbot relay.
+
+### Bugs encontrados y fixes
+
+1. **URL joining** (`e1e9a22`): `relay.rstrip("/") + path` → `urljoin(relay, path)`.
+   `INDIO_RELAY_URL=http://127.0.0.1:8081/say` producía `/say/admin/api/data`
+   en vez de `/admin/api/data`.
+
+2. **Credenciales hardcodeadas** (`10e73d4`): `_ADMIN_AUTH_USER`/`_ADMIN_AUTH_PASS`
+   → `config.ADMIN_USER`/`config.ADMIN_PASS` (defaults `dilelu`/`indiovapls`).
+
+3. **Auth en JS fetch** (`a1e1934`): `fetch('/admin/api/data')` no envía Basic Auth.
+   Fix: servidor fetchea los datos server-side y los embebe como `var AUTH = ...`
+   y `var allData = ...` en el HTML vía placeholders.
+
+4. **JS SyntaxError por escapes** (`3504842`): Python `"""..."""` consume backslashes,
+   `\'` → `'`. Fix: `\\'` para producir `\'` en el output JS.
+
+5. **Tooltips + columna Name** (`08e650d`): `title` attributes en español en todas
+   las celdas de las 4 tabs, y columna "Name" en tabla MMR.
+
 ## 💡 Guía de Modificación
 
 1. **Tests primero (o junto al cambio):** seguí la skill `behavioral-testing`. No
