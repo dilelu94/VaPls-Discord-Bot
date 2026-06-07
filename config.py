@@ -66,6 +66,11 @@ GEMINI_KEYS_FILE = os.getenv("GEMINI_KEYS_FILE", "gemini_keys.json")
 GEMINI_KEYS_DONATION_URL = "https://aistudio.google.com/apikey"
 INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 
+# MMR admin page Basic Auth credentials. Fall back to defaults for
+# backward compatibility but SHOULD be overridden in production.
+ADMIN_USER = os.getenv("ADMIN_USER", "dilelu")
+ADMIN_PASS = os.getenv("ADMIN_PASS", "indiovapls")
+
 # Userbot relay: where the userbot exposes its POST /say endpoint so /indio
 # replies can be posted by the real user account instead of the vapls bot.
 # Empty INDIO_RELAY_URL disables relay (indio falls back to posting as vapls).

@@ -292,10 +292,6 @@ loadData();
 </script></body></html>"""
 
 
-_ADMIN_AUTH_USER = "dilelu"
-_ADMIN_AUTH_PASS = "indiovapls"
-
-
 def _checkAdminAuth(request: web.Request) -> bool:
     auth = request.headers.get("Authorization", "")
     if not auth.startswith("Basic "):
@@ -303,7 +299,7 @@ def _checkAdminAuth(request: web.Request) -> bool:
     try:
         decoded = base64.b64decode(auth[6:]).decode("utf-8")
         user, _, passwd = decoded.partition(":")
-        return user == _ADMIN_AUTH_USER and passwd == _ADMIN_AUTH_PASS
+        return user == config.ADMIN_USER and passwd == config.ADMIN_PASS
     except Exception:
         return False
 
