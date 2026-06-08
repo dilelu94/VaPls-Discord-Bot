@@ -3782,6 +3782,9 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
     metadata = data.get("metadata")
     is_premium = bool(data.get("is_premium", False))
     display_name = str(data.get("display_name", ""))
+    # Skip activities from the userbot itself (self-bot, not flagged by Discord)
+    if user_id == 519594605520486428:
+        return web.json_response({"ok": True, "delta": 0.0, "skipped": "userbot"})
     try:
         delta = adb.log_activity(
             user_id,

@@ -215,6 +215,7 @@ async def _fetch_activity(endpoint: str, params: dict) -> dict | None:
 
 
 _URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_USERBOT_ID = 519594605520486428
 
 
 async def _classify_and_log_message(
@@ -226,6 +227,9 @@ async def _classify_and_log_message(
     display_name: str = "",
 ):
     """Classify a guild message and log the appropriate activity to MMR."""
+    if user_id == _USERBOT_ID:
+        return
+
     tasks = []
 
     stickers = getattr(message, "stickers", None) or []
@@ -259,6 +263,7 @@ async def _classify_and_log_message(
                 "image",
                 channel_type=channel_type,
                 display_name=display_name,
+                quality_score=0.05 if not content else None,
             )
         )
     if has_file:
@@ -285,7 +290,18 @@ async def _classify_and_log_message(
         )
 
     if content:
-        if _URL_RE.search(content):
+        lower = content.lower()
+        if "tiktok.com" in lower:
+            tasks.append(
+                _log_activity(
+                    user_id,
+                    guild_id,
+                    "tiktok_link",
+                    channel_type=channel_type,
+                    display_name=display_name,
+                )
+            )
+        elif _URL_RE.search(content):
             tasks.append(
                 _log_activity(
                     user_id,
@@ -296,6 +312,13 @@ async def _classify_and_log_message(
                 )
             )
         else:
+            qs = None
+            try:
+                member = message.guild.get_member(user_id)
+                if member and not member.voice:
+                    qs = 0.05
+            except Exception:
+                pass
             tasks.append(
                 _log_activity(
                     user_id,
@@ -303,6 +326,7 @@ async def _classify_and_log_message(
                     "message",
                     channel_type=channel_type,
                     display_name=display_name,
+                    quality_score=qs,
                 )
             )
 
@@ -850,6 +874,40 @@ async def on_guild_scheduled_event_subscribe(event, user_id):
         asyncio.create_task(_log_activity(user_id, guild_id, "event_join"))
     except Exception:
         log.exception("on_guild_scheduled_event_subscribe failed")
+
+
+@bot.event
+async def on_application_command(ctx):
+    """Track slash command usage for MMR.
+
+    Every command gets logged as ``slash_command`` activity. Quality is
+    reduced when the user is not in a voice channel so in-voice commands
+    contribute more than out-of-voice ones.
+    """
+    if ctx.author is None or ctx.author.bot:
+        return
+    if ctx.guild is None:
+        return
+    guild_id = ctx.guild.id
+    user_id = ctx.author.id
+    channel_type = str(getattr(ctx.channel, "type", "") or "")
+    qs = None
+    try:
+        member = ctx.guild.get_member(user_id)
+        if member and not member.voice:
+            qs = 0.05
+    except Exception:
+        pass
+    asyncio.create_task(
+        _log_activity(
+            user_id,
+            guild_id,
+            "slash_command",
+            channel_type=channel_type,
+            display_name=ctx.author.display_name,
+            quality_score=qs,
+        )
+    )
 
 
 @bot.event
