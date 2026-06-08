@@ -2148,14 +2148,7 @@ class GuildPlayer:
                     self._scheduleAutoResume(channel_id)
 
         if self.interrupted:
-            try:
-                title = self.currentSong["title"] if self.currentSong else "?"
-                await self.updateControlMessage(
-                    f"⚠️ Conexión perdida — **{title}** quedó en "
-                    f"{int(self.interruptedAtSeconds)}s. Pedile que retome con /play."
-                )
-            except Exception:
-                pass
+            await self.showInterruptedState()
             return
 
         # Delete the file of the finished song
@@ -2418,6 +2411,8 @@ class GuildPlayer:
         """
         if not self.textChannel:
             return
+        if self.interrupted:
+            return
 
         embed = discord.Embed(
             title="🎵 Reproductor de Música", color=discord.Color.blurple()
@@ -2479,6 +2474,46 @@ class GuildPlayer:
                 )
             except Exception:
                 playLogger.warning("[PLAYER] Fallback send also failed")
+
+    async def showInterruptedState(self):
+        """Replace the live PlayerControlView with an interrupted-state view.
+
+        Called from ``onSongFinished`` after the voice client died mid-stream.
+        The player still has its full queue and current song in memory; this
+        updates the control message to show a "Conexión perdida" embed with
+        queue info and a single ▶️ Reconectar button that resumes the full
+        player (queue + current position).
+        """
+        if not self.controlMessage:
+            return
+
+        embed = discord.Embed(
+            title="🎵 Reproductor de Música", color=discord.Color.greyple()
+        )
+
+        parts = ["⚠️ **Conexión perdida**"]
+        if self.currentSong:
+            parts.append(
+                f"Reproduciendo: **{self.currentSong['title']}** "
+                f"en {int(self.interruptedAtSeconds)}s"
+            )
+        if self.queue:
+            parts.append(f"**{len(self.queue)}** canciones en cola")
+            lines = []
+            for song in self.queue[:5]:
+                durStr = song.get("duration_string", "")
+                durSuffix = f" `[{durStr}]`" if durStr else ""
+                lines.append(f"• {song['title']}{durSuffix}")
+            if len(self.queue) > 5:
+                lines.append(f"... y {len(self.queue) - 5} más.")
+            embed.add_field(name="📋 Cola", value="\n".join(lines), inline=False)
+        embed.description = "\n".join(parts)
+
+        view = InterruptedView(self)
+        try:
+            await self.controlMessage.edit(embed=embed, view=view)
+        except Exception as e:
+            playLogger.warning("[PLAYER] Failed to show interrupted state: %s", e)
 
     async def showIdleDisconnect(self):
         """Turn the live control panel into a dead "disconnected" state.
@@ -2688,6 +2723,133 @@ class PlayerControlView(discord.ui.View):
             self.player.guildId,
             channel_id=interaction.channel_id,
         )
+
+
+class InterruptedView(discord.ui.View):
+    """Minimal view shown when playback is interrupted mid-stream.
+
+    No ghost buttons — just a single ▶️ Reconectar button that resumes the
+    full GuildPlayer (current song at saved position + full queue).
+    """
+
+    def __init__(self, player):
+        super().__init__(timeout=None)
+        self.player = player
+
+    @discord.ui.button(
+        label="▶️ Reconectar",
+        style=discord.ButtonStyle.success,
+        custom_id="btn_int_reconnect",
+        row=0,
+    )
+    async def reconnectButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
+        """Reconnect to voice and resume playback from interruption point."""
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+
+        user = getattr(interaction, "user", None)
+        voice = getattr(user, "voice", None)
+        voice_channel = getattr(voice, "channel", None) if voice else None
+
+        if voice_channel is None:
+            guild = (
+                self.player.bot.get_guild(self.player.guildId)
+                if self.player.bot is not None
+                else None
+            )
+            if guild is not None:
+                for vc in guild.voice_channels:
+                    if len(vc.members) > 0:
+                        voice_channel = vc
+                        break
+
+        if voice_channel is None:
+            try:
+                await interaction.followup.send(
+                    "❌ No hay nadie en un canal de voz.", ephemeral=True
+                )
+            except Exception:
+                pass
+            return
+
+        # Cancel any still-running auto-resume so we don't race.
+        task = getattr(self.player, "_autoResumeTask", None)
+        if task is not None and not task.done():
+            task.cancel()
+
+        try:
+            vc = await voice_channel.connect(reconnect=True)
+        except Exception as exc:
+            playLogger.warning("[INTERRUPTED-VIEW] reconnect failed: %s", exc)
+            # Try force-disconnect stale client and retry once
+            if self.player.bot is not None:
+                guild = self.player.bot.get_guild(self.player.guildId)
+                if guild is not None and guild.voice_client is not None:
+                    try:
+                        await guild.voice_client.disconnect(force=True)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
+            try:
+                vc = await voice_channel.connect(reconnect=True)
+            except Exception as exc2:
+                try:
+                    await interaction.followup.send(
+                        f"❌ No pude reconectar: {exc2}", ephemeral=True
+                    )
+                except Exception:
+                    pass
+                return
+
+        ok = await self.player.resumeFromInterruption(vc)
+        if ok:
+            try:
+                await interaction.followup.send("✅ Reconectado.", ephemeral=True)
+            except Exception:
+                pass
+        else:
+            try:
+                await interaction.followup.send(
+                    "❌ No se pudo reanudar la reproducción.", ephemeral=True
+                )
+            except Exception:
+                pass
+
+    @discord.ui.button(
+        label="⏹️ Stop & Clear",
+        style=discord.ButtonStyle.danger,
+        custom_id="btn_int_stop",
+        row=0,
+    )
+    async def stopButton(
+        self, button: discord.ui.Button, interaction: discord.Interaction
+    ):
+        """Stop playback and clear the queue without reconnecting."""
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            pass
+        self.player.currentSong = None
+        self.player.queue.clear()
+        self.player.interrupted = False
+        self.player.interruptedAtSeconds = 0.0
+        embed = discord.Embed(
+            title="🎵 Reproductor de Música", color=discord.Color.greyple()
+        )
+        embed.description = "⏹️ Cola vaciada."
+        try:
+            if self.player.controlMessage:
+                await self.player.controlMessage.edit(embed=embed, view=None)
+        except Exception:
+            pass
 
 
 class DisconnectedControlView(discord.ui.View):

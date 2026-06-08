@@ -507,7 +507,13 @@ class TranscriberSink(voice_recv.AudioSink):
         if guild_id is not None:
             try:
                 if _channel_has_others(guild_id):
-                    adb.log_activity(user_id, guild_id, "voice_vad", duration_secs=secs)
+                    adb.log_activity(
+                        user_id,
+                        guild_id,
+                        "voice_vad",
+                        duration_secs=secs,
+                        quality_score=0.05,
+                    )
             except Exception as e:
                 log.warning(f"[MMR] failed to log voice activity for {user_id}: {e}")
 
@@ -1453,14 +1459,28 @@ class WakeWordSink(voice_recv.AudioSink):
             self._wake_triggerer_id = None
             return
         secs = len(pcm) / (16000 * 2)
+        vosk_result = capture.get("vosk_result")
         guild_id = self.user_guilds.get(user_id)
         if guild_id is not None:
             try:
                 if _channel_has_others(guild_id):
-                    adb.log_activity(user_id, guild_id, "voice_vad", duration_secs=secs)
+                    has_vosk = vosk_result is not None and bool(
+                        vosk_result.get("text")
+                        or any(
+                            alt.get("text")
+                            for alt in vosk_result.get("alternatives", [])
+                        )
+                    )
+                    q = 1.0 if has_vosk else 0.05
+                    adb.log_activity(
+                        user_id,
+                        guild_id,
+                        "voice_vad",
+                        duration_secs=secs,
+                        quality_score=q,
+                    )
             except Exception as e:
                 log.warning(f"[MMR] failed to log voice activity for {user_id}: {e}")
-        vosk_result = capture.get("vosk_result")
         prebuffer_len = capture.get("prebuffer_len", 0)
         wake_confirm_pcm = capture.get("wake_confirm_pcm")
         with self._active_lock:
