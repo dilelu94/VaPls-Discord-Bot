@@ -1545,6 +1545,11 @@ async def ranking(ctx):
         rating = round(row["rating"], 1)
         prefix = medals[i] if i < 3 else f"**{i + 1}.**"
         member = ctx.guild.get_member(uid)
+        if member is None:
+            try:
+                member = await ctx.guild.fetch_member(uid)
+            except Exception:
+                member = None
         name = (
             member.display_name
             if member
