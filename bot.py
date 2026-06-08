@@ -36,7 +36,6 @@ import errorHandler
 import geminiKeys
 import decifrarVoting
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
-import webhookLogger
 import huggingfaceImage
 # import geminiImage
 
@@ -56,10 +55,6 @@ log = logging.getLogger("bot")
 import posthog_client
 
 posthog_client.init_observability(service_name="vapls-main-bot")
-
-# Forward logs to a Discord thread via webhook (LOG_WEBHOOK_URL env var).
-# Disabled when the env var is empty — silent no-op.
-_webhook_log_handler = webhookLogger.install_from_env("bot")
 
 if not discord.opus.is_loaded():
     for lib in ["libopus.so.0", "libopus.so", "opus"]:
@@ -402,8 +397,6 @@ async def on_ready():
     """
     global _api_runner
     log.info(f"Bot online as {bot.user}")
-    if _webhook_log_handler is not None:
-        _webhook_log_handler.start(asyncio.get_running_loop())
     if _api_runner is None:
         try:
             _api_runner = await startApiServer(bot)

@@ -48,7 +48,6 @@ try:
     from users import USERS as _USERS
 except Exception:
     _USERS = {}
-import webhookLogger  # parent dir; wired after basicConfig() below
 import activity_db as adb
 
 
@@ -221,10 +220,6 @@ import posthog_client
 
 posthog_client.init_observability(service_name="vapls-userbot")
 
-# Webhook forwarding (LOG_WEBHOOK_URL). Installed *after* basicConfig so the
-# stdout StreamHandler still gets added — otherwise basicConfig sees our
-# handler already attached and skips its own setup, killing journalctl logs.
-_webhook_log_handler = webhookLogger.install_from_env("userbot")
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 logging.getLogger("discord.voice_client").setLevel(logging.INFO)
@@ -2408,8 +2403,6 @@ async def on_ready():
             "will not be able to identify the VaPls bot's slash commands; "
             "indio playback will not work until this is configured.",
         )
-    if _webhook_log_handler is not None:
-        _webhook_log_handler.start(asyncio.get_running_loop())
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):

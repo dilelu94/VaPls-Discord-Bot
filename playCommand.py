@@ -921,6 +921,7 @@ class GuildPlayer:
         self.downloadingIds = set()
         self.preDownloadTask = None
         self.activeDownloadProc = None
+        self._predlProc = None
         self.initialCtx = None
         # Playback-position tracking + interruption state. Used so the bot can
         # resume the current song from where it was after an involuntary
@@ -1002,6 +1003,7 @@ class GuildPlayer:
         if self.autodj_predownload_proc is not None:
             try:
                 self.autodj_predownload_proc.kill()
+                await asyncio.wait_for(self.autodj_predownload_proc.wait(), timeout=5)
             except Exception:
                 pass
             self.autodj_predownload_proc = None
@@ -1366,6 +1368,7 @@ class GuildPlayer:
         if self.autodj_predownload_proc is not None:
             try:
                 self.autodj_predownload_proc.kill()
+                await asyncio.wait_for(self.autodj_predownload_proc.wait(), timeout=5)
             except Exception:
                 pass
             self.autodj_predownload_proc = None
@@ -1486,6 +1489,7 @@ class GuildPlayer:
             seek,
         )
         await self.startPlayingCurrent(seek_seconds=seek)
+        self.startPreDownloading()
         return True
 
     def _scheduleAutoResume(self, channel_id: int) -> None:
@@ -1716,6 +1720,7 @@ class GuildPlayer:
         if self.activeDownloadProc:
             try:
                 self.activeDownloadProc.kill()
+                await asyncio.wait_for(self.activeDownloadProc.wait(), timeout=5)
             except Exception:
                 pass
         self.queue.clear()
@@ -2285,7 +2290,9 @@ class GuildPlayer:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
+                self._predlProc = proc
                 stdout, stderr = await proc.communicate()
+                self._predlProc = None
                 if proc.returncode == 0:
                     duration = time.time() - startTime
                     fileSize = (
@@ -2309,6 +2316,7 @@ class GuildPlayer:
                     f"[PRE-DOWNLOAD ERROR] Exception background downloading '{videoTitle}': {e}"
                 )
             finally:
+                self._predlProc = None
                 self.downloadingIds.discard(videoId)
 
             # Sleep slightly between downloads to avoid high CPU load/network spam
@@ -2353,7 +2361,7 @@ class GuildPlayer:
         """
         if self.vc and (self.vc.is_playing() or self.vc.is_paused()):
             self.vc.stop()
-        else:
+        elif self.currentSong:
             await self.onSongFinished(None)
 
     async def playPrevious(self):
@@ -2370,7 +2378,7 @@ class GuildPlayer:
         self.isPrevious = True
         if self.vc and (self.vc.is_playing() or self.vc.is_paused()):
             self.vc.stop()
-        else:
+        elif self.currentSong:
             await self.onSongFinished(None)
 
     async def stopPlayback(self):
@@ -2971,6 +2979,16 @@ def clearGuildPlayer(guildId: int):
             playLogger.info(
                 f"[CLEANUP] Cancelled active background pre-download task for guild {guildId}"
             )
+        # Kill any still-running download subprocess
+        for proc in (
+            getattr(player, "_predlProc", None),
+            getattr(player, "activeDownloadProc", None),
+        ):
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
         # Delete all files in queue and currentSong
         downloadsDir = os.path.join(
