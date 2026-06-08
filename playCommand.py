@@ -955,6 +955,9 @@ class GuildPlayer:
         self.preDownloadTask = None
         self.activeDownloadProc = None
         self._predlProc = None
+        self._ffmpegGen = (
+            0  # incremented each startPlayingCurrent; stale-callback guard
+        )
         self.initialCtx = None
         # Playback-position tracking + interruption state. Used so the bot can
         # resume the current song from where it was after an involuntary
@@ -2078,11 +2081,13 @@ class GuildPlayer:
                 audioSource = discord.FFmpegOpusAudio(filepath)
 
             def afterCallback(error):
+                gen = self._ffmpegGen
                 asyncio.run_coroutine_threadsafe(
-                    self.onSongFinished(error), self.bot.loop
+                    self.onSongFinished(error, gen=gen), self.bot.loop
                 )
 
             self.vc.play(audioSource, after=afterCallback)
+            self._ffmpegGen += 1
             self.isStartingPlayback = False
             # Reset elapsed-time tracking. When resuming from a seek the
             # virtual start is shifted back so ``_currentElapsedSeconds``
@@ -2153,11 +2158,14 @@ class GuildPlayer:
                 pass
             self.bot.loop.create_task(self.skipSong())
 
-    async def onSongFinished(self, error):
+    async def onSongFinished(self, error, gen=None):
         """Handle playback completion and advance the queue.
 
         Args:
             error: Playback error passed by Discord (if any).
+            gen: FFmpeg generation counter; if stale (different from
+                ``self._ffmpegGen``) the callback is from a previous FFmpeg
+                process and is ignored.
 
         Side Effects:
             Deletes temporary files, mutates queue/history, updates UI.
@@ -2165,6 +2173,8 @@ class GuildPlayer:
         Async:
             This function is a coroutine and must be awaited.
         """
+        if gen is not None and gen != self._ffmpegGen:
+            return
         if error:
             playLogger.error(
                 "[PLAYBACK ERROR] Playback finished with error for '%s': %s",
@@ -2458,6 +2468,7 @@ class GuildPlayer:
         """
         self._autodj_cancel_grace()
         self.autodj_pending_song = None
+        self.autodj_active = False
         self.isStopping = True
         self.queue.clear()
         self.isDownloading = False

@@ -80,6 +80,7 @@ def init_db(db_path: str | None = None) -> None:
     _conn.execute("PRAGMA journal_mode=WAL")
     _conn.execute("PRAGMA busy_timeout=5000")
     _schema()
+    _purge_old()
 
 
 def _ensure_dir(path: str) -> None:
@@ -390,6 +391,13 @@ def log_activity(
     )
     _conn.commit()
     return delta
+
+
+def _purge_old() -> None:
+    cutoff = _now() - 31536000
+    for t in ("activity_log", "raw_activity_log"):
+        _conn.execute(f"DELETE FROM {t} WHERE created_at < ?", (cutoff,))
+    _conn.commit()
 
 
 # ---- Raw activity logging (unfiltered, before quality mods) -----------------

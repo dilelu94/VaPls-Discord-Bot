@@ -325,6 +325,30 @@ async def _classify_and_log_message(
                 )
             )
 
+    # Thread/forum post bonus (on top of whatever activity the message is)
+    if channel_type in ("public_thread", "private_thread"):
+        parent = getattr(message.channel, "parent", None)
+        if parent and getattr(parent, "type", None) is discord.ChannelType.forum:
+            tasks.append(
+                _log_activity(
+                    user_id,
+                    guild_id,
+                    "forum_post",
+                    channel_type=channel_type,
+                    display_name=display_name,
+                )
+            )
+        else:
+            tasks.append(
+                _log_activity(
+                    user_id,
+                    guild_id,
+                    "thread_post",
+                    channel_type=channel_type,
+                    display_name=display_name,
+                )
+            )
+
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -523,6 +547,7 @@ async def on_voice_state_update(member, before, after):
                 _player = guildPlayers.get(before.channel.guild.id)
                 if _player is not None and _player.currentSong is not None:
                     _player.mark_interrupted()
+                    _player._scheduleAutoResume(before.channel.id)
             except Exception:
                 log.exception("failed to mark player as interrupted")
         return
@@ -533,13 +558,9 @@ async def on_voice_state_update(member, before, after):
     guild_id = (after.channel or before.channel).guild.id
 
     n = member.display_name
-    # ---- Voice join/leave with occupancy check ----
+    # ---- Voice join/leave (track timestamps but DON'T log voice_vad — userbot handles it via VAD+Vosk) ----
     if before.channel is None and after.channel is not None:
         _voice_joins.setdefault(guild_id, {})[member.id] = time.time()
-        if _has_others(after.channel):
-            asyncio.create_task(
-                _log_activity(member.id, guild_id, "voice_vad", display_name=n)
-            )
         # Start watch tracking if someone is streaming
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
@@ -547,17 +568,6 @@ async def on_voice_state_update(member, before, after):
     elif before.channel is not None and after.channel is None:
         guild_joins = _voice_joins.get(guild_id, {})
         join_time = guild_joins.pop(member.id, None)
-        duration = (time.time() - join_time) if join_time else 0
-        if join_time and _has_others(before.channel):
-            asyncio.create_task(
-                _log_activity(
-                    member.id,
-                    guild_id,
-                    "voice_vad",
-                    duration_secs=round(duration, 1),
-                    display_name=n,
-                )
-            )
         _finalize_watch(member.id, guild_id)
 
     elif (
@@ -567,22 +577,7 @@ async def on_voice_state_update(member, before, after):
     ):
         guild_joins = _voice_joins.setdefault(guild_id, {})
         join_time = guild_joins.get(member.id)
-        if join_time and _has_others(before.channel):
-            duration = time.time() - join_time
-            asyncio.create_task(
-                _log_activity(
-                    member.id,
-                    guild_id,
-                    "voice_vad",
-                    duration_secs=round(duration, 1),
-                    display_name=n,
-                )
-            )
         guild_joins[member.id] = time.time()
-        if _has_others(after.channel):
-            asyncio.create_task(
-                _log_activity(member.id, guild_id, "voice_vad", display_name=n)
-            )
         _finalize_watch(member.id, guild_id)
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
@@ -788,12 +783,17 @@ async def on_thread_create(thread):
         owner_id = getattr(thread, "owner_id", None)
         if owner_id is None:
             return
-        # New thread creation
+        # Forum thread vs regular thread
+        parent = getattr(thread, "parent", None)
+        if parent and getattr(parent, "type", None) is discord.ChannelType.forum:
+            act_type = "forum_create"
+        else:
+            act_type = "thread_create"
         asyncio.create_task(
             _log_activity(
                 owner_id,
                 guild_id,
-                "thread_create",
+                act_type,
                 channel_type="thread",
             )
         )
