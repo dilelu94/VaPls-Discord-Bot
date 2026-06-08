@@ -188,8 +188,10 @@ _ADMIN_HTML = """<!DOCTYPE html><html lang="es"><head>
 body{background:#1a1a2e;color:#eee;font-family:sans-serif;margin:20px}
 h1{color:#e94560}
 table{width:100%;border-collapse:collapse;margin:10px 0}
-td,th{border:1px solid #333;padding:8px;text-align:left}
+td,th{border:1px solid #333;padding:8px;text-align:left;white-space:nowrap}
 th{background:#16213e}
+tr:nth-child(even) td{background:#0f3460}
+td:first-child,td:nth-child(2),td:nth-child(4),td:nth-child(5),td:nth-child(6){font-family:monospace;text-align:right}
 input{background:#0f3460;color:#fff;border:1px solid #e94560;padding:4px;border-radius:3px}
 button{background:#e94560;color:#fff;border:none;padding:6px 12px;border-radius:3px;cursor:pointer}
 button:hover{background:#c73650}
@@ -298,14 +300,23 @@ function renderActivity(el) {
     var row = allData.activity[i];
     if (_activityFilter && row.activity_type !== _activityFilter) continue;
     var d = new Date((row.created_at || 0) * 1000).toLocaleString();
-    var uname = row.user_name || row.user_id;
-    h += '<tr><td title=\"Registro #' + row.id + ' en la base de datos. Sirve para referenciar esta actividad especifica.\">' + row.id + '</td>'
-      + '<td title=\"Nombre del usuario: ' + uname + '.\">' + uname + '</td>'
-      + '<td title=\"Tipo: ' + row.activity_type + '. El peso de este tipo se configura en la pestana Weights.\">' + row.activity_type + '</td>'
-      + '<td title=\"Duracion: ' + (row.duration_secs || 0) + ' segundos. Cuanto mas dura la actividad, mas impacto tiene en el rating.\">' + (row.duration_secs || '-') + '</td>'
-      + '<td title=\"Calidad: ' + (row.quality_score || 0) + '. Multiplica el impacto base de la actividad.\">' + row.quality_score + '</td>'
-      + '<td title=\"Delta de rating: ' + (row.rating_delta || 0) + ' puntos Glicko-1.\">' + (row.rating_delta || 0) + '</td>'
-      + '<td title=\"Fecha: ' + d + '\">' + d + '</td></tr>';
+    var uname = row.user_name || '#' + String(row.user_id).slice(-4);
+    var q = row.quality_score;
+    if (q === null || q === undefined) q = '-';
+    else q = Number(q).toFixed(2);
+    var delta = row.rating_delta;
+    if (delta === null || delta === undefined) delta = '-';
+    else delta = (delta > 0 ? '+' : '') + Number(delta).toFixed(2);
+    var dur = row.duration_secs;
+    if (dur === null || dur === undefined || dur === 0) dur = '-';
+    else dur = Number(dur).toFixed(1) + 's';
+    h += '<tr><td title=\"Registro #' + row.id + '\">' + row.id + '</td>'
+      + '<td title=\"' + uname + '\">' + uname + '</td>'
+      + '<td title=\"' + row.activity_type + '\">' + row.activity_type + '</td>'
+      + '<td title=\"' + (row.duration_secs || 0) + 's\">' + dur + '</td>'
+      + '<td title=\"' + (row.quality_score || 0) + '\">' + q + '</td>'
+      + '<td title=\"' + (row.rating_delta || 0) + '\">' + delta + '</td>'
+      + '<td title=\"' + d + '\">' + d + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
