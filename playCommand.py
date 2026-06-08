@@ -1543,6 +1543,15 @@ class GuildPlayer:
                         channel_id,
                     )
                     return
+                # Force-disconnect any stale voice client Discord still has
+                # registered internally so channel.connect() doesn't bail
+                # with "Already connected to a voice channel."
+                if guild is not None and guild.voice_client is not None:
+                    try:
+                        await guild.voice_client.disconnect(force=True)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
                 try:
                     vc = await channel.connect(reconnect=True)
                 except Exception as exc:
