@@ -587,12 +587,27 @@ async def on_voice_state_update(member, before, after):
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
 
-    # ---- Camera tracking ----
+    # ---- Camera tracking (quality scales with occupancy + other cameras) ----
     try:
         if not before.self_video and after.self_video and after.channel:
             if _has_others(after.channel):
+                others = [
+                    m
+                    for m in after.channel.members
+                    if not m.bot
+                    and m.id != member.id
+                    and m.id != config.USERBOT_USER_ID
+                ]
+                cam_count = sum(1 for m in others if m.voice and m.voice.self_video)
+                q = min(1.0, 0.3 + 0.15 * len(others) + 0.2 * cam_count)
                 asyncio.create_task(
-                    _log_activity(member.id, guild_id, "camera", display_name=n)
+                    _log_activity(
+                        member.id,
+                        guild_id,
+                        "camera",
+                        quality_score=round(q, 2),
+                        display_name=n,
+                    )
                 )
     except Exception:
         pass

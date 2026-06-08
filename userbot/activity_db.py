@@ -118,6 +118,17 @@ def _schema() -> None:
             created_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS raw_activity_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER NOT NULL,
+            activity_type TEXT NOT NULL,
+            channel_type TEXT DEFAULT '',
+            duration_secs REAL DEFAULT 0,
+            metadata TEXT DEFAULT '{}',
+            created_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS daily_stats (
             user_id INTEGER NOT NULL,
             guild_id INTEGER NOT NULL,
@@ -381,6 +392,38 @@ def log_activity(
     return delta
 
 
+# ---- Raw activity logging (unfiltered, before quality mods) -----------------
+
+
+def log_raw_activity(
+    user_id: int,
+    guild_id: int,
+    activity_type: str,
+    *,
+    channel_type: str = "",
+    duration_secs: float = 0.0,
+    metadata: dict | None = None,
+) -> None:
+    if _conn is None:
+        return
+    _conn.execute(
+        """INSERT INTO raw_activity_log
+           (user_id, guild_id, activity_type, channel_type,
+            duration_secs, metadata, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            user_id,
+            guild_id,
+            activity_type,
+            channel_type,
+            duration_secs,
+            json.dumps(metadata or {}),
+            _now(),
+        ),
+    )
+    _conn.commit()
+
+
 # ---- Queries ---------------------------------------------------------------
 
 
@@ -453,6 +496,12 @@ def get_all_data() -> dict:
             "SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 500"
         ).fetchall()
     ]
+    raw = [
+        dict(row)
+        for row in _conn.execute(
+            "SELECT * FROM raw_activity_log ORDER BY created_at DESC LIMIT 1000"
+        ).fetchall()
+    ]
     daily = [
         dict(row)
         for row in _conn.execute(
@@ -466,7 +515,7 @@ def get_all_data() -> dict:
             a["metadata"] = json.loads(a["metadata"])
         except (json.JSONDecodeError, TypeError):
             a["metadata"] = {}
-    return {"mmr": mmr, "activity": activity, "daily": daily, "config": cfg}
+    return {"mmr": mmr, "activity": activity, "raw": raw, "daily": daily, "config": cfg}
 
 
 def get_premium_users() -> list[int]:

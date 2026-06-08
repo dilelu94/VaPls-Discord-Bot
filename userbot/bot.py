@@ -3798,6 +3798,15 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
     metadata = data.get("metadata")
     is_premium = bool(data.get("is_premium", False))
     display_name = str(data.get("display_name", ""))
+    # Log raw (unfiltered) activity before any quality modifications
+    adb.log_raw_activity(
+        user_id,
+        guild_id,
+        activity_type,
+        channel_type=channel_type,
+        duration_secs=duration_secs,
+        metadata=metadata,
+    )
     # Skip activities from the userbot itself (self-bot, not flagged by Discord)
     if user_id == 519594605520486428:
         return web.json_response({"ok": True, "delta": 0.0, "skipped": "userbot"})
@@ -3923,11 +3932,15 @@ button:hover{background:#c73650}
   <a href="#" onclick="showTab('config')">Config</a>
   <a href="#" onclick="showTab('mmr')">MMR</a>
   <a href="#" onclick="showTab('activity')">Activity</a>
+  <a href="#" onclick="showTab('breakdown')">Breakdown</a>
+  <a href="#" onclick="showTab('raw')">Raw</a>
 </div>
 <div id="tab-weights" class="section"></div>
 <div id="tab-config" class="section"></div>
 <div id="tab-mmr" class="section"></div>
 <div id="tab-activity" class="section"></div>
+<div id="tab-breakdown" class="section"></div>
+<div id="tab-raw" class="section"></div>
 <div id="msg" class="msg"></div>
 <script>
 let allData = {};
@@ -3947,6 +3960,8 @@ function renderTab(name) {
   else if (name === 'config') renderConfig(el);
   else if (name === 'mmr') renderMmr(el);
   else if (name === 'activity') renderActivity(el);
+  else if (name === 'breakdown') renderBreakdown(el);
+  else if (name === 'raw') renderRaw(el);
 }
 function renderWeights(el) {
   let h = '<h2>Activity Weights</h2><table><tr><th>Activity</th><th>Weight</th><th>Action</th></tr>';
@@ -3982,6 +3997,72 @@ function renderActivity(el) {
   for (const row of (allData.activity || [])) {
     const d = new Date((row.created_at || 0) * 1000).toLocaleString();
     h += '<tr><td>' + row.id + '</td><td>' + row.user_id + '</td><td>' + row.activity_type + '</td><td>' + (row.duration_secs || '-') + '</td><td>' + row.quality_score + '</td><td>' + (row.rating_delta || 0) + '</td><td>' + d + '</td></tr>';
+  }
+  h += '</table>';
+  el.innerHTML = h;
+}
+function renderBreakdown(el) {
+  const acts = allData.activity || [];
+  if (!acts.length) { el.innerHTML = '<h2>User Breakdown</h2><p>No activity data.</p>'; return; }
+  const users = {};
+  for (const r of acts) {
+    const uid = r.user_id;
+    if (!users[uid]) users[uid] = { user_id: uid, display_name: r.display_name || '', total_delta: 0, count: 0, types: {} };
+    const u = users[uid];
+    u.count++;
+    u.total_delta += r.rating_delta || 0;
+    const t = r.activity_type;
+    if (!u.types[t]) u.types[t] = { count: 0, total_delta: 0, total_duration: 0 };
+    u.types[t].count++;
+    u.types[t].total_delta += r.rating_delta || 0;
+    u.types[t].total_duration += r.duration_secs || 0;
+  }
+  const userList = Object.values(users).sort((a, b) => b.total_delta - a.total_delta);
+  const selId = 'bd-user';
+  let h = '<h2>User Breakdown</h2>';
+  h += '<label for="' + selId + '">Select user:</label>';
+  h += '<select id="' + selId + '" onchange="renderBreakdownUser()">';
+  h += '<option value="">-- select --</option>';
+  for (const u of userList) {
+    h += '<option value="' + u.user_id + '">' + (u.display_name || '#' + String(u.user_id).slice(-4)) + ' (mmr ' + u.total_delta.toFixed(1) + ')</option>';
+  }
+  h += '</select>';
+  h += '<div id="bd-detail"></div>';
+  el.innerHTML = h;
+}
+function renderBreakdownUser() {
+  const sel = document.getElementById('bd-user');
+  const uid = parseInt(sel.value);
+  if (!uid) return;
+  const acts = (allData.activity || []).filter(r => r.user_id === uid);
+  const types = {};
+  for (const r of acts) {
+    const t = r.activity_type;
+    if (!types[t]) types[t] = { count: 0, total_delta: 0, total_duration: 0, total_quality: 0 };
+    types[t].count++;
+    types[t].total_delta += r.rating_delta || 0;
+    types[t].total_duration += r.duration_secs || 0;
+    types[t].total_quality += r.quality_score || 0;
+  }
+  const name = acts[0] && acts[0].display_name ? acts[0].display_name : '#' + String(uid).slice(-4);
+  let h = '<h3>' + name + ' (' + uid + ')</h3>';
+  h += '<p>Total activities: ' + acts.length + ' | Net MMR: <strong>' + acts.reduce((s, r) => s + (r.rating_delta || 0), 0).toFixed(1) + '</strong></p>';
+  h += '<table><tr><th>Type</th><th>Count</th><th>Total Delta</th><th>Avg Quality</th><th>Total Duration</th><th>Last</th></tr>';
+  const sorted = Object.entries(types).sort((a, b) => b[1].total_delta - a[1].total_delta);
+  for (const [type, d] of sorted) {
+    const last = acts.filter(r => r.activity_type === type).reduce((latest, r) => r.created_at > latest ? r.created_at : latest, 0);
+    h += '<tr><td>' + type + '</td><td>' + d.count + '</td><td>' + (d.total_delta >= 0 ? '+' : '') + d.total_delta.toFixed(2) + '</td><td>' + (d.total_quality / d.count).toFixed(2) + '</td><td>' + d.total_duration.toFixed(1) + 's</td><td>' + new Date(last * 1000).toLocaleString() + '</td></tr>';
+  }
+  h += '</table>';
+  document.getElementById('bd-detail').innerHTML = h;
+}
+function renderRaw(el) {
+  const rows = allData.raw || [];
+  if (!rows.length) { el.innerHTML = '<h2>Raw Activity Log</h2><p>No raw data yet.</p>'; return; }
+  let h = '<h2>Raw Activity Log <span style="font-size:14px;color:#aaa">(unfiltered, before MMR mods)</span></h2>';
+  h += '<table><tr><th>ID</th><th>User</th><th>Type</th><th>Duration</th><th>Date</th></tr>';
+  for (const r of rows) {
+    h += '<tr><td>' + r.id + '</td><td>' + r.user_id + '</td><td>' + r.activity_type + '</td><td>' + (r.duration_secs ? r.duration_secs.toFixed(1) + 's' : '-') + '</td><td>' + new Date((r.created_at || 0) * 1000).toLocaleString() + '</td></tr>';
   }
   h += '</table>';
   el.innerHTML = h;
