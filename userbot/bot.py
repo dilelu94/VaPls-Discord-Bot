@@ -75,6 +75,7 @@ except ImportError:
     davey = None
 
 _dave_stats = {"total": 0, "dave_ok": 0, "dave_skip": 0, "dave_fail": 0}
+_last_voice_ts: dict[int, float] = {}
 
 # Opus 20ms mono silence frame — used as fallback when DAVE decryption fails so
 # opus_decode produces silence instead of crashing the PacketRouter thread.
@@ -471,6 +472,7 @@ class TranscriberSink(voice_recv.AudioSink):
             self.buffers[user_id].extend(data_16k)
             self.last_voice_ts[user_id] = now
             self.had_voice[user_id] = True
+            _last_voice_ts[user_id] = now
 
             # Force flush if a single utterance grew past the safety cap.
             secs = len(self.buffers[user_id]) / (16000 * 2)
@@ -1211,6 +1213,7 @@ class WakeWordSink(voice_recv.AudioSink):
             is_voice = rms >= TranscriberSink.SILENCE_RMS_THRESHOLD
             if is_voice:
                 self.last_voice_ts[user_id] = now
+                _last_voice_ts[user_id] = now
             else:
                 # If the speaker has been silent long enough, this is a NEW
                 # utterance boundary. Drop prebuffer + reset VOSK so the wake
@@ -3798,6 +3801,11 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
     # Skip activities from the userbot itself (self-bot, not flagged by Discord)
     if user_id == 519594605520486428:
         return web.json_response({"ok": True, "delta": 0.0, "skipped": "userbot"})
+    # Stream without recent voice → don't count (silent screen-share)
+    if activity_type in ("stream", "camera"):
+        last_voice = _last_voice_ts.get(user_id)
+        if last_voice is None or time.time() - last_voice > 300:  # 5 min
+            quality_score = 0.0
     try:
         delta = adb.log_activity(
             user_id,
