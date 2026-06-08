@@ -2495,6 +2495,26 @@ class GuildPlayer:
         if not self.controlMessage:
             return
 
+        # Don't show interrupted state if bot is actually connected
+        try:
+            if self.vc and self.vc.is_connected():
+                return
+        except Exception:
+            pass
+
+        if not self.currentSong and not self.queue:
+            embed = discord.Embed(
+                title="🎵 Reproductor de Música", color=discord.Color.greyple()
+            )
+            embed.description = (
+                "⚠️ Conexión perdida.\nNo hay nada en cola para reanudar."
+            )
+            try:
+                await self.controlMessage.edit(embed=embed, view=None)
+            except Exception as e:
+                playLogger.warning("[PLAYER] Failed to show interrupted state: %s", e)
+            return
+
         embed = discord.Embed(
             title="🎵 Reproductor de Música", color=discord.Color.greyple()
         )
