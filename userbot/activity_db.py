@@ -32,9 +32,9 @@ DEFAULT_WEIGHTS = {
     "forum_create": 8.0,
     "reaction": 0.05,
     "slash_command": 0.05,
-    "event_create": 6.0,
+    "event_create": 0,
     "event_join": 1.0,
-    "channel_create": 5.0,
+    "channel_create": 0,
     "poll_create": 3.0,
     "poll_vote": 0.15,
 }
@@ -154,6 +154,7 @@ def _schema() -> None:
             ON daily_stats(date);
     """)
     _migrate_v1()
+    _migrate_v2()
 
 
 def _migrate_v1() -> None:
@@ -171,6 +172,14 @@ def _migrate_v1() -> None:
     for k, v in DEFAULT_CFG.items():
         _conn.execute(
             "INSERT OR IGNORE INTO config (key, value) VALUES (?, ?)", (k, str(v))
+        )
+    _conn.commit()
+
+
+def _migrate_v2() -> None:
+    for k in ("weight_event_create", "weight_channel_create"):
+        _conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES (?, '0')", (k,)
         )
     _conn.commit()
 
