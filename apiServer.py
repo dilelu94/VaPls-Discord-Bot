@@ -287,10 +287,10 @@ function renderActivity(el) {
   for (var j = 0; j < types.length; j++) {
     var t = types[j];
     var active = _activityFilter === t ? ' style="background:#e94560;color:#fff"' : '';
-    h += '<span' + active + ' onclick="filterActivity(\'' + t + '\')" title=\"Filtrar solo ' + t + '. Clic de nuevo para ver todos.\" style="display:inline-block;margin:4px 6px 4px 0;padding:4px 10px;background:#0f3460;border-radius:4px;cursor:pointer;border:1px solid #e94560">' + t + ': ' + counts[t] + '</span>';
+    h += '<span' + active + ' onclick="filterActivity(\\'' + t + '\\')" title=\"Filtrar solo ' + t + '. Clic de nuevo para ver todos.\" style="display:inline-block;margin:4px 6px 4px 0;padding:4px 10px;background:#0f3460;border-radius:4px;cursor:pointer;border:1px solid #e94560">' + t + ': ' + counts[t] + '</span>';
   }
   if (_activityFilter) {
-    h += '<span onclick="filterActivity(\'\')" title=\"Quitar filtro y mostrar todas las actividades\" style="display:inline-block;margin:4px 6px 4px 0;padding:4px 10px;background:#333;border-radius:4px;cursor:pointer;border:1px solid #888">✕ Quitar filtro</span>';
+    h += '<span onclick="filterActivity(\\'\\')" title=\"Quitar filtro y mostrar todas las actividades\" style="display:inline-block;margin:4px 6px 4px 0;padding:4px 10px;background:#333;border-radius:4px;cursor:pointer;border:1px solid #888">✕ Quitar filtro</span>';
   }
   h += '</div>';
   h += '<table><tr><th title=\"ID autoincremental del registro en la base de datos. Identifica univocamente cada actividad.\">ID</th><th title=\"Nombre del usuario que realizo la actividad. Coincide con el User ID de la pestana MMR.\">User</th><th title=\"Tipo de actividad: voice_vad (actividad de voz), etc. Cada tipo tiene su propio peso configurable en la pestana Weights.\">Type</th><th title=\"Duracion de la actividad en segundos. '-' significa que la actividad no tiene duracion medible.\">Duration</th><th title=\"Multiplicador de calidad (0.0 a 1.0 tipicamente). Ajusta el impacto de la actividad: 1.0 = calidad maxima, 0.5 = mitad del impacto.\">Quality</th><th title=\"Cambio neto en el rating Glicko-1 del usuario que resulto de esta actividad. Positivo = subio, Negativo = bajo, 0 = sin cambio.\">Delta</th><th title=\"Fecha y hora en que se registro la actividad en el servidor.\">Date</th></tr>';
