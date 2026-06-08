@@ -741,6 +741,39 @@ class AutoDJSuggestionView(discord.ui.View):
         await self.player.autodj_deactivate(reason="button")
 
 
+class AutodjHistoryView(discord.ui.View):
+    """View for the Auto-DJ history message.
+
+    A single toggle button that swaps between showing just the last song
+    and the full list of songs Auto-DJ has queued this session.
+    """
+
+    def __init__(self, player: "GuildPlayer"):
+        super().__init__(timeout=None)
+        self.player = player
+
+    @discord.ui.button(
+        label="📋 Historial",
+        style=discord.ButtonStyle.secondary,
+        custom_id="autodj_history_toggle",
+    )
+    async def toggle(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.defer()
+        self.player.autodj_history_showing_all = (
+            not self.player.autodj_history_showing_all
+        )
+        embed = self.player._autodj_history_embed()
+        button.label = (
+            "🙈 Cerrar historial"
+            if self.player.autodj_history_showing_all
+            else "📋 Historial"
+        )
+        try:
+            await interaction.edit_original_response(embed=embed, view=self)
+        except Exception:
+            pass
+
+
 class DjMenuView(discord.ui.View):
     """Interactive menu posted by /dj (and by the Indio when he detects the request
     in the text chat). Buttons wire directly to the GuildPlayer Auto-DJ API.
@@ -967,6 +1000,8 @@ class GuildPlayer:
         # Seed carried forward across rounds (veto updates these to keep the artist thread)
         self.autodj_seed_id: Optional[str] = None
         self.autodj_seed_title: Optional[str] = None
+        self.autodj_history: list[dict] = []  # songs auto-DJ has queued (last 50)
+        self.autodj_history_showing_all: bool = False  # toggle in history view
         self.dj_menu_msg: Optional[discord.Message] = None
 
     # ------------------------------------------------------------------
@@ -993,6 +1028,32 @@ class GuildPlayer:
                 await self.textChannel.send(content)
             except Exception:
                 pass
+
+    def _autodj_history_embed(self) -> discord.Embed:
+        embed = discord.Embed(title="🎧 Auto-DJ", color=discord.Color.green())
+        if not self.autodj_history:
+            embed.description = "Aún no se pusieron canciones."
+            return embed
+        last = self.autodj_history[-1]
+        dur = last.get("duration_string", "")
+        dur_suffix = f" [{dur}]" if dur else ""
+        if self.autodj_history_showing_all:
+            lines = []
+            for i, s in enumerate(self.autodj_history, 1):
+                d = s.get("duration_string", "")
+                ds = f" [{d}]" if d else ""
+                prefix = "👈 " if i == len(self.autodj_history) else ""
+                lines.append(f"{prefix}{i}. **{s['title']}**{ds}")
+            embed.description = (
+                f"📋 **Historial** ({len(self.autodj_history)} canciones):\n"
+                + "\n".join(lines)
+            )
+        else:
+            embed.description = (
+                f"📋 **Historial** ({len(self.autodj_history)} canciones)\n"
+                f"📌 **{last['title']}**{dur_suffix} ← última"
+            )
+        return embed
 
     async def autodj_deactivate(self, reason: str = "") -> None:
         """Turn Auto-DJ off. Cancels any pending grace and edits the suggestion card."""
@@ -1311,11 +1372,16 @@ class GuildPlayer:
         if song is None:
             return
 
+        self.autodj_history.append(song)
+        if len(self.autodj_history) > 50:
+            self.autodj_history.pop(0)
+
         if self.autodj_suggestion_msg is not None:
             try:
+                self.autodj_history_showing_all = False
+                embed = self._autodj_history_embed()
                 await self.autodj_suggestion_msg.edit(
-                    content=f"🎧 Auto-DJ: **{song['title']}** 🎵",
-                    view=None,
+                    embed=embed, view=AutodjHistoryView(self)
                 )
             except Exception:
                 pass
