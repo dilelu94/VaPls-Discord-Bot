@@ -723,7 +723,7 @@ class AutoDJSuggestionView(discord.ui.View):
         await self.player._autodj_veto()
 
     @discord.ui.button(
-        label="▶️ Ya, ponela", style=discord.ButtonStyle.success, custom_id="autodj_now"
+        label="▶️ Poner ahora", style=discord.ButtonStyle.success, custom_id="autodj_now"
     )
     async def play_now(
         self, button: discord.ui.Button, interaction: discord.Interaction
@@ -874,10 +874,11 @@ async def openDjMenu(bot, guild_id: int, channel_id: Optional[int] = None) -> tu
 
     view = DjMenuView(player)
     content = (
-        "🎧 **Modo DJ activado.** Cuando se vacíe la cola, sigo yo.\n"
-        "• **🚫 Vetar sugerencia** — descarta la sugerencia actual y busca otra.\n"
-        "• **▶️ Poner ahora** — salta la espera y pone la sugerencia ya.\n"
-        "• **⏹️ Apagar DJ** — desactiva el modo DJ."
+        "🎧 **Modo DJ activado.** Cuando se vacíe la cola, sigo yo.\n\n"
+        "Cuando aparezca una sugerencia, podés:\n"
+        "• **🚫 Vetar sugerencia** — descartarla y pedir otra.\n"
+        "• **▶️ Poner ahora** — saltar la espera y ponerla ya.\n"
+        "• **⏹️ Apagar DJ** — desactivar el modo DJ."
     )
     try:
         player.dj_menu_msg = await channel.send(content, view=view)
