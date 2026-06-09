@@ -733,7 +733,7 @@ class AutoDJSuggestionView(discord.ui.View):
         await self.player._autodj_fire_now()
 
     @discord.ui.button(
-        label="⏹️ Cortala", style=discord.ButtonStyle.danger, custom_id="autodj_stop"
+        label="⏹️ Apagar DJ", style=discord.ButtonStyle.danger, custom_id="autodj_stop"
     )
     async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Deactivate Auto-DJ after the current song finishes."""
@@ -806,7 +806,9 @@ class DjMenuView(discord.ui.View):
         await self.player._autodj_veto()
 
     @discord.ui.button(
-        label="▶️ Poner ya", style=discord.ButtonStyle.primary, custom_id="djmenu_fire"
+        label="▶️ Poner ahora",
+        style=discord.ButtonStyle.primary,
+        custom_id="djmenu_fire",
     )
     async def fire_now(
         self, button: discord.ui.Button, interaction: discord.Interaction
@@ -816,7 +818,7 @@ class DjMenuView(discord.ui.View):
         await self.player._autodj_fire_now()
 
     @discord.ui.button(
-        label="⏹️ Cortar DJ", style=discord.ButtonStyle.danger, custom_id="djmenu_stop"
+        label="⏹️ Apagar DJ", style=discord.ButtonStyle.danger, custom_id="djmenu_stop"
     )
     async def stop(self, button: discord.ui.Button, interaction: discord.Interaction):
         """Deactivate Auto-DJ."""
@@ -873,9 +875,9 @@ async def openDjMenu(bot, guild_id: int, channel_id: Optional[int] = None) -> tu
     view = DjMenuView(player)
     content = (
         "🎧 **Modo DJ activado.** Cuando se vacíe la cola, sigo yo.\n"
-        "• **🚫 Vetar** — descarta la sugerencia actual y busca otra.\n"
-        "• **▶️ Poner ya** — salta la espera y pone la sugerencia ahora.\n"
-        "• **⏹️ Cortar DJ** — apaga el modo DJ."
+        "• **🚫 Vetar sugerencia** — descarta la sugerencia actual y busca otra.\n"
+        "• **▶️ Poner ahora** — salta la espera y pone la sugerencia ya.\n"
+        "• **⏹️ Apagar DJ** — desactiva el modo DJ."
     )
     try:
         player.dj_menu_msg = await channel.send(content, view=view)
