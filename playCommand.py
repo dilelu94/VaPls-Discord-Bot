@@ -2582,7 +2582,7 @@ class GuildPlayer:
         except Exception:
             pass
 
-        if not self.currentSong and not self.queue:
+        if not self.currentSong:
             embed = discord.Embed(
                 title="🎵 Reproductor de Música", color=discord.Color.greyple()
             )
@@ -3202,8 +3202,15 @@ async def playLogic(
     #   (see startPlayingCurrent). Joining the channel immediately and sitting
     #   silent during yt-dlp is what lets the idle watchdog kick us out before
     #   we ever play a note.
-    if ctx.voice_client is not None:
-        vc = ctx.voice_client
+    vc = ctx.voice_client
+    if vc is not None:
+        try:
+            if not vc.is_connected():
+                raise RuntimeError("stale client")
+        except Exception:
+            vc = None
+
+    if vc is not None:
         if vc.channel.id != channel.id:
             if getattr(vc, "recording", False):
                 try:
