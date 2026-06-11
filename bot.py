@@ -1729,12 +1729,28 @@ async def transferir(ctx):
     )
     link = f"{config.TRANSFER_BASE_URL}/upload/{sess.token}"
     gb = config.TRANSFER_DEFAULT_LIMIT // (1024**3)
-    await safe_respond(
-        ctx,
-        f"📁 Subí tu archivo (max {gb} GB):\n{link}\n\n"
-        f"⏱️ El link vence en {config.TRANSFER_SESSION_TTL // 60} min si no hay actividad.",
-        ephemeral=True,
+    view = discord.ui.View()
+    view.add_item(
+        discord.ui.Button(
+            label="⬆️ Subir acá",
+            url=link,
+        )
     )
+    try:
+        if ctx.response.is_done():
+            await ctx.followup.send(
+                f"📁 Max {gb} GB · Link vence en {config.TRANSFER_SESSION_TTL // 60} min",
+                view=view,
+                ephemeral=True,
+            )
+        else:
+            await ctx.respond(
+                f"📁 Max {gb} GB · Link vence en {config.TRANSFER_SESSION_TTL // 60} min",
+                view=view,
+                ephemeral=True,
+            )
+    except Exception:
+        pass
 
 
 @bot.slash_command(
