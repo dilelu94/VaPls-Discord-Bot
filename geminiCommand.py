@@ -126,7 +126,8 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("pause_music")} → `pause_music` \
 - {_fmt_trigger("resume_music")} → `resume_music` \
 - {_fmt_trigger("stop_music")} → `stop_music` \
-- {_fmt_trigger("dj_mode")} → `dj_mode` \
+- {_fmt_trigger("dj_mode")} → `dj_mode`
+- {_fmt_trigger("spacewar_guide")} → `spacewar_guide` \
 
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
@@ -359,6 +360,18 @@ _INDIO_TOOLS = [
             },
             "required": ["prompt"],
         },
+    },
+    {
+        "name": "spacewar_guide",
+        "description": (
+            "Explicar cómo obtener Spacewar (appid 480, la app de testing de Valve) "
+            "gratis en la biblioteca de Steam. "
+            "Usala SOLO cuando el usuario pregunte explícitamente cómo instalar, tener, agregar "
+            "o conseguir Spacewar en Steam, o mencione steam://run/480. "
+            "No la uses para hablar de juegos retro ni del Spacewar original de 1962. "
+            "No generes texto adicional — llamá la tool y el sistema se encarga de la guía."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
     },
 ]
 
@@ -1360,6 +1373,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "dj_mode": ("DJ_MODE", None),
     "generate_image": ("GENERATE_IMAGE", "prompt"),
     "edit_image": ("EDIT_IMAGE", "prompt"),
+    "spacewar_guide": ("SPACEWAR_GUIDE", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -1371,6 +1385,7 @@ _ACTION_FALLBACK_TEXT = {
     "DJ_MODE": "🎧 Modo DJ",
     "GENERATE_IMAGE": "🎨 Generando imagen...",
     "EDIT_IMAGE": "🎨 Editando imagen...",
+    "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
 }
 
 _ACTION_ARG_MAX_CHARS = 200
@@ -2114,6 +2129,57 @@ async def _dispatch_indio_actions(
                                         pass
                     statuses.append(f"image_edit: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio EDIT_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
+                elif action == "SPACEWAR_GUIDE":
+                    target_cid = (
+                        getattr(reply_handle, "channel_id", None)
+                        or config.INDIO_REPLY_CHANNEL_ID
+                        or 1490008278275461280
+                    )
+                    guide = (
+                        "**🎮 Spacewar — guía rápida**\n\n"
+                        "Spacewar es una app de testing de Valve. No hay que instalarla, "
+                        "solo tenerla en la biblioteca para ciertos juegos que la necesitan.\n\n"
+                        "**¿Ya la tenés?**\n"
+                        "1. Abrí Steam.\n"
+                        "2. Andá a tu **Biblioteca**.\n"
+                        "3. Escribí `Spacewar` en la barra de búsqueda de la izquierda.\n"
+                        "4. Si aparece, ya la tenés, no necesitás hacer nada.\n\n"
+                        "**Si no la tenés — Windows:**\n"
+                        "1. Asegurate de que Steam esté abierto.\n"
+                        "2. Presioná `Windows + R`, pegá esto y dale Enter:\n"
+                        "   ```\n"
+                        "   steam://run/480\n"
+                        "   ```\n"
+                        "   Steam se abre solito y la descarga/agrega. "
+                        "Una vez que aparece en tu biblioteca, se queda ahí para siempre.\n\n"
+                        "**Linux / Steam Deck:**\n"
+                        "   Abrí una terminal y ejecutá:\n"
+                        "   ```\n"
+                        "   steam steam://run/480\n"
+                        "   ```\n\n"
+                        "**Bazzite:**\n"
+                        "   Abrí una terminal y ejecutá:\n"
+                        "   ```\n"
+                        "   flatpak run com.valvesoftware.Steam steam://run/480\n"
+                        "   ```\n\n"
+                        "⚠️ Si tira error, asegurate de tener Steam abierto antes de mandar el comando."
+                    )
+                    ok = False
+                    try:
+                        channel = bot.get_channel(target_cid)
+                        if channel is None:
+                            channel = await bot.fetch_channel(target_cid)
+                        if channel:
+                            await channel.send(guide)
+                            ok = True
+                            msg = "guide sent"
+                        else:
+                            msg = "channel not found"
+                    except Exception as e:
+                        logger.exception("indio SPACEWAR_GUIDE failed")
+                        msg = f"error: {e}"
+                    statuses.append(f"spacewar: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio SPACEWAR_GUIDE → ok=%s msg=%s", ok, msg)
                 elif action == "DJ_MODE":
                     # Activate Auto-DJ + post the panel — same handler as /dj.
                     # Use the channel where the Indio just replied so the panel

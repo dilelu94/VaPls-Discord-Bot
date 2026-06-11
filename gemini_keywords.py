@@ -108,6 +108,14 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "hacé de dj",
         "prendé el dj",
     ],
+    "spacewar_guide": [
+        "cómo tener spacewar",
+        "cómo instalo spacewar",
+        "spacewar steam",
+        "steam://run/480",
+        "necesito spacewar en la biblioteca",
+        "agregá spacewar",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────
