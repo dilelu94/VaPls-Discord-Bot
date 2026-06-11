@@ -1739,11 +1739,25 @@ async def transferir(ctx):
     # Wait for upload to complete, then post download link in channel.
     max_wait = config.TRANSFER_EXPIRY_HOURS * 3600
     polled = 0
+    log.info("polling start token=%s", sess.token[:8])
     while polled < max_wait:
         await asyncio.sleep(5)
         polled += 5
         sess = transferManager.get(sess.token)
+        log.debug(
+            "poll token=%s polled=%d found=%s expired=%s ready=%s",
+            sess.token[:8],
+            polled,
+            sess is not None,
+            getattr(sess, "expired", None),
+            getattr(sess, "ready", None),
+        )
         if not sess or sess.expired:
+            log.info(
+                "poll abort token=%s reason=%s",
+                sess.token[:8],
+                "not_found" if not sess else "expired",
+            )
             return
         if sess.ready:
             dl = f"{config.TRANSFER_BASE_URL}/dl/{sess.token}/{sess.filename}"
@@ -1751,6 +1765,11 @@ async def transferir(ctx):
             gb_val = sz / (1024**3)
             sz_str = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{sz / (1024**2):.0f} MB"
             channel = bot.get_channel(sess.channel_id)
+            log.info(
+                "poll ready token=%s channel=%s",
+                sess.token[:8],
+                channel.id if channel else None,
+            )
             if channel:
                 try:
                     embed = discord.Embed(
@@ -1761,8 +1780,15 @@ async def transferir(ctx):
                     view = discord.ui.View()
                     view.add_item(discord.ui.Button(label="🔗 Copiar link", url=dl))
                     await channel.send(embed=embed, view=view)
+                    log.info("poll posted token=%s", sess.token[:8])
                 except Exception:
                     log.exception("failed to post transfer link")
+            else:
+                log.warning(
+                    "poll no channel token=%s channel_id=%s",
+                    sess.token[:8],
+                    sess.channel_id,
+                )
             return
 
 

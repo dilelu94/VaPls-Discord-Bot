@@ -63,6 +63,12 @@ class TransferManager:
         )
         self.sessions[token] = sess
         self._save_index()
+        logger.info(
+            "session created token=%s author=%s channel=%s",
+            token[:8],
+            author_name,
+            channel_id,
+        )
         return sess
 
     def init_upload(self, token: str, filename: str, total_size: int) -> Optional[str]:
@@ -81,6 +87,9 @@ class TransferManager:
         sess.last_activity = time.time()
         os.makedirs(os.path.join(config.TRANSFER_DIR, token), exist_ok=True)
         self._save_index()
+        logger.info(
+            "upload init token=%s filename=%s size=%d", token[:8], filename, total_size
+        )
         return None
 
     def add_chunk(self, token: str, chunk_idx: int, data: bytes) -> Optional[str]:
@@ -99,11 +108,19 @@ class TransferManager:
             return f"error de escritura: {e}"
         sess.received.add(chunk_idx)
         sess.last_activity = time.time()
+        logger.debug(
+            "chunk token=%s idx=%d/%d size=%d",
+            token[:8],
+            chunk_idx + 1,
+            (sess.total_size + sess.chunk_size - 1) // sess.chunk_size,
+            len(data),
+        )
         return None
 
     def complete_upload(self, token: str) -> Optional[str]:
         sess = self.sessions.get(token)
         if not sess or sess.expired:
+            logger.warning("complete: invalid/expired session token=%s", token[:8])
             return "sesión inválida o expirada"
         expected = (sess.total_size + sess.chunk_size - 1) // sess.chunk_size
         actual_size = 0
@@ -113,6 +130,12 @@ class TransferManager:
         except OSError:
             pass
         if actual_size != sess.total_size:
+            logger.warning(
+                "complete: size mismatch token=%s expected=%d actual=%d",
+                token[:8],
+                sess.total_size,
+                actual_size,
+            )
             return (
                 f"tamaño incorrecto: esperado {sess.total_size}, recibido {actual_size}"
             )
@@ -122,6 +145,12 @@ class TransferManager:
         sess.last_activity = time.time()
         self.append_history(sess)
         self._save_index()
+        logger.info(
+            "upload complete token=%s filename=%s size=%d",
+            token[:8],
+            sess.filename,
+            sess.total_size,
+        )
         return None
 
     def delete(self, token: str) -> bool:
