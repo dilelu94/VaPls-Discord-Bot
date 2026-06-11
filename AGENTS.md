@@ -446,8 +446,8 @@ SQLite con 4 tablas:
 
 ### Pesos default
 
-| Actividad       | Peso |
-|----------------|------|
+| Actividad      | Peso |
+| -------------- | ---- |
 | voice_vad      | 0.4  |
 | camera         | 0.8  |
 | stream         | 1.5  |
@@ -471,18 +471,18 @@ SQLite con 4 tablas:
 
 ### Config default
 
-| Key                  | Default | Efecto                                        |
-|----------------------|---------|-----------------------------------------------|
-| initial_rating       | 1500    | Rating con el que arranca un usuario nuevo    |
-| initial_deviation    | 350     | RD inicial (máxima incertidumbre)             |
-| min_deviation        | 30      | Piso de RD (nunca baja de esto)               |
-| max_deviation        | 500     | Techo de RD                                   |
-| decay_per_day        | 10      | Cuánto sube la RD por día sin actividad       |
-| decay_rating_per_day | 1       | Cuánto rating pierde por día sin actividad    |
-| spam_window_seconds  | 10      | Ventana de tiempo para detectar spam          |
-| spam_max_events      | 5       | Máximo de eventos del mismo tipo en la ventana|
-| premium_multiplier   | 0.85    | Multiplicador de quality para usuarios premium|
-| k_factor             | 1.0     | Escala del delta Glicko                       |
+| Key                  | Default | Efecto                                         |
+| -------------------- | ------- | ---------------------------------------------- |
+| initial_rating       | 1500    | Rating con el que arranca un usuario nuevo     |
+| initial_deviation    | 350     | RD inicial (máxima incertidumbre)              |
+| min_deviation        | 30      | Piso de RD (nunca baja de esto)                |
+| max_deviation        | 500     | Techo de RD                                    |
+| decay_per_day        | 10      | Cuánto sube la RD por día sin actividad        |
+| decay_rating_per_day | 1       | Cuánto rating pierde por día sin actividad     |
+| spam_window_seconds  | 10      | Ventana de tiempo para detectar spam           |
+| spam_max_events      | 5       | Máximo de eventos del mismo tipo en la ventana |
+| premium_multiplier   | 0.85    | Multiplicador de quality para usuarios premium |
+| k_factor             | 1.0     | Escala del delta Glicko                        |
 
 ### Fórmula Glicko-1
 
@@ -497,19 +497,19 @@ SQLite con 4 tablas:
 
 Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userbot (`/activity/log`):
 
-| Evento | Actividad | Condición |
-|--------|-----------|-----------|
-| Usuario habla en voz (whisper final) | `voice_vad` | Con duración, solo si hay ≥2 humanos en el canal |
-| Usuario entra a voz | `voice_vad` | Una vez, solo si hay ≥2 humanos |
-| Usuario se va de voz | `voice_vad` | Con duración acumulada |
-| Usuario cambia de canal | `voice_vad` | Duración parcial + nuevo evento |
-| Usuario prende cámara | `camera` | Solo si hay ≥2 humanos |
-| Usuario empieza a streamear | `stream` | Solo si hay ≥1 viewer; quality escala 0.4/0.6/0.8/1.0 según viewers |
-| Viewer mirando stream | `watch_stream` | Con duración, capped a 10 min/día |
-| Mensaje de texto | `message` / `link` / `sticker` / `image` / `file` | Según contenido |
-| Creación de poll/channel/event/thread/forum | `poll_create` / `channel_create` / etc. | Según tipo |
-| Votar en poll | `poll_vote` | |
-| Unirse a evento | `event_join` | |
+| Evento                                      | Actividad                                         | Condición                                                           |
+| ------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
+| Usuario habla en voz (whisper final)        | `voice_vad`                                       | Con duración, solo si hay ≥2 humanos en el canal                    |
+| Usuario entra a voz                         | `voice_vad`                                       | Una vez, solo si hay ≥2 humanos                                     |
+| Usuario se va de voz                        | `voice_vad`                                       | Con duración acumulada                                              |
+| Usuario cambia de canal                     | `voice_vad`                                       | Duración parcial + nuevo evento                                     |
+| Usuario prende cámara                       | `camera`                                          | Solo si hay ≥2 humanos                                              |
+| Usuario empieza a streamear                 | `stream`                                          | Solo si hay ≥1 viewer; quality escala 0.4/0.6/0.8/1.0 según viewers |
+| Viewer mirando stream                       | `watch_stream`                                    | Con duración, capped a 10 min/día                                   |
+| Mensaje de texto                            | `message` / `link` / `sticker` / `image` / `file` | Según contenido                                                     |
+| Creación de poll/channel/event/thread/forum | `poll_create` / `channel_create` / etc.           | Según tipo                                                          |
+| Votar en poll                               | `poll_vote`                                       |                                                                     |
+| Unirse a evento                             | `event_join`                                      |                                                                     |
 
 ### Stream cap
 
@@ -520,15 +520,15 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 ### Relay HTTP endpoints (`userbot/bot.py`)
 
-| Endpoint | Método | Uso |
-|----------|--------|-----|
-| `/activity/log` | POST | Loggear una actividad (usado por main bot) |
-| `/activity` | GET | Listar actividades recientes (query: guild_id, limit) |
-| `/activity/user` | GET | Stats de un usuario (query: user_id, guild_id) |
-| `/activity/leaderboard` | GET | Top N por guild (query: guild_id, limit) |
-| `/admin` | GET | Admin page HTML (Basic Auth) |
-| `/admin/api/data` | GET | JSON dump completo (Basic Auth) |
-| `/admin/api/weights` | POST | Actualizar config/pesos (Basic Auth) |
+| Endpoint                | Método | Uso                                                   |
+| ----------------------- | ------ | ----------------------------------------------------- |
+| `/activity/log`         | POST   | Loggear una actividad (usado por main bot)            |
+| `/activity`             | GET    | Listar actividades recientes (query: guild_id, limit) |
+| `/activity/user`        | GET    | Stats de un usuario (query: user_id, guild_id)        |
+| `/activity/leaderboard` | GET    | Top N por guild (query: guild_id, limit)              |
+| `/admin`                | GET    | Admin page HTML (Basic Auth)                          |
+| `/admin/api/data`       | GET    | JSON dump completo (Basic Auth)                       |
+| `/admin/api/weights`    | POST   | Actualizar config/pesos (Basic Auth)                  |
 
 ### Proxy del main bot (`apiServer.py`)
 
@@ -553,6 +553,19 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 6. (902cdd5) Tooltips más detallados.
 7. (2026-06-07) Código JS huérfano en `apiServer.py:313-342` que rompía el render de las tabs. Fix: eliminado.
 8. (2026-06-07) Bloque duplicado de stream+watch_stream tracking en `bot.py:547-569`. Fix: eliminado, y el restante ahora requiere viewers > 0 con quality escalada por cantidad de viewers + daily cap.
+
+## 📦 Últimos cambios — transferencia de archivos (/transferir)
+
+### 2026-06-11 — Fixes y mejoras en /transferir
+
+1. **URL encoding de espacios**: `apiServer.py:1243` — `quote(sess.filename)` al construir URL del botón de Discord. Antes espacios rompían el embed con `400 Bad Request`.
+2. **Botón en vez de texto**: `bot.py` — `/transferir` ahora envía `discord.ui.Button(label="⬆️ Subir acá", url=...)` en vez de texto plano.
+3. **Página de descarga separada**: `transferCommand.py` — nuevo template `DOWNLOAD_HTML`. Sin botón de borrar, sin "Sesión expirada". Muestra icono, filename, tamaño, botón de descarga. Si el archivo no existe: "Archivo no disponible".
+4. **Redirect a /dl/ al completar upload**: `transferCommand.py:683` — `window.location.href = "/dl/..."` en vez de mostrar sección "completado".
+5. **Icono VaporPals**: `static/icon.jpg` — favicon + main icon en ambas páginas.
+6. **Timer suave (segundo a segundo)**: `transferCommand.py` — reemplazado `updateTimer()` (saltos de 5s) por `syncTimer()` (fetch cada 5s para sincronizar) + `tick()` (contador local cada 1s).
+7. **Ocultar upload al expirar**: `transferCommand.py` — cuando el timer detecta expiración, oculta `upload-section` y muestra `expired-section`. Antes solo cambiaba el texto.
+8. **Borrado de archivos pesados**: Se liberaron ~7 GB borrando dos `Burglin Gnomes.zip` de 3.4 GB del server.
 
 ## 💡 Guía de Modificación
 

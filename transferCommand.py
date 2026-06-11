@@ -690,51 +690,57 @@ async function startUpload() {{
 }}
 
 // --- timer ------------------------------------------------------------------
-function updateTimer() {{
-  const el = document.getElementById("timer");
-  if (!el) return;
+var localTtl = 0;
+var localTtlAt = 0;
+var tickId = null;
 
-  // Show ETA during upload instead of session timer
-  if (uploading) {{
-    updateUploadETA();
-    return;
-  }}
+function showExpired(el) {{
+  el.textContent = "⏰ Sesión expirada";
+  active = false;
+  document.getElementById("upload-section").style.display = "none";
+  document.getElementById("expired-section").style.display = "block";
+  if (tickId) clearInterval(tickId);
+  tickId = null;
+}}
+
+function showSecs(el, secs) {{
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  el.textContent = `⏱️ Sesión activa: ${{m}}:${{s.toString().padStart(2, "0")}}`;
+}}
+
+function syncTimer() {{
+  const el = document.getElementById("timer");
+  if (!el || uploading) return;
 
   fetch(`/upload/${{TOKEN}}/status`)
     .then(r => r.json())
     .then(d => {{
-      if (d.expired) {{
-        el.textContent = "⏰ Sesión expirada";
-        active = false;
-        return;
-      }}
+      if (d.expired) {{ showExpired(el); return; }}
       if (d.completed) {{
-        el.textContent = "";
+        if (d.file_exists) {{
+          window.location.href = "/dl/" + TOKEN + "/" + encodeURIComponent(d.filename || "");
+        }}
         return;
       }}
-      const secs = d.ttl_remaining;
-      if (secs <= 0) {{
-        el.textContent = "⏰ Sesión expirada";
-        active = false;
-        checkSession();
-        return;
+      if (d.ttl_remaining <= 0) {{ showExpired(el); return; }}
+      localTtl = d.ttl_remaining;
+      localTtlAt = Date.now();
+      if (!tickId) {{
+        tickId = setInterval(tick, 1000);
+        tick();
       }}
-      const m = Math.floor(secs / 60);
-      const s = secs % 60;
-      el.textContent = `⏱️ Sesión activa: ${{m}}:${{s.toString().padStart(2, "0")}}`;
     }})
     .catch(() => {{}});
 }}
 
-async function checkSession() {{
-  if (active) return;
-  const r = await fetch(`/upload/${{TOKEN}}/status`);
-  const d = await r.json();
-  if (!d.expired) {{
-    active = true;
-    document.getElementById("upload-section").style.display = "block";
-    document.getElementById("expired-section").style.display = "none";
-  }}
+function tick() {{
+  const el = document.getElementById("timer");
+  if (!el || uploading) return;
+  const elapsed = (Date.now() - localTtlAt) / 1000;
+  const secs = localTtl - elapsed;
+  if (secs <= 0) {{ showExpired(el); return; }}
+  showSecs(el, secs);
 }}
 
 function copyLink() {{
@@ -788,8 +794,8 @@ async function init() {{
   loadFiles();
   loadHistory();
   setInterval(loadFiles, 10000);
-  setInterval(updateTimer, 5000);
-  updateTimer();
+  setInterval(syncTimer, 5000);
+  syncTimer();
 }}
 
 init();
