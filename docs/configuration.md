@@ -59,6 +59,22 @@
 | `WAKE_SOUND_THROTTLE_SECONDS`  | ❌       | `0.0`                   | Mínimo de segundos entre dos sonidos en el mismo canal. `0` = sin throttle (cada detección suena), útil mientras se calibra. Subir si en producción molesta el spam.                                                                             |
 | `LOG_LEVEL`                    | ❌       | `INFO`                  | Python logging level for the userbot.                                                                                                                                                                                                            |
 
+## File transfer (/transferir)
+
+| Variable                    | Required | Default                    | Description / implications                                                                    |
+| --------------------------- | -------- | -------------------------- | --------------------------------------------------------------------------------------------- |
+| `TRANSFER_DIR`              | ❌       | `transfers`                | Directory where uploaded files and session metadata are stored. Created automatically.        |
+| `TRANSFER_MAX_SIZE`         | ❌       | `16106127360` (15 GB)      | Hard per-file limit in bytes. The server rejects any upload exceeding this size.              |
+| `TRANSFER_DEFAULT_LIMIT`    | ❌       | `10737418240` (10 GB)      | Default per-file limit shown to the user in the web UI. Must be ≤ `TRANSFER_MAX_SIZE`.        |
+| `TRANSFER_SESSION_TTL`      | ❌       | `300` (5 min)              | Seconds a session token stays alive without any upload activity. Resets on each chunk upload. |
+| `TRANSFER_EXPIRY_HOURS`     | ❌       | `24`                       | How many hours a completed file stays available for download before the sweeper deletes it.   |
+| `TRANSFER_CHUNK_SIZE`       | ❌       | `10485760` (10 MB)         | Chunk size for resumable uploads in bytes. The browser slices files into chunks of this size. |
+| `TRANSFER_REQUIRED_ROLE`    | ❌       | `Main Characters`          | Discord role name required to invoke `/transferir`.                                           |
+| `TRANSFER_DISK_RESERVE`     | ❌       | `5368709120` (5 GB)        | Minimum free disk bytes the sweeper/maintains before rejecting new uploads.                   |
+| `TRANSFER_HISTORY_PATH`     | ❌       | `transfers/_history.jsonl` | Path to the permanent upload history log (JSONL, append-only).                                |
+| `TRANSFER_BASE_URL`         | ❌       | `http://141.148.84.55`     | External base URL used to build download links posted in Discord. No trailing slash.          |
+| `TRANSFER_SWEEPER_INTERVAL` | ❌       | `600` (10 min)             | Seconds between background sweeper runs. Expired sessions and files are cleaned on each tick. |
+
 ## Security notes
 
 - Never commit `TOKEN` or `USER_TOKEN`.

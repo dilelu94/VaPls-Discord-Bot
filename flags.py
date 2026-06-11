@@ -30,6 +30,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "help": "text",
     "ranking": "text",
     "actividad": "text",
+    "transferir": "text",
     "restart": "text",
 }
 

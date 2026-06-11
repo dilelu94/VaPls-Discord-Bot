@@ -37,6 +37,8 @@ import geminiKeys
 import decifrarVoting
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import huggingfaceImage
+import transferCommand
+from transferCommand import manager as transferManager
 # import geminiImage
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
@@ -443,6 +445,13 @@ async def on_ready():
         log.info("suggestions auto-sync: %s", result)
     except Exception:
         log.exception("suggestions auto-sync failed")
+
+    # Start file-transfer sweeper background task.
+    try:
+        asyncio.create_task(transferManager.start_sweeper())
+        log.info("transfer sweeper started")
+    except Exception:
+        log.exception("transfer sweeper startup failed")
 
 
 # ---- Voice state tracking for MMR -----------------------------------------
@@ -1690,6 +1699,70 @@ async def huh(ctx):
 
 
 @bot.slash_command(
+    name="transferir",
+    description="Subí archivos de hasta 10 GB para compartir en el server",
+)
+async def transferir(ctx):
+    """Slash command: generate a temp upload link for file sharing.
+
+    Only users with the configured role (@Main Characters by default) may
+    invoke this. The resulting token expires in 5 min unless a file is
+    uploaded, and completed files auto-delete after 24 h.
+    """
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "transferir")
+
+    role = discord.utils.get(ctx.author.roles, name=config.TRANSFER_REQUIRED_ROLE)
+    if not role:
+        await safe_respond(
+            ctx,
+            f"❌ Solo @{config.TRANSFER_REQUIRED_ROLE} puede usar este comando.",
+            ephemeral=True,
+        )
+        return
+
+    sess = transferManager.create_session(
+        ctx.author.id,
+        ctx.author.display_name,
+        ctx.channel_id,
+        ctx.guild.id,
+    )
+    link = f"{config.TRANSFER_BASE_URL}/upload/{sess.token}"
+    gb = config.TRANSFER_DEFAULT_LIMIT // (1024**3)
+    await safe_respond(
+        ctx,
+        f"📁 Subí tu archivo (max {gb} GB):\n{link}\n\n"
+        f"⏱️ El link vence en {config.TRANSFER_SESSION_TTL // 60} min si no hay actividad.",
+        ephemeral=True,
+    )
+
+    # Wait for upload to complete, then post download link in channel.
+    max_wait = config.TRANSFER_EXPIRY_HOURS * 3600
+    polled = 0
+    while polled < max_wait:
+        await asyncio.sleep(5)
+        polled += 5
+        sess = transferManager.get(sess.token)
+        if not sess or sess.expired:
+            return
+        if sess.ready:
+            dl = f"{config.TRANSFER_BASE_URL}/dl/{sess.token}/{sess.filename}"
+            sz = sess.total_size
+            gb_val = sz / (1024**3)
+            sz_str = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{sz / (1024**2):.0f} MB"
+            channel = bot.get_channel(sess.channel_id)
+            if channel:
+                try:
+                    await channel.send(
+                        f"📁 **{sess.author_name}** compartió un archivo:\n"
+                        f"[{sess.filename}]({dl}) — {sz_str} — 24h ⏳"
+                    )
+                except Exception:
+                    log.exception("failed to post transfer link")
+            return
+
+
+@bot.slash_command(
     name="help", description="Lista los comandos del bot y cómo funciona"
 )
 async def help_cmd(ctx):
@@ -1760,6 +1833,8 @@ async def help_cmd(ctx):
             "agrupa con ideas parecidas.\n"
             "**/sugerencias-ver** — mirá qué sugerencias ya existen, ordenadas "
             "por las más pedidas.\n"
+            "**/transferir** — generá un link para compartir archivos de hasta "
+            "10 GB (solo @Main Characters).\n"
             "**/help** — esto."
         ),
         inline=False,

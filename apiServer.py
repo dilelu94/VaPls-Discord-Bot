@@ -27,6 +27,7 @@ import geminiCommand
 import geminiKeys
 from playCommand import guildPlayers
 from users import USERS
+import transferCommand
 
 logger = logging.getLogger("apiServer")
 
@@ -69,6 +70,9 @@ async def authMiddleware(request: web.Request, handler):
     """
     # Admin routes use Basic Auth instead of X-API-Secret.
     if request.path.startswith("/admin"):
+        return await handler(request)
+    # Transfer routes use the token as auth.
+    if request.path.startswith("/upload") or request.path.startswith("/dl"):
         return await handler(request)
     err = _checkAuth(request)
     if err is not None:
@@ -413,7 +417,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
         Configured aiohttp Application.
     """
     app = web.Application(
-        middlewares=[authMiddleware], client_max_size=25 * 1024 * 1024
+        middlewares=[authMiddleware],
+        client_max_size=config.TRANSFER_CHUNK_SIZE + 1024 * 1024,
     )
 
     async def status(_: web.Request) -> web.Response:
@@ -1154,11 +1159,145 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return resp
         return await _admin_proxy("/admin/api/weights", request)
 
-    app.router.add_get("/admin", adminPage)
-    app.router.add_get("/admin/api/data", adminData)
-    app.router.add_post("/admin/api/weights", adminWeights)
+    # --- transfer endpoints ------------------------------------------------
 
-    app.router.add_get("/status", status)
+    async def uploadPage(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        mgr = transferCommand.manager
+        sess = mgr.get(token)
+        if not sess:
+            return web.Response(
+                text=transferCommand.format_upload_html(token),
+                content_type="text/html",
+            )
+        return web.Response(
+            text=transferCommand.format_upload_html(token),
+            content_type="text/html",
+        )
+
+    async def uploadInit(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "body inválido"}, status=400)
+        filename = body.get("filename", "")
+        size = int(body.get("size", 0))
+        if not filename or size <= 0:
+            return web.json_response(
+                {"error": "filename y size requeridos"}, status=400
+            )
+        err = transferCommand.manager.init_upload(token, filename, size)
+        if err:
+            return web.json_response({"error": err}, status=400)
+        return web.json_response({"ok": True})
+
+    async def uploadChunk(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        idx = int(request.match_info["idx"])
+        data = await request.read()
+        err = transferCommand.manager.add_chunk(token, idx, data)
+        if err:
+            return web.json_response({"error": err}, status=400)
+        return web.json_response({"ok": True})
+
+    async def uploadStatus(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        sess = transferCommand.manager.get(token)
+        if not sess:
+            return web.json_response({"valid": False, "expired": True})
+        now = time.time()
+        age = now - sess.last_activity
+        ttl = max(0, int(config.TRANSFER_SESSION_TTL - age))
+        expired = (
+            not sess.ready and not sess.completed and age >= config.TRANSFER_SESSION_TTL
+        )
+        return web.json_response(
+            {
+                "valid": True,
+                "expired": expired,
+                "completed": sess.completed or sess.ready,
+                "received": sorted(sess.received),
+                "total_chunks": (sess.total_size + sess.chunk_size - 1)
+                // sess.chunk_size
+                if sess.total_size
+                else 0,
+                "filename": sess.filename,
+                "size": sess.total_size,
+                "ttl_remaining": ttl if not sess.ready else 86400,
+            }
+        )
+
+    async def uploadComplete(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        err = transferCommand.manager.complete_upload(token)
+        if err:
+            return web.json_response({"error": err}, status=400)
+        sess = transferCommand.manager.get(token)
+        url = f"{config.TRANSFER_BASE_URL}/dl/{token}/{sess.filename}"
+        return web.json_response({"ok": True, "url": url})
+
+    async def uploadDelete(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        ok = transferCommand.manager.delete(token)
+        if not ok:
+            return web.json_response({"error": "no encontrado"}, status=404)
+        return web.json_response({"ok": True})
+
+    async def downloadFile(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        filename = request.match_info.get("filename", "")
+        sess = transferCommand.manager.get(token)
+        if not sess or not sess.ready:
+            return web.Response(
+                text="Archivo no encontrado o no disponible", status=404
+            )
+        if not filename:
+            filename = sess.filename
+        filepath = os.path.join(config.TRANSFER_DIR, token, filename)
+        if not os.path.isfile(filepath):
+            return web.Response(text="Archivo no encontrado", status=404)
+        return web.FileResponse(
+            path=filepath,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+            },
+        )
+
+    async def transferFiles(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        if not transferCommand.manager.get(token):
+            return web.json_response({"files": [], "disk_free": 0, "disk_total": 0})
+        files = transferCommand.manager.get_active_files()
+        try:
+            st = os.statvfs(config.TRANSFER_DIR)
+            free = st.f_frsize * st.f_bavail
+            total = st.f_frsize * st.f_blocks
+        except OSError:
+            free = total = 0
+        return web.json_response(
+            {"files": files, "disk_free": free, "disk_total": total}
+        )
+
+    async def transferHistory(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        if not transferCommand.manager.get(token):
+            return web.json_response({"history": []})
+        history = transferCommand.manager.get_history(limit=200)
+        return web.json_response({"history": history})
+
+    app.router.add_get("/upload/{token}", uploadPage)
+    app.router.add_post("/upload/{token}/init", uploadInit)
+    app.router.add_post("/upload/{token}/chunk/{idx}", uploadChunk)
+    app.router.add_get("/upload/{token}/status", uploadStatus)
+    app.router.add_post("/upload/{token}/complete", uploadComplete)
+    app.router.add_delete("/upload/{token}", uploadDelete)
+    app.router.add_get("/upload/{token}/files", transferFiles)
+    app.router.add_get("/upload/{token}/history", transferHistory)
+    app.router.add_get("/dl/{token}", downloadFile)
+    app.router.add_get("/dl/{token}/{filename}", downloadFile)
+
+    app.router.add_get("/admin", adminPage)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
     app.router.add_post("/message", sendMessage)

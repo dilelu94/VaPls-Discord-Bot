@@ -12,9 +12,11 @@ If `API_SECRET` is empty, the API returns `503` for all endpoints.
 ## Endpoints
 
 ### GET `/status`
+
 Returns readiness and voice client status.
 
 **Response**
+
 ```json
 {
   "ready": true,
@@ -31,13 +33,16 @@ Returns readiness and voice client status.
 ```
 
 ### GET `/members?guild_id=...&voice_only=true|false`
+
 Lists voice channels and members for a guild.
 
 **Query params**
+
 - `guild_id` (required)
 - `voice_only` (optional, default `true`)
 
 **Response**
+
 ```json
 {
   "voice_channels": [
@@ -52,12 +57,15 @@ Lists voice channels and members for a guild.
 ```
 
 ### GET `/user/{user_id}?guild_id=...`
+
 Returns a single guild member’s status and voice state.
 
 ### POST `/message`
+
 Posts a message to a text channel.
 
 **Body (JSON)**
+
 ```json
 {
   "guild_id": 123,
@@ -68,14 +76,17 @@ Posts a message to a text channel.
 ```
 
 **Response**
+
 ```json
 { "message_id": 789 }
 ```
 
 ### POST `/play-audio`
+
 Plays an uploaded audio file in a voice channel.
 
 **Body (multipart/form-data)**
+
 - `guild_id` (required)
 - `channel_id` (optional)
 - `file` (required)
@@ -95,6 +106,7 @@ Plays an uploaded audio file in a voice channel.
   `[1, RECORD_MAX_SECONDS]` on the userbot side.
 
 **Response**
+
 ```json
 {
   "played": true,
@@ -108,9 +120,11 @@ Plays an uploaded audio file in a voice channel.
 and the bot is configured (`USERBOT_RECORD_URL`) to forward to the userbot.
 
 ### GET `/queue?guild_id=...`
+
 Returns the current playback queue.
 
 **Response**
+
 ```json
 {
   "current": { "id": "abc", "title": "Song" },
@@ -121,8 +135,136 @@ Returns the current playback queue.
 }
 ```
 
+## File transfer endpoints (`/upload`, `/dl`)
+
+These endpoints are **public** (no `X-API-Secret` required). The UUID token is the
+authentication mechanism.
+
+### `GET /upload/{token}`
+
+Serves the HTML upload page. Shows an upload form, a listing of all active files,
+the permanent upload history, and disk usage.
+
+### `POST /upload/{token}/init`
+
+Initialise a chunked upload session.
+
+**Body (JSON)**
+
+```json
+{ "filename": "video.mp4", "size": 2147483648 }
+```
+
+- `filename`: the original file name.
+- `size`: total file size in bytes (must be ≤ `TRANSFER_MAX_SIZE`).
+- Returns `400` if the session is expired, disk is full, or size exceeds the limit.
+
+### `POST /upload/{token}/chunk/{idx}`
+
+Upload a single chunk. The body is raw binary. `idx` is the zero-based chunk index.
+
+Chunks are written at the correct offset in the target file as they arrive, so
+the upload is **resumable**: if interrupted, the client can call `/status` to
+learn which chunks are already on disk and resume from the first missing one.
+
+- Returns `400` if the session is expired or the upload is already complete.
+
+### `GET /upload/{token}/status`
+
+Returns the current session state.
+
+**Response**
+
+```json
+{
+  "valid": true,
+  "expired": false,
+  "completed": false,
+  "received": [0, 1, 2],
+  "total_chunks": 200,
+  "filename": "video.mp4",
+  "size": 2147483648,
+  "ttl_remaining": 240
+}
+```
+
+- `ttl_remaining`: seconds before the session token expires (only meaningful
+  when the upload is not yet complete). When the file is ready, returns 86400.
+
+### `POST /upload/{token}/complete`
+
+Finalise the upload. Verifies that the assembled file size matches the declared
+`size` from `/init`. Once confirmed, the file is marked `ready` and the bot
+automatically posts the download link to the Discord channel.
+
+- Returns `400` if the size does not match.
+
+### `DELETE /upload/{token}`
+
+Delete the session and its file from disk. Any valid token holder can delete any
+file (community cleanup model).
+
+**Response**
+
+```json
+{ "ok": true }
+```
+
+### `GET /upload/{token}/files`
+
+Returns JSON with all currently active files (not expired) and disk usage.
+
+**Response**
+
+```json
+{
+  "files": [
+    {
+      "token": "abc123",
+      "filename": "video.mp4",
+      "size": 2147483648,
+      "author_name": "Mati",
+      "remaining_secs": 64800,
+      "url": "http://141.148.84.55/dl/abc123/video.mp4"
+    }
+  ],
+  "disk_free": 30000000000,
+  "disk_total": 45000000000
+}
+```
+
+### `GET /upload/{token}/history`
+
+Returns the permanent upload history (last 200 entries).
+
+**Response**
+
+```json
+{
+  "history": [
+    {
+      "author_name": "Mati",
+      "filename": "video.mp4",
+      "size": 2147483648,
+      "uploaded_at": 1750000000,
+      "token": "abc123"
+    }
+  ]
+}
+```
+
+### `GET /dl/{token}/{filename}`
+
+Download a completed file. Serves the file with `Content-Disposition: attachment`.
+
+### `GET /dl/{token}`
+
+Redirects to `/dl/{token}/{filename}` when there is exactly one file.
+
 ## Error responses
+
 Common errors:
+
 - `401` – unauthorized (`X-API-Secret` mismatch)
 - `400` – missing/invalid parameters
 - `404` – guild or channel not found
@@ -130,6 +272,7 @@ Common errors:
 - `500` – Discord or playback failure
 
 ## Transcript forwarding
+
 The userbot can POST transcripts to `BOT_API_BASE/transcript`, but this handler
 is **not** implemented in `apiServer.py` and must be added separately.
 
@@ -141,12 +284,15 @@ These endpoints are served by the **userbot** (`apiServer` on `127.0.0.1:8081`).
 All requests must include `X-API-Secret: <RELAY_SECRET>`.
 
 ### POST `/sensibilidad`
+
 Switch the VOSK wake-word sensitivity preset at runtime.
 
 **Body**
+
 ```json
 { "preset": 2 }
 ```
+
 - `preset`: integer 1, 2, 3, or 4.
   - `1` — most sensitive: `che indio`, `que indio`, `eh indio` + command-verb patterns.
   - `2` — less sensitive: only `che indio` + command-verb patterns. Removes `que`/`eh` invocation pairs to reduce false positives.
@@ -156,8 +302,10 @@ Switch the VOSK wake-word sensitivity preset at runtime.
 The preset is **in-memory only** — it resets to the default (4) on userbot restart.
 
 **Response**
+
 ```json
 { "preset": 2 }
 ```
+
 - `400` if `preset` is missing, not an integer, or outside 1–4.
 - `503` if `RELAY_SECRET` is not configured.

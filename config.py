@@ -145,6 +145,30 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = os.getenv("GITHUB_REPO", "dilelu94/VaPls-Discord-Bot").strip()
 GITHUB_ISSUE_LABEL = os.getenv("GITHUB_ISSUE_LABEL", "sugerencia").strip()
 
+# --- File transfer (/transferir) --------------------------------------------
+# Directory where uploaded files and metadata are stored.
+TRANSFER_DIR = os.getenv("TRANSFER_DIR", "transfers")
+# Hard limit per file in bytes (15 GB).
+TRANSFER_MAX_SIZE = int(os.getenv("TRANSFER_MAX_SIZE", str(15 * 1024**3)))
+# Default per-file limit shown to the user (10 GB).
+TRANSFER_DEFAULT_LIMIT = int(os.getenv("TRANSFER_DEFAULT_LIMIT", str(10 * 1024**3)))
+# Session TTL in seconds (5 min) — resets on each chunk upload.
+TRANSFER_SESSION_TTL = int(os.getenv("TRANSFER_SESSION_TTL", "300"))
+# How many hours a completed file stays alive before auto-delete.
+TRANSFER_EXPIRY_HOURS = float(os.getenv("TRANSFER_EXPIRY_HOURS", "24"))
+# Chunk size in bytes for resumable upload (10 MB).
+TRANSFER_CHUNK_SIZE = int(os.getenv("TRANSFER_CHUNK_SIZE", str(10 * 1024**2)))
+# Discord role required to use /transferir.
+TRANSFER_REQUIRED_ROLE = os.getenv("TRANSFER_REQUIRED_ROLE", "Main Characters")
+# Minimum free disk bytes before rejecting new uploads (5 GB).
+TRANSFER_DISK_RESERVE = int(os.getenv("TRANSFER_DISK_RESERVE", str(5 * 1024**3)))
+# History log path (permanent record of all uploads).
+TRANSFER_HISTORY_PATH = os.getenv("TRANSFER_HISTORY_PATH", "transfers/_history.jsonl")
+# External base URL for download links (no trailing slash).
+TRANSFER_BASE_URL = os.getenv("TRANSFER_BASE_URL", "http://141.148.84.55")
+# Sweeper interval in seconds (10 min).
+TRANSFER_SWEEPER_INTERVAL = int(os.getenv("TRANSFER_SWEEPER_INTERVAL", "600"))
+
 # --- ASR-quality feedback (inline reactions) -------------------------------
 # Cada transcripción de voz que entra al `/indio` puede ser sampleada para
 # pedir feedback de calidad del ASR: el bot agrega 👍 / ❌ al mensaje de
