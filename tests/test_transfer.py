@@ -222,6 +222,45 @@ def test_history_entry_has_token(_fresh_manager, tmp_path):
     assert isinstance(entry["uploaded_at"], int)
 
 
+# --- endpoints reject when upload expired ------------------------------------
+
+
+async def test_delete_rejected_when_upload_expired(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    sess.completed = True
+    sess.ready = True
+    sess.completed_at = None  # legacy → upload expired
+
+    client = await _client()
+    try:
+        resp = await client.delete(f"/upload/{sess.token}")
+        body = await resp.json()
+    finally:
+        await client.close()
+
+    assert resp.status == 403
+    assert "expirada" in body.get("error", "")
+
+
+async def test_files_rejected_when_upload_expired(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    sess.completed = True
+    sess.ready = True
+    sess.completed_at = None
+
+    client = await _client()
+    try:
+        resp = await client.get(f"/upload/{sess.token}/files")
+        body = await resp.json()
+    finally:
+        await client.close()
+
+    assert resp.status == 403
+    assert "expirada" in body.get("error", "")
+
+
 # --- completed file appears in active list ----------------------------------
 
 

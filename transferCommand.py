@@ -174,14 +174,17 @@ class TransferManager:
             )
         return out
 
-    def is_session_active(self, token: str) -> bool:
+    def is_upload_expired(self, token: str) -> bool:
         sess = self.sessions.get(token)
         if not sess or sess.expired:
-            return False
-        if sess.ready or sess.completed:
             return True
-        age = time.time() - sess.last_activity
-        return age < config.TRANSFER_SESSION_TTL
+        if not sess.ready:
+            age = time.time() - sess.last_activity
+            return age >= config.TRANSFER_SESSION_TTL
+        if sess.completed_at is None:
+            return True
+        age = time.time() - sess.completed_at
+        return age >= config.TRANSFER_SESSION_TTL
 
     # --- history ------------------------------------------------------------
 
@@ -350,23 +353,34 @@ UPLOAD_HTML = """<!DOCTYPE html>
     <div id="timer" class="timer"></div>
   </div>
 
+  <div id="completed-section" class="card" style="display:none;text-align:center">
+    <h2 style="color:#3fb950">✅ Archivo subido</h2>
+    <p id="completed-filename" style="font-size:1.1rem;margin:8px 0"></p>
+    <input type="text" id="completed-link" readonly
+      style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#58a6ff;text-align:center;margin:8px 0;font-size:0.9rem"
+      onclick="this.select();navigator.clipboard?.writeText(this.value)">
+    <button class="btn btn-primary" onclick="copyLink()" style="margin-top:4px">📋 Copiar link</button>
+  </div>
+
   <div id="expired-section" class="card expired" style="display:none">
     <h2>⏰ Sesión expirada</h2>
     <p>Ejecutá <strong>/transferir</strong> en Discord para generar un nuevo link.</p>
   </div>
 </div>
 
-<h2>📋 Archivos activos</h2>
-<div id="active-files" class="card">
-  <p style="color:#8b949e;font-size:0.9rem">Cargando...</p>
-</div>
+<div id="extra-sections">
+  <h2 id="files-heading">📋 Archivos activos</h2>
+  <div id="active-files" class="card">
+    <p style="color:#8b949e;font-size:0.9rem">Cargando...</p>
+  </div>
 
-<h2>📜 Historial de archivos subidos</h2>
-<div id="history" class="card">
-  <p style="color:#8b949e;font-size:0.9rem">Cargando...</p>
-</div>
+  <h2 id="history-heading">📜 Historial de archivos subidos</h2>
+  <div id="history" class="card">
+    <p style="color:#8b949e;font-size:0.9rem">Cargando...</p>
+  </div>
 
-<div id="disk-info" class="disk"></div>
+  <div id="disk-info" class="disk"></div>
+</div>
 
 <script>
 const TOKEN = "{TOKEN}";
@@ -589,7 +603,14 @@ async function startUpload() {{
     el.innerHTML = '<span class="success">✅ Archivo subido correctamente</span>';
     document.getElementById("timer").textContent = "";
     document.getElementById("file-input").disabled = true;
-    loadFiles();
+    document.getElementById("extra-sections").style.display = "none";
+    document.getElementById("upload-section").style.display = "none";
+    document.getElementById("completed-section").style.display = "block";
+    document.getElementById("completed-filename").textContent = file.name;
+    document.getElementById("completed-link").value =
+      window.location.origin + "/dl/" + TOKEN + "/" + file.name;
+    uploading = false;
+    return;
   }} else {{
     const err = await compR.json();
     el.innerHTML = '<span class="error">❌ Error al finalizar: ' + (err.error || "desconocido") + '</span>';
@@ -645,6 +666,13 @@ async function checkSession() {{
   }}
 }}
 
+function copyLink() {{
+  const el = document.getElementById("completed-link");
+  if (!el) return;
+  el.select();
+  navigator.clipboard?.writeText(el.value);
+}}
+
 // --- init -------------------------------------------------------------------
 async function init() {{
   const r = await fetch(`/upload/${{TOKEN}}/status`);
@@ -652,19 +680,26 @@ async function init() {{
   if (!d.valid) {{
     document.getElementById("session-state").innerHTML =
       '<div class="card expired"><h2>❌ Token inválido</h2></div>';
+    document.getElementById("extra-sections").style.display = "none";
     return;
   }}
   if (d.expired) {{
     document.getElementById("upload-section").style.display = "none";
+    document.getElementById("completed-section").style.display = "none";
     document.getElementById("expired-section").style.display = "block";
-  }} else {{
-    if (d.completed) {{
-      document.getElementById("file-input").disabled = true;
-      document.getElementById("status").innerHTML =
-        '<span class="success">✅ Archivo subido</span>';
-    }}
-    document.getElementById("upload-section").style.display = "block";
+    document.getElementById("extra-sections").style.display = "none";
+    return;
   }}
+  if (d.completed) {{
+    document.getElementById("upload-section").style.display = "none";
+    document.getElementById("completed-section").style.display = "block";
+    document.getElementById("extra-sections").style.display = "none";
+    document.getElementById("completed-filename").textContent = d.filename;
+    document.getElementById("completed-link").value =
+      window.location.origin + "/dl/" + TOKEN + "/" + d.filename;
+    return;
+  }}
+  document.getElementById("upload-section").style.display = "block";
   loadFiles();
   loadHistory();
   setInterval(loadFiles, 10000);

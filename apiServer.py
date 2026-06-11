@@ -1203,42 +1203,31 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def uploadStatus(request: web.Request) -> web.Response:
         token = request.match_info["token"]
-        sess = transferCommand.manager.get(token)
+        mgr = transferCommand.manager
+        sess = mgr.get(token)
         if not sess:
             return web.json_response({"valid": False, "expired": True})
-        now = time.time()
-        age = now - sess.last_activity
-        ttl = max(0, int(config.TRANSFER_SESSION_TTL - age))
-        # Upload page expires after SESSION_TTL (5 min) even for completed files.
-        # Legacy sessions (completed before completed_at existed) are treated as expired.
-        if sess.ready:
-            if sess.completed_at is None:
-                upload_expired = True
-                upload_ttl = 0
-            else:
-                upload_age = now - sess.completed_at
-                upload_expired = upload_age >= config.TRANSFER_SESSION_TTL
-                upload_ttl = max(0, int(config.TRANSFER_SESSION_TTL - upload_age))
-        else:
-            upload_expired = (
-                not sess.ready
-                and not sess.completed
-                and age >= config.TRANSFER_SESSION_TTL
+        expired = mgr.is_upload_expired(token)
+        ttl = (
+            0
+            if expired
+            else max(
+                0, int(config.TRANSFER_SESSION_TTL - (time.time() - sess.last_activity))
             )
-            upload_ttl = ttl
+        )
         return web.json_response(
             {
                 "valid": True,
-                "expired": upload_expired,
+                "expired": expired,
                 "completed": sess.completed or sess.ready,
-                "received": sorted(sess.received),
+                "received": sorted(sess.received) if not expired else [],
                 "total_chunks": (sess.total_size + sess.chunk_size - 1)
                 // sess.chunk_size
-                if sess.total_size
+                if sess.total_size and not expired
                 else 0,
-                "filename": sess.filename,
-                "size": sess.total_size,
-                "ttl_remaining": upload_ttl,
+                "filename": sess.filename if not expired else "",
+                "size": sess.total_size if not expired else 0,
+                "ttl_remaining": ttl,
             }
         )
 
@@ -1253,7 +1242,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def uploadDelete(request: web.Request) -> web.Response:
         token = request.match_info["token"]
-        ok = transferCommand.manager.delete(token)
+        mgr = transferCommand.manager
+        if mgr.is_upload_expired(token):
+            return web.json_response({"error": "sesión expirada"}, status=403)
+        ok = mgr.delete(token)
         if not ok:
             return web.json_response({"error": "no encontrado"}, status=404)
         return web.json_response({"ok": True})
@@ -1280,9 +1272,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def transferFiles(request: web.Request) -> web.Response:
         token = request.match_info["token"]
-        if not transferCommand.manager.get(token):
-            return web.json_response({"files": [], "disk_free": 0, "disk_total": 0})
-        files = transferCommand.manager.get_active_files()
+        mgr = transferCommand.manager
+        if mgr.is_upload_expired(token):
+            return web.json_response({"error": "sesión expirada"}, status=403)
+        files = mgr.get_active_files()
         try:
             st = os.statvfs(config.TRANSFER_DIR)
             free = st.f_frsize * st.f_bavail
