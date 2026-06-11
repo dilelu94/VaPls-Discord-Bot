@@ -1209,13 +1209,22 @@ def makeApp(bot: discord.Bot) -> web.Application:
         now = time.time()
         age = now - sess.last_activity
         ttl = max(0, int(config.TRANSFER_SESSION_TTL - age))
-        expired = (
-            not sess.ready and not sess.completed and age >= config.TRANSFER_SESSION_TTL
-        )
+        # Upload page expires after SESSION_TTL (5 min) even for completed files.
+        if sess.ready and sess.completed_at is not None:
+            upload_age = now - sess.completed_at
+            upload_expired = upload_age >= config.TRANSFER_SESSION_TTL
+            upload_ttl = max(0, int(config.TRANSFER_SESSION_TTL - upload_age))
+        else:
+            upload_expired = (
+                not sess.ready
+                and not sess.completed
+                and age >= config.TRANSFER_SESSION_TTL
+            )
+            upload_ttl = ttl
         return web.json_response(
             {
                 "valid": True,
-                "expired": expired,
+                "expired": upload_expired,
                 "completed": sess.completed or sess.ready,
                 "received": sorted(sess.received),
                 "total_chunks": (sess.total_size + sess.chunk_size - 1)
@@ -1224,7 +1233,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 else 0,
                 "filename": sess.filename,
                 "size": sess.total_size,
-                "ttl_remaining": ttl if not sess.ready else 86400,
+                "ttl_remaining": upload_ttl,
             }
         )
 
@@ -1279,6 +1288,16 @@ def makeApp(bot: discord.Bot) -> web.Application:
             {"files": files, "disk_free": free, "disk_total": total}
         )
 
+    async def uploadExtend(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        mgr = transferCommand.manager
+        sess = mgr.get(token)
+        if not sess or not sess.ready:
+            return web.json_response({"error": "no encontrado"}, status=404)
+        mgr.extend(token)
+        remaining = int(config.TRANSFER_EXPIRY_HOURS * 3600)
+        return web.json_response({"ok": True, "remaining_secs": remaining})
+
     async def transferHistory(request: web.Request) -> web.Response:
         token = request.match_info["token"]
         if not transferCommand.manager.get(token):
@@ -1294,6 +1313,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_delete("/upload/{token}", uploadDelete)
     app.router.add_get("/upload/{token}/files", transferFiles)
     app.router.add_get("/upload/{token}/history", transferHistory)
+    app.router.add_post("/upload/{token}/extend", uploadExtend)
     app.router.add_get("/dl/{token}", downloadFile)
     app.router.add_get("/dl/{token}/{filename}", downloadFile)
 

@@ -1753,10 +1753,14 @@ async def transferir(ctx):
             channel = bot.get_channel(sess.channel_id)
             if channel:
                 try:
-                    await channel.send(
-                        f"📁 **{sess.author_name}** compartió un archivo:\n"
-                        f"[{sess.filename}]({dl}) — {sz_str} — 24h ⏳"
+                    embed = discord.Embed(
+                        title="✅ Archivo subido exitosamente",
+                        description=f"**{sess.filename}**\n{sz_str}",
+                        color=0x238636,
                     )
+                    view = discord.ui.View()
+                    view.add_item(discord.ui.Button(label="🔗 Copiar link", url=dl))
+                    await channel.send(embed=embed, view=view)
                 except Exception:
                     log.exception("failed to post transfer link")
             return

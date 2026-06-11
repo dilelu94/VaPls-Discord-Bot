@@ -38,6 +38,7 @@ class TransferSession:
     completed: bool = False
     ready: bool = False
     expired: bool = False
+    completed_at: Optional[float] = None
 
 
 class TransferManager:
@@ -117,6 +118,7 @@ class TransferManager:
             )
         sess.completed = True
         sess.ready = True
+        sess.completed_at = time.time()
         sess.last_activity = time.time()
         self.append_history(sess)
         self._save_index()
@@ -136,6 +138,12 @@ class TransferManager:
 
     def get(self, token: str) -> Optional[TransferSession]:
         return self.sessions.get(token)
+
+    def extend(self, token: str) -> None:
+        sess = self.sessions.get(token)
+        if sess:
+            sess.last_activity = time.time()
+            self._save_index()
 
     def touch(self, token: str) -> None:
         sess = self.sessions.get(token)
@@ -301,6 +309,8 @@ UPLOAD_HTML = """<!DOCTYPE html>
   .btn-primary:disabled {{ opacity: 0.5; cursor: not-allowed; }}
   .btn-danger {{ background: #da3633; color: #fff; }}
   .btn-danger:hover {{ background: #f85149; }}
+  .btn-extend {{ background: #1f6feb; color: #fff; padding: 6px 10px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; }}
+  .btn-extend:hover {{ background: #388bfd; }}
   progress {{ width: 100%; height: 12px; border-radius: 6px; margin: 8px 0; }}
   progress::-webkit-progress-bar {{ background: #21262d; border-radius: 6px; }}
   progress::-webkit-progress-value {{ background: #238636; border-radius: 6px; }}
@@ -403,12 +413,16 @@ function renderFiles(files) {{
   for (const f of files) {{
     const rem = formatTime(f.remaining_secs);
     const sz = formatSize(f.size);
+    const extBtn = `<button class="btn btn-extend" onclick="extendFile('${{f.token}}')" title="Extender 24h">➕</button>`;
     html += `<div class="file-row">
       <div class="file-info">
         <a class="file-name" href="${{f.url}}">${{f.filename}}</a>
         <div class="file-meta">${{sz}} &middot; ${{f.author_name}} &middot; ${{rem}}</div>
       </div>
-      <button class="btn btn-danger" onclick="deleteFile('${{f.token}}')">🗑️</button>
+      <div style="display:flex;gap:4px">
+        ${{extBtn}}
+        <button class="btn btn-danger" onclick="deleteFile('${{f.token}}')">🗑️</button>
+      </div>
     </div>`;
   }}
   el.innerHTML = html;
@@ -471,6 +485,18 @@ async function deleteFile(fileToken) {{
   }}
 }}
 
+async function extendFile(fileToken) {{
+  try {{
+    const r = await fetch(`/upload/${{fileToken}}/extend`, {{method:"POST"}});
+    if (r.ok) {{
+      const data = await r.json();
+      loadFiles();
+    }}
+  }} catch (e) {{
+    console.error("extend error", e);
+  }}
+}}
+
 // --- chunked upload ---------------------------------------------------------
 document.getElementById("file-input").addEventListener("change", function(e) {{
   file = e.target.files[0];
@@ -484,8 +510,27 @@ document.getElementById("file-input").addEventListener("change", function(e) {{
   startUpload();
 }});
 
+let uploadStartTime = null;
+let uploadedBytes = 0;
+
+function updateUploadETA() {{
+  const el = document.getElementById("timer");
+  if (!el || !uploading || !uploadStartTime) return;
+  const elapsed = (Date.now() - uploadStartTime) / 1000;
+  if (elapsed < 2 || uploadedBytes < 1) return;
+  const speed = uploadedBytes / elapsed;
+  const remaining = file.size - uploadedBytes;
+  const eta = remaining / speed;
+  if (eta <= 0 || !isFinite(eta)) return;
+  const m = Math.floor(eta / 60);
+  const s = Math.floor(eta % 60);
+  el.textContent = `⏱️ Tiempo estimado: ${{m}}:${{s.toString().padStart(2, "0")}}`;
+}}
+
 async function startUpload() {{
   uploading = true;
+  uploadStartTime = Date.now();
+  uploadedBytes = 0;
   const el = document.getElementById("status");
   const prog = document.getElementById("progress");
   prog.value = 0;
@@ -511,6 +556,7 @@ async function startUpload() {{
 
   for (let i = 0; i < totalChunks; i++) {{
     if (chunksSent.has(i)) {{
+      uploadedBytes += Math.min(CHUNK_SIZE, file.size - uploadedBytes);
       prog.value = Math.round((i / totalChunks) * 100);
       continue;
     }}
@@ -519,6 +565,7 @@ async function startUpload() {{
     const chunk = file.slice(start, end);
 
     try {{
+      const t0 = Date.now();
       const r = await fetch(`/upload/${{TOKEN}}/chunk/${{i}}`, {{method:"POST", body:chunk}});
       if (!r.ok) {{
         const err = await r.json();
@@ -526,18 +573,21 @@ async function startUpload() {{
         uploading = false;
         return;
       }}
+      uploadedBytes += chunk.size;
     }} catch (e) {{
       el.innerHTML = '<span class="error">❌ Error de red en chunk ' + i + '. Recargá para reanudar.</span>';
       uploading = false;
       return;
     }}
     prog.value = Math.round(((i + 1) / totalChunks) * 100);
+    updateUploadETA();
   }}
 
   // complete
   const compR = await fetch(`/upload/${{TOKEN}}/complete`, {{method:"POST"}});
   if (compR.ok) {{
     el.innerHTML = '<span class="success">✅ Archivo subido correctamente</span>';
+    document.getElementById("timer").textContent = "";
     document.getElementById("file-input").disabled = true;
     loadFiles();
   }} else {{
@@ -551,12 +601,23 @@ async function startUpload() {{
 function updateTimer() {{
   const el = document.getElementById("timer");
   if (!el) return;
+
+  // Show ETA during upload instead of session timer
+  if (uploading) {{
+    updateUploadETA();
+    return;
+  }}
+
   fetch(`/upload/${{TOKEN}}/status`)
     .then(r => r.json())
     .then(d => {{
       if (d.expired) {{
         el.textContent = "⏰ Sesión expirada";
         active = false;
+        return;
+      }}
+      if (d.completed) {{
+        el.textContent = "";
         return;
       }}
       const secs = d.ttl_remaining;
@@ -568,7 +629,7 @@ function updateTimer() {{
       }}
       const m = Math.floor(secs / 60);
       const s = secs % 60;
-      el.textContent = `⏱️ ${{m}}:${{s.toString().padStart(2, "0")}}`;
+      el.textContent = `⏱️ Sesión activa: ${{m}}:${{s.toString().padStart(2, "0")}}`;
     }})
     .catch(() => {{}});
 }}
