@@ -122,7 +122,7 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
    - POST `/upload/{token}/init` — inicia la sesión con filename y tamaño
    - POST `/upload/{token}/chunk/{idx}` — envía cada chunk
    - POST `/upload/{token}/complete` — finaliza y gatilla la notificación
-4. **`uploadComplete` postea embed en Discord** → el bot envía un mensaje embed con el nombre del archivo y un botón **🔗 Descargar** al canal donde se ejecutó `/transferir`
+4. **`uploadComplete` postea embed en Discord** → el bot envía un mensaje embed con el nombre del archivo y un botón **🔗 Descargar** al canal donde se ejecutó `/transferir`. La URL del botón se codifica correctamente (espacios → `%20`, etc.)
 5. **Receptor hace click** → GET `/dl/{token}/{filename}` descarga el archivo
 
 ### Expiración

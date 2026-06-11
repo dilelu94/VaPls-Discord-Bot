@@ -13,7 +13,7 @@ import json
 import os
 import time
 import uuid
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 import logging
 from typing import Any, Optional
 
@@ -1240,7 +1240,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if err:
             return web.json_response({"error": err}, status=400)
         sess = transferCommand.manager.get(token)
-        dl = f"{config.TRANSFER_BASE_URL}/dl/{token}/{sess.filename}"
+        dl = f"{config.TRANSFER_BASE_URL}/dl/{token}/{quote(sess.filename)}"
         sz = sess.total_size
         gb_val = sz / (1024**3)
         sz_str = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{sz / (1024**2):.0f} MB"
