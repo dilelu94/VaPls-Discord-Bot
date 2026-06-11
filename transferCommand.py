@@ -389,10 +389,6 @@ UPLOAD_HTML = """<!DOCTYPE html>
       style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#58a6ff;text-align:center;margin:8px 0;font-size:0.9rem"
       onclick="this.select();copyLink()">
     <button class="btn btn-primary" onclick="copyLink()" style="margin-top:4px">📋 Copiar link</button>
-    <p style="font-size:0.8rem;color:#8b949e;margin-top:6px">
-      O compartí el link directamente:
-      <a id="completed-dl" href="#" style="color:#58a6ff">📥 descargar</a>
-    </p>
   </div>
 
   <div id="expired-section" class="card expired" style="display:none">
@@ -642,7 +638,6 @@ async function startUpload() {{
     const dl = window.location.origin + "/dl/" + TOKEN + "/" + file.name;
     document.getElementById("completed-filename").textContent = file.name;
     document.getElementById("completed-link").value = dl;
-    document.getElementById("completed-dl").href = dl;
     uploading = false;
     return;
   }} else {{
@@ -735,7 +730,6 @@ async function init() {{
     const dl2 = window.location.origin + "/dl/" + TOKEN + "/" + d.filename;
     document.getElementById("completed-filename").textContent = d.filename;
     document.getElementById("completed-link").value = dl2;
-    document.getElementById("completed-dl").href = dl2;
     return;
   }}
   document.getElementById("upload-section").style.display = "block";
