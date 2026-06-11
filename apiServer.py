@@ -1237,8 +1237,31 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if err:
             return web.json_response({"error": err}, status=400)
         sess = transferCommand.manager.get(token)
-        url = f"{config.TRANSFER_BASE_URL}/dl/{token}/{sess.filename}"
-        return web.json_response({"ok": True, "url": url})
+        dl = f"{config.TRANSFER_BASE_URL}/dl/{token}/{sess.filename}"
+        sz = sess.total_size
+        gb_val = sz / (1024**3)
+        sz_str = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{sz / (1024**2):.0f} MB"
+        try:
+            channel = bot.get_channel(sess.channel_id)
+            if channel:
+                embed = discord.Embed(
+                    title="✅ Archivo subido exitosamente",
+                    description=f"**{sess.filename}**\n{sz_str}",
+                    color=0x238636,
+                )
+                view = discord.ui.View()
+                view.add_item(discord.ui.Button(label="🔗 Descargar", url=dl))
+                await channel.send(embed=embed, view=view)
+                logger.info("transfer embed posted token=%s", token[:8])
+            else:
+                logger.warning(
+                    "transfer no channel token=%s channel_id=%s",
+                    token[:8],
+                    sess.channel_id,
+                )
+        except Exception:
+            logger.exception("failed to post transfer completion embed")
+        return web.json_response({"ok": True, "url": dl})
 
     async def uploadDelete(request: web.Request) -> web.Response:
         token = request.match_info["token"]

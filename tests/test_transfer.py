@@ -5,6 +5,7 @@ Covers:
 - uploadStatus changes from completed → expired after SESSION_TTL
 - Download endpoint remains available after upload page expires
 - extract_role_check for @Main Characters gating
+- uploadComplete endpoint posts Discord embed via bot
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
@@ -275,3 +276,109 @@ def test_completed_file_appears_in_active_list(_fresh_manager, tmp_path):
     assert entry["token"] == sess.token
     assert entry["filename"] == "test.txt"
     assert isinstance(entry["uploaded_at"], int)
+
+
+# --- uploadComplete posts Discord embed --------------------------------------
+
+
+async def test_upload_complete_posts_embed_to_correct_channel(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.add_chunk(sess.token, 0, b"hello")
+
+    bot = MagicMock()
+    ch = AsyncMock()
+    bot.get_channel.return_value = ch
+
+    app = makeApp(bot)
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        resp = await c.post(f"/upload/{sess.token}/complete")
+        body = await resp.json()
+    finally:
+        await c.close()
+
+    assert resp.status == 200
+    assert body["ok"] is True
+    bot.get_channel.assert_called_once_with(42)
+    ch.send.assert_awaited_once()
+
+
+async def test_upload_complete_embed_contains_download_button(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.add_chunk(sess.token, 0, b"hello")
+
+    bot = MagicMock()
+    ch = AsyncMock()
+    bot.get_channel.return_value = ch
+
+    app = makeApp(bot)
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        await c.post(f"/upload/{sess.token}/complete")
+    finally:
+        await c.close()
+
+    args, kwargs = ch.send.await_args
+    assert "view" in kwargs
+    view = kwargs["view"]
+    assert len(view.children) == 1
+    btn = view.children[0]
+    assert "Descargar" in btn.label
+    assert btn.url is not None
+    assert sess.token in btn.url
+
+
+async def test_upload_complete_returns_ok_even_when_channel_gone(
+    _fresh_manager, tmp_path
+):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.add_chunk(sess.token, 0, b"hello")
+
+    bot = MagicMock()
+    bot.get_channel.return_value = None
+
+    app = makeApp(bot)
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        resp = await c.post(f"/upload/{sess.token}/complete")
+        body = await resp.json()
+    finally:
+        await c.close()
+
+    assert resp.status == 200
+    assert body["ok"] is True
+
+
+async def test_upload_complete_returns_ok_even_when_discord_send_fails(
+    _fresh_manager, tmp_path
+):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.add_chunk(sess.token, 0, b"hello")
+
+    bot = MagicMock()
+    ch = AsyncMock()
+    ch.send.side_effect = Exception("discord outage")
+    bot.get_channel.return_value = ch
+
+    app = makeApp(bot)
+    c = TestClient(TestServer(app))
+    await c.start_server()
+    try:
+        resp = await c.post(f"/upload/{sess.token}/complete")
+        body = await resp.json()
+    finally:
+        await c.close()
+
+    assert resp.status == 200
+    assert body["ok"] is True

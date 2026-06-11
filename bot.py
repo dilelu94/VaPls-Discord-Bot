@@ -1736,61 +1736,6 @@ async def transferir(ctx):
         ephemeral=True,
     )
 
-    # Wait for upload to complete, then post download link in channel.
-    max_wait = config.TRANSFER_EXPIRY_HOURS * 3600
-    polled = 0
-    log.info("polling start token=%s", sess.token[:8])
-    while polled < max_wait:
-        await asyncio.sleep(5)
-        polled += 5
-        sess = transferManager.get(sess.token)
-        log.debug(
-            "poll token=%s polled=%d found=%s expired=%s ready=%s",
-            sess.token[:8],
-            polled,
-            sess is not None,
-            getattr(sess, "expired", None),
-            getattr(sess, "ready", None),
-        )
-        if not sess or sess.expired:
-            log.info(
-                "poll abort token=%s reason=%s",
-                sess.token[:8],
-                "not_found" if not sess else "expired",
-            )
-            return
-        if sess.ready:
-            dl = f"{config.TRANSFER_BASE_URL}/dl/{sess.token}/{sess.filename}"
-            sz = sess.total_size
-            gb_val = sz / (1024**3)
-            sz_str = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{sz / (1024**2):.0f} MB"
-            channel = bot.get_channel(sess.channel_id)
-            log.info(
-                "poll ready token=%s channel=%s",
-                sess.token[:8],
-                channel.id if channel else None,
-            )
-            if channel:
-                try:
-                    embed = discord.Embed(
-                        title="✅ Archivo subido exitosamente",
-                        description=f"**{sess.filename}**\n{sz_str}",
-                        color=0x238636,
-                    )
-                    view = discord.ui.View()
-                    view.add_item(discord.ui.Button(label="🔗 Copiar link", url=dl))
-                    await channel.send(embed=embed, view=view)
-                    log.info("poll posted token=%s", sess.token[:8])
-                except Exception:
-                    log.exception("failed to post transfer link")
-            else:
-                log.warning(
-                    "poll no channel token=%s channel_id=%s",
-                    sess.token[:8],
-                    sess.channel_id,
-                )
-            return
-
 
 @bot.slash_command(
     name="help", description="Lista los comandos del bot y cómo funciona"
@@ -1886,6 +1831,57 @@ async def help_cmd(ctx):
         await ctx.followup.send(embed=embed, ephemeral=True)
     except Exception:
         await safe_respond(ctx, "No pude mandar el help — fijate los logs.")
+
+
+@bot.slash_command(
+    name="spacewar",
+    description="Guía para tener Spacewar gratis en tu biblioteca de Steam",
+)
+async def spacewar(ctx):
+    """Slash command: explain how to get Spacewar on Steam.
+
+    Ephemeral guide for users who want to add Steam's free dev-test app
+    to their library without purchasing anything.
+
+    Args:
+        ctx: Discord application context.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "spacewar")
+
+    msg = (
+        "**🎮 Spacewar — guía rápida**\n\n"
+        "Spacewar es una app de testing de Valve. No hay que instalarla, "
+        "solo tenerla en la biblioteca para ciertos juegos que la necesitan.\n\n"
+        "**¿Ya la tenés?**\n"
+        "1. Abrí Steam.\n"
+        "2. Andá a tu **Biblioteca**.\n"
+        "3. Escribí `Spacewar` en la barra de búsqueda de la izquierda.\n"
+        "4. Si aparece, ya la tenés, no necesitás hacer nada.\n\n"
+        "**Si no la tenés — Windows:**\n"
+        "1. Asegurate de que Steam esté abierto.\n"
+        "2. Presioná `Windows + R`, pegá esto y dale Enter:\n"
+        "   ```\n"
+        "   steam://run/480\n"
+        "   ```\n"
+        "   Steam se abre solito y la descarga/agrega. "
+        "Una vez que aparece en tu biblioteca, se queda ahí para siempre.\n\n"
+        "**Linux / Steam Deck:**\n"
+        "   Abrí una terminal y ejecutá:\n"
+        "   ```\n"
+        "   steam steam://run/480\n"
+        "   ```\n\n"
+        "**Bazzite:**\n"
+        "   Abrí una terminal y ejecutá:\n"
+        "   ```\n"
+        "   flatpak run com.valvesoftware.Steam steam://run/480\n"
+        "   ```\n\n"
+        "⚠️ Si tira error, asegurate de tener Steam abierto antes de mandar el comando."
+    )
+    await safe_respond(ctx, msg, ephemeral=True)
 
 
 @bot.slash_command(name="restart", description="devtool - no usar")

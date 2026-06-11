@@ -385,10 +385,8 @@ UPLOAD_HTML = """<!DOCTYPE html>
   <div id="completed-section" class="card" style="display:none;text-align:center">
     <h2 style="color:#3fb950">✅ Archivo subido</h2>
     <p id="completed-filename" style="font-size:1.1rem;margin:8px 0"></p>
-    <input type="text" id="completed-link" readonly
-      style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#58a6ff;text-align:center;margin:8px 0;font-size:0.9rem"
-      onclick="this.select();navigator.clipboard?.writeText(this.value)">
-    <button class="btn btn-primary" onclick="copyLink()" style="margin-top:4px">📋 Copiar link</button>
+    <a id="completed-link" class="btn btn-primary" target="_blank" rel="noopener"
+      style="text-decoration:none;display:inline-block;margin-top:4px">📥 Descargar archivo</a>
   </div>
 
   <div id="expired-section" class="card expired" style="display:none">
@@ -636,7 +634,7 @@ async function startUpload() {{
     document.getElementById("upload-section").style.display = "none";
     document.getElementById("completed-section").style.display = "block";
     document.getElementById("completed-filename").textContent = file.name;
-    document.getElementById("completed-link").value =
+    document.getElementById("completed-link").href =
       window.location.origin + "/dl/" + TOKEN + "/" + file.name;
     uploading = false;
     return;
@@ -695,13 +693,6 @@ async function checkSession() {{
   }}
 }}
 
-function copyLink() {{
-  const el = document.getElementById("completed-link");
-  if (!el) return;
-  el.select();
-  navigator.clipboard?.writeText(el.value);
-}}
-
 // --- init -------------------------------------------------------------------
 async function init() {{
   const r = await fetch(`/upload/${{TOKEN}}/status`);
@@ -724,7 +715,7 @@ async function init() {{
     document.getElementById("completed-section").style.display = "block";
     document.getElementById("extra-sections").style.display = "none";
     document.getElementById("completed-filename").textContent = d.filename;
-    document.getElementById("completed-link").value =
+    document.getElementById("completed-link").href =
       window.location.origin + "/dl/" + TOKEN + "/" + d.filename;
     return;
   }}
