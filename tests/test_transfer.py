@@ -226,7 +226,7 @@ def test_history_entry_has_token(_fresh_manager, tmp_path):
 # --- endpoints reject when upload expired ------------------------------------
 
 
-async def test_delete_rejected_when_upload_expired(_fresh_manager, tmp_path):
+async def test_delete_works_even_when_upload_expired(_fresh_manager, tmp_path):
     mgr = _fresh_manager
     sess = mgr.create_session(1, "tester", 42, 100)
     sess.completed = True
@@ -240,8 +240,9 @@ async def test_delete_rejected_when_upload_expired(_fresh_manager, tmp_path):
     finally:
         await client.close()
 
-    assert resp.status == 403
-    assert "expirada" in body.get("error", "")
+    assert resp.status == 200
+    assert body["ok"] is True
+    assert sess.expired is True
 
 
 async def test_files_rejected_when_upload_expired(_fresh_manager, tmp_path):
@@ -356,6 +357,31 @@ async def test_upload_complete_returns_ok_even_when_channel_gone(
 
     assert resp.status == 200
     assert body["ok"] is True
+
+
+async def test_status_returns_file_exists_and_filename_when_expired(
+    _fresh_manager, tmp_path
+):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    _complete_upload(mgr, sess.token)
+    sess.completed_at = time.time() - 600  # expired
+
+    token_dir = tmp_path / "transfers" / sess.token
+    token_dir.mkdir(parents=True, exist_ok=True)
+    (token_dir / "test.txt").write_text("hello")
+
+    client = await _client()
+    try:
+        resp = await client.get(f"/upload/{sess.token}/status")
+        body = await resp.json()
+    finally:
+        await client.close()
+
+    assert "file_exists" in body
+    assert body["file_exists"] is True
+    assert body["filename"] == "test.txt"
+    assert body["expired"] is True
 
 
 async def test_upload_complete_returns_ok_even_when_discord_send_fails(

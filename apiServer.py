@@ -1215,6 +1215,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 0, int(config.TRANSFER_SESSION_TTL - (time.time() - sess.last_activity))
             )
         )
+        filepath = os.path.join(config.TRANSFER_DIR, token, sess.filename)
+        file_exists = os.path.isfile(filepath)
         return web.json_response(
             {
                 "valid": True,
@@ -1225,9 +1227,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 // sess.chunk_size
                 if sess.total_size and not expired
                 else 0,
-                "filename": sess.filename if not expired else "",
-                "size": sess.total_size if not expired else 0,
+                "filename": sess.filename,
+                "size": sess.total_size,
                 "ttl_remaining": ttl,
+                "file_exists": file_exists,
             }
         )
 
@@ -1266,8 +1269,6 @@ def makeApp(bot: discord.Bot) -> web.Application:
     async def uploadDelete(request: web.Request) -> web.Response:
         token = request.match_info["token"]
         mgr = transferCommand.manager
-        if mgr.is_upload_expired(token):
-            return web.json_response({"error": "sesión expirada"}, status=403)
         ok = mgr.delete(token)
         if not ok:
             return web.json_response({"error": "no encontrado"}, status=404)

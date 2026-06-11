@@ -394,6 +394,11 @@ UPLOAD_HTML = """<!DOCTYPE html>
   <div id="expired-section" class="card expired" style="display:none">
     <h2>⏰ Sesión expirada</h2>
     <p>Ejecutá <strong>/transferir</strong> en Discord para generar un nuevo link.</p>
+    <div id="expired-file-info" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #30363d">
+      <p id="expired-filename" style="font-size:0.9rem;margin-bottom:8px"></p>
+      <button class="btn btn-danger" onclick="deleteExpired()">🗑️ Borrar archivo</button>
+      <p id="deleted-msg" style="color:#3fb950;font-size:0.9rem;display:none;margin-top:8px">✅ Archivo borrado</p>
+    </div>
   </div>
 </div>
 
@@ -706,6 +711,21 @@ function copyLink() {{
   }}
 }}
 
+async function deleteExpired() {{
+  try {{
+    const r = await fetch(`/upload/${{TOKEN}}`, {{method:"DELETE"}});
+    if (r.ok) {{
+      document.getElementById("expired-file-info").style.display = "none";
+      document.getElementById("deleted-msg").style.display = "block";
+    }} else {{
+      const body = await r.json();
+      alert(body.error || "Error al borrar");
+    }}
+  }} catch (e) {{
+    alert("Error de red");
+  }}
+}}
+
 // --- init -------------------------------------------------------------------
 async function init() {{
   const r = await fetch(`/upload/${{TOKEN}}/status`);
@@ -721,6 +741,10 @@ async function init() {{
     document.getElementById("completed-section").style.display = "none";
     document.getElementById("expired-section").style.display = "block";
     document.getElementById("extra-sections").style.display = "none";
+    if (d.file_exists) {{
+      document.getElementById("expired-file-info").style.display = "block";
+      document.getElementById("expired-filename").textContent = d.filename;
+    }}
     return;
   }}
   if (d.completed) {{
