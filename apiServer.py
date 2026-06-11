@@ -72,7 +72,11 @@ async def authMiddleware(request: web.Request, handler):
     if request.path.startswith("/admin"):
         return await handler(request)
     # Transfer routes use the token as auth.
-    if request.path.startswith("/upload") or request.path.startswith("/dl"):
+    if (
+        request.path.startswith("/upload")
+        or request.path.startswith("/dl")
+        or request.path.startswith("/static")
+    ):
         return await handler(request)
     err = _checkAuth(request)
     if err is not None:

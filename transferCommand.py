@@ -439,6 +439,7 @@ UPLOAD_HTML = """<!DOCTYPE html>
   <div id="expired-section" class="card expired" style="display:none">
     <h2>⏰ Sesión expirada</h2>
     <p>Ejecutá <strong>/transferir</strong> en Discord para generar un nuevo link.</p>
+    <p style="margin-top:6px">Volvé a usar <strong>/transferir</strong></p>
     <div id="expired-file-info" style="display:none;margin-top:12px;padding-top:12px;border-top:1px solid #30363d">
       <p id="expired-filename" style="font-size:0.9rem;margin-bottom:8px"></p>
       <button class="btn btn-danger" onclick="deleteExpired()">🗑️ Borrar archivo</button>
