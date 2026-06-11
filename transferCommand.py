@@ -14,6 +14,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
+from urllib.parse import quote
 from typing import Optional
 
 import config
@@ -322,6 +323,47 @@ class TransferManager:
 
 manager = TransferManager()
 
+
+DOWNLOAD_HTML = """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Descargar archivo</title>
+<style>
+  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; max-width: 600px; margin: auto; display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
+  .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 32px; text-align: center; width: 100%; }}
+  .filename {{ font-size: 1.1rem; color: #58a6ff; margin: 12px 0 4px; word-break: break-all; }}
+  .size {{ font-size: 0.85rem; color: #8b949e; margin-bottom: 24px; }}
+  .btn {{ display: inline-block; padding: 12px 32px; border-radius: 6px; border: none; cursor: pointer; font-size: 16px; text-decoration: none; }}
+  .btn-download {{ background: #238636; color: #fff; }}
+  .btn-download:hover {{ background: #2ea043; }}
+  .gone {{ color: #8b949e; font-size: 1rem; margin-top: 12px; }}
+</style>
+</head>
+<body>
+<div class="card">
+  <div id="available">
+    <div style="font-size:3rem;margin-bottom:8px">📎</div>
+    <div class="filename">{FILENAME}</div>
+    <div class="size">{SIZE}</div>
+    <a class="btn btn-download" href="{RAW_URL}">⬇️ Descargar</a>
+  </div>
+  <div id="unavailable" style="display:none">
+    <div style="font-size:3rem;margin-bottom:8px">❌</div>
+    <div class="gone">Archivo no disponible</div>
+  </div>
+</div>
+<script>
+var ok = {OK};
+if (!ok) {{
+  document.getElementById("available").style.display = "none";
+  document.getElementById("unavailable").style.display = "block";
+}}
+</script>
+</body>
+</html>"""
 
 UPLOAD_HTML = """<!DOCTYPE html>
 <html lang="es">
@@ -634,16 +676,8 @@ async function startUpload() {{
   // complete
   const compR = await fetch(`/upload/${{TOKEN}}/complete`, {{method:"POST"}});
   if (compR.ok) {{
-    el.innerHTML = '<span class="success">✅ Archivo subido correctamente</span>';
-    document.getElementById("timer").textContent = "";
-    document.getElementById("file-input").disabled = true;
-    document.getElementById("extra-sections").style.display = "none";
-    document.getElementById("upload-section").style.display = "none";
-    document.getElementById("completed-section").style.display = "block";
-    const dl = window.location.origin + "/dl/" + TOKEN + "/" + file.name;
-    document.getElementById("completed-filename").textContent = file.name;
-    document.getElementById("completed-link").value = dl;
     uploading = false;
+    window.location.href = "/dl/" + TOKEN + "/" + encodeURIComponent(file.name);
     return;
   }} else {{
     const err = await compR.json();
@@ -736,24 +770,15 @@ async function init() {{
     document.getElementById("extra-sections").style.display = "none";
     return;
   }}
-  if (d.expired) {{
-    document.getElementById("upload-section").style.display = "none";
-    document.getElementById("completed-section").style.display = "none";
-    document.getElementById("expired-section").style.display = "block";
+  if (d.expired || d.completed) {{
+    document.getElementById("session-state").innerHTML =
+      '<div class="card" style="text-align:center;padding:40px"><p style="color:#8b949e;font-size:0.9rem">' +
+      (d.completed ? '✅ Archivo subido' : '⏰ Sesión expirada') +
+      '</p></div>';
     document.getElementById("extra-sections").style.display = "none";
-    if (d.file_exists) {{
-      document.getElementById("expired-file-info").style.display = "block";
-      document.getElementById("expired-filename").textContent = d.filename;
+    if (d.completed && d.filename) {{
+      window.location.href = "/dl/" + TOKEN + "/" + encodeURIComponent(d.filename);
     }}
-    return;
-  }}
-  if (d.completed) {{
-    document.getElementById("upload-section").style.display = "none";
-    document.getElementById("completed-section").style.display = "block";
-    document.getElementById("extra-sections").style.display = "none";
-    const dl2 = window.location.origin + "/dl/" + TOKEN + "/" + d.filename;
-    document.getElementById("completed-filename").textContent = d.filename;
-    document.getElementById("completed-link").value = dl2;
     return;
   }}
   document.getElementById("upload-section").style.display = "block";
@@ -768,6 +793,20 @@ init();
 </script>
 </body>
 </html>"""
+
+
+def format_download_html(token: str, filename: str, size: int, ok: bool) -> str:
+    if ok:
+        gb_val = size / (1024**3)
+        sz = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{size / (1024**2):.0f} MB"
+    else:
+        sz = ""
+    return DOWNLOAD_HTML.format(
+        FILENAME=filename,
+        SIZE=sz,
+        RAW_URL=f"/dl/{token}/{quote(filename)}/raw",
+        OK="true" if ok else "false",
+    )
 
 
 def format_upload_html(token: str) -> str:

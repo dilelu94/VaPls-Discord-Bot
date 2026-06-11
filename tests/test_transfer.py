@@ -162,7 +162,19 @@ async def test_download_still_works_after_upload_expired(_fresh_manager, tmp_pat
         await client.close()
 
     assert dl_resp.status == 200
-    assert dl_body == "hello world"
+    assert "Descargar" in dl_body
+    assert "test.txt" in dl_body
+    assert "/raw" in dl_body
+
+    client2 = await _client()
+    try:
+        raw_resp = await client2.get(f"/dl/{sess.token}/test.txt/raw")
+        raw_body = await raw_resp.text()
+    finally:
+        await client2.close()
+
+    assert raw_resp.status == 200
+    assert raw_body == "hello world"
 
 
 async def test_status_expired_for_inactive_uncompleted(_fresh_manager, tmp_path):

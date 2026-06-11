@@ -1278,15 +1278,26 @@ def makeApp(bot: discord.Bot) -> web.Application:
         token = request.match_info["token"]
         filename = request.match_info.get("filename", "")
         sess = transferCommand.manager.get(token)
+        if not filename and sess:
+            filename = sess.filename
+        filepath = os.path.join(config.TRANSFER_DIR, token, filename)
+        ok = sess is not None and os.path.isfile(filepath)
+        html = transferCommand.format_download_html(
+            token, filename, sess.total_size if sess else 0, ok
+        )
+        return web.Response(text=html, content_type="text/html")
+
+    async def downloadRaw(request: web.Request) -> web.Response:
+        token = request.match_info["token"]
+        filename = request.match_info.get("filename", "")
+        sess = transferCommand.manager.get(token)
         if not sess or not sess.ready:
-            return web.Response(
-                text="Archivo no encontrado o no disponible", status=404
-            )
+            return web.Response(text="Archivo no disponible", status=404)
         if not filename:
             filename = sess.filename
         filepath = os.path.join(config.TRANSFER_DIR, token, filename)
         if not os.path.isfile(filepath):
-            return web.Response(text="Archivo no encontrado", status=404)
+            return web.Response(text="Archivo no disponible", status=404)
         return web.FileResponse(
             path=filepath,
             headers={
@@ -1338,6 +1349,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/upload/{token}/extend", uploadExtend)
     app.router.add_get("/dl/{token}", downloadFile)
     app.router.add_get("/dl/{token}/{filename}", downloadFile)
+    app.router.add_get("/dl/{token}/{filename}/raw", downloadRaw)
 
     app.router.add_get("/admin", adminPage)
     app.router.add_get("/members", members)
