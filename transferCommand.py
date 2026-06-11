@@ -330,10 +330,12 @@ DOWNLOAD_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Descargar archivo</title>
+<link rel="icon" href="/static/icon.jpg" type="image/jpeg">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; max-width: 600px; margin: auto; display: flex; min-height: 100vh; align-items: center; justify-content: center; }}
   .card {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 32px; text-align: center; width: 100%; }}
+  .icon {{ width: 96px; height: 96px; border-radius: 12px; object-fit: cover; margin-bottom: 8px; }}
   .filename {{ font-size: 1.1rem; color: #58a6ff; margin: 12px 0 4px; word-break: break-all; }}
   .size {{ font-size: 0.85rem; color: #8b949e; margin-bottom: 24px; }}
   .btn {{ display: inline-block; padding: 12px 32px; border-radius: 6px; border: none; cursor: pointer; font-size: 16px; text-decoration: none; }}
@@ -345,7 +347,7 @@ DOWNLOAD_HTML = """<!DOCTYPE html>
 <body>
 <div class="card">
   <div id="available">
-    <div style="font-size:3rem;margin-bottom:8px">📎</div>
+    <img class="icon" src="/static/icon.jpg" alt="icon">
     <div class="filename">{FILENAME}</div>
     <div class="size">{SIZE}</div>
     <a class="btn btn-download" href="{RAW_URL}">⬇️ Descargar</a>
@@ -371,6 +373,7 @@ UPLOAD_HTML = """<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Transferir archivos</title>
+<link rel="icon" href="/static/icon.jpg" type="image/jpeg">
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0d1117; color: #c9d1d9; padding: 20px; max-width: 800px; margin: auto; }}

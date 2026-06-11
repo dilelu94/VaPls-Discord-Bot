@@ -1350,6 +1350,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/dl/{token}", downloadFile)
     app.router.add_get("/dl/{token}/{filename}", downloadFile)
     app.router.add_get("/dl/{token}/{filename}/raw", downloadRaw)
+    app.router.add_static("/static", os.path.join(os.path.dirname(__file__), "static"))
 
     app.router.add_get("/admin", adminPage)
     app.router.add_get("/members", members)
