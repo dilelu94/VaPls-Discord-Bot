@@ -1210,10 +1210,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
         age = now - sess.last_activity
         ttl = max(0, int(config.TRANSFER_SESSION_TTL - age))
         # Upload page expires after SESSION_TTL (5 min) even for completed files.
-        if sess.ready and sess.completed_at is not None:
-            upload_age = now - sess.completed_at
-            upload_expired = upload_age >= config.TRANSFER_SESSION_TTL
-            upload_ttl = max(0, int(config.TRANSFER_SESSION_TTL - upload_age))
+        # Legacy sessions (completed before completed_at existed) are treated as expired.
+        if sess.ready:
+            if sess.completed_at is None:
+                upload_expired = True
+                upload_ttl = 0
+            else:
+                upload_age = now - sess.completed_at
+                upload_expired = upload_age >= config.TRANSFER_SESSION_TTL
+                upload_ttl = max(0, int(config.TRANSFER_SESSION_TTL - upload_age))
         else:
             upload_expired = (
                 not sess.ready
