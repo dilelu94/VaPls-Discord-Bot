@@ -385,8 +385,14 @@ UPLOAD_HTML = """<!DOCTYPE html>
   <div id="completed-section" class="card" style="display:none;text-align:center">
     <h2 style="color:#3fb950">✅ Archivo subido</h2>
     <p id="completed-filename" style="font-size:1.1rem;margin:8px 0"></p>
-    <a id="completed-link" class="btn btn-primary" target="_blank" rel="noopener"
-      style="text-decoration:none;display:inline-block;margin-top:4px">📥 Descargar archivo</a>
+    <input type="text" id="completed-link" readonly
+      style="width:100%;padding:8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#58a6ff;text-align:center;margin:8px 0;font-size:0.9rem"
+      onclick="this.select();copyLink()">
+    <button class="btn btn-primary" onclick="copyLink()" style="margin-top:4px">📋 Copiar link</button>
+    <p style="font-size:0.8rem;color:#8b949e;margin-top:6px">
+      O compartí el link directamente:
+      <a id="completed-dl" href="#" style="color:#58a6ff">📥 descargar</a>
+    </p>
   </div>
 
   <div id="expired-section" class="card expired" style="display:none">
@@ -633,9 +639,10 @@ async function startUpload() {{
     document.getElementById("extra-sections").style.display = "none";
     document.getElementById("upload-section").style.display = "none";
     document.getElementById("completed-section").style.display = "block";
+    const dl = window.location.origin + "/dl/" + TOKEN + "/" + file.name;
     document.getElementById("completed-filename").textContent = file.name;
-    document.getElementById("completed-link").href =
-      window.location.origin + "/dl/" + TOKEN + "/" + file.name;
+    document.getElementById("completed-link").value = dl;
+    document.getElementById("completed-dl").href = dl;
     uploading = false;
     return;
   }} else {{
@@ -693,6 +700,17 @@ async function checkSession() {{
   }}
 }}
 
+function copyLink() {{
+  const el = document.getElementById("completed-link");
+  if (!el) return;
+  el.select();
+  try {{
+    document.execCommand("copy");
+  }} catch (e) {{
+    // execCommand fallback — works even on HTTP
+  }}
+}}
+
 // --- init -------------------------------------------------------------------
 async function init() {{
   const r = await fetch(`/upload/${{TOKEN}}/status`);
@@ -714,9 +732,10 @@ async function init() {{
     document.getElementById("upload-section").style.display = "none";
     document.getElementById("completed-section").style.display = "block";
     document.getElementById("extra-sections").style.display = "none";
+    const dl2 = window.location.origin + "/dl/" + TOKEN + "/" + d.filename;
     document.getElementById("completed-filename").textContent = d.filename;
-    document.getElementById("completed-link").href =
-      window.location.origin + "/dl/" + TOKEN + "/" + d.filename;
+    document.getElementById("completed-link").value = dl2;
+    document.getElementById("completed-dl").href = dl2;
     return;
   }}
   document.getElementById("upload-section").style.display = "block";
