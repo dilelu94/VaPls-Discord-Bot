@@ -14,6 +14,7 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field, asdict
+import html
 from urllib.parse import quote
 from typing import Optional
 
@@ -497,6 +498,12 @@ async function loadHistory() {{
   }}
 }}
 
+function esc(s) {{
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}}
+
 function renderFiles(files) {{
   const el = document.getElementById("active-files");
   if (!files.length) {{
@@ -510,8 +517,8 @@ function renderFiles(files) {{
     const extBtn = `<button class="btn btn-extend" onclick="extendFile('${{f.token}}')" title="Extender 24h">➕</button>`;
     html += `<div class="file-row">
       <div class="file-info">
-        <a class="file-name" href="${{f.url}}">${{f.filename}}</a>
-        <div class="file-meta">${{sz}} &middot; ${{f.author_name}} &middot; ${{rem}}</div>
+        <a class="file-name" href="${{f.url}}">${{esc(f.filename)}}</a>
+        <div class="file-meta">${{sz}} &middot; ${{esc(f.author_name)}} &middot; ${{rem}}</div>
       </div>
       <div style="display:flex;gap:4px">
         ${{extBtn}}
@@ -812,7 +819,7 @@ def format_download_html(token: str, filename: str, size: int, ok: bool) -> str:
     else:
         sz = ""
     return DOWNLOAD_HTML.format(
-        FILENAME=filename,
+        FILENAME=html.escape(filename),
         SIZE=sz,
         RAW_URL=f"/dl/{token}/{quote(filename)}/raw",
         OK="true" if ok else "false",
