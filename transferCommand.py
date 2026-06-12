@@ -514,10 +514,13 @@ UPLOAD_HTML = """<!DOCTYPE html>
   .error {{ color: #da3633; }}
   .success {{ color: #3fb950; }}
   .disk {{ font-size: 0.8rem; color: #8b949e; text-align: right; margin-top: 12px; }}
+  .disclaimer {{ background: #da3633; color: #fff; padding: 10px 16px; border-radius: 8px; margin-bottom: 12px; font-size: 0.85rem; text-align: center; font-weight: 500; }}
 </style>
 </head>
 <body>
 <h1>📁 Transferir archivos</h1>
+
+<div class="disclaimer">⚠️ Todo archivo subido queda registrado permanentemente con nombre de usuario e ID de Discord</div>
 
 <div id="session-state">
   <div id="upload-section" class="card" style="display:none">
