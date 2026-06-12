@@ -20,6 +20,25 @@ from typing import Optional
 
 import config
 
+ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".ico", ".avif"}
+VIDEO_EXTS = {".mp4", ".webm", ".mkv", ".avi", ".mov", ".wmv", ".flv"}
+ALLOWED_EXTS = ARCHIVE_EXTS | IMAGE_EXTS | VIDEO_EXTS
+
+
+def _ext(name: str) -> str:
+    _, ext = os.path.splitext(name)
+    return ext.lower()
+
+
+def _is_image(name: str) -> bool:
+    return _ext(name) in IMAGE_EXTS
+
+
+def _is_video(name: str) -> bool:
+    return _ext(name) in VIDEO_EXTS
+
+
 logger = logging.getLogger("transferCommand")
 
 
@@ -79,6 +98,8 @@ class TransferManager:
             return "sesión inválida o expirada"
         if "/" in filename or "\\" in filename:
             return "nombre de archivo inválido"
+        if _ext(filename) not in ALLOWED_EXTS:
+            return "formato no permitido — solo archivos comprimidos, imágenes o videos"
         if total_size > config.TRANSFER_MAX_SIZE:
             return f"el archivo excede el límite de {config.TRANSFER_MAX_SIZE // (1024**3)} GB"
         if not self._check_disk(total_size):

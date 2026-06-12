@@ -62,7 +62,7 @@ async def _client():
 
 
 def _complete_upload(mgr, token, data=b"chunk data"):
-    mgr.init_upload(token, "test.txt", len(data))
+    mgr.init_upload(token, "test.zip", len(data))
     mgr.add_chunk(token, 0, data)
     mgr.complete_upload(token)
     return mgr.get(token)
@@ -231,7 +231,7 @@ def test_history_entry_has_token(_fresh_manager, tmp_path):
     assert len(history) >= 1
     entry = history[0]
     assert entry["token"] == sess.token
-    assert entry["filename"] == "test.txt"
+    assert entry["filename"] == "test.zip"
     assert isinstance(entry["uploaded_at"], int)
 
 
@@ -287,7 +287,7 @@ def test_completed_file_appears_in_active_list(_fresh_manager, tmp_path):
     assert len(history) >= 1
     entry = history[0]
     assert entry["token"] == sess.token
-    assert entry["filename"] == "test.txt"
+    assert entry["filename"] == "test.zip"
     assert isinstance(entry["uploaded_at"], int)
 
 
@@ -297,7 +297,7 @@ def test_completed_file_appears_in_active_list(_fresh_manager, tmp_path):
 async def test_upload_complete_posts_embed_to_correct_channel(_fresh_manager, tmp_path):
     mgr = _fresh_manager
     sess = mgr.create_session(1, "tester", 42, 100)
-    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.init_upload(sess.token, "test.zip", 5)
     mgr.add_chunk(sess.token, 0, b"hello")
 
     bot = MagicMock()
@@ -322,7 +322,7 @@ async def test_upload_complete_posts_embed_to_correct_channel(_fresh_manager, tm
 async def test_upload_complete_embed_contains_download_button(_fresh_manager, tmp_path):
     mgr = _fresh_manager
     sess = mgr.create_session(1, "tester", 42, 100)
-    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.init_upload(sess.token, "test.zip", 5)
     mgr.add_chunk(sess.token, 0, b"hello")
 
     bot = MagicMock()
@@ -352,7 +352,7 @@ async def test_upload_complete_returns_ok_even_when_channel_gone(
 ):
     mgr = _fresh_manager
     sess = mgr.create_session(1, "tester", 42, 100)
-    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.init_upload(sess.token, "test.zip", 5)
     mgr.add_chunk(sess.token, 0, b"hello")
 
     bot = MagicMock()
@@ -381,7 +381,7 @@ async def test_status_returns_file_exists_and_filename_when_expired(
 
     token_dir = tmp_path / "transfers" / sess.token
     token_dir.mkdir(parents=True, exist_ok=True)
-    (token_dir / "test.txt").write_text("hello")
+    (token_dir / "test.zip").write_text("hello")
 
     client = await _client()
     try:
@@ -392,7 +392,7 @@ async def test_status_returns_file_exists_and_filename_when_expired(
 
     assert "file_exists" in body
     assert body["file_exists"] is True
-    assert body["filename"] == "test.txt"
+    assert body["filename"] == "test.zip"
     assert body["expired"] is True
 
 
@@ -401,7 +401,7 @@ async def test_upload_complete_returns_ok_even_when_discord_send_fails(
 ):
     mgr = _fresh_manager
     sess = mgr.create_session(1, "tester", 42, 100)
-    mgr.init_upload(sess.token, "test.txt", 5)
+    mgr.init_upload(sess.token, "test.zip", 5)
     mgr.add_chunk(sess.token, 0, b"hello")
 
     bot = MagicMock()

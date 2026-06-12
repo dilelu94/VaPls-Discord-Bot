@@ -1251,14 +1251,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
         try:
             channel = bot.get_channel(sess.channel_id)
             if channel:
-                embed = discord.Embed(
-                    title="✅ Archivo subido exitosamente",
-                    description=f"**{sess.filename}**\n{sz_str}",
-                    color=0x238636,
-                )
-                view = discord.ui.View()
-                view.add_item(discord.ui.Button(label="🔗 Descargar", url=dl))
-                await channel.send(embed=embed, view=view)
+                is_media = transferCommand._is_image(
+                    sess.filename
+                ) or transferCommand._is_video(sess.filename)
+                if is_media:
+                    await channel.send(f"**{sess.filename}** ({sz_str})\n{dl}")
+                else:
+                    embed = discord.Embed(
+                        title="✅ Archivo subido exitosamente",
+                        description=f"**{sess.filename}**\n{sz_str}",
+                        color=0x238636,
+                    )
+                    view = discord.ui.View()
+                    view.add_item(discord.ui.Button(label="🔗 Descargar", url=dl))
+                    await channel.send(embed=embed, view=view)
                 logger.info("transfer embed posted token=%s", token[:8])
             else:
                 logger.warning(
