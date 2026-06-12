@@ -448,6 +448,29 @@ from dataclasses import dataclass, field
 from typing import Optional as _Optional
 
 _IMAGE_SESSION_TIMEOUT = 300  # 5 min sin respuesta → se cancela
+_INDIO_IMAGE_ROLE = (
+    "Main Characters"  # rol requerido para enviar imágenes al Indio por DM
+)
+
+
+def _can_send_indio_images(
+    member: "_Optional[discord.Member]",
+    role_name: str = _INDIO_IMAGE_ROLE,
+) -> tuple[bool, str]:
+    """Check if a guild member can send images to the Indio via DM.
+
+    Returns (True, '') if allowed, or (False, 'mensaje de error') if denied.
+    Pure function — no Discord API calls, no side effects. Testable by
+    passing MagicMock objects for ``member``.
+    """
+    if member is None:
+        return False, "❌ Solo miembros de la guild pueden mandarme fotos por DM."
+    if not discord.utils.get(member.roles, name=role_name):
+        return (
+            False,
+            f"❌ Solo usuarios con el rol @{role_name} pueden mandarme fotos por DM.",
+        )
+    return True, ""
 
 
 @dataclass
