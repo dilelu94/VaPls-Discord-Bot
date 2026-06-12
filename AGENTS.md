@@ -581,7 +581,9 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
     - **Videos**: `.mp4`, `.webm`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`
     - Cualquier otra extensión responde `"formato no permitido"`.
     - Implementado en `transferCommand.py:_ext()`, `ALLOWED_EXTS`, validación en `init_upload()`.
-13. **Auto-embed de media en Discord**: en `apiServer.py:uploadComplete()`, si el archivo es imagen o video (según `_is_image()` / `_is_video()`), se envía el link directo como mensaje de texto para que Discord lo incruste/ reproduzca automáticamente. Para archivos comprimidos se mantiene el embed con botón "Descargar".
+13. **Auto-embed de media en Discord**: en `apiServer.py:uploadComplete()`, si es imagen/video se envía el link al endpoint `/raw` para que Discord lo incruste/reproduzca. Para archivos comprimidos se mantiene el embed con botón "Descargar".
+14. **Página de descarga con preview de media**: `DOWNLOAD_HTML` + `format_download_html()` detecta si es imagen/video y muestra `<img>` o `<video>` directamente en vez del botón "Descargar". Content-Disposition `inline` para media, `attachment` para archivos.
+15. **Logs y PostHog analytics** en todos los pasos: eventos `transfer_rejected` (con razón: `path_traversal`, `format_not_allowed`, `oversize`, `disk_full`), `transfer_init`, `transfer_complete` (con `embed_type`: `image`/`video`/`archive`), `transfer_embed_failed`.
 
 ## 💡 Guía de Modificación
 
