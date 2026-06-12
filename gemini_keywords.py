@@ -116,6 +116,13 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "necesito spacewar en la biblioteca",
         "agregá spacewar",
     ],
+    "use_image": [
+        "mostrá la imagen de",
+        "mostrame la foto de",
+        "poné la imagen de",
+        "acordate de la imagen de",
+        "mostrá esa imagen",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────

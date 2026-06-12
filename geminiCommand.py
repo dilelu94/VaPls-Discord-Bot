@@ -129,6 +129,7 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("stop_music")} → `stop_music` \
 - {_fmt_trigger("dj_mode")} → `dj_mode`
 - {_fmt_trigger("spacewar_guide")} → `spacewar_guide` \
+- {_fmt_trigger("use_image")} → `use_image` \
 
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
@@ -374,6 +375,30 @@ _INDIO_TOOLS = [
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
+    {
+        "name": "use_image",
+        "description": (
+            "Mostrar una imagen de la colección del grupo en el chat. "
+            "Usala cuando sea contextualmente relevante (un momento gracioso, "
+            "una referencia visual, una imagen que un amigo compartió antes). "
+            "Elegí la imagen que mejor matchee con la conversación. "
+            "Siempre fijate en [IMÁGENES DISPONIBLES] arriba para saber IDs y descripciones."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "image_id": {
+                    "type": "STRING",
+                    "description": "ID de la imagen en el catálogo (ej: 'f47ac10b-58cc-4372-a567-0e02b2c3d479')",
+                },
+                "caption": {
+                    "type": "STRING",
+                    "description": "Texto opcional para acompañar la imagen (ej: 'mirá esta joyita'). Vacío si no querés texto.",
+                },
+            },
+            "required": ["image_id"],
+        },
+    },
 ]
 
 
@@ -560,6 +585,22 @@ async def handle_indio_image_dm(
     - The DM has text and the user has a pending session (response).
     """
     uid = message.author.id
+
+    # Check for stale session for THIS user
+    stale = _pending_image_sessions.get(uid)
+    if (
+        stale is not None
+        and (_time.time() - stale.last_activity) > _IMAGE_SESSION_TIMEOUT
+    ):
+        _pending_image_sessions.pop(uid, None)
+        await message.channel.send(
+            "⏰ Pasaron más de 5 minutos... te fuiste afk. "
+            "Más tarde seguimos, me vas a tener que volver a "
+            "pasar las fotos."
+        )
+        return  # Don't process this message; user needs to send images again
+
+    # Also clean up OTHER users' stale sessions in background
     _cleanup_stale_sessions()
 
     # --- New session (message has images) ---
@@ -1840,6 +1881,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "generate_image": ("GENERATE_IMAGE", "prompt"),
     "edit_image": ("EDIT_IMAGE", "prompt"),
     "spacewar_guide": ("SPACEWAR_GUIDE", None),
+    "use_image": ("USE_IMAGE", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -1852,6 +1894,7 @@ _ACTION_FALLBACK_TEXT = {
     "GENERATE_IMAGE": "🎨 Generando imagen...",
     "EDIT_IMAGE": "🎨 Editando imagen...",
     "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
+    "USE_IMAGE": "🖼️ Ahí va",
 }
 
 _ACTION_ARG_MAX_CHARS = 200
@@ -1876,8 +1919,16 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
             continue
         action, arg_key = mapping
         if arg_key is None:
-            # Argument-less control verb (skip/pause/resume/stop).
-            actions.append((action, ""))
+            args = call.get("args") or {}
+            if args and isinstance(args, dict) and any(v for v in args.values()):
+                # Tool with multiple args (e.g. use_image with image_id + caption)
+                # — pack as small JSON so dispatch can unpack both.
+                import json as _json
+
+                actions.append((action, _json.dumps(args, ensure_ascii=False)))
+            else:
+                # Argument-less control verb (skip/pause/resume/stop).
+                actions.append((action, ""))
             continue
         args = call.get("args") or {}
         raw = args.get(arg_key) if isinstance(args, dict) else None
@@ -2646,6 +2697,58 @@ async def _dispatch_indio_actions(
                         msg = f"error: {e}"
                     statuses.append(f"spacewar: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio SPACEWAR_GUIDE → ok=%s msg=%s", ok, msg)
+                elif action == "USE_IMAGE":
+                    import discord as _discord
+                    import json as _json
+
+                    # arg is a JSON blob with image_id + optional caption
+                    image_id = ""
+                    caption = ""
+                    if arg and arg.startswith("{"):
+                        try:
+                            parsed = _json.loads(arg)
+                            image_id = (parsed.get("image_id") or "").strip()
+                            caption = (parsed.get("caption") or "").strip()
+                        except Exception:
+                            image_id = arg.strip()
+                    else:
+                        image_id = arg.strip() if arg else ""
+                    mgr = _init_image_mgr()
+                    entry = mgr.get_image_entry(image_id) if image_id else None
+                    if entry is None:
+                        statuses.append("use_image: fail — unknown id")
+                        logger.warning("indio USE_IMAGE: unknown image_id=%s", image_id)
+                        continue
+                    img_path = mgr.get_image_path(image_id)
+                    if img_path is None:
+                        statuses.append("use_image: fail — file missing")
+                        continue
+                    target_cid = (
+                        getattr(reply_handle, "channel_id", None)
+                        or config.INDIO_REPLY_CHANNEL_ID
+                        or 1490008278275461280
+                    )
+                    ok = False
+                    msg = ""
+                    try:
+                        channel = bot.get_channel(target_cid)
+                        if channel is None:
+                            channel = await bot.fetch_channel(target_cid)
+                        if channel is not None:
+                            payload = {}
+                            if caption:
+                                payload["content"] = caption
+                            payload["file"] = _discord.File(str(img_path))
+                            await channel.send(**payload)
+                            ok = True
+                            msg = "sent"
+                        else:
+                            msg = "channel not found"
+                    except Exception as e:
+                        logger.exception("indio USE_IMAGE failed")
+                        msg = f"error: {e}"
+                    statuses.append(f"use_image: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio USE_IMAGE %s → ok=%s msg=%s", image_id, ok, msg)
                 elif action == "DJ_MODE":
                     # Activate Auto-DJ + post the panel — same handler as /dj.
                     # Use the channel where the Indio just replied so the panel
@@ -3798,6 +3901,7 @@ async def indioLogic(
     system_instruction = INDIO_SYSTEM + (
         f"\n\n{stable_extras}" if stable_extras else ""
     )
+    system_instruction = _inject_image_catalog(system_instruction)
 
     t0 = time.monotonic()
     # Solo activamos el aviso de rotación cuando el Indio responde en el canal
@@ -4224,6 +4328,7 @@ async def indioFromVoice(
     system_instruction = INDIO_SYSTEM + (
         f"\n\n{stable_extras}" if stable_extras else ""
     )
+    system_instruction = _inject_image_catalog(system_instruction)
 
     # ---- Context from replied-to message + image download ----
     volatile = player_block or None
