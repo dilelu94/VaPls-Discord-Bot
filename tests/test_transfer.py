@@ -247,7 +247,7 @@ async def test_delete_works_even_when_upload_expired(_fresh_manager, tmp_path):
 
     client = await _client()
     try:
-        resp = await client.delete(f"/upload/{sess.token}")
+        resp = await client.delete(f"/upload/{sess.token}?dt={sess.delete_token}")
         body = await resp.json()
     finally:
         await client.close()
@@ -255,6 +255,21 @@ async def test_delete_works_even_when_upload_expired(_fresh_manager, tmp_path):
     assert resp.status == 200
     assert body["ok"] is True
     assert sess.expired is True
+
+
+async def test_delete_rejected_without_delete_token(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+
+    client = await _client()
+    try:
+        resp = await client.delete(f"/upload/{sess.token}")
+        body = await resp.json()
+    finally:
+        await client.close()
+
+    assert resp.status == 403
+    assert body["error"] == "no autorizado"
 
 
 async def test_files_rejected_when_upload_expired(_fresh_manager, tmp_path):

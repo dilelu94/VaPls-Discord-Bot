@@ -1167,15 +1167,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def uploadPage(request: web.Request) -> web.Response:
         token = request.match_info["token"]
-        mgr = transferCommand.manager
-        sess = mgr.get(token)
-        if not sess:
-            return web.Response(
-                text=transferCommand.format_upload_html(token),
-                content_type="text/html",
-            )
+        sess = transferCommand.manager.get(token)
+        dt = sess.delete_token if sess else ""
         return web.Response(
-            text=transferCommand.format_upload_html(token),
+            text=transferCommand.format_upload_html(token, dt),
             content_type="text/html",
         )
 
@@ -1305,7 +1300,13 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def uploadDelete(request: web.Request) -> web.Response:
         token = request.match_info["token"]
+        dt = request.query.get("dt", "")
         mgr = transferCommand.manager
+        sess = mgr.get(token)
+        if not sess:
+            return web.json_response({"error": "no encontrado"}, status=404)
+        if sess.delete_token and sess.delete_token != dt:
+            return web.json_response({"error": "no autorizado"}, status=403)
         ok = mgr.delete(token)
         if not ok:
             return web.json_response({"error": "no encontrado"}, status=404)
@@ -1315,24 +1316,47 @@ def makeApp(bot: discord.Bot) -> web.Application:
         token = request.match_info["token"]
         filename = os.path.basename(request.match_info.get("filename", ""))
         sess = transferCommand.manager.get(token)
-        if not filename and sess:
-            filename = sess.filename
-        filepath = os.path.join(config.TRANSFER_DIR, token, filename)
-        ok = sess is not None and os.path.isfile(filepath)
-        html = transferCommand.format_download_html(
-            token, filename, sess.total_size if sess else 0, ok
-        )
+        dirpath = os.path.join(config.TRANSFER_DIR, token)
+        if not filename:
+            if sess and sess.filename:
+                filename = sess.filename
+            else:
+                try:
+                    for fn in os.listdir(dirpath):
+                        p = os.path.join(dirpath, fn)
+                        if os.path.isfile(p) and not fn.startswith("."):
+                            filename = fn
+                            break
+                except OSError:
+                    pass
+        filepath = os.path.join(dirpath, filename)
+        fsize = 0
+        ok = os.path.isfile(filepath)
+        if ok:
+            fsize = os.path.getsize(filepath)
+        elif sess:
+            fsize = sess.total_size
+        html = transferCommand.format_download_html(token, filename, fsize, ok)
         return web.Response(text=html, content_type="text/html")
 
     async def downloadRaw(request: web.Request) -> web.Response:
         token = request.match_info["token"]
         filename = os.path.basename(request.match_info.get("filename", ""))
         sess = transferCommand.manager.get(token)
-        if not sess or not sess.ready:
-            return web.Response(text="Archivo no disponible", status=404)
+        dirpath = os.path.join(config.TRANSFER_DIR, token)
         if not filename:
-            filename = sess.filename
-        filepath = os.path.join(config.TRANSFER_DIR, token, filename)
+            if sess and sess.filename:
+                filename = sess.filename
+            else:
+                try:
+                    for fn in os.listdir(dirpath):
+                        p = os.path.join(dirpath, fn)
+                        if os.path.isfile(p) and not fn.startswith("."):
+                            filename = fn
+                            break
+                except OSError:
+                    pass
+        filepath = os.path.join(dirpath, filename)
         if not os.path.isfile(filepath):
             return web.Response(text="Archivo no disponible", status=404)
         disposition = (
@@ -1375,9 +1399,6 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.json_response({"ok": True, "remaining_secs": remaining})
 
     async def transferHistory(request: web.Request) -> web.Response:
-        token = request.match_info["token"]
-        if not transferCommand.manager.get(token):
-            return web.json_response({"history": []})
         history = transferCommand.manager.get_history(limit=200)
         return web.json_response({"history": history})
 

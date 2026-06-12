@@ -10,6 +10,9 @@ audio/*
 # Persisted runtime data (e.g. /indio conversation memory)
 data/
 
+# File transfer session data (tracked by the server, not the repo)
+transfers/
+
 # Vosk Models (too large for GitHub)
 models/*
 !models/.gitkeep

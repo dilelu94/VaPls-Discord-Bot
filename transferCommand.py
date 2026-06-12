@@ -61,6 +61,7 @@ class TransferSession:
     ready: bool = False
     expired: bool = False
     completed_at: Optional[float] = None
+    delete_token: str = ""
 
 
 class TransferManager:
@@ -83,6 +84,7 @@ class TransferManager:
             channel_id=channel_id,
             guild_id=guild_id,
         )
+        sess.delete_token = uuid.uuid4().hex
         self.sessions[token] = sess
         self._save_index()
         logger.info(
@@ -399,18 +401,73 @@ class TransferManager:
 
     def _load_index(self) -> None:
         path = os.path.join(config.TRANSFER_DIR, "_index.json")
-        if not os.path.isfile(path):
-            return
+        if os.path.isfile(path):
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                logger.warning("failed to load index: %s", e)
+                data = {}
+            for token, d in data.items():
+                d["received"] = set(d.get("received", []))
+                sess = TransferSession(**d)
+                self.sessions[token] = sess
+        # Scan disk for directory tokens not in index (survives deploy resets)
         try:
-            with open(path) as f:
-                data = json.load(f)
-        except (OSError, json.JSONDecodeError) as e:
-            logger.warning("failed to load index: %s", e)
-            return
-        for token, d in data.items():
-            d["received"] = set(d.get("received", []))
-            sess = TransferSession(**d)
-            self.sessions[token] = sess
+            for entry in os.listdir(config.TRANSFER_DIR):
+                dirpath = os.path.join(config.TRANSFER_DIR, entry)
+                if not os.path.isdir(dirpath) or entry.startswith("_"):
+                    continue
+                if entry in self.sessions:
+                    continue
+                files = os.listdir(dirpath)
+                if not files:
+                    continue
+                filename = files[0]
+                filepath = os.path.join(dirpath, filename)
+                fsize = os.path.getsize(filepath)
+                author_name = "Desconocido"
+                author_id = 0
+                channel_id = 0
+                guild_id = 0
+                try:
+                    with open(config.TRANSFER_HISTORY_PATH) as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                h = json.loads(line)
+                                if h.get("token") == entry:
+                                    author_name = h.get("author_name", "Desconocido")
+                                    break
+                            except json.JSONDecodeError:
+                                continue
+                except (OSError, FileNotFoundError):
+                    pass
+                sess = TransferSession(
+                    token=entry,
+                    author_id=author_id,
+                    author_name=author_name,
+                    channel_id=channel_id,
+                    guild_id=guild_id,
+                    filename=filename,
+                    total_size=fsize,
+                    ready=True,
+                    completed=True,
+                    completed_at=os.path.getmtime(filepath),
+                    last_activity=os.path.getmtime(filepath),
+                    created_at=os.path.getctime(dirpath),
+                    delete_token="",
+                )
+                self.sessions[entry] = sess
+                logger.info(
+                    "recovered session from disk token=%s filename=%s",
+                    entry[:8],
+                    filename,
+                )
+        except OSError:
+            pass
 
 
 manager = TransferManager()
@@ -533,6 +590,7 @@ UPLOAD_HTML = """<!DOCTYPE html>
     <progress id="progress" value="0" max="100"></progress>
     <div id="status"></div>
     <div id="timer" class="timer"></div>
+    <button class="btn btn-danger" id="cancel-btn" style="display:none;margin-top:8px" onclick="cancelUpload()">✕ Cancelar</button>
   </div>
 
   <div id="completed-section" class="card" style="display:none;text-align:center">
@@ -572,6 +630,7 @@ UPLOAD_HTML = """<!DOCTYPE html>
 
 <script>
 const TOKEN = "{TOKEN}";
+const DELETE_TOKEN = "{DELETE_TOKEN}";
 const DEFAULT_LIMIT = {DEFAULT_LIMIT};
 const SESSION_TTL_SECS = {SESSION_TTL_SECS};
 const CHUNK_SIZE = {CHUNK_SIZE};
@@ -682,7 +741,7 @@ function formatTime(secs) {{
 async function deleteFile(fileToken) {{
   if (!confirm("¿Borrar este archivo?")) return;
   try {{
-    const r = await fetch(`/upload/${{fileToken}}`, {{method:"DELETE"}});
+    const r = await fetch(`/upload/${{fileToken}}?dt=${{DELETE_TOKEN}}`, {{method:"DELETE"}});
     if (r.ok) {{
       loadFiles();
     }} else {{
@@ -739,6 +798,7 @@ async function startUpload() {{
   uploading = true;
   uploadStartTime = Date.now();
   uploadedBytes = 0;
+  document.getElementById("cancel-btn").style.display = "inline-block";
   const el = document.getElementById("status");
   const prog = document.getElementById("progress");
   prog.value = 0;
@@ -763,6 +823,7 @@ async function startUpload() {{
   totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
   for (let i = 0; i < totalChunks; i++) {{
+    if (!uploading) return;
     if (chunksSent.has(i)) {{
       uploadedBytes += Math.min(CHUNK_SIZE, file.size - uploadedBytes);
       prog.value = Math.round((i / totalChunks) * 100);
@@ -801,7 +862,18 @@ async function startUpload() {{
     const err = await compR.json();
     el.innerHTML = '<span class="error">❌ Error al finalizar: ' + (err.error || "desconocido") + '</span>';
   }}
+  document.getElementById("cancel-btn").style.display = "none";
   uploading = false;
+}}
+
+async function cancelUpload() {{
+  if (!confirm("¿Cancelar la subida?")) return;
+  uploading = false;
+  document.getElementById("cancel-btn").style.display = "none";
+  document.getElementById("status").innerHTML = '<span style="color:#8b949e">✖ Subida cancelada</span>';
+  try {{
+    await fetch(`/upload/${{TOKEN}}?dt=${{DELETE_TOKEN}}`, {{method:"DELETE"}});
+  }} catch (e) {{}}
 }}
 
 // --- timer ------------------------------------------------------------------
@@ -871,7 +943,7 @@ function copyLink() {{
 
 async function deleteExpired() {{
   try {{
-    const r = await fetch(`/upload/${{TOKEN}}`, {{method:"DELETE"}});
+    const r = await fetch(`/upload/${{TOKEN}}?dt=${{DELETE_TOKEN}}`, {{method:"DELETE"}});
     if (r.ok) {{
       document.getElementById("expired-file-info").style.display = "none";
       document.getElementById("deleted-msg").style.display = "block";
@@ -935,9 +1007,10 @@ def format_download_html(token: str, filename: str, size: int, ok: bool) -> str:
     )
 
 
-def format_upload_html(token: str) -> str:
+def format_upload_html(token: str, delete_token: str = "") -> str:
     return UPLOAD_HTML.format(
         TOKEN=token,
+        DELETE_TOKEN=delete_token,
         DEFAULT_LIMIT=config.TRANSFER_DEFAULT_LIMIT,
         DEFAULT_LIMIT_GB=config.TRANSFER_DEFAULT_LIMIT // (1024**3),
         SESSION_TTL_MIN=config.TRANSFER_SESSION_TTL // 60,

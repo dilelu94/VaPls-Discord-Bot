@@ -585,6 +585,49 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 14. **Página de descarga con preview de media**: `DOWNLOAD_HTML` + `format_download_html()` detecta si es imagen/video y muestra `<img>` o `<video>` directamente en vez del botón "Descargar". Content-Disposition `inline` para media, `attachment` para archivos.
 15. **Logs y PostHog analytics** en todos los pasos: eventos `transfer_rejected` (con razón: `path_traversal`, `format_not_allowed`, `oversize`, `disk_full`), `transfer_init`, `transfer_complete` (con `embed_type`: `image`/`video`/`archive`), `transfer_embed_failed`.
 
+## 🖼️ Colección de imágenes del Indio (DM → catálogo)
+
+El Indio puede recibir imágenes por **DM** y guardarlas en una colección
+curada (`indio_images/manifest.json`). Las imágenes quedan disponibles para que
+el Indio las use espontáneamente en conversaciones vía la tool `use_image`.
+
+### Flujo por DM
+
+1. Usuario manda DM con 1+ imágenes al bot.
+2. Por cada imagen pregunta: "esta descripción (nombre del archivo) está bien?"
+3. Opciones del usuario:
+   - **sí** — usa el filename como descripción, extrae tags simples
+   - **no** / **describimela** — descarga la imagen, llama a Gemini UNA VEZ para
+     describir + generar tags + verificar coincidencia con el filename
+   - **la describo yo** — el usuario escribe su propia descripción
+   - **cancelar** — saltea la imagen
+4. Guarda imagen + metadata en `indio_images/manifest.json`
+5. Al final muestra resumen de lo guardado
+6. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos"
+
+### Tool `use_image`
+
+El Indio puede llamar `use_image(image_id, caption?)` para mostrar una imagen
+de la colección en el chat. El catálogo se inyecta en el system prompt como
+`[IMÁGENES DISPONIBLES]`.
+
+### Archivos clave
+
+| Archivo                      | Rol                                                                                                             |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `imageManager.py`            | CRUD del manifiesto + archivos de imagen + generación del bloque de catálogo                                    |
+| `geminiCommand.py`           | State machine de sesión DM (`_ImageDMSession`), dispatch de `USE_IMAGE`, inyección de catálogo en system prompt |
+| `bot.py:688-702`             | Detección de imágenes en DMs + ruteo a `handle_indio_image_dm`                                                  |
+| `gemini_keywords.py:119-125` | Trigger phrases para `use_image` en `SYSTEM_TRIGGERS`                                                           |
+| `config.py:72`               | `INDIO_IMAGES_DIR` (default `indio_images/`)                                                                    |
+| `indio_images/manifest.json` | Catálogo persistente (gitignored)                                                                               |
+
+### Config
+
+```bash
+INDIO_IMAGES_DIR=indio_images    # default
+```
+
 ## 💡 Guía de Modificación
 
 1. **Tests primero (o junto al cambio):** seguí la skill `behavioral-testing`. No
