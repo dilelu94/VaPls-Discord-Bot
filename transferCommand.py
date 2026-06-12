@@ -15,7 +15,7 @@ import time
 import uuid
 from dataclasses import dataclass, field, asdict
 import html
-from urllib.parse import quote
+from urllib.parse import quote as url_quote
 from typing import Optional
 
 import config
@@ -77,6 +77,8 @@ class TransferManager:
         sess = self.sessions.get(token)
         if not sess or sess.expired:
             return "sesión inválida o expirada"
+        if "/" in filename or "\\" in filename:
+            return "nombre de archivo inválido"
         if total_size > config.TRANSFER_MAX_SIZE:
             return f"el archivo excede el límite de {config.TRANSFER_MAX_SIZE // (1024**3)} GB"
         if not self._check_disk(total_size):
@@ -200,7 +202,7 @@ class TransferManager:
                     "size": sess.total_size,
                     "author_name": sess.author_name,
                     "remaining_secs": int(remaining),
-                    "url": f"{config.TRANSFER_BASE_URL}/dl/{sess.token}/{sess.filename}",
+                    "url": f"{config.TRANSFER_BASE_URL}/dl/{sess.token}/{url_quote(sess.filename)}",
                 }
             )
         return out
@@ -821,7 +823,7 @@ def format_download_html(token: str, filename: str, size: int, ok: bool) -> str:
     return DOWNLOAD_HTML.format(
         FILENAME=html.escape(filename),
         SIZE=sz,
-        RAW_URL=f"/dl/{token}/{quote(filename)}/raw",
+        RAW_URL=f"/dl/{token}/{url_quote(filename)}/raw",
         OK="true" if ok else "false",
     )
 

@@ -1280,7 +1280,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def downloadFile(request: web.Request) -> web.Response:
         token = request.match_info["token"]
-        filename = request.match_info.get("filename", "")
+        filename = os.path.basename(request.match_info.get("filename", ""))
         sess = transferCommand.manager.get(token)
         if not filename and sess:
             filename = sess.filename
@@ -1293,7 +1293,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def downloadRaw(request: web.Request) -> web.Response:
         token = request.match_info["token"]
-        filename = request.match_info.get("filename", "")
+        filename = os.path.basename(request.match_info.get("filename", ""))
         sess = transferCommand.manager.get(token)
         if not sess or not sess.ready:
             return web.Response(text="Archivo no disponible", status=404)
