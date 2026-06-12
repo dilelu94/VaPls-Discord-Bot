@@ -75,6 +75,17 @@ if python -c "import playwright" 2>/dev/null; then
     python -m playwright install --with-deps chromium 2>&1 || true
 fi
 
+# ── 5c. One-time migration: vapls-userbot → indio-userbot ──────────────────
+if systemctl is-enabled vapls-userbot &>/dev/null; then
+    echo "==> Migrating vapls-userbot.service → indio-userbot.service..."
+    sudo systemctl stop vapls-userbot 2>/dev/null || true
+    sudo systemctl disable vapls-userbot 2>/dev/null || true
+    sudo cp "$DEPLOY_DIR/userbot/indio-userbot.service" /etc/systemd/system/indio-userbot.service
+    sudo systemctl daemon-reload
+    sudo systemctl enable indio-userbot
+    echo "    Migration done."
+fi
+
 # ── 6. Restart services ───────────────────────────────────────────────────────
 echo "==> Restarting discord-bot and indio-userbot..."
 sudo systemctl restart discord-bot indio-userbot
