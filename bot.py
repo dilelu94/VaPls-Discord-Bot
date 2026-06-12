@@ -685,47 +685,6 @@ async def on_message(message):
         )
         return
 
-    # --- DM: Image collection (new session or response to active session) ---
-    from geminiCommand import (
-        handle_indio_image_dm,
-        has_pending_image_session,
-        _can_send_indio_images,
-        _INDIO_IMAGE_ROLE,
-    )
-
-    if message.attachments:
-        _image_exts = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".webp",
-            ".bmp",
-            ".svg",
-            ".ico",
-            ".avif",
-        }
-        images = [
-            a
-            for a in message.attachments
-            if (a.content_type or "").startswith("image/")
-            or any(a.filename.lower().endswith(e) for e in _image_exts)
-        ]
-        if images:
-            if config.INDIO_IMAGE_GUILD_ID:
-                guild = bot.get_guild(config.INDIO_IMAGE_GUILD_ID)
-                member = guild.get_member(message.author.id) if guild else None
-                ok, err = _can_send_indio_images(member, _INDIO_IMAGE_ROLE)
-                if not ok:
-                    await message.channel.send(err)
-                    return
-            await handle_indio_image_dm(message, images)
-            return
-
-    if has_pending_image_session(message.author.id):
-        await handle_indio_image_dm(message, [])
-        return
-
     content = (message.content or "").strip()
     if not content:
         return

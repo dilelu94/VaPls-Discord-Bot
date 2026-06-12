@@ -663,10 +663,10 @@ async def _ask_about_current(
     await channel.send(
         f"🖼️ Imagen **{sess.current_index + 1}/{sess.total}**:\n"
         f"Nombre del archivo: **{name}**\n\n"
-        f"¿Esta descripción está bien?\n"
-        f"• **sí** — usamos el nombre del archivo como descripción\n"
-        f"• **no** o **describimela** — la describo yo\n"
-        f"• **la describo yo** — escribí tu propia descripción\n"
+        f"¿Qué hacemos?\n"
+        f"• **sí** — usar el nombre del archivo como descripción\n"
+        f"• **no** / **describimela** — YO (el Indio) la describo con IA\n"
+        f"• **pongo descripción** — VOS escribís la descripción\n"
         f"• **cancelar** — salteamos esta imagen"
     )
     sess.stage = "confirm"
@@ -690,11 +690,12 @@ async def _handle_session_text(
         elif text in ("no", "nop", "nope", "describimela", "describila"):
             await _describe_with_gemini(channel, author, sess)
         elif text in (
-            "la describo yo",
+            "pongo descripción",
+            "pongo descripcion",
+            "pongo",
             "describo yo",
+            "la describo yo",
             "yo la describo",
-            "describo",
-            "pongo yo",
         ):
             sess.stage = "waiting_desc"
             sess.last_activity = _time.time()
@@ -707,7 +708,7 @@ async def _handle_session_text(
             # Didn't understand — repeat options
             await channel.send(
                 "No entendí. Respondé con **sí**, **no** / **describimela**, "
-                "**la describo yo**, o **cancelar**."
+                "**pongo descripción**, o **cancelar**."
             )
     elif sess.stage == "confirm_save":
         if text in ("sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"):
@@ -830,6 +831,17 @@ async def _describe_with_gemini(
     match_msg = ""
     if coincidencia:
         match_msg = f"\n📊 Coincide **{coincidencia}** con el nombre del archivo."
+
+    if coincidencia.lower() in ("no", "parcial"):
+        await channel.send(
+            f"📝 Descripción de IA: *{desc}*\n"
+            f"🏷️ Tags: {', '.join(tags[:5])}"
+            f"{match_msg}\n\n"
+            f"❌ La descripción no coincide. **Escribí tu propia descripción** para esta imagen."
+        )
+        sess.stage = "waiting_desc"
+        sess.last_activity = _time.time()
+        return
 
     await channel.send(
         f"📝 Descripción: *{desc}*\n"

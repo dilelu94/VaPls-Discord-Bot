@@ -23,6 +23,7 @@ from typing import Any, Optional
 _POSTHOG_AVAILABLE = False
 try:
     from posthog import Posthog, new_context, identify_context, tag
+
     _POSTHOG_AVAILABLE = True
 except ImportError:
     pass
@@ -37,6 +38,7 @@ try:
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
     from opentelemetry.sdk.resources import Resource, SERVICE_NAME
     from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+
     _OTEL_LOGS_AVAILABLE = True
 except ImportError:
     pass
@@ -60,7 +62,7 @@ def init_observability(service_name: str = "vapls-app") -> None:
     because the bot talks to Gemini over raw HTTP, not the official SDK.
 
     Args:
-        service_name: Identifies your app (e.g., 'vapls-main-bot' or 'vapls-userbot').
+        service_name: Identifies your app (e.g., 'vapls-main-bot' or 'indio-userbot').
     """
     global _posthog, _observability_initialized
 
@@ -81,14 +83,16 @@ def init_observability(service_name: str = "vapls-app") -> None:
             _posthog = Posthog(
                 project_api_key=api_key,
                 host=host,
-                enable_exception_autocapture=True,       # catches unhandled exceptions automatically
+                enable_exception_autocapture=True,  # catches unhandled exceptions automatically
                 capture_exception_code_variables=False,  # disabled code variable capturing to prevent accidental leakage
             )
             _logger.info("PostHog initialized for %s (host=%s)", service_name, host)
         except Exception as e:
             _logger.warning("Failed to initialize PostHog client: %s", e)
     else:
-        _logger.warning("PostHog package is not installed; analytics/errors will be no-op.")
+        _logger.warning(
+            "PostHog package is not installed; analytics/errors will be no-op."
+        )
 
     # 2. OpenTelemetry Logs -> PostHog Log Pipeline
     if _OTEL_LOGS_AVAILABLE:
@@ -105,21 +109,28 @@ def init_observability(service_name: str = "vapls-app") -> None:
                 headers={"Authorization": f"Bearer {api_key}"},
             )
             # BatchLogRecordProcessor processes logs asynchronously on a background thread
-            logger_provider.add_log_record_processor(BatchLogRecordProcessor(otlp_exporter))
+            logger_provider.add_log_record_processor(
+                BatchLogRecordProcessor(otlp_exporter)
+            )
 
             otel_handler = LoggingHandler(logger_provider=logger_provider)
             root_logger = logging.getLogger()
             root_logger.addHandler(otel_handler)
-            _logger.info("OpenTelemetry logs pipeline hooked to standard Python logging.")
+            _logger.info(
+                "OpenTelemetry logs pipeline hooked to standard Python logging."
+            )
         except Exception as e:
             _logger.warning("Failed to hook OpenTelemetry logs pipeline: %s", e)
     else:
-        _logger.warning("OpenTelemetry logs packages are not installed; OTLP log pipeline disabled.")
+        _logger.warning(
+            "OpenTelemetry logs packages are not installed; OTLP log pipeline disabled."
+        )
 
     _observability_initialized = True
 
 
 # --- Context manager ---
+
 
 @contextmanager
 def request_context(user_id: str, **extra_tags):
@@ -150,6 +161,7 @@ def request_context(user_id: str, **extra_tags):
 
 
 # --- Analytics ---
+
 
 def track_request(
     user_id: Optional[str],
@@ -246,7 +258,10 @@ def identify_user(user_id: str, **person_properties) -> None:
 
 # --- Error tracking ---
 
-def capture_error(error: BaseException, user_id: Optional[str] = None, **properties) -> None:
+
+def capture_error(
+    error: BaseException, user_id: Optional[str] = None, **properties
+) -> None:
     """Manually capture an exception and send it to PostHog Error Tracking.
     Use this inside try/except blocks for handled errors.
 
@@ -278,6 +293,7 @@ def capture_error(error: BaseException, user_id: Optional[str] = None, **propert
 
 # --- Logs ---
 
+
 def get_logger(name: Optional[str] = None) -> logging.Logger:
     """Returns a standard Python logger.
     All loggers in Python propagate to the root logger, so logs will be
@@ -287,6 +303,7 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 
 
 # --- AI / LLM Observability ---
+
 
 def track_ai_generation(
     model: str,
@@ -300,7 +317,7 @@ def track_ai_generation(
     user_id: Optional[str] = None,
     guild_id: Optional[str] = None,
     cached_tokens: Optional[int] = None,
-    **properties
+    **properties,
 ) -> None:
     """Capture a detailed Gemini LLM generation event in PostHog.
     This generates a standard `$ai_generation` event which maps beautifully to
@@ -371,7 +388,9 @@ def track_ai_generation(
 
     try:
         if user_id:
-            _posthog.capture(distinct_id=str(user_id), event="$ai_generation", properties=props)
+            _posthog.capture(
+                distinct_id=str(user_id), event="$ai_generation", properties=props
+            )
         else:
             # Let contextvars identify the current distinct_id automatically
             _posthog.capture(event="$ai_generation", properties=props)

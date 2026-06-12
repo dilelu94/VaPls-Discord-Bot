@@ -1,6 +1,7 @@
 # Operations (Runbook)
 
 ## Server
+
 - **Producción**: Oracle Cloud Ampere A1 — 4 OCPU (Neoverse N1 aarch64) / 24 GB RAM.
 - **Stack**: Ubuntu 22.04+ aarch64. `faster-whisper` (CTranslate2 con wheels aarch64), `py-cord`, `discord.py-self`, `ffmpeg`.
 - **⚠️ Python 3.10 (constraint de runtime)**: el server corre **Python 3.10.12**
@@ -11,6 +12,7 @@
 - **Razón del upgrade desde E2.1.Micro (1 GB)**: faster-whisper `base` saturaba la CPU (~27s para 1.4s de audio); el modelo `small` ahora corre real-time con concurrencia 5 y deja headroom para `/play` simultáneo.
 
 ## CI/CD pipeline
+
 El deploy normal es **automático**: hacer push a `master` dispara
 `.github/workflows/ci.yml`.
 
@@ -27,7 +29,7 @@ push a master ─► job test (Python 3.10, = prod) ─► job deploy (SSH al se
   (`bash -s`), así corre la versión del repo aunque el checkout del server esté
   viejo o roto.
 - **`scripts/deploy.sh`** (idempotente, corre en el server): `git fetch` +
-  `git reset --hard origin/master` (el server es un *pure deploy target* — no
+  `git reset --hard origin/master` (el server es un _pure deploy target_ — no
   editar archivos a mano ahí), reinstala deps solo si cambiaron
   `requirements.txt` / `userbot/requirements.txt`, reinicia ambos servicios y
   **verifica que queden `active`** (si no, sale con error y el deploy figura rojo).
@@ -36,12 +38,14 @@ push a master ─► job test (Python 3.10, = prod) ─► job deploy (SSH al se
   reinstalar un master roto. Bumpeá los SHAs deliberadamente + testeá, nunca auto.
 
 Deploy manual (fallback, p. ej. para tocar solo un archivo sin pasar por CI):
+
 ```bash
 rsync -avz -e "ssh -i <key>" <archivos> ubuntu@<host>:/home/ubuntu/vapls-discord-bot/
-ssh -i <key> ubuntu@<host> 'sudo systemctl restart discord-bot vapls-userbot'
+ssh -i <key> ubuntu@<host> 'sudo systemctl restart discord-bot indio-userbot'
 ```
 
 ## Provisioning scripts (primer arranque / clon nuevo)
+
 - `deploy.sh`: Instala dependencias, crea venv, copia `.env`, y registra
   `discord-bot.service` para systemd. (Provisión inicial — el deploy continuo
   usa `scripts/deploy.sh`, ver arriba.)
@@ -51,7 +55,9 @@ ssh -i <key> ubuntu@<host> 'sudo systemctl restart discord-bot vapls-userbot'
   `monitorAutoKill.log`.
 
 ## Systemd
+
 Main bot service (from `deploy.sh`):
+
 ```
 sudo systemctl start discord-bot
 sudo systemctl status discord-bot
@@ -59,15 +65,18 @@ journalctl -u discord-bot -f
 ```
 
 Userbot service example:
-- `userbot/vapls-userbot.service` (ajusta `User`, rutas y `.env`).
+
+- `userbot/indio-userbot.service` (ajusta `User`, rutas y `.env`).
 
 ## Logging locations
+
 - `play.log`: rotación de logs específicos de `/play`.
 - `botOutput.log`: salida estándar (cuando se usa `runMonitored.sh` o `autoRestart.sh`).
 - `monitorAutoKill.log`: reinicios de `autoRestart.sh`.
-- Systemd: `journalctl -u discord-bot` y `journalctl -u vapls-userbot`.
+- Systemd: `journalctl -u discord-bot` y `journalctl -u indio-userbot`.
 
 ## Troubleshooting
+
 - **Bot no inicia**: verifica `TOKEN` (main bot) o `USER_TOKEN` (userbot).
 - **No reproduce audio**: confirma `FFmpeg` instalado y `YT_DLP_PATH` válido.
 - **No hay saludos/soundpad**: revisa `CUSTOM_AUDIO_PATH` y archivos existentes.

@@ -1,7 +1,9 @@
 # Architecture
 
 ## Overview
+
 VaPls runs as two cooperating processes:
+
 - **Main bot (`bot.py`)**: Handles slash commands, voice playback, greetings,
   analytics, and the HTTP API server.
 - **Userbot (`userbot/bot.py`)**: Logs in with a real user account to receive
@@ -9,13 +11,15 @@ VaPls runs as two cooperating processes:
   transcripts to the main bot's HTTP API.
 
 ## Entry points
+
 - `bot.py`: Main Discord bot.
 - `userbot/bot.py`: Voice transcription userbot.
 - Scripts: `run.sh`, `runMonitored.sh`, `autoRestart.sh`, `deploy.sh`.
 - Systemd: `discord-bot.service` (created by `deploy.sh`) and
-  `userbot/vapls-userbot.service`.
+  `userbot/indio-userbot.service`.
 
 ## Module responsibilities and interactions
+
 - **bot.py**: Registers slash commands and event handlers. Calls into
   `playCommand`, `soundpadCommand`, `geminiCommand`, `greeting`, `analytics`,
   and starts `apiServer`.
@@ -40,24 +44,38 @@ VaPls runs as two cooperating processes:
 - **tests/testSoundpad.py**: Soundpad UI and pagination tests.
 
 ## Data flows
+
 ### Voice playback
+
 1. `/play` → `playLogic` → `GuildPlayer` queues songs.
 2. `GuildPlayer` runs yt-dlp to download and plays audio via FFmpeg.
 3. `/soundpad` → `SoundpadView` → plays local audio clips.
 4. `greeting.set_pending_trigger` + voice state updates trigger entry sounds.
 
 ### Transcription
+
 1. Userbot joins voice channels and attaches `TranscriberSink`.
 2. PCM is resampled to 16 kHz and processed by Vosk.
 3. `on_transcript` logs text, posts to a text channel, and optionally forwards
    to `BOT_API_BASE` (expects an external `/transcript` handler).
 
 ### Gemini responses
+
 1. `/vapls` or `/indio` → `geminiCommand`.
 2. `geminiClient.generate` calls Gemini API.
 3. Responses are chunked and sent back to Discord.
 
+### Indio image collection (DM relay)
+
+1. User sends DM with images to the **Indio userbot** (not the VaPls bot).
+2. `userbot/bot.py:_handle_indio_image_dm()` POSTs image URLs to VaPls `POST /indio-image`.
+3. `apiServer.py:submitIndioImage()` creates `_FakeAttachment` objects, runs `geminiCommand.handle_indio_image_dm()`.
+4. VaPls returns JSON `{messages: [str], done: bool}` with the Indio's replies.
+5. Userbot forwards each message to the DM channel.
+6. Subsequent text replies in the same session are relayed the same way.
+
 ## Dependency boundaries
+
 - The main bot does **not** receive voice; the userbot is required for
   transcription in DAVE E2EE channels.
 - HTTP API calls require `X-API-Secret`.

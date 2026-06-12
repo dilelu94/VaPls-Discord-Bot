@@ -185,16 +185,16 @@ WantedBy=multi-user.target
 EOF
 
 # 7. Registrar el servicio del userbot (unit versionado en el repo)
-if [ -f userbot/vapls-userbot.service ]; then
-    echo "Instalando vapls-userbot.service..."
-    sudo cp userbot/vapls-userbot.service /etc/systemd/system/vapls-userbot.service
+if [ -f userbot/indio-userbot.service ]; then
+    echo "Instalando indio-userbot.service..."
+    sudo cp userbot/indio-userbot.service /etc/systemd/system/indio-userbot.service
 fi
 
 # Recargar systemd para reconocer los servicios nuevos
 sudo systemctl daemon-reload
 sudo systemctl enable discord-bot
-if [ -f /etc/systemd/system/vapls-userbot.service ]; then
-    sudo systemctl enable vapls-userbot
+if [ -f /etc/systemd/system/indio-userbot.service ]; then
+    sudo systemctl enable indio-userbot
 fi
 
 echo "=== Configuración completada con éxito ==="

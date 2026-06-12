@@ -76,8 +76,8 @@ if python -c "import playwright" 2>/dev/null; then
 fi
 
 # ── 6. Restart services ───────────────────────────────────────────────────────
-echo "==> Restarting discord-bot and vapls-userbot..."
-sudo systemctl restart discord-bot vapls-userbot
+echo "==> Restarting discord-bot and indio-userbot..."
+sudo systemctl restart discord-bot indio-userbot
 
 # ── 7. Verify both services came back active ──────────────────────────────────
 # systemd marks Type=simple units "active" the instant the process spawns, so a
@@ -85,7 +85,7 @@ sudo systemctl restart discord-bot vapls-userbot
 # Give them a few seconds to settle so a fast crash-loop is caught here.
 sleep 5
 FAILED=""
-for svc in discord-bot vapls-userbot; do
+for svc in discord-bot indio-userbot; do
     STATUS=$(systemctl is-active "$svc" 2>/dev/null || true)
     if [ "$STATUS" != "active" ]; then
         echo "ERROR: $svc is '$STATUS' (expected 'active')"
@@ -105,5 +105,5 @@ echo ""
 echo "✔ Deploy complete"
 echo "  Commits: $(git rev-parse --short "$OLD") → $(git rev-parse --short "$NEW")"
 echo "  Deps reinstalled:${DEPS_REINSTALLED:- (none)}"
-echo "  Services active: discord-bot, vapls-userbot"
+echo "  Services active: discord-bot, indio-userbot"
 echo "  Finished at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"

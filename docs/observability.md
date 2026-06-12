@@ -54,7 +54,7 @@ We maintain a dual-logging pipeline that preserves standard terminal outputs whi
 Because the main bot (`bot.py`) and the userbot (`userbot/bot.py`) run as separate processes, a standard OpenTelemetry `Resource` is attached to the log pipeline at startup so you can instantly filter and segment logs in PostHog:
 
 - **Main Bot:** Initializes with `service_name="vapls-main-bot"`.
-- **Userbot:** Initializes with `service_name="vapls-userbot"`.
+- **Userbot:** Initializes with `service_name="indio-userbot"`.
 
 Every OTLP log record shipped to PostHog carries its corresponding `service.name` property.
 
@@ -112,12 +112,12 @@ This maps directly to PostHog's **LLM Observability** dashboard, allowing you to
 
 ## 🔑 Key & Project Reference
 
-| Field                | Value                                                  |
-| -------------------- | ------------------------------------------------------ |
-| **PostHog Project**  | VaPls Discord Bot — Observability & Analytics          |
-| **Host**             | `https://us.i.posthog.com`                             |
-| **Personal API Key** | `phx_REDACTED` |
-| **Env Var**          | `POSTHOG_API_KEY` in both `.env` and `userbot/.env`    |
+| Field                | Value                                               |
+| -------------------- | --------------------------------------------------- |
+| **PostHog Project**  | VaPls Discord Bot — Observability & Analytics       |
+| **Host**             | `https://us.i.posthog.com`                          |
+| **Personal API Key** | `phx_REDACTED`                                      |
+| **Env Var**          | `POSTHOG_API_KEY` in both `.env` and `userbot/.env` |
 
 > The personal API key (`phx_`) has full project access — keep it out of git.
 > It is documented in `PH_API_KEY.md` at the repo root for developer reference.

@@ -70,7 +70,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 | **Shape**           | Oracle VM.Standard.A1.Flex — 4 OCPU / 24 GB RAM / 4 Gbps NIC         |
 | **SSH key (local)** | `/var/home/dilelu/.ssh/vapls`                                        |
 | **Repo path**       | `/home/ubuntu/vapls-discord-bot/`                                    |
-| **Services**        | `discord-bot.service` (main bot) + `vapls-userbot.service` (userbot) |
+| **Services**        | `discord-bot.service` (main bot) + `indio-userbot.service` (userbot) |
 
 **Migrado desde** `ubuntu@129.80.59.99` (Oracle Linux amd64, instancia E2.1.Micro) el 2026-05-30. El server viejo quedó wipe-eado del bot pero sigue prendido para otros usos.
 
@@ -86,7 +86,7 @@ a mano ahí. Detalle completo en [docs/operations.md](docs/operations.md#cicd-pi
 rsync -avz -e "ssh -i /var/home/dilelu/.ssh/vapls" \
   <archivos cambiados> ubuntu@141.148.84.55:/home/ubuntu/vapls-discord-bot/
 ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
-  'sudo systemctl restart discord-bot.service'  # + vapls-userbot.service si cambió userbot/
+  'sudo systemctl restart discord-bot.service'  # + indio-userbot.service si cambió userbot/
 ```
 
 ## 🛠️ Stack Tecnológico y Dependencias
@@ -268,7 +268,7 @@ Si encontrás el error a futuro: re-correr los 3 comandos en el venv del userbot
 
 ### 2) Modelo `faster-whisper` se descarga en el primer arranque
 
-La primera vez que `vapls-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado).
+La primera vez que `indio-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado).
 
 ### 3) DAVE patch en el userbot
 
@@ -554,6 +554,15 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 7. (2026-06-07) Código JS huérfano en `apiServer.py:313-342` que rompía el render de las tabs. Fix: eliminado.
 8. (2026-06-07) Bloque duplicado de stream+watch_stream tracking en `bot.py:547-569`. Fix: eliminado, y el restante ahora requiere viewers > 0 con quality escalada por cantidad de viewers + daily cap.
 
+### 2026-06-12 — Files invisibles por deploy y delete_token auth
+
+16. **`_index.json` reseteado por deploy**: `transfers/` agregado a `.gitignore`. El deploy con `git reset --hard` ya no pierde el tracking de sesiones.
+17. **Recuperación de sesiones desde disco**: `_load_index()` ahora escanea `transfers/` por directorios no indexados y reconstruye sesiones desde `_history.jsonl` + metadata del archivo en disco. Los archivos viejos aparecen automáticamente después de un restart.
+18. **`downloadRaw` y `downloadFile` sin sesión en memoria**: si la sesión no está cargada, los endpoints buscan el archivo directamente en disco. Ya no requieren `sess.ready`.
+19. **`delete_token`**: cada sesión genera un `delete_token` único en `create_session()`. El endpoint `DELETE /upload/{token}` requiere `?dt=delete_token`. Solo la página de upload (que tiene el token embebido) puede borrar. El link de descarga en Discord NO sirve para borrar.
+20. **Botón Cancelar en upload**: aparece durante la subida, detiene los chunks restantes y borra el archivo parcial via `DELETE /upload/{token}?dt=...`.
+21. **`transferHistory` sin guard**: se removió el chequeo `if not mgr.sessions.get(token)` que retornaba vacío para tokens desconocidos. Ahora siempre devuelve el historial completo desde `_history.jsonl`.
+
 ## 📦 Últimos cambios — transferencia de archivos (/transferir)
 
 ### 2026-06-11 — Fixes y mejoras en /transferir
@@ -585,25 +594,30 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 14. **Página de descarga con preview de media**: `DOWNLOAD_HTML` + `format_download_html()` detecta si es imagen/video y muestra `<img>` o `<video>` directamente en vez del botón "Descargar". Content-Disposition `inline` para media, `attachment` para archivos.
 15. **Logs y PostHog analytics** en todos los pasos: eventos `transfer_rejected` (con razón: `path_traversal`, `format_not_allowed`, `oversize`, `disk_full`), `transfer_init`, `transfer_complete` (con `embed_type`: `image`/`video`/`archive`), `transfer_embed_failed`.
 
-## 🖼️ Colección de imágenes del Indio (DM → catálogo)
+## 🖼️ Colección de imágenes del Indio (userbot DM → relay → VaPls → catálogo)
 
-El Indio puede recibir imágenes por **DM** y guardarlas en una colección
-curada (`indio_images/manifest.json`). Las imágenes quedan disponibles para que
-el Indio las use espontáneamente en conversaciones vía la tool `use_image`.
+El Indio (userbot de Discord) recibe imágenes por **DM** y las relayea al main
+bot VaPls, que corre la state machine y las guarda en una colección curada
+(`indio_images/manifest.json`). Las imágenes quedan disponibles para que el
+Indio las use espontáneamente en conversaciones vía la tool `use_image`.
 
 ### Flujo por DM
 
-1. Usuario manda DM con 1+ imágenes al bot.
-2. Por cada imagen pregunta: "esta descripción (nombre del archivo) está bien?"
-3. Opciones del usuario:
+1. Usuario manda DM con 1+ imágenes al **Indio** (userbot, no al bot VaPls).
+2. Userbot relayea las imágenes a `POST /indio-image` de VaPls (`apiServer.py`).
+3. VaPls corre la state machine `_ImageDMSession` y devuelve las respuestas.
+4. Userbot envía las respuestas al DM channel del usuario.
+5. Por cada imagen VaPls pregunta: "¿Qué hacemos?"
    - **sí** — usa el filename como descripción, extrae tags simples
    - **no** / **describimela** — descarga la imagen, llama a Gemini UNA VEZ para
      describir + generar tags + verificar coincidencia con el filename
-   - **la describo yo** — el usuario escribe su propia descripción
+   - **pongo descripción** — el usuario escribe su propia descripción
    - **cancelar** — saltea la imagen
-4. Guarda imagen + metadata en `indio_images/manifest.json`
-5. Al final muestra resumen de lo guardado
-6. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos"
+6. Si la descripción de Gemini **no coincide** o es **parcial**, el usuario
+   **debe** escribir su propia descripción (obligatorio).
+7. Guarda imagen + metadata en `indio_images/manifest.json`
+8. Al final muestra resumen de lo guardado.
+9. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos".
 
 ### Tool `use_image`
 
@@ -617,15 +631,17 @@ de la colección en el chat. El catálogo se inyecta en el system prompt como
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `imageManager.py`            | CRUD del manifiesto + archivos de imagen + generación del bloque de catálogo                                    |
 | `geminiCommand.py`           | State machine de sesión DM (`_ImageDMSession`), dispatch de `USE_IMAGE`, inyección de catálogo en system prompt |
-| `bot.py:688-702`             | Detección de imágenes en DMs + ruteo a `handle_indio_image_dm`                                                  |
+| `apiServer.py:1057-1134`     | Endpoint `POST /indio-image`: relay endpoint que recibe imágenes del userbot y corre la state machine           |
+| `userbot/bot.py:2579-2682`   | Handler `_handle_indio_image_dm()`: relay de DMs con imágenes a VaPls via `/indio-image`                        |
 | `gemini_keywords.py:119-125` | Trigger phrases para `use_image` en `SYSTEM_TRIGGERS`                                                           |
-| `config.py:72`               | `INDIO_IMAGES_DIR` (default `indio_images/`)                                                                    |
+| `config.py:72-73`            | `INDIO_IMAGES_DIR` + `INDIO_IMAGE_GUILD_ID`                                                                     |
 | `indio_images/manifest.json` | Catálogo persistente (gitignored)                                                                               |
 
 ### Config
 
 ```bash
-INDIO_IMAGES_DIR=indio_images    # default
+INDIO_IMAGES_DIR=indio_images        # default
+INDIO_IMAGE_GUILD_ID=0               # guild ID para role gate; 0 = desactivado
 ```
 
 ## 💡 Guía de Modificación

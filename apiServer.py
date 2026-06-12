@@ -13,6 +13,7 @@ import json
 import os
 import time
 import uuid
+import types
 from urllib.parse import urljoin, quote
 import logging
 from typing import Any, Optional
@@ -36,6 +37,31 @@ logger = logging.getLogger("apiServer")
 # Discord gateway hands us a connected session (on_ready / on_connect).
 _PROCESS_START = time.time()
 _GATEWAY_CONNECTED_AT: Optional[float] = None
+
+
+class _BufferChannel:
+    """Fake Discord channel that buffers send() calls for API relay."""
+
+    def __init__(self):
+        self.messages: list[str] = []
+
+    async def send(self, content=None, **kwargs):
+        if content:
+            self.messages.append(content)
+
+
+class _FakeAttachment:
+    """Fake discord.Attachment that downloads from a URL on read()."""
+
+    def __init__(self, info: dict):
+        self.url = info.get("url", "")
+        self.filename = info.get("filename", "image.png")
+        self.content_type = info.get("content_type", "image/png")
+
+    async def read(self) -> bytes:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(self.url) as resp:
+                return await resp.read()
 
 
 def _checkAuth(request: web.Request) -> Optional[web.Response]:
@@ -1028,6 +1054,85 @@ def makeApp(bot: discord.Bot) -> web.Application:
             }
         )
 
+    async def submitIndioImage(request: web.Request) -> web.Response:
+        """Relay endpoint for Indio image DM handling via userbot.
+
+        The userbot receives image DMs and POSTs them here. The main bot
+        runs the same state machine (``_ImageDMSession``) and returns the
+        reply text that the userbot should send to the DM channel.
+
+        Body JSON, ``type`` = ``"image"`` (new session):
+          {user_id, user_name, images: [{url, filename, content_type}]}
+
+        Body JSON, ``type`` = ``"text"`` (existing session):
+          {user_id, user_name, text}
+
+        Returns: {messages: [str], done: bool}
+        """
+        auth_err = _checkAuth(request)
+        if auth_err:
+            return auth_err
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        uid = int(data.get("user_id", 0))
+        uname = data.get("user_name", "unknown")
+        msg_type = data.get("type", "")
+
+        from geminiCommand import (
+            handle_indio_image_dm,
+            has_pending_image_session,
+            _can_send_indio_images,
+            _INDIO_IMAGE_ROLE,
+        )
+
+        # Guild/role gate
+        if config.INDIO_IMAGE_GUILD_ID:
+            guild = bot.get_guild(config.INDIO_IMAGE_GUILD_ID)
+            member = guild.get_member(uid) if guild else None
+            ok, err = _can_send_indio_images(member, _INDIO_IMAGE_ROLE)
+            if not ok:
+                return web.json_response({"messages": [err], "done": True})
+
+        buf = _BufferChannel()
+        author = types.SimpleNamespace(id=uid, display_name=uname)
+
+        if msg_type == "image":
+            raw = data.get("images") or []
+            fakes = [_FakeAttachment(i) for i in raw]
+            msg = types.SimpleNamespace(
+                author=author,
+                channel=buf,
+                attachments=fakes,
+                content="",
+            )
+            await handle_indio_image_dm(msg, fakes)
+        elif msg_type == "text":
+            if not has_pending_image_session(uid):
+                return web.json_response(
+                    {
+                        "messages": ["⏰ No tengo ninguna sesión pendiente con vos."],
+                        "done": True,
+                    }
+                )
+            text = data.get("text", "")
+            msg = types.SimpleNamespace(
+                author=author,
+                channel=buf,
+                attachments=[],
+                content=text,
+            )
+            await handle_indio_image_dm(msg, [])
+        else:
+            return web.json_response({"error": "invalid type"}, status=400)
+
+        from geminiCommand import _pending_image_sessions
+
+        sess = _pending_image_sessions.get(uid)
+        done = sess is None or sess.is_done
+        return web.json_response({"messages": buf.messages, "done": done})
+
     async def textChannels(request: web.Request) -> web.Response:
         """List text channels of the guild."""
         try:
@@ -1425,6 +1530,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/indio", indioVoice)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
+    app.router.add_post("/indio-image", submitIndioImage)
     app.router.add_get("/channels", textChannels)
     app.router.add_post("/github-webhook", githubWebhook)
     return app

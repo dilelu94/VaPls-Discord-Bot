@@ -10,11 +10,11 @@ The repo is maintained by a non-developer with the help of coding agents. Two
 pains motivated this work:
 
 1. **A change broke the test suite, and "the agent should have run the tests"
-   didn't prevent it.** Root cause was *not* a skipped test — it was an
+   didn't prevent it.** Root cause was _not_ a skipped test — it was an
    **environment portability gap**: `userbot/recording.py` and
    `tests/test_recording.py` both `import audioop`, a stdlib module **removed in
    Python 3.13**. The maintainer's machine runs Python 3.14, so the import fails
-   and a single collection error aborts the *entire* pytest run. CI (matrix
+   and a single collection error aborts the _entire_ pytest run. CI (matrix
    3.10–3.12) and the agent's environment (≤3.12) stayed green because `audioop`
    still exists there. The production server (Ubuntu 22.04, Python 3.10) is
    unaffected. So: "run tests locally" is meaningless if everyone runs a
@@ -33,14 +33,14 @@ pains motivated this work:
 - Make the test suite trustworthy and **portable across Python versions**.
 - Give **any** AI agent (Claude, Gemini, Codex, Copilot) a hard, agent-agnostic
   gate that runs the tests before work is considered "done".
-- **Continuously deploy** `master` to the Oracle server *only when CI is green*,
+- **Continuously deploy** `master` to the Oracle server _only when CI is green_,
   so a broken change can never reach the live bot.
 - Turn the server into a **pure deploy target** (no more live editing).
 
 ## Non-goals
 
 - Migrating the delivery flow to PR-based (the friend keeps pushing to `master`;
-  CI gates the *deploy*, not the merge).
+  CI gates the _deploy_, not the merge).
 - Deploying the separate `telegram-bot` service / `vapls-telegram-bot` repo.
 - Reconfiguring or reusing the existing self-hosted `granja-luque` Actions
   runner (deploy uses SSH from a GitHub-hosted runner instead).
@@ -49,17 +49,17 @@ pains motivated this work:
 
 ## Verified environment facts (server recon, 2026-05-30)
 
-| Area | Fact |
-|---|---|
-| Host | Oracle Ampere A1, Ubuntu 22.04.5 aarch64 |
-| Python | 3.10.12 in **both** venvs (`venv/`, `userbot/venv/`) |
-| Services | `discord-bot`, `vapls-userbot`, `telegram-bot` — all `User=ubuntu`, `Restart=always`, system services; passwordless `sudo systemctl` confirmed |
-| `discord-bot` | `WorkingDirectory=~/vapls-discord-bot`, `ExecStart=venv/bin/python3 bot.py` |
-| `vapls-userbot` | `WorkingDirectory=~/vapls-discord-bot/userbot`, `ExecStart=userbot/venv/bin/python3 bot.py`, **own** `requirements.txt` |
-| Repo | `~/vapls-discord-bot`, remote = public `github.com/dilelu94/VaPls-Discord-Bot`, on `master`, 42 commits behind, dirty tree |
-| `.env` files | gitignored (main + userbot) — safe from `git reset --hard` |
-| Untracked | `.env*` backups, `audio_output/`, `downloads/`, and a `geminiKeys.py` byte-identical to upstream |
-| Self-hosted runner | present but registered to `dilelu94/granja-luque`, inactive — **not used** |
+| Area               | Fact                                                                                                                                           |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Host               | Oracle Ampere A1, Ubuntu 22.04.5 aarch64                                                                                                       |
+| Python             | 3.10.12 in **both** venvs (`venv/`, `userbot/venv/`)                                                                                           |
+| Services           | `discord-bot`, `indio-userbot`, `telegram-bot` — all `User=ubuntu`, `Restart=always`, system services; passwordless `sudo systemctl` confirmed |
+| `discord-bot`      | `WorkingDirectory=~/vapls-discord-bot`, `ExecStart=venv/bin/python3 bot.py`                                                                    |
+| `indio-userbot`    | `WorkingDirectory=~/vapls-discord-bot/userbot`, `ExecStart=userbot/venv/bin/python3 bot.py`, **own** `requirements.txt`                        |
+| Repo               | `~/vapls-discord-bot`, remote = public `github.com/dilelu94/VaPls-Discord-Bot`, on `master`, 42 commits behind, dirty tree                     |
+| `.env` files       | gitignored (main + userbot) — safe from `git reset --hard`                                                                                     |
+| Untracked          | `.env*` backups, `audio_output/`, `downloads/`, and a `geminiKeys.py` byte-identical to upstream                                               |
+| Self-hosted runner | present but registered to `dilelu94/granja-luque`, inactive — **not used**                                                                     |
 
 ## Design
 
@@ -94,7 +94,7 @@ Canonical "definition of done" command, enforced three ways:
 
 - **`Makefile`** with a `check` target → `pytest -q`. Single command everyone
   (humans + agents) runs. Include `install` (`pip install -r
-  requirements-dev.txt`) for convenience.
+requirements-dev.txt`) for convenience.
 - **`.githooks/pre-push`** (committed, executable) runs `make check`; a red suite
   rejects the push. Activated once per clone with
   `git config core.hooksPath .githooks` — documented in `AGENTS.md` setup.
@@ -134,11 +134,11 @@ Add a `deploy` job to `.github/workflows/ci.yml`:
    `audio_output/`, `downloads/` (only a `git clean` would, which we do not run).
 4. Smart dependency install:
    - if root `requirements.txt` changed in this pull → `venv/bin/pip install -r
-     requirements.txt`
+requirements.txt`
    - if `userbot/requirements.txt` changed → `userbot/venv/bin/pip install -r
-     userbot/requirements.txt`
+userbot/requirements.txt`
    - "changed" = diff between the pre-pull and post-pull commit for that path.
-5. `sudo systemctl restart discord-bot vapls-userbot` (not `telegram-bot`).
+5. `sudo systemctl restart discord-bot indio-userbot` (not `telegram-bot`).
 6. Verify both are `active` (`systemctl is-active`); exit non-zero (failing the
    deploy job loudly) if either did not come back.
 

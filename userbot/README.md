@@ -13,16 +13,16 @@ naturally, so audio is decrypted client-side and we can route it to VOSK.
 
 ## What this does (and doesn't)
 
-| | |
-|---|---|
-| ✅ Auto-joins voice channels when humans enter | |
-| ✅ Auto-leaves when the channel is empty | |
-| ✅ Per-user Spanish transcription via VOSK | |
-| ✅ Posts transcripts to a configurable text channel | |
-| ✅ Optional HTTP forward to the main bot's API | |
-| ❌ Plays audio (the main bot still handles /play, /soundpad) | |
-| ❌ Slash commands (those live in the main bot) | |
-| ❌ Soundboard greeting (main bot handles it on its own join) | |
+|                                                              |     |
+| ------------------------------------------------------------ | --- |
+| ✅ Auto-joins voice channels when humans enter               |     |
+| ✅ Auto-leaves when the channel is empty                     |     |
+| ✅ Per-user Spanish transcription via VOSK                   |     |
+| ✅ Posts transcripts to a configurable text channel          |     |
+| ✅ Optional HTTP forward to the main bot's API               |     |
+| ❌ Plays audio (the main bot still handles /play, /soundpad) |     |
+| ❌ Slash commands (those live in the main bot)               |     |
+| ❌ Soundboard greeting (main bot handles it on its own join) |     |
 
 ## Setup (Oracle server)
 
@@ -41,6 +41,7 @@ to connect + speak in the relevant voice channels.
 > never commit it.
 
 In a browser logged in as the secondary account:
+
 1. Open Discord in the browser.
 2. Open DevTools (F12) → **Network** tab.
 3. Reload the page or send a message.
@@ -69,16 +70,16 @@ needed.
 ### 4. Register as a systemd service
 
 ```bash
-sudo cp vapls-userbot.service /etc/systemd/system/
+sudo cp indio-userbot.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now vapls-userbot.service
-sudo systemctl status vapls-userbot.service
+sudo systemctl enable --now indio-userbot.service
+sudo systemctl status indio-userbot.service
 ```
 
 ### 5. Watch the logs
 
 ```bash
-sudo journalctl -u vapls-userbot.service -f
+sudo journalctl -u indio-userbot.service -f
 ```
 
 Look for:
@@ -108,9 +109,9 @@ See `.env.example` for the full list. Highlights:
 ## Stop / restart
 
 ```bash
-sudo systemctl restart vapls-userbot.service
-sudo systemctl stop vapls-userbot.service
-sudo systemctl disable vapls-userbot.service
+sudo systemctl restart indio-userbot.service
+sudo systemctl stop indio-userbot.service
+sudo systemctl disable indio-userbot.service
 ```
 
 ## Troubleshooting

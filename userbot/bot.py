@@ -219,7 +219,7 @@ log = logging.getLogger("userbot")
 import analytics
 import posthog_client
 
-posthog_client.init_observability(service_name="vapls-userbot")
+posthog_client.init_observability(service_name="indio-userbot")
 
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
@@ -2576,6 +2576,121 @@ async def _handle_gemini_key_dm(message) -> bool:
     return True
 
 
+async def _handle_indio_image_dm(message) -> bool:
+    """Relay image DMs to the main bot's /indio-image endpoint.
+
+    Called from ``on_message`` when the userbot receives a DM:
+    - If the DM has image attachments → POST ``type=image`` with URLs.
+    - If the DM has text and a pending session exists → POST ``type=text``.
+    - Otherwise return False so the caller fall through to the normal flow.
+
+    The main bot runs the ``_ImageDMSession`` state machine and returns
+    a list of messages to be sent back to the DM channel.
+    """
+    guild = getattr(message, "guild", None)
+    if guild is not None:
+        return False  # not a DM
+    if not config.MAIN_BOT_API_BASE or not config.MAIN_BOT_API_SECRET:
+        return False
+    uid = message.author.id
+
+    has_images = bool(
+        message.attachments
+        and any(
+            (getattr(a, "content_type", "") or "").startswith("image/")
+            for a in message.attachments
+        )
+    )
+
+    if not has_images:
+        # Without images the only thing we can do is forward text for an
+        # existing session. We don't know if a session exists without asking
+        # the server, so probe with a lightweight GET-like POST.
+        payload = {
+            "type": "text",
+            "user_id": uid,
+            "user_name": getattr(message.author, "display_name", None)
+            or getattr(message.author, "name", "unknown"),
+            "text": message.content or "",
+        }
+        session = await _get_http()
+        try:
+            async with session.post(
+                f"{config.MAIN_BOT_API_BASE}/indio-image",
+                json=payload,
+                headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    log.info(
+                        "[INDIO-IMG-DM] text-only DM no session: HTTP %s: %s",
+                        resp.status,
+                        body[:200],
+                    )
+                    return False
+                data = await resp.json(content_type=None)
+        except Exception:
+            log.exception("[INDIO-IMG-DM] relay failed for text DM")
+            return False
+
+        msgs = (data or {}).get("messages") or []
+        done = (data or {}).get("done", True)
+        for m in msgs:
+            try:
+                await message.channel.send(m)
+            except Exception:
+                log.exception("[INDIO-IMG-DM] send reply failed")
+        return True
+
+    # --- New image session ---
+    images = [
+        {
+            "url": a.url,
+            "filename": a.filename,
+            "content_type": a.content_type or "image/png",
+        }
+        for a in message.attachments
+        if (getattr(a, "content_type", "") or "").startswith("image/")
+    ]
+    if not images:
+        return False
+
+    payload = {
+        "type": "image",
+        "user_id": uid,
+        "user_name": getattr(message.author, "display_name", None)
+        or getattr(message.author, "name", "unknown"),
+        "images": images,
+    }
+    try:
+        session = await _get_http()
+        async with session.post(
+            f"{config.MAIN_BOT_API_BASE}/indio-image",
+            json=payload,
+            headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status >= 400:
+                body = await resp.text()
+                log.warning(
+                    "[INDIO-IMG-DM] image relay HTTP %s: %s", resp.status, body[:200]
+                )
+                return True
+            data = await resp.json(content_type=None)
+    except Exception as e:
+        log.exception("[INDIO-IMG-DM] image relay failed")
+        return True
+
+    msgs = (data or {}).get("messages") or []
+    for m in msgs:
+        try:
+            await message.channel.send(m)
+        except Exception:
+            log.exception("[INDIO-IMG-DM] send reply failed")
+    return True
+
+
 @client.event
 async def on_message(message):
     """Auto-reply trigger: when any human (not the userbot, not other bots,
@@ -2595,6 +2710,9 @@ async def on_message(message):
         return
     # DM con keys de Gemini: lo procesamos y cortamos.
     if await _handle_gemini_key_dm(message):
+        return
+    # DM: relay de imágenes al Indio vía VaPls /indio-image
+    if await _handle_indio_image_dm(message):
         return
     if not config.INDIO_AUTO_REPLY_ENABLED:
         return
