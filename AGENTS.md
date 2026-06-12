@@ -567,6 +567,22 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 7. **Ocultar upload al expirar**: `transferCommand.py` — cuando el timer detecta expiración, oculta `upload-section` y muestra `expired-section`. Antes solo cambiaba el texto.
 8. **Borrado de archivos pesados**: Se liberaron ~7 GB borrando dos `Burglin Gnomes.zip` de 3.4 GB del server.
 
+### 2026-06-11 — Seguridad
+
+9. **XSS en HTML/JS**: `html.escape()` en `format_download_html`, función `esc()` en JS para escapar filenames en innerHTML. Atributo `href` sanitizado vía `url_quote()` en URLs.
+10. **Path traversal**: rechazo de `/` y `\` en `init_upload`, `os.path.basename()` en endpoints de descarga.
+11. **Auth middleware para /static/**: `apiServer.py` — agregado `/static` a la whitelist del middleware para que el icono se sirva sin token.
+
+### 2026-06-12 — Restricción de tipos de archivo y auto-embed
+
+12. **Extensiones permitidas**: solo se aceptan estos grupos:
+    - **Archivos comprimidos**: `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.xz`, `.zst`
+    - **Imágenes**: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`, `.svg`, `.ico`, `.avif`
+    - **Videos**: `.mp4`, `.webm`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`
+    - Cualquier otra extensión responde `"formato no permitido"`.
+    - Implementado en `transferCommand.py:_ext()`, `ALLOWED_EXTS`, validación en `init_upload()`.
+13. **Auto-embed de media en Discord**: en `apiServer.py:uploadComplete()`, si el archivo es imagen o video (según `_is_image()` / `_is_video()`), se envía el link directo como mensaje de texto para que Discord lo incruste/ reproduzca automáticamente. Para archivos comprimidos se mantiene el embed con botón "Descargar".
+
 ## 💡 Guía de Modificación
 
 1. **Tests primero (o junto al cambio):** seguí la skill `behavioral-testing`. No
