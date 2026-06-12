@@ -1248,6 +1248,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         sz = sess.total_size
         gb_val = sz / (1024**3)
         sz_str = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{sz / (1024**2):.0f} MB"
+        embed_type = "archive"
         try:
             channel = bot.get_channel(sess.channel_id)
             if channel:
@@ -1255,8 +1256,22 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     sess.filename
                 ) or transferCommand._is_video(sess.filename)
                 if is_media:
+                    embed_type = (
+                        "image" if transferCommand._is_image(sess.filename) else "video"
+                    )
+                    logger.info(
+                        "transfer media auto-embed token=%s type=%s filename=%s",
+                        token[:8],
+                        embed_type,
+                        sess.filename,
+                    )
                     await channel.send(f"**{sess.filename}** ({sz_str})\n{dl}")
                 else:
+                    logger.info(
+                        "transfer archive embed token=%s filename=%s",
+                        token[:8],
+                        sess.filename,
+                    )
                     embed = discord.Embed(
                         title="✅ Archivo subido exitosamente",
                         description=f"**{sess.filename}**\n{sz_str}",
@@ -1265,7 +1280,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     view = discord.ui.View()
                     view.add_item(discord.ui.Button(label="🔗 Descargar", url=dl))
                     await channel.send(embed=embed, view=view)
-                logger.info("transfer embed posted token=%s", token[:8])
+                analytics.capture(
+                    "transfer_complete",
+                    properties={
+                        "token": token[:8],
+                        "filename": sess.filename,
+                        "size": sz,
+                        "embed_type": embed_type,
+                    },
+                )
             else:
                 logger.warning(
                     "transfer no channel token=%s channel_id=%s",
@@ -1274,6 +1297,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 )
         except Exception:
             logger.exception("failed to post transfer completion embed")
+            analytics.capture_exception(
+                Exception("transfer_embed_failed"), properties={"token": token[:8]}
+            )
         return web.json_response({"ok": True, "url": dl})
 
     async def uploadDelete(request: web.Request) -> web.Response:

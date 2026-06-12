@@ -18,6 +18,7 @@ import html
 from urllib.parse import quote as url_quote
 from typing import Optional
 
+import analytics
 import config
 
 ARCHIVE_EXTS = {".zip", ".rar", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".zst"}
@@ -97,12 +98,66 @@ class TransferManager:
         if not sess or sess.expired:
             return "sesión inválida o expirada"
         if "/" in filename or "\\" in filename:
+            logger.warning(
+                "upload rejected path traversal token=%s filename=%s",
+                token[:8],
+                filename,
+            )
+            analytics.capture(
+                "transfer_rejected",
+                properties={
+                    "reason": "path_traversal",
+                    "token": token[:8],
+                    "filename": filename,
+                },
+            )
             return "nombre de archivo inválido"
-        if _ext(filename) not in ALLOWED_EXTS:
+        ext = _ext(filename)
+        if ext not in ALLOWED_EXTS:
+            logger.info(
+                "upload rejected format token=%s filename=%s ext=%s",
+                token[:8],
+                filename,
+                ext,
+            )
+            analytics.capture(
+                "transfer_rejected",
+                properties={
+                    "reason": "format_not_allowed",
+                    "token": token[:8],
+                    "filename": filename,
+                    "ext": ext,
+                },
+            )
             return "formato no permitido — solo archivos comprimidos, imágenes o videos"
         if total_size > config.TRANSFER_MAX_SIZE:
+            logger.warning(
+                "upload rejected oversize token=%s size=%d max=%d",
+                token[:8],
+                total_size,
+                config.TRANSFER_MAX_SIZE,
+            )
+            analytics.capture(
+                "transfer_rejected",
+                properties={
+                    "reason": "oversize",
+                    "token": token[:8],
+                    "size": total_size,
+                },
+            )
             return f"el archivo excede el límite de {config.TRANSFER_MAX_SIZE // (1024**3)} GB"
         if not self._check_disk(total_size):
+            logger.error(
+                "upload rejected disk full token=%s size=%d", token[:8], total_size
+            )
+            analytics.capture(
+                "transfer_rejected",
+                properties={
+                    "reason": "disk_full",
+                    "token": token[:8],
+                    "size": total_size,
+                },
+            )
             return "disco lleno, no se puede aceptar el archivo"
         sess.filename = filename
         sess.total_size = total_size
@@ -113,7 +168,20 @@ class TransferManager:
         os.makedirs(os.path.join(config.TRANSFER_DIR, token), exist_ok=True)
         self._save_index()
         logger.info(
-            "upload init token=%s filename=%s size=%d", token[:8], filename, total_size
+            "upload init token=%s filename=%s size=%d ext=%s",
+            token[:8],
+            filename,
+            total_size,
+            ext,
+        )
+        analytics.capture(
+            "transfer_init",
+            properties={
+                "token": token[:8],
+                "filename": filename,
+                "size": total_size,
+                "ext": ext,
+            },
         )
         return None
 
