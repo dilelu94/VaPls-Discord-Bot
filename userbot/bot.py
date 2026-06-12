@@ -2594,10 +2594,22 @@ async def _handle_indio_image_dm(message) -> bool:
         return False
     uid = message.author.id
 
+    _image_exts = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".webp",
+        ".bmp",
+        ".svg",
+        ".ico",
+        ".avif",
+    }
     has_images = bool(
         message.attachments
         and any(
             (getattr(a, "content_type", "") or "").startswith("image/")
+            or any(a.filename.lower().endswith(e) for e in _image_exts)
             for a in message.attachments
         )
     )
@@ -2652,6 +2664,7 @@ async def _handle_indio_image_dm(message) -> bool:
         }
         for a in message.attachments
         if (getattr(a, "content_type", "") or "").startswith("image/")
+        or any(a.filename.lower().endswith(e) for e in _image_exts)
     ]
     if not images:
         return False
