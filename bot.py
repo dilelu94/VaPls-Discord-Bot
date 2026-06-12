@@ -689,10 +689,22 @@ async def on_message(message):
     from geminiCommand import handle_indio_image_dm, has_pending_image_session
 
     if message.attachments:
+        _image_exts = {
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".webp",
+            ".bmp",
+            ".svg",
+            ".ico",
+            ".avif",
+        }
         images = [
             a
             for a in message.attachments
-            if a.content_type and a.content_type.startswith("image/")
+            if (a.content_type or "").startswith("image/")
+            or any(a.filename.lower().endswith(e) for e in _image_exts)
         ]
         if images:
             await handle_indio_image_dm(message, images)
