@@ -430,6 +430,7 @@ DOWNLOAD_HTML = """<!DOCTYPE html>
   .icon {{ width: 96px; height: 96px; border-radius: 12px; object-fit: cover; margin-bottom: 8px; }}
   .filename {{ font-size: 1.1rem; color: #58a6ff; margin: 12px 0 4px; word-break: break-all; }}
   .size {{ font-size: 0.85rem; color: #8b949e; margin-bottom: 24px; }}
+  .media {{ max-width: 100%; max-height: 70vh; border-radius: 8px; margin-bottom: 16px; }}
   .btn {{ display: inline-block; padding: 12px 32px; border-radius: 6px; border: none; cursor: pointer; font-size: 16px; text-decoration: none; }}
   .btn-download {{ background: #238636; color: #fff; }}
   .btn-download:hover {{ background: #2ea043; }}
@@ -442,7 +443,8 @@ DOWNLOAD_HTML = """<!DOCTYPE html>
     <img class="icon" src="/static/icon.jpg" alt="icon">
     <div class="filename">{FILENAME}</div>
     <div class="size">{SIZE}</div>
-    <a class="btn btn-download" href="{RAW_URL}">⬇️ Descargar</a>
+    <div id="media-preview" style="display:none;margin-bottom:16px"></div>
+    <a class="btn btn-download" href="{RAW_URL}" id="dl-btn">⬇️ Descargar</a>
   </div>
   <div id="unavailable" style="display:none">
     <div style="font-size:3rem;margin-bottom:8px">❌</div>
@@ -451,9 +453,20 @@ DOWNLOAD_HTML = """<!DOCTYPE html>
 </div>
 <script>
 var ok = {OK};
+var mt = "{MEDIA_TYPE}";
+var raw = "{RAW_URL}";
 if (!ok) {{
   document.getElementById("available").style.display = "none";
   document.getElementById("unavailable").style.display = "block";
+}}
+if (mt === "image") {{
+  document.getElementById("dl-btn").style.display = "none";
+  document.getElementById("media-preview").style.display = "block";
+  document.getElementById("media-preview").innerHTML = '<img class="media" src="' + raw + '" alt="' + document.querySelector(".filename").textContent + '">';
+}} else if (mt === "video") {{
+  document.getElementById("dl-btn").style.display = "none";
+  document.getElementById("media-preview").style.display = "block";
+  document.getElementById("media-preview").innerHTML = '<video class="media" src="' + raw + '" controls autoplay loop></video>';
 }}
 </script>
 </body>
@@ -909,11 +922,13 @@ def format_download_html(token: str, filename: str, size: int, ok: bool) -> str:
         sz = f"{gb_val:.1f} GB" if gb_val >= 1 else f"{size / (1024**2):.0f} MB"
     else:
         sz = ""
+    mt = "image" if _is_image(filename) else "video" if _is_video(filename) else ""
     return DOWNLOAD_HTML.format(
         FILENAME=html.escape(filename),
         SIZE=sz,
         RAW_URL=f"/dl/{token}/{url_quote(filename)}/raw",
         OK="true" if ok else "false",
+        MEDIA_TYPE=mt,
     )
 
 

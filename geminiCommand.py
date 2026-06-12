@@ -29,6 +29,7 @@ import config
 import geminiClient
 import gemini_keywords as _kw
 import geminiKeys
+import imageManager
 
 try:
     from users import USERS as _USERS
@@ -412,6 +413,471 @@ _indio_last_seen: dict[str, float] = {}
 # Parens (not brackets) intentional — brackets in the prompt teach the model
 # to echo "[Name]:" speaker-tag patterns in its own replies.
 _HISTORY_AGE_TAG_THRESHOLD_SEC = 15 * 60  # 15 minutes
+
+# ---------------------------------------------------------------------------
+# Image collection via DM
+# ---------------------------------------------------------------------------
+
+import time as _time
+from dataclasses import dataclass, field
+from typing import Optional as _Optional
+
+_IMAGE_SESSION_TIMEOUT = 300  # 5 min sin respuesta → se cancela
+
+
+@dataclass
+class _PendingImage:
+    attachment: "discord.Attachment"
+    original_filename: str
+
+
+class _ImageDMSession:
+    """State machine for collecting images one-by-one via DM."""
+
+    def __init__(self, author_id: int, images: list["discord.Attachment"]):
+        self.author_id = author_id
+        self.pending = [_PendingImage(a, a.filename) for a in images]
+        self.total = len(images)
+        self.processed: list[dict] = []
+        self.current_index = 0
+        # stage: confirm | confirm_save | waiting_desc | done
+        self.stage = "confirm"
+        self.last_activity = _time.time()
+        # Temp storage for Gemini-described image data (stage=confirm_save)
+        self._pending_desc: str = ""
+        self._pending_tags: list[str] = field(default_factory=list)
+        self._pending_data: bytes = b""
+        self._pending_mime: str = ""
+        self._pending_ext: str = ""
+
+    @property
+    def current(self) -> "_Optional[_PendingImage]":
+        if self.current_index < len(self.pending):
+            return self.pending[self.current_index]
+        return None
+
+    def advance(self) -> None:
+        self.current_index += 1
+        if self.current_index >= self.total:
+            self.stage = "done"
+
+    @property
+    def is_done(self) -> bool:
+        return self.stage == "done" or self.current_index >= self.total
+
+
+_pending_image_sessions: dict[int, _ImageDMSession] = {}
+_image_mgr: "_Optional[imageManager.ImageManager]" = None
+
+
+def _init_image_mgr() -> imageManager.ImageManager:
+    global _image_mgr
+    if _image_mgr is None:
+        _image_mgr = imageManager.ImageManager(config.INDIO_IMAGES_DIR)
+    return _image_mgr
+
+
+def has_pending_image_session(author_id: int) -> bool:
+    return author_id in _pending_image_sessions
+
+
+def _extract_tags(text: str) -> list[str]:
+    """Simple tag extraction from a text string (filename or description).
+    Splits on whitespace, underscores, hyphens, commas; drops short/common words."""
+    import re as _re
+
+    parts = _re.split(r"[\s_,;.\-!¡¿?()\[\]]+", text.lower())
+    stop = {
+        "de",
+        "la",
+        "el",
+        "en",
+        "un",
+        "una",
+        "con",
+        "del",
+        "y",
+        "e",
+        "a",
+        "que",
+        "es",
+        "por",
+        "para",
+        "lo",
+        "las",
+        "los",
+        "se",
+        "su",
+        "al",
+        "como",
+        "más",
+        "pero",
+        "este",
+        "esta",
+        "jpg",
+        "png",
+        "jpeg",
+        "gif",
+        "webp",
+        "img",
+        "image",
+        "photo",
+        "foto",
+        "imagen",
+    }
+    seen = set()
+    out: list[str] = []
+    for p in parts:
+        p = p.strip()
+        if len(p) >= 3 and p not in stop and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out[:8]
+
+
+def _cleanup_stale_sessions() -> None:
+    """Cancel sessions that have been idle for > 5 minutes."""
+    now = _time.time()
+    stale = [
+        uid
+        for uid, s in _pending_image_sessions.items()
+        if now - s.last_activity > _IMAGE_SESSION_TIMEOUT
+    ]
+    for uid in stale:
+        s = _pending_image_sessions.pop(uid, None)
+        if s is not None:
+            logger.info("image DM session %d stale — cleaned up", uid)
+
+
+async def handle_indio_image_dm(
+    message: "discord.Message",
+    attachments: list["discord.Attachment"],
+) -> None:
+    """Entry point for image-related DM messages.
+
+    Called from ``bot.py.on_message`` when:
+    - The DM has image attachments (new session or aux in existing).
+    - The DM has text and the user has a pending session (response).
+    """
+    uid = message.author.id
+    _cleanup_stale_sessions()
+
+    # --- New session (message has images) ---
+    if attachments and uid not in _pending_image_sessions:
+        sess = _ImageDMSession(uid, attachments)
+        _pending_image_sessions[uid] = sess
+        n = len(attachments)
+        if n == 1:
+            await message.channel.send("📸 Recibí una imagen. Vamos a revisarla.")
+        else:
+            await message.channel.send(
+                f"📸 Recibí {n} imágenes. Las revisamos una por una."
+            )
+        await _ask_about_current(message.channel, sess)
+        return
+
+    # --- Existing session — user's response ---
+    sess = _pending_image_sessions.get(uid)
+    if sess is None:
+        return  # not our message, let other handlers deal with it
+
+    sess.last_activity = _time.time()
+    text = (message.content or "").strip().lower()
+    await _handle_session_text(message.channel, message.author, sess, text)
+
+
+async def _ask_about_current(
+    channel: "discord.abc.Messageable",
+    sess: _ImageDMSession,
+) -> None:
+    """Ask the user about the filename of the current image."""
+    img = sess.current
+    if img is None:
+        await _finish_session(channel, sess)
+        return
+    name = img.original_filename
+    await channel.send(
+        f"🖼️ Imagen **{sess.current_index + 1}/{sess.total}**:\n"
+        f"Nombre del archivo: **{name}**\n\n"
+        f"¿Esta descripción está bien?\n"
+        f"• **sí** — usamos el nombre del archivo como descripción\n"
+        f"• **no** o **describimela** — la describo yo\n"
+        f"• **la describo yo** — escribí tu propia descripción\n"
+        f"• **cancelar** — salteamos esta imagen"
+    )
+    sess.stage = "confirm"
+
+
+async def _handle_session_text(
+    channel: "discord.abc.Messageable",
+    author: "discord.User",
+    sess: _ImageDMSession,
+    text: str,
+) -> None:
+    """Route the user's text response based on the current session stage."""
+    if sess.stage == "waiting_desc":
+        # User is providing a custom description
+        await _save_with_user_description(channel, author, sess, text)
+        return
+
+    if sess.stage == "confirm":
+        if text in ("sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"):
+            await _save_with_filename(channel, author, sess)
+        elif text in ("no", "nop", "nope", "describimela", "describila"):
+            await _describe_with_gemini(channel, author, sess)
+        elif text in (
+            "la describo yo",
+            "describo yo",
+            "yo la describo",
+            "describo",
+            "pongo yo",
+        ):
+            sess.stage = "waiting_desc"
+            sess.last_activity = _time.time()
+            await channel.send("Dale, decime la descripción para esta imagen.")
+        elif text in ("cancelar", "cancel", "saltear", "skip", "next", "siguiente"):
+            await channel.send("OK, la salteamos.")
+            sess.advance()
+            await _ask_about_current(channel, sess)
+        else:
+            # Didn't understand — repeat options
+            await channel.send(
+                "No entendí. Respondé con **sí**, **no** / **describimela**, "
+                "**la describo yo**, o **cancelar**."
+            )
+    elif sess.stage == "confirm_save":
+        if text in ("sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"):
+            await _save_with_gemini_desc(channel, author, sess)
+        else:
+            await channel.send("OK, no la guardamos.")
+            sess.advance()
+            await _ask_about_current(channel, sess)
+    else:
+        logger.warning(
+            "image DM session %d unexpected stage %s", sess.author_id, sess.stage
+        )
+
+
+async def _save_with_filename(
+    channel: "discord.abc.Messageable",
+    author: "discord.User",
+    sess: _ImageDMSession,
+) -> None:
+    """Save the current image using the filename as description."""
+    img = sess.current
+    if img is None:
+        return
+    mgr = _init_image_mgr()
+    desc = img.original_filename
+    # Strip extension from filename for a cleaner description
+    name_no_ext = desc.rsplit(".", 1)[0] if "." in desc else desc
+    tags = _extract_tags(name_no_ext)
+    try:
+        data = await img.attachment.read()
+        ext = (
+            img.attachment.filename.rsplit(".", 1)[-1]
+            if "." in img.attachment.filename
+            else "png"
+        )
+        img_id = mgr.add_image(
+            data, ext, name_no_ext, tags, author.id, img.original_filename
+        )
+        sess.processed.append({"id": img_id, "description": name_no_ext, "tags": tags})
+        await channel.send(f"✅ Guardada como: *{name_no_ext}*")
+    except Exception as exc:
+        logger.exception("image save failed")
+        await channel.send(f"❌ No pude guardarla: {exc}")
+    sess.advance()
+    await _ask_about_current(channel, sess)
+
+
+async def _describe_with_gemini(
+    channel: "discord.abc.Messageable",
+    author: "discord.User",
+    sess: _ImageDMSession,
+) -> None:
+    """Download the image and ask Gemini to describe it + give tags + verify filename."""
+    img = sess.current
+    if img is None:
+        return
+    try:
+        data = await img.attachment.read()
+    except Exception as exc:
+        logger.exception("image download failed")
+        await channel.send(f"❌ No pude descargar la imagen: {exc}")
+        sess.advance()
+        await _ask_about_current(channel, sess)
+        return
+
+    import base64 as _b64
+
+    b64_data = _b64.b64encode(data).decode()
+    mime = img.attachment.content_type or "image/png"
+    image_part = {"inlineData": {"mimeType": mime, "data": b64_data}}
+    name_hint = img.original_filename
+
+    await channel.send("🔍 Dejame ver la imagen...")
+    try:
+        reply = await geminiClient.generate(
+            user_message=(
+                "Describí esta imagen BREVEMENTE (2-3 oraciones máximo) para un "
+                "catálogo de imágenes. También dame 3-5 tags relevantes separados "
+                "por comas y decime si la descripción sugerida "
+                f"'{name_hint}' coincide ALGO con lo que se ve.\n\n"
+                "Formateá tu respuesta ASÍ:\n"
+                "DESCRIPCIÓN: <texto>\n"
+                "TAGS: tag1, tag2, tag3\n"
+                "COINCIDENCIA: sí / parcial / no"
+            ),
+            system_instruction=(
+                "Sos un asistente que describe imágenes para un catálogo. "
+                "Sé conciso, objetivo, no inventes nada que no esté en la imagen."
+            ),
+            image_parts=[image_part],
+            max_output_tokens=512,
+        )
+    except Exception as exc:
+        logger.exception("gemini describe failed")
+        await channel.send(f"❌ No pude describirla: {exc}")
+        sess.advance()
+        await _ask_about_current(channel, sess)
+        return
+
+    gemini_text = reply.text or ""
+    # Parse response
+    desc = ""
+    tags: list[str] = []
+    coincidencia = ""
+    for line in gemini_text.split("\n"):
+        line = line.strip()
+        if line.upper().startswith("DESCRIPCIÓN:"):
+            desc = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("TAGS:"):
+            raw = line.split(":", 1)[1].strip()
+            tags = [t.strip().lower() for t in raw.split(",") if t.strip()]
+        elif line.upper().startswith("COINCIDENCIA:"):
+            coincidencia = line.split(":", 1)[1].strip()
+
+    if not desc:
+        desc = gemini_text[:200]  # fallback
+    if not tags:
+        tags = _extract_tags(desc)
+
+    match_msg = ""
+    if coincidencia:
+        match_msg = f"\n📊 Coincide **{coincidencia}** con el nombre del archivo."
+
+    await channel.send(
+        f"📝 Descripción: *{desc}*\n"
+        f"🏷️ Tags: {', '.join(tags[:5])}"
+        f"{match_msg}\n\n"
+        f"¿La guardo así?"
+    )
+
+    # Store the parsed result on the session for when user confirms
+    sess._pending_desc = desc
+    sess._pending_tags = tags
+    sess._pending_data = data
+    sess._pending_mime = mime
+    sess._pending_ext = (
+        img.attachment.filename.rsplit(".", 1)[-1]
+        if "." in img.attachment.filename
+        else "png"
+    )
+    sess.stage = "confirm_save"  # special stage: just waiting for sí/no
+
+
+async def _save_with_user_description(
+    channel: "discord.abc.Messageable",
+    author: "discord.User",
+    sess: _ImageDMSession,
+    text: str,
+) -> None:
+    """Save the image using the user's own description."""
+    img = sess.current
+    if img is None:
+        return
+    mgr = _init_image_mgr()
+    desc = text.strip()
+    tags = _extract_tags(desc)
+    try:
+        data = await img.attachment.read()
+        ext = (
+            img.attachment.filename.rsplit(".", 1)[-1]
+            if "." in img.attachment.filename
+            else "png"
+        )
+        img_id = mgr.add_image(data, ext, desc, tags, author.id, img.original_filename)
+        sess.processed.append({"id": img_id, "description": desc, "tags": tags})
+        await channel.send(f"✅ Guardada como: *{desc}*")
+    except Exception as exc:
+        logger.exception("image save failed")
+        await channel.send(f"❌ No pude guardarla: {exc}")
+    sess.advance()
+    await _ask_about_current(channel, sess)
+
+
+async def _save_with_gemini_desc(
+    channel: "discord.abc.Messageable",
+    author: "discord.User",
+    sess: _ImageDMSession,
+) -> None:
+    """Save the current image using a description that Gemini already generated."""
+    mgr = _init_image_mgr()
+    try:
+        img_id = mgr.add_image(
+            sess._pending_data,
+            sess._pending_ext,
+            sess._pending_desc,
+            sess._pending_tags,
+            author.id,
+            sess.current.original_filename if sess.current else "",
+        )
+        sess.processed.append(
+            {
+                "id": img_id,
+                "description": sess._pending_desc,
+                "tags": sess._pending_tags,
+            }
+        )
+        await channel.send(f"✅ Guardada: *{sess._pending_desc}*")
+    except Exception as exc:
+        logger.exception("image save failed")
+        await channel.send(f"❌ No pude guardarla: {exc}")
+    sess.advance()
+    await _ask_about_current(channel, sess)
+
+
+async def _finish_session(
+    channel: "discord.abc.Messageable",
+    sess: _ImageDMSession,
+) -> None:
+    """Wrap up the session and show the summary."""
+    uid = sess.author_id
+    _pending_image_sessions.pop(uid, None)
+    n = len(sess.processed)
+    if n == 0:
+        await channel.send("No se guardó ninguna imagen. ¡Ché boludo!")
+        return
+
+    lines = [f"✅ **Listo!** Guardé {n} imagen(es):"]
+    for i, p in enumerate(sess.processed, 1):
+        tags = ", ".join(p["tags"][:5])
+        lines.append(f"  {i}. *{p['description']}* [{tags}]")
+    lines.append(
+        "\nA partir de ahora las voy a tener en cuenta en las conversaciones "
+        "y las puedo usar cuando corresponda."
+    )
+    await channel.send("\n".join(lines))
+
+
+def _inject_image_catalog(system_instruction: str) -> str:
+    """Append the image catalog block to the system instruction if available."""
+    mgr = _init_image_mgr()
+    block = mgr.get_catalog_block()
+    if block:
+        return system_instruction + "\n\n" + block
+    return system_instruction
 
 
 def _humanize_age(seconds: float) -> str:

@@ -69,6 +69,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_KEYS_FILE = os.getenv("GEMINI_KEYS_FILE", "gemini_keys.json")
 GEMINI_KEYS_DONATION_URL = "https://aistudio.google.com/apikey"
 INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
+INDIO_IMAGES_DIR = os.getenv("INDIO_IMAGES_DIR", "indio_images")
 
 # MMR admin page Basic Auth credentials. Fall back to defaults for
 # backward compatibility but SHOULD be overridden in production.

@@ -40,6 +40,14 @@ lsyncd.status
 image_cache/*
 !image_cache/.gitkeep
 
+# Runtime image collection from DM submissions
+indio_images/*.json
+indio_images/*.png
+indio_images/*.jpg
+indio_images/*.jpeg
+indio_images/*.gif
+indio_images/*.webp
+
 # Gemini Playwright Gmail session authentication state
 gemini_auth.json
 

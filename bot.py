@@ -685,6 +685,23 @@ async def on_message(message):
         )
         return
 
+    # --- DM: Image collection (new session or response to active session) ---
+    from geminiCommand import handle_indio_image_dm, has_pending_image_session
+
+    if message.attachments:
+        images = [
+            a
+            for a in message.attachments
+            if a.content_type and a.content_type.startswith("image/")
+        ]
+        if images:
+            await handle_indio_image_dm(message, images)
+            return
+
+    if has_pending_image_session(message.author.id):
+        await handle_indio_image_dm(message, [])
+        return
+
     content = (message.content or "").strip()
     if not content:
         return

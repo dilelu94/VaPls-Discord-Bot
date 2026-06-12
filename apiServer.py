@@ -1259,13 +1259,14 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     embed_type = (
                         "image" if transferCommand._is_image(sess.filename) else "video"
                     )
+                    raw = f"{dl}/raw"
                     logger.info(
                         "transfer media auto-embed token=%s type=%s filename=%s",
                         token[:8],
                         embed_type,
                         sess.filename,
                     )
-                    await channel.send(f"**{sess.filename}** ({sz_str})\n{dl}")
+                    await channel.send(f"**{sess.filename}** ({sz_str})\n{raw}")
                 else:
                     logger.info(
                         "transfer archive embed token=%s filename=%s",
@@ -1334,10 +1335,16 @@ def makeApp(bot: discord.Bot) -> web.Application:
         filepath = os.path.join(config.TRANSFER_DIR, token, filename)
         if not os.path.isfile(filepath):
             return web.Response(text="Archivo no disponible", status=404)
+        disposition = (
+            "inline"
+            if transferCommand._is_image(filename)
+            or transferCommand._is_video(filename)
+            else "attachment"
+        )
         return web.FileResponse(
             path=filepath,
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Disposition": f'{disposition}; filename="{filename}"',
             },
         )
 
