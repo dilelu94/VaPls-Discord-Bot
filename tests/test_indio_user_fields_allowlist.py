@@ -5,6 +5,7 @@ permanecer fuera del prompt — son datos internos del bot, no del personaje.
 
 Estos tests son guardrails: si alguien suma un campo nuevo al dict de USERS,
 o cambia el pick del Indio para incluir más campos sin querer, esto rompe."""
+
 import geminiCommand as gc
 from geminiCommand import _format_long_term, _static_user_traits, _INDIO_USER_FIELDS
 from users import USERS
@@ -17,18 +18,25 @@ def test_dossier_keys_match_allowlist():
     assert dossiers, "expected at least one user from USERS"
     for name, data in dossiers.items():
         assert set(data.keys()) == set(_INDIO_USER_FIELDS), (
-            f"user {name!r} expone keys inesperadas: {set(data.keys())}")
+            f"user {name!r} expone keys inesperadas: {set(data.keys())}"
+        )
 
 
 def test_greeting_never_leaks_to_indio_prompt():
     """Los paths de greeting (e.g. 'hava-nagila-cut.mp3') están en USERS pero
     nunca deben aparecer en el bloque de long-term que ve Gemini."""
-    greetings = [info["greeting"] for info in USERS.values()
-                 if isinstance(info, dict) and info.get("greeting")]
+    greetings = [
+        info["greeting"]
+        for info in USERS.values()
+        if isinstance(info, dict) and info.get("greeting")
+    ]
     assert greetings, "expected at least one user with greeting in USERS"
 
-    members = [info["name"] for info in USERS.values()
-               if isinstance(info, dict) and info.get("name")]
+    members = [
+        info["name"]
+        for info in USERS.values()
+        if isinstance(info, dict) and info.get("name")
+    ]
     rendered = _format_long_term({"users": {}}, current_members=members)
 
     for path in greetings:
@@ -45,28 +53,35 @@ def test_block_substrings_are_not_exposed_as_user_fields():
     dossiers = _static_user_traits()
     for name, data in dossiers.items():
         assert "block_dynamic_substrings" not in data, (
-            f"user {name!r} expone block_dynamic_substrings al prompt")
+            f"user {name!r} expone block_dynamic_substrings al prompt"
+        )
 
 
 def test_blocked_dynamic_facts_are_scrubbed_from_user_dossier():
     """Si Gemini distila un fact que matchea un block del usuario, ese fact
     se filtra del dossier de ESE usuario antes de llegar al prompt. Pinea el
     comportamiento real del feature block_dynamic_substrings."""
-    # Mila tiene block ["sexo: hombre", "es hombre"] en users.py real.
-    lt = {"users": {"Mila": {"traits": [
-        "es hombre",          # debería filtrarse (matchea block)
-        "le gusta el mate",   # debería pasar (no matchea ningún block)
-    ]}}}
-    rendered = _format_long_term(lt, current_members=["Mila"])
+    # Miles tiene block relacionados a tecnología en users.py real.
+    lt = {
+        "users": {
+            "Miles": {
+                "traits": [
+                    "sabe mucho de tecnología",  # debería filtrarse (matchea block)
+                    "le gusta Queen",  # debería pasar (no matchea ningún block)
+                ]
+            }
+        }
+    }
+    rendered = _format_long_term(lt, current_members=["Miles"])
 
-    # Sección del dossier de Mila específicamente.
-    mila_idx = rendered.find("- Mila:")
-    assert mila_idx >= 0, "expected Mila dossier section"
-    next_user_idx = rendered.find("\n- ", mila_idx + 1)
-    mila_chunk = rendered[mila_idx:next_user_idx if next_user_idx > 0 else None]
+    # Sección del dossier de Miles específicamente.
+    miles_idx = rendered.find("- Miles:")
+    assert miles_idx >= 0, "expected Miles dossier section"
+    next_user_idx = rendered.find("\n- ", miles_idx + 1)
+    miles_chunk = rendered[miles_idx : next_user_idx if next_user_idx > 0 else None]
 
-    assert "le gusta el mate" in mila_chunk
-    assert "es hombre" not in mila_chunk
+    assert "le gusta Queen" in miles_chunk
+    assert "sabe mucho de tecnología" not in miles_chunk
 
 
 def test_unknown_user_field_is_ignored(monkeypatch):

@@ -33,6 +33,7 @@ USERS: dict[int, dict] = {
         "name": "Mila",
         "greeting": "Mila/Milapollo.mp3",
         "traits": [
+            "pronombres: él",
             "nombre real: Santiago",
             "apodos: Mila, Milanesa",
             "bombero, trabaja de seguridad",
@@ -53,6 +54,7 @@ USERS: dict[int, dict] = {
     211354006805676032: {
         "name": "Miles",
         "traits": [
+            "pronombres: él",
             "nombre real: Leonel",
             "es hincha de Boca",
             "le gusta Queen",
@@ -81,6 +83,7 @@ USERS: dict[int, dict] = {
         "name": "Viny",
         "greeting": "Audios/ay-ay-necesito-pito.mp3",
         "traits": [
+            "pronombres: él",
             "nombre real: Juan",
             "apodos: Viny, Pela (y variantes de pelado)",
             "pelado",
@@ -105,6 +108,7 @@ USERS: dict[int, dict] = {
         "name": "Chalo",
         "greeting": "Audios/bokita.mp3",
         "traits": [
+            "pronombres: él",
             "nombre real: Gonzalo",
             "programador jr",
             "le gusta pescar",
@@ -119,6 +123,7 @@ USERS: dict[int, dict] = {
         "name": "Fide",
         "greeting": "Audios/aughhhhhhhhhh.mp3",
         "traits": [
+            "pronombres: él",
             "nombre real: Fidel",
             "medio nazi (chiste interno del grupo)",
             "de Gualeguaychu",
@@ -127,6 +132,7 @@ USERS: dict[int, dict] = {
     231217010522980352: {
         "name": "Juji",
         "traits": [
+            "pronombres: él",
             "nombre real: Nicolás",
             "esta en una secta",
             "no entra a Discord hace un monton",
@@ -136,6 +142,7 @@ USERS: dict[int, dict] = {
         "name": "Seba",
         "greeting": "Audios/hava-nagila-cut.mp3",
         "traits": [
+            "pronombres: él",
             "nombre real: Sebastián",
             "tiene el cuello largo",
             "judio (emoji de jugo en chiste interno)",
@@ -156,6 +163,7 @@ USERS: dict[int, dict] = {
     428444575963807745: {
         "name": "Tobi",
         "traits": [
+            "pronombres: él",
             "nombre real: Tobias",
             "es gobernado",
             "tiene una impresora 3D",
@@ -171,6 +179,7 @@ USERS: dict[int, dict] = {
         "name": "Franko",
         "greeting": "Audios/Sale un contercito.m4a",
         "traits": [
+            "pronombres: él",
             "nombre real: Franco",
             "falopero, drogadicto (chiste interno del grupo)",
             "de Gualeguaychu",
@@ -186,6 +195,7 @@ USERS: dict[int, dict] = {
         "name": "Caro",
         "greeting": "Audios/snoop-dogg-smoke-weed-everyday.mp3",
         "traits": [
+            "pronombres: ella",
             "nombre real: Carolina",
             "tatuadora",
             "amiga del indio",
@@ -204,6 +214,7 @@ USERS: dict[int, dict] = {
         "name": "Enrique",
         "greeting": "Audios/enrique.mp3",
         "traits": [
+            "pronombres: él",
             "nombre real: Enrique",
             "uruguayo",
             "profesor de musica",
@@ -214,6 +225,7 @@ USERS: dict[int, dict] = {
         "name": "Mati",
         "greeting": "Audios/Fart_with_reverb_sound_effect.wav",
         "traits": [
+            "pronombres: él",
             "nombre real: Matias",
             "programador senior",
             "tiene una gata gorda que considera su hija",
@@ -227,6 +239,7 @@ USERS: dict[int, dict] = {
     310165756384116736: {
         "name": "Magote",
         "traits": [
+            "pronombres: él",
             "nombre real: Daniel",
             "municipal, ñoqui (chiste interno: no labura)",
             "tiene una hija",
@@ -240,6 +253,7 @@ USERS: dict[int, dict] = {
     519594605520486428: {
         "name": "El Indio",
         "traits": [
+            "pronombres: él",
             "nombre real: Indio",
             "el mas grande del grupo, les lleva 30 años a todos",
             "sabe una banda de musica, de todos los generos",
@@ -281,6 +295,7 @@ NON_DISCORD_MEMBERS: list[dict] = [
     {
         "name": "Bibi",
         "traits": [
+            "pronombres: él",
             "mejor amigo del indio",
             "a veces llora en los muros",
             "no tiene Discord",
