@@ -811,11 +811,12 @@ async def _handle_session_text(
             analytics.capture(
                 "indio_image_action",
                 distinct_id=str(author.id),
-                properties={"action": "reject_save", "stage": sess.stage},
+                properties={"action": "retry_from_confirm", "stage": sess.stage},
             )
-            await channel.send("OK, no la guardamos.")
-            sess.advance()
-            await _ask_about_current(channel, sess)
+            sess._retries = 0
+            await channel.send("Dale, decime la descripción correcta.")
+            sess.stage = "waiting_desc"
+            sess.last_activity = _time.time()
     else:
         logger.warning(
             "image DM session %d unexpected stage %s", sess.author_id, sess.stage
