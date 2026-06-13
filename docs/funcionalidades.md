@@ -9,10 +9,10 @@ descriptivo de alto nivel; para el detalle de implementación ver
 
 ## Arquitectura: 2 procesos separados
 
-| Proceso | Archivo | Cuenta | Rol |
-|---|---|---|---|
-| **Main bot** | `bot.py` | Bot de Discord (token de app) | Comandos, audio de salida, Gemini, HTTP API |
-| **Userbot** ("el Indio") | `userbot/bot.py` | Cuenta de usuario real | Escucha y transcribe voz (E2EE), graba respuestas |
+| Proceso                  | Archivo          | Cuenta                        | Rol                                               |
+| ------------------------ | ---------------- | ----------------------------- | ------------------------------------------------- |
+| **Main bot**             | `bot.py`         | Bot de Discord (token de app) | Comandos, audio de salida, Gemini, HTTP API       |
+| **Userbot** ("el Indio") | `userbot/bot.py` | Cuenta de usuario real        | Escucha y transcribe voz (E2EE), graba respuestas |
 
 Se separan porque Discord **no le da las claves de cifrado E2EE (DAVE/MLS) a los
 bots** — solo a cuentas de usuario reales. Por eso la transcripción la hace el
@@ -22,17 +22,19 @@ userbot. Los dos se comunican por HTTP en loopback.
 
 ## 1. Comandos slash (main bot, `bot.py`)
 
-| Comando | Qué hace |
-|---|---|
-| **`/play [query]`** | Reproduce canción/playlist de YouTube (búsqueda o URL). Sin argumento, avisa que falta el query. |
+| Comando                 | Qué hace                                                                                                                                                                               |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`/play [query]`**     | Reproduce canción/playlist de YouTube (búsqueda o URL). Sin argumento, avisa que falta el query.                                                                                       |
 | **`/soundpad [query]`** | Sin query: abre un panel interactivo de clips locales. Con query: busca el clip más parecido (fuzzy) y lo reproduce directo. **Requiere haber donado una API key de Gemini** (gating). |
-| **`/vapls <pregunta>`** | Pregunta a Gemini **sin memoria** (stateless). Persona "bot del server". |
-| **`/indio <charla>`** | Charla con la persona "el Indio" **con memoria** (corto + largo plazo). |
-| **`/parar`** | Detiene la reproducción, vacía la cola y desconecta de voz. |
-| **`/quit`** | Desconecta de voz **sin** tocar la cola. |
-| **`/restart`** | Devtool: reinicia el proceso del bot (`os.execv`). |
+| **`/vapls <pregunta>`** | Pregunta a Gemini **sin memoria** (stateless). Persona "bot del server".                                                                                                               |
+| **`/indio <charla>`**   | Charla con la persona "el Indio" **con memoria** (corto + largo plazo).                                                                                                                |
+| **`/parar`**            | Detiene la reproducción, vacía la cola y desconecta de voz.                                                                                                                            |
+| **`/quit`**             | Desconecta de voz **sin** tocar la cola.                                                                                                                                               |
+| **`/story-test`**       | [Owner] Fuerza una historia del Indio al instante (testing).                                                                                                                           |
+| **`/restart`**          | Devtool: reinicia el proceso del bot (`os.execv`).                                                                                                                                     |
 
 **Eventos del bot:**
+
 - `on_message` (solo DMs): si le mandás por privado una **API key de Gemini**
   (`AIzaSy…` o `AQ.Ab8…`), la detecta, la suma al pool y te lo agradece.
 - `on_voice_state_update`: cuando el bot entra a un canal de voz, dispara el
@@ -56,7 +58,7 @@ dict global `guildPlayers`).
   ⏸️ Pausar / ⏭️ Siguiente / ⏹️ Stop, que se actualiza solo.
 - **Panel "desconectado"** (`DisconnectedControlView`): cuando el watchdog de
   inactividad echa al bot, ese mismo mensaje se edita a `💤 Desconectado por
-  inactividad` con los botones de playback grises (sin "botones fantasma") y un
+inactividad` con los botones de playback grises (sin "botones fantasma") y un
   ▶️ Reconectar que vuelve a poner la última canción (`reconnectLastSong`).
 - **Botón Cancelar** durante la descarga inicial (`CancelDownloadView`).
 - **Diagnóstico de errores** (`_diagnoseYtDlpFailure`): traduce errores de yt-dlp
@@ -103,6 +105,7 @@ Dos personalidades sobre la API de Google Gemini (tier gratuito):
 concisas.
 
 **`/indio`** — un "pibe más del grupo", con personalidad y **memoria**:
+
 - **Memoria corto plazo**: historial verbatim por servidor (TTL 6 h).
 - **Memoria largo plazo**: cuando el historial crece (>30 turnos), una llamada
   aparte a Gemini **destila** lo viejo en notas estructuradas (rasgos por
@@ -117,6 +120,7 @@ concisas.
 
   Estas acciones se ejecutan, idealmente, **a través del userbot** para que en el
   chat aparezca como "El Indio usó /play".
+
 - **Actúa primero, después confirma**: el Indio postea su confirmación breve en
   el momento ("dale, va Queen"), corre la acción, y **edita ese mismo mensaje en
   el lugar** con el resultado real: éxito → sufijo corto ("— listo 🔊/🎵/✅");
@@ -140,6 +144,7 @@ concisas.
   "indio, la dos"; el voto por reacción no.)
 
 **`geminiClient.py`** — cliente HTTP async con:
+
 - **Pool de keys con failover**: rota entre varias keys, marca en cooldown (60 s)
   las que devuelven 429, y elige round-robin.
 - Soporte de tools, manejo tipado de errores
@@ -165,6 +170,7 @@ de VOSK, para debug offline de la calidad del ASR).
 
 Sistema colaborativo: como el tier gratuito tiene cupo limitado, los usuarios
 **donan sus propias keys** por DM.
+
 - Detecta keys en texto, las valida, las suma al pool en caliente (sin reiniciar)
   y persiste en `gemini_keys.json` (gitignored, chmod 600).
 - Lleva quién donó cada key (`owner_id`) → así `/soundpad` se "desbloquea" solo
@@ -176,6 +182,7 @@ Sistema colaborativo: como el tier gratuito tiene cupo limitado, los usuarios
 ## 6. Saludos (`greeting.py`)
 
 Cuando el bot entra a un canal de voz reproduce un audio de saludo:
+
 - Audio personalizado por usuario (definido en `users.py`) o uno por defecto
   (`Fish Carrot.m4a`).
 - Throttle de 15 s por canal, normalización de volumen, y espera a que el cliente
@@ -196,17 +203,17 @@ reconectar con un toque.
 Servidor aiohttp en `127.0.0.1:8080`, protegido por header `X-API-Secret`. Lo usa
 un bot de Telegram externo:
 
-| Endpoint | Qué hace |
-|---|---|
-| `GET /status` | Estado del bot, uptime, voice clients |
-| `GET /members` | Canales de voz y miembros |
-| `GET /user/{id}` | Datos de un miembro |
-| `GET /queue` | Cola de reproducción de un guild |
-| `GET /playing` | Si el bot está reproduciendo (lo usa el userbot para ajustar concurrencia) |
-| `POST /message` | Publica texto en un canal (prefijado `[TG/...]`) |
+| Endpoint           | Qué hace                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `GET /status`      | Estado del bot, uptime, voice clients                                                                                          |
+| `GET /members`     | Canales de voz y miembros                                                                                                      |
+| `GET /user/{id}`   | Datos de un miembro                                                                                                            |
+| `GET /queue`       | Cola de reproducción de un guild                                                                                               |
+| `GET /playing`     | Si el bot está reproduciendo (lo usa el userbot para ajustar concurrencia)                                                     |
+| `POST /message`    | Publica texto en un canal (prefijado `[TG/...]`)                                                                               |
 | `POST /play-audio` | Reproduce un audio subido desde Telegram; opcionalmente pide al userbot que **grabe la respuesta de voz** y la mande de vuelta |
-| `POST /indio` | Invoca al Indio desde una transcripción de voz (prefija `[voz] ` y opcionalmente seedea reacciones de feedback ASR) |
-| `POST /gemini-key` | Recibe keys de Gemini reenviadas por el userbot |
+| `POST /indio`      | Invoca al Indio desde una transcripción de voz (prefija `[voz] ` y opcionalmente seedea reacciones de feedback ASR)            |
+| `POST /gemini-key` | Recibe keys de Gemini reenviadas por el userbot                                                                                |
 
 ---
 
@@ -215,6 +222,7 @@ un bot de Telegram externo:
 El proceso más técnico. Funciones clave:
 
 **Transcripción:**
+
 - Se une automáticamente a los canales de voz donde hay humanos; se va tras
   inactividad (`IDLE_LEAVE_SECONDS`).
 - **DAVE patch**: monkey-patchea el descifrado de `voice_recv` para aplicar
@@ -242,18 +250,65 @@ y lo POSTea a un callback (típicamente el bridge de Telegram).
 
 **Servidor relay HTTP** (`127.0.0.1:8081`, secret-gated):
 
-| Endpoint | Qué hace |
-|---|---|
-| `POST /say` | Postea un mensaje como el usuario real (así las respuestas del Indio salen con su identidad) |
-| `POST /edit` | Edita en el lugar un mensaje ya posteado por el userbot (el Indio actúa primero y después edita su respuesta con el resultado real) |
-| `POST /record` | Dispara una grabación de voz |
-| `GET /members` | Lista miembros del guild (sin necesitar el intent privilegiado en el bot) |
-| `POST /invoke_play` | Invoca el `/play` de VaPls como el usuario real |
-| `POST /invoke_soundpad` | Invoca el `/soundpad` de VaPls como el usuario real |
+| Endpoint                | Qué hace                                                                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /say`             | Postea un mensaje como el usuario real (así las respuestas del Indio salen con su identidad)                                        |
+| `POST /edit`            | Edita en el lugar un mensaje ya posteado por el userbot (el Indio actúa primero y después edita su respuesta con el resultado real) |
+| `POST /record`          | Dispara una grabación de voz                                                                                                        |
+| `GET /members`          | Lista miembros del guild (sin necesitar el intent privilegiado en el bot)                                                           |
+| `POST /invoke_play`     | Invoca el `/play` de VaPls como el usuario real                                                                                     |
+| `POST /invoke_soundpad` | Invoca el `/soundpad` de VaPls como el usuario real                                                                                 |
 
 ---
 
-## 10. Flujos integrados destacados
+## 10. Sistema de historias del Indio (`storyManager.py` + `imagePool.py`)
+
+Generación automática de **chistes/memes/jodas entre amigos** a partir de
+imágenes del grupo, con revisión comunitaria.
+
+### Pool de imágenes (`imagePool.py`)
+
+- El zip fuente (`Pibes Vapor-…zip`, 268 imágenes) se extrae en
+  `indio_images/pool/` preservando las carpetas (Viny/, Fox/, Yo/, Eyyman/,
+  Seba/, Franko/, Juji/, Varios/, Santi/, Tobi/, Mati/, Fidel/).
+- `get_random_image(mgr)` elige una imagen al azar que **no esté ya guardada**
+  en el manifest (`indio_images/manifest.json`). Las imágenes aprobadas se
+  descartan del pool.
+- El pool se inicializa al arrancar el watcher. Si no hay zip disponible
+  (dev), arranca vacío.
+
+### Generación (`storyManager.py`)
+
+- **Trigger idle:** cuando el chat lleva >4 h sin mensajes, se programa una
+  historia con delay aleatorio de 1-2 h.
+- **Trigger voz:** cuando >2 humanos están en un canal de voz (debounce 30 min).
+- **Mínimo 1/día:** si pasó >1 h sin actividad y todavía no hay historia hoy,
+  se dispara una sin delay.
+- **Máximo 2/día** por servidor.
+- **Guardia:** no genera si la historia anterior no tiene reply **o** no hubo
+  ≥5 mensajes después de ella.
+
+### Pipeline
+
+1. Elige imagen al azar del pool (excluye las ya guardadas).
+2. Lee la imagen → base64 → la pasa a Gemini (`image_parts`).
+3. System prompt: Indio persona — "hacé un chiste corto sobre esta imagen,
+   como si se lo contaras al grupo, max 2-3 oraciones, español rioplatense
+   con voseo, sin comillas ni formato".
+4. Postea en el canal de revisión (`INDIO_STORY_CHANNEL_ID`) con la imagen
+   adjunta, el chiste, y las reacciones ✅ / ❌.
+5. **✅** → guarda la imagen en el catálogo (`imageManager.add_image()`) con
+   tags `indio_story`, la elimina del pool, y confirma en el canal.
+6. **❌** → la imagen vuelve al pool (no se guarda), avisa en el canal.
+7. **Responder al mensaje** → el texto se usa como feedback para regenerar
+   el chiste con la misma imagen (nuevo mensaje de review).
+
+### Testing
+
+- `/story-test` (solo owner) fuerza una historia inmediata sin esperar
+  triggers.
+
+---
 
 **Voice-reply Discord → Telegram:** Telegram manda audio → `/play-audio` lo
 reproduce → al terminar, el main bot pide al userbot que grabe la respuesta → el

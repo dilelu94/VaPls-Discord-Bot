@@ -39,6 +39,7 @@ from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import huggingfaceImage
 import transferCommand
 from transferCommand import manager as transferManager
+import storyManager
 # import geminiImage
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
@@ -453,6 +454,13 @@ async def on_ready():
     except Exception:
         log.exception("transfer sweeper startup failed")
 
+    # Start Indio story watcher (idle/voice triggers).
+    try:
+        asyncio.create_task(storyManager.start_story_watcher(bot))
+        log.info("story watcher started")
+    except Exception:
+        log.exception("story watcher startup failed")
+
 
 # ---- Voice state tracking for MMR -----------------------------------------
 # Per-guild per-user join timestamps for duration calculation.
@@ -573,6 +581,16 @@ async def on_voice_state_update(member, before, after):
         # Start watch tracking if someone is streaming
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
+        # Story system: trigger when enough humans in voice
+        if storyManager.check_voice_trigger(guild_id, after.channel):
+            asyncio.create_task(
+                storyManager.trigger_story(
+                    bot,
+                    guild_id,
+                    config.INDIO_STORY_CHANNEL_ID,
+                    trigger_type="voice",
+                )
+            )
 
     elif before.channel is not None and after.channel is None:
         guild_joins = _voice_joins.get(guild_id, {})
@@ -673,6 +691,13 @@ async def on_message(message):
         guild_id = message.guild.id
         user_id = message.author.id
         channel_type = str(getattr(message.channel, "type", "") or "")
+
+        # Story system: track chat activity for idle detection
+        storyManager.record_chat_activity(guild_id)
+        # Detect replies to story review messages
+        if message.channel.id == config.INDIO_STORY_CHANNEL_ID:
+            asyncio.create_task(storyManager.handle_story_reply(message, bot))
+
         asyncio.create_task(
             _classify_and_log_message(
                 message,
@@ -767,6 +792,9 @@ async def on_raw_reaction_add(payload):
             user_id=payload.user_id,
             added=True,
         )
+
+        # Story system: ✅/❌ on review channel messages
+        await storyManager.handle_story_reaction(payload, bot)
 
         # MMR: log reactions as activity, skipping decifrar voting reactions
         if payload.guild_id and not decifrarVoting.is_tracked(payload.message_id):
@@ -1898,6 +1926,39 @@ async def spacewar(ctx):
         "⚠️ Si tira error, asegurate de tener Steam abierto antes de mandar el comando."
     )
     await safe_respond(ctx, msg, ephemeral=True)
+
+
+@bot.slash_command(
+    name="story-test",
+    description="[owner] Forzar una historia del Indio ahora (testing)",
+)
+async def story_test(ctx):
+    """Slash command (owner-only): trigger an Indio story immediately.
+
+    Useful for testing the full pipeline: pick image → Gemini → post review.
+    The story is posted to the review channel and counts toward the daily max.
+    """
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "story-test")
+    if ctx.author.id != config.OWNER_ID:
+        await safe_respond(ctx, "❌ Solo el owner puede usar esto.", ephemeral=True)
+        return
+    if ctx.guild is None:
+        await safe_respond(ctx, "❌ Solo funciona en un servidor.", ephemeral=True)
+        return
+
+    guild_id = ctx.guild.id
+    channel_id = config.INDIO_STORY_CHANNEL_ID
+    try:
+        await storyManager.trigger_story(bot, guild_id, channel_id, trigger_type="test")
+        await safe_respond(
+            ctx,
+            "🐔 Historia disparada — revisá <#{}>.".format(channel_id),
+            ephemeral=True,
+        )
+    except Exception as e:
+        log.exception("story-test failed")
+        await safe_respond(ctx, f"❌ Error: {e}", ephemeral=True)
 
 
 @bot.slash_command(name="restart", description="devtool - no usar")

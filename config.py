@@ -98,6 +98,25 @@ INDIO_PLAY_CHANNEL_ID = int(os.getenv("INDIO_PLAY_CHANNEL_ID", "4516070974326046
 # 0 = comportamiento clasico (responde en el canal del trigger).
 INDIO_REPLY_CHANNEL_ID = int(os.getenv("INDIO_REPLY_CHANNEL_ID", "1490008278275461280"))
 
+# --- Indio story system ----------------------------------------------------
+# Canal donde se postean las historias generadas para revisión comunitaria.
+INDIO_STORY_CHANNEL_ID = int(os.getenv("INDIO_STORY_CHANNEL_ID", "451580655650996236"))
+# Directorio donde se extraen las imágenes del pool.
+INDIO_STORY_POOL_DIR = os.getenv("INDIO_STORY_POOL_DIR", "indio_images/pool")
+# Máximo de stories por día (por servidor).
+INDIO_MAX_STORIES_PER_DAY = int(os.getenv("INDIO_MAX_STORIES_PER_DAY", "2"))
+# Minutos de inactividad en el chat para trigger idle.
+INDIO_IDLE_MINUTES = int(os.getenv("INDIO_IDLE_MINUTES", "240"))
+# Delay mínimo/máximo (segundos) entre detección idle y posteo real.
+INDIO_STORY_IDLE_DELAY_MIN = int(os.getenv("INDIO_STORY_IDLE_DELAY_MIN", "3600"))  # 1h
+INDIO_STORY_IDLE_DELAY_MAX = int(os.getenv("INDIO_STORY_IDLE_DELAY_MAX", "7200"))  # 2h
+# Mínimo de mensajes después del último story para permitir otro.
+INDIO_STORY_MIN_MESSAGES_AFTER = int(os.getenv("INDIO_STORY_MIN_MESSAGES_AFTER", "5"))
+# Mínimo de humanos en un canal de voz para trigger voice.
+INDIO_STORY_VOICE_MIN_MEMBERS = int(os.getenv("INDIO_STORY_VOICE_MIN_MEMBERS", "3"))
+# Minutos de inactividad para forzar la 1ra historia del día (min 1/día).
+INDIO_STORY_DAILY_MIN_IDLE = int(os.getenv("INDIO_STORY_DAILY_MIN_IDLE", "60"))
+
 # Hugging Face Inference API for /generarimagen (free tier, no API key needed
 # for inference, just a Hugging Face token). Sign up at huggingface.co and
 # create a read token at https://huggingface.co/settings/tokens.
@@ -114,7 +133,9 @@ CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
 # las respuestas de /vapls salen ephemeral (solo las ve el invocador), para no
 # ensuciar canales que no son los del bot.
 PUBLIC_ALLOWED_CHANNEL_IDS = {
-    cid for cid in (INDIO_PLAY_CHANNEL_ID, INDIO_REPLY_CHANNEL_ID) if cid
+    cid
+    for cid in (INDIO_PLAY_CHANNEL_ID, INDIO_REPLY_CHANNEL_ID, INDIO_STORY_CHANNEL_ID)
+    if cid
 }
 
 # Userbot voice-recording endpoint. After /play-audio finishes playing a
