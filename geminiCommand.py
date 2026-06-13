@@ -866,15 +866,18 @@ async def _validate_candidate(
 
     if candidate_text:
         prompt = (
-            f"Describí CORRECTAMENTE el contenido de esta imagen "
-            f"(no el formato, sino el contenido real) para un catálogo. "
-            f"Sé conciso (2-3 oraciones máximo). "
-            f"También dame 3-5 tags relevantes separados por comas.\n\n"
             f'El usuario dice que esta imagen es: "{candidate_text}"\n\n'
-            f"Decime si esa descripción del usuario coincide con el "
-            f"contenido real de la imagen.\n\n"
+            f"1. Describí el contenido REAL de la imagen de forma objetiva "
+            f"(2-3 oraciones).\n"
+            f"2. Decí si la descripción del usuario es RAZONABLE para esta "
+            f"imagen.\n\n"
+            f"Importante: Sé PERMISIVO. Apodos de personas, nombres propios, "
+            f"chistes internos, descripciones creativas y referencias del "
+            f"grupo son válidas aunque no sean descripciones literales. "
+            f"Solo respondé COINCIDE: no si la descripción del usuario es "
+            f"claramente de algo DISTINTO a lo que se ve en la imagen.\n\n"
             f"Respondé EXACTAMENTE con este formato:\n"
-            f"DESCRIPCIÓN: <tu descripción>\n"
+            f"DESCRIPCIÓN: <descripción objetiva>\n"
             f"TAGS: tag1, tag2, tag3\n"
             f"COINCIDE: sí\n"
             f"o\n"
