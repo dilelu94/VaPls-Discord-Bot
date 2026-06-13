@@ -69,6 +69,7 @@ class ImageManager:
         tags: list[str],
         author_id: int,
         original_filename: str,
+        gemini_description: str = "",
     ) -> str:
         """Persist an image + its metadata. Returns the new image id."""
         img_id = str(uuid.uuid4())
@@ -79,6 +80,7 @@ class ImageManager:
             "filename": filename,
             "original_filename": original_filename,
             "description": description,
+            "gemini_description": gemini_description,
             "tags": tags,
             "author_id": author_id,
             "created_at": int(time.time()),

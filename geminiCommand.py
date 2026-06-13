@@ -21,6 +21,7 @@ import unicodedata
 from typing import Optional
 from urllib.parse import urljoin
 
+import base64 as _b64
 import aiohttp
 import discord
 
@@ -488,15 +489,17 @@ class _ImageDMSession:
         self.total = len(images)
         self.processed: list[dict] = []
         self.current_index = 0
-        # stage: confirm | confirm_save | waiting_desc | done
+        # stage: confirm | waiting_desc | confirm_save | done
         self.stage = "confirm"
         self.last_activity = _time.time()
-        # Temp storage for Gemini-described image data (stage=confirm_save)
+        self._candidate_desc: str = ""
+        self._retries: int = 0
         self._pending_desc: str = ""
         self._pending_tags: list[str] = field(default_factory=list)
         self._pending_data: bytes = b""
         self._pending_mime: str = ""
         self._pending_ext: str = ""
+        self._data_read: bool = False
 
     @property
     def current(self) -> "_Optional[_PendingImage]":
@@ -708,10 +711,9 @@ async def _ask_about_current(
         f"🖼️ Imagen **{sess.current_index + 1}/{sess.total}**:\n"
         f"Nombre del archivo: **{name}**\n\n"
         f"¿Qué hacemos?\n"
-        f"• **sí** — usar el nombre del archivo como descripción\n"
-        f"• **no** / **describimela** — YO (el Indio) la describo con IA\n"
-        f"• **pongo descripción** — VOS escribís la descripción\n"
-        f"• **cancelar** — salteamos esta imagen"
+        f"• **1** — usar el nombre del archivo como descripción\n"
+        f"• **cancelar** — salteamos esta imagen\n"
+        f"• *cualquier otro texto* — se usa como tu descripción"
     )
     sess.stage = "confirm"
 
@@ -723,59 +725,11 @@ async def _handle_session_text(
     text: str,
 ) -> None:
     """Route the user's text response based on the current session stage."""
-    if sess.stage == "waiting_desc":
-        # User is providing a custom description
-        await _save_with_user_description(channel, author, sess, text)
-        return
-
     _YES = {"sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"}
-    _NO = {"no", "nop", "nope"}
     _first = text.split(",")[0].split()[0].strip() if text else ""
 
-    if sess.stage == "confirm":
-        if _first in _YES:
-            img = sess.current
-            if img and _is_generic_filename(img.original_filename):
-                analytics.capture(
-                    "indio_image_action",
-                    distinct_id=str(author.id),
-                    properties={
-                        "action": "generic_filename_rejected",
-                        "filename": img.original_filename,
-                    },
-                )
-                await channel.send(
-                    f"⚠️ El nombre del archivo **{img.original_filename}** es muy "
-                    "genérico y no sirve como descripción. "
-                    "Voy a describirla con IA o escribila vos."
-                )
-                await _describe_with_gemini(channel, author, sess)
-            else:
-                await _save_with_filename(channel, author, sess)
-        elif _first in _NO or text in ("describimela", "describila"):
-            analytics.capture(
-                "indio_image_action",
-                distinct_id=str(author.id),
-                properties={"action": "describe_with_ai", "stage": sess.stage},
-            )
-            await _describe_with_gemini(channel, author, sess)
-        elif text in (
-            "pongo descripción",
-            "pongo descripcion",
-            "pongo",
-            "describo yo",
-            "la describo yo",
-            "yo la describo",
-        ):
-            analytics.capture(
-                "indio_image_action",
-                distinct_id=str(author.id),
-                properties={"action": "user_description", "stage": sess.stage},
-            )
-            sess.stage = "waiting_desc"
-            sess.last_activity = _time.time()
-            await channel.send("Dale, decime la descripción para esta imagen.")
-        elif text in ("cancelar", "cancel", "saltear", "skip", "next", "siguiente"):
+    if sess.stage == "waiting_desc":
+        if text in ("cancelar", "cancel", "saltear", "skip"):
             analytics.capture(
                 "indio_image_action",
                 distinct_id=str(author.id),
@@ -789,28 +743,75 @@ async def _handle_session_text(
                 "indio_image_action",
                 distinct_id=str(author.id),
                 properties={
-                    "action": "unrecognized",
+                    "action": "retry_description",
                     "stage": sess.stage,
-                    "text": text,
+                    "retry": sess._retries + 1,
                 },
             )
-            await channel.send(
-                "No entendí. Respondé con **sí**, **no** / **describimela**, "
-                "**pongo descripción**, o **cancelar**."
+            await _validate_candidate(channel, author, sess, text)
+        return
+
+    if sess.stage == "confirm":
+        if text in ("cancelar", "cancel", "saltear", "skip", "next", "siguiente"):
+            analytics.capture(
+                "indio_image_action",
+                distinct_id=str(author.id),
+                properties={"action": "skip", "stage": sess.stage},
             )
+            await channel.send("OK, la salteamos.")
+            sess.advance()
+            await _ask_about_current(channel, sess)
+        elif _first == "1":
+            analytics.capture(
+                "indio_image_action",
+                distinct_id=str(author.id),
+                properties={"action": "use_filename", "stage": sess.stage},
+            )
+            img = sess.current
+            if img is None:
+                return
+            if _is_generic_filename(img.original_filename):
+                analytics.capture(
+                    "indio_image_action",
+                    distinct_id=str(author.id),
+                    properties={
+                        "action": "generic_filename_rejected",
+                        "filename": img.original_filename,
+                    },
+                )
+                await channel.send(
+                    f"⚠️ El nombre del archivo **{img.original_filename}** es muy "
+                    "genérico y no sirve como descripción. "
+                    "Voy a describirla con IA."
+                )
+                await _validate_candidate(channel, author, sess, "")
+            else:
+                name_no_ext = (
+                    img.original_filename.rsplit(".", 1)[0]
+                    if "." in img.original_filename
+                    else img.original_filename
+                )
+                await _validate_candidate(channel, author, sess, name_no_ext)
+        else:
+            analytics.capture(
+                "indio_image_action",
+                distinct_id=str(author.id),
+                properties={"action": "user_description", "stage": sess.stage},
+            )
+            await _validate_candidate(channel, author, sess, text)
     elif sess.stage == "confirm_save":
         if _first in _YES:
             analytics.capture(
                 "indio_image_action",
                 distinct_id=str(author.id),
-                properties={"action": "confirm_gemini_desc", "stage": sess.stage},
+                properties={"action": "confirm_save", "stage": sess.stage},
             )
-            await _save_with_gemini_desc(channel, author, sess)
+            await _save_user_and_gemini_desc(channel, author, sess)
         else:
             analytics.capture(
                 "indio_image_action",
                 distinct_id=str(author.id),
-                properties={"action": "reject_gemini_desc", "stage": sess.stage},
+                properties={"action": "reject_save", "stage": sess.stage},
             )
             await channel.send("OK, no la guardamos.")
             sess.advance()
@@ -821,81 +822,77 @@ async def _handle_session_text(
         )
 
 
-async def _save_with_filename(
+async def _validate_candidate(
     channel: "discord.abc.Messageable",
     author: "discord.User",
     sess: _ImageDMSession,
+    candidate_text: str = "",
 ) -> None:
-    """Save the current image using the filename as description."""
+    """Download the image once and ask Gemini to describe + validate the candidate.
+
+    If ``candidate_text`` is empty (generic filename), Gemini just describes.
+    Otherwise Gemini also checks if the candidate matches the image content.
+    On match → show description → confirm_save stage.
+    On mismatch → increment retries → waiting_desc stage (or skip if >5 retries).
+    """
     img = sess.current
     if img is None:
         return
-    mgr = _init_image_mgr()
-    desc = img.original_filename
-    # Strip extension from filename for a cleaner description
-    name_no_ext = desc.rsplit(".", 1)[0] if "." in desc else desc
-    tags = _extract_tags(name_no_ext)
-    try:
-        data = await img.attachment.read()
-        ext = (
+
+    # Download once, cache in session
+    if not sess._data_read:
+        try:
+            data = await img.attachment.read()
+        except Exception as exc:
+            logger.exception("image download failed")
+            await channel.send(f"❌ No pude descargar la imagen: {exc}")
+            sess.advance()
+            await _ask_about_current(channel, sess)
+            return
+        sess._pending_data = data
+        sess._pending_mime = img.attachment.content_type or "image/png"
+        sess._pending_ext = (
             img.attachment.filename.rsplit(".", 1)[-1]
             if "." in img.attachment.filename
             else "png"
         )
-        img_id = mgr.add_image(
-            data, ext, name_no_ext, tags, author.id, img.original_filename
-        )
-        sess.processed.append({"id": img_id, "description": name_no_ext, "tags": tags})
-        analytics.capture(
-            "indio_image_saved",
-            distinct_id=str(author.id),
-            properties={"method": "filename", "description": name_no_ext, "tags": tags},
-        )
-        await channel.send(f"✅ Guardada como: *{name_no_ext}*")
-    except Exception as exc:
-        logger.exception("image save failed")
-        analytics.capture_exception(
-            exc, properties={"method": "filename", "author_id": str(author.id)}
-        )
-        await channel.send(f"❌ No pude guardarla: {exc}")
-    sess.advance()
-    await _ask_about_current(channel, sess)
+        sess._data_read = True
 
+    b64_data = _b64.b64encode(sess._pending_data).decode()
+    image_part = {"inlineData": {"mimeType": sess._pending_mime, "data": b64_data}}
 
-async def _describe_with_gemini(
-    channel: "discord.abc.Messageable",
-    author: "discord.User",
-    sess: _ImageDMSession,
-) -> None:
-    """Download the image and ask Gemini to describe it + give tags + verify filename."""
-    img = sess.current
-    if img is None:
-        return
-    try:
-        data = await img.attachment.read()
-    except Exception as exc:
-        logger.exception("image download failed")
-        await channel.send(f"❌ No pude descargar la imagen: {exc}")
-        sess.advance()
-        await _ask_about_current(channel, sess)
-        return
-
-    import base64 as _b64
-
-    b64_data = _b64.b64encode(data).decode()
-    mime = img.attachment.content_type or "image/png"
-    image_part = {"inlineData": {"mimeType": mime, "data": b64_data}}
     await channel.send("🔍 Dejame ver la imagen...")
+
+    if candidate_text:
+        prompt = (
+            f"Describí CORRECTAMENTE el contenido de esta imagen "
+            f"(no el formato, sino el contenido real) para un catálogo. "
+            f"Sé conciso (2-3 oraciones máximo). "
+            f"También dame 3-5 tags relevantes separados por comas.\n\n"
+            f'El usuario dice que esta imagen es: "{candidate_text}"\n\n'
+            f"Decime si esa descripción del usuario coincide con el "
+            f"contenido real de la imagen.\n\n"
+            f"Respondé EXACTAMENTE con este formato:\n"
+            f"DESCRIPCIÓN: <tu descripción>\n"
+            f"TAGS: tag1, tag2, tag3\n"
+            f"COINCIDE: sí\n"
+            f"o\n"
+            f"COINCIDE: no"
+        )
+    else:
+        prompt = (
+            "Describí CORRECTAMENTE el contenido de esta imagen "
+            "(no el formato, sino el contenido real) para un catálogo. "
+            "Sé conciso (2-3 oraciones máximo). "
+            "También dame 3-5 tags relevantes separados por comas.\n\n"
+            "Respondé EXACTAMENTE con este formato:\n"
+            "DESCRIPCIÓN: <tu descripción>\n"
+            "TAGS: tag1, tag2, tag3"
+        )
+
     try:
         reply = await geminiClient.generate(
-            user_message=(
-                "Describí esta imagen BREVEMENTE (2-3 oraciones máximo) para un "
-                "catálogo de imágenes. También dame 3-5 tags relevantes separados "
-                "por comas.\n\n"
-                "Formateá tu respuesta ASÍ:\n"
-                "DESCRIPCIÓN: <texto>\n"
-                "TAGS: tag1, tag2, tag3"
-            ),
+            user_message=prompt,
             system_instruction=(
                 "Sos un asistente que describe imágenes para un catálogo. "
                 "Sé conciso, objetivo, no inventes nada que no esté en la imagen."
@@ -904,8 +901,8 @@ async def _describe_with_gemini(
             max_output_tokens=512,
         )
     except Exception as exc:
-        logger.exception("gemini describe failed")
-        await channel.send(f"❌ No pude describirla: {exc}")
+        logger.exception("gemini validate failed")
+        await channel.send(f"❌ No pude procesar la imagen: {exc}")
         sess.advance()
         await _ask_about_current(channel, sess)
         return
@@ -913,6 +910,8 @@ async def _describe_with_gemini(
     gemini_text = reply.text or ""
     desc = ""
     tags: list[str] = []
+    coincides: Optional[bool] = None
+
     for line in gemini_text.split("\n"):
         line = line.strip()
         if line.upper().startswith("DESCRIPCIÓN:"):
@@ -920,97 +919,93 @@ async def _describe_with_gemini(
         elif line.upper().startswith("TAGS:"):
             raw = line.split(":", 1)[1].strip()
             tags = [t.strip().lower() for t in raw.split(",") if t.strip()]
+        elif line.upper().startswith("COINCIDE:"):
+            val = line.split(":", 1)[1].strip().lower()
+            coincides = val in ("sí", "si", "yes")
 
     if not desc:
         desc = gemini_text[:200]
     if not tags:
         tags = _extract_tags(desc)
+    if coincides is None and candidate_text:
+        coincides = False
+
+    sess._candidate_desc = candidate_text
+    sess._pending_desc = desc
+    sess._pending_tags = tags
 
     analytics.capture(
-        "indio_image_gemini_described",
+        "indio_image_gemini_validated",
         distinct_id=str(author.id),
         properties={
-            "desc": desc[:100],
+            "candidate": candidate_text[:100],
+            "gemini_desc": desc[:100],
             "tags": tags[:5],
+            "coincides": coincides,
+            "retries": sess._retries,
             "filename": img.original_filename,
         },
     )
 
-    await channel.send(
-        f"📝 Descripción: *{desc}*\n🏷️ Tags: {', '.join(tags[:5])}\n\n¿La guardo así?"
-    )
-
-    # Store the parsed result on the session for when user confirms
-    sess._pending_desc = desc
-    sess._pending_tags = tags
-    sess._pending_data = data
-    sess._pending_mime = mime
-    sess._pending_ext = (
-        img.attachment.filename.rsplit(".", 1)[-1]
-        if "." in img.attachment.filename
-        else "png"
-    )
-    sess.stage = "confirm_save"  # special stage: just waiting for sí/no
-
-
-async def _save_with_user_description(
-    channel: "discord.abc.Messageable",
-    author: "discord.User",
-    sess: _ImageDMSession,
-    text: str,
-) -> None:
-    """Save the image using the user's own description."""
-    img = sess.current
-    if img is None:
-        return
-    mgr = _init_image_mgr()
-    desc = text.strip()
-    tags = _extract_tags(desc)
-    try:
-        data = await img.attachment.read()
-        ext = (
-            img.attachment.filename.rsplit(".", 1)[-1]
-            if "." in img.attachment.filename
-            else "png"
+    if candidate_text and coincides is False:
+        sess._retries += 1
+        if sess._retries >= 5:
+            analytics.capture(
+                "indio_image_action",
+                distinct_id=str(author.id),
+                properties={
+                    "action": "max_retries_exceeded",
+                    "retries": sess._retries,
+                },
+            )
+            await channel.send(
+                "❌ Ya intentamos varias veces y no pudimos dar con una "
+                "descripción que coincida. La salteamos."
+            )
+            sess.advance()
+            await _ask_about_current(channel, sess)
+        else:
+            await channel.send(
+                f"❌ No coincide. Describila de vuelta o decí **cancelar** "
+                f"para saltearla.\n"
+                f"Gemini dice: *{desc}*"
+            )
+            sess.stage = "waiting_desc"
+            sess.last_activity = _time.time()
+    else:
+        await channel.send(
+            f"📝 Descripción: *{desc}*\n🏷️ Tags: {', '.join(tags[:5])}\n\n"
+            f"¿La guardo así?"
         )
-        img_id = mgr.add_image(data, ext, desc, tags, author.id, img.original_filename)
-        sess.processed.append({"id": img_id, "description": desc, "tags": tags})
-        analytics.capture(
-            "indio_image_saved",
-            distinct_id=str(author.id),
-            properties={"method": "user_desc", "description": desc, "tags": tags},
-        )
-        await channel.send(f"✅ Guardada como: *{desc}*")
-    except Exception as exc:
-        logger.exception("image save failed")
-        analytics.capture_exception(
-            exc, properties={"method": "user_desc", "author_id": str(author.id)}
-        )
-        await channel.send(f"❌ No pude guardarla: {exc}")
-    sess.advance()
-    await _ask_about_current(channel, sess)
+        sess.stage = "confirm_save"
 
 
-async def _save_with_gemini_desc(
+async def _save_user_and_gemini_desc(
     channel: "discord.abc.Messageable",
     author: "discord.User",
     sess: _ImageDMSession,
 ) -> None:
-    """Save the current image using a description that Gemini already generated."""
+    """Save the image with both the user's description and Gemini's description."""
     mgr = _init_image_mgr()
+    user_desc = sess._candidate_desc
+    gemini_desc = sess._pending_desc
+    final_desc = user_desc or gemini_desc
+
     try:
         img_id = mgr.add_image(
             sess._pending_data,
             sess._pending_ext,
-            sess._pending_desc,
+            final_desc,
             sess._pending_tags,
             author.id,
             sess.current.original_filename if sess.current else "",
+            gemini_description=gemini_desc,
         )
         sess.processed.append(
             {
                 "id": img_id,
-                "description": sess._pending_desc,
+                "description": final_desc,
+                "gemini_description": gemini_desc,
                 "tags": sess._pending_tags,
             }
         )
@@ -1018,15 +1013,16 @@ async def _save_with_gemini_desc(
             "indio_image_saved",
             distinct_id=str(author.id),
             properties={
-                "method": "gemini_desc",
-                "description": sess._pending_desc,
+                "method": "validated",
+                "description": final_desc[:100],
+                "gemini_description": gemini_desc[:100],
                 "tags": sess._pending_tags,
             },
         )
-        await channel.send(f"✅ Guardada: *{sess._pending_desc}*")
+        await channel.send(f"✅ Guardada: *{final_desc}*")
     except Exception as exc:
         logger.exception("image save failed")
-        analytics.capture_exception(exc, properties={"method": "gemini_desc"})
+        analytics.capture_exception(exc, properties={"method": "validated"})
         await channel.send(f"❌ No pude guardarla: {exc}")
     sess.advance()
     await _ask_about_current(channel, sess)
