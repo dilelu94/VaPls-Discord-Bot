@@ -775,31 +775,45 @@ async def _handle_session_text(
                 distinct_id=str(author.id),
                 properties={"action": "use_filename", "stage": sess.stage},
             )
-            img = sess.current
-            if img is None:
-                return
-            if _is_generic_filename(img.original_filename):
-                analytics.capture(
-                    "indio_image_action",
-                    distinct_id=str(author.id),
-                    properties={
-                        "action": "generic_filename_rejected",
-                        "filename": img.original_filename,
-                    },
-                )
-                await channel.send(
-                    f"⚠️ El nombre del archivo **{img.original_filename}** es muy "
-                    "genérico. Describila vos."
-                )
-                sess.stage = "waiting_desc"
-                sess.last_activity = _time.time()
+            remaining_count = sess.total - sess.current_index
+            if remaining_count > 1:
+                failed = await _batch_validate_filenames(channel, author, sess)
+                if failed:
+                    sess.pending = failed
+                    sess.total = len(failed)
+                    sess.current_index = 0
+                    sess._data_read = False
+                    sess._retries = 0
+                    await _ask_about_current(channel, sess)
+                else:
+                    sess.stage = "done"
+                    await _finish_session(channel, sess)
             else:
-                name_no_ext = (
-                    img.original_filename.rsplit(".", 1)[0]
-                    if "." in img.original_filename
-                    else img.original_filename
-                )
-                await _validate_candidate(channel, author, sess, name_no_ext)
+                img = sess.current
+                if img is None:
+                    return
+                if _is_generic_filename(img.original_filename):
+                    analytics.capture(
+                        "indio_image_action",
+                        distinct_id=str(author.id),
+                        properties={
+                            "action": "generic_filename_rejected",
+                            "filename": img.original_filename,
+                        },
+                    )
+                    await channel.send(
+                        f"⚠️ El nombre del archivo **{img.original_filename}** es muy "
+                        "genérico. Describila vos."
+                    )
+                    sess.stage = "waiting_desc"
+                    sess.last_activity = _time.time()
+                else:
+                    name_no_ext = (
+                        img.original_filename.rsplit(".", 1)[0]
+                        if "." in img.original_filename
+                        else img.original_filename
+                    )
+                    await _validate_candidate(channel, author, sess, name_no_ext)
         else:
             analytics.capture(
                 "indio_image_action",
@@ -829,6 +843,91 @@ async def _handle_session_text(
         logger.warning(
             "image DM session %d unexpected stage %s", sess.author_id, sess.stage
         )
+
+
+async def _gemini_validate(
+    data: bytes,
+    mime_type: str,
+    candidate_text: str = "",
+) -> tuple[Optional[bool], str, list[str], str]:
+    """Send image data to Gemini for description + optional validation.
+
+    Returns (coincides, description, tags, raw_text).
+    ``coincides`` is None when ``candidate_text`` is empty (no validation needed).
+    Raises on Gemini errors — caller is responsible for handling.
+    """
+    b64_data = _b64.b64encode(data).decode()
+    image_part = {"inlineData": {"mimeType": mime_type, "data": b64_data}}
+
+    if candidate_text:
+        prompt = (
+            f'El usuario dice que esta imagen es: "{candidate_text}"\n\n'
+            f"1. Describí el contenido REAL de la imagen de forma objetiva "
+            f"(2-3 oraciones).\n"
+            f"2. Decí si la descripción del usuario es RAZONABLE para esta "
+            f"imagen.\n\n"
+            f"Importante: Sé PERMISIVO. Apodos de personas, nombres propios, "
+            f"chistes internos, descripciones creativas y referencias del "
+            f"grupo son válidas aunque no sean descripciones literales. "
+            f"Solo respondé COINCIDE: no si la descripción del usuario es "
+            f"claramente de algo DISTINTO a lo que se ve en la imagen.\n\n"
+            f"Respondé EXACTAMENTE con este formato:\n"
+            f"DESCRIPCIÓN: <descripción objetiva>\n"
+            f"TAGS: tag1, tag2, tag3\n"
+            f"COINCIDE: sí\n"
+            f"o\n"
+            f"COINCIDE: no"
+        )
+    else:
+        prompt = (
+            "Describí CORRECTAMENTE el contenido de esta imagen "
+            "(no el formato, sino el contenido real) para un catálogo. "
+            "Sé conciso (2-3 oraciones máximo). "
+            "También dame 3-5 tags relevantes separados por comas.\n\n"
+            "Respondé EXACTAMENTE con este formato:\n"
+            "DESCRIPCIÓN: <tu descripción>\n"
+            "TAGS: tag1, tag2, tag3"
+        )
+
+    reply = await geminiClient.generate(
+        user_message=prompt,
+        system_instruction=(
+            "Sos un asistente que describe imágenes para un catálogo. "
+            "Sé conciso, objetivo, no inventes nada que no esté en la imagen."
+        ),
+        image_parts=[image_part],
+        max_output_tokens=512,
+    )
+
+    gemini_text = reply.text or ""
+    desc = ""
+    tags: list[str] = []
+    coincides: Optional[bool] = None
+
+    for line in gemini_text.split("\n"):
+        line = line.strip()
+        if line.upper().startswith("DESCRIPCIÓN:"):
+            desc = line.split(":", 1)[1].strip()
+        elif line.upper().startswith("TAGS:"):
+            raw = line.split(":", 1)[1].strip()
+            tags = [t.strip().lower() for t in raw.split(",") if t.strip()]
+        elif line.upper().startswith("COINCIDE:"):
+            val = line.split(":", 1)[1].strip().lower()
+            coincides = val in ("sí", "si", "yes")
+
+    if not desc:
+        desc = gemini_text[:200]
+    if not tags:
+        tags = _extract_tags(desc)
+    if coincides is None and candidate_text:
+        logger.warning(
+            "VALIDATION: missing COINCIDE line, assuming match. candidate=%r raw=%r",
+            candidate_text[:100],
+            gemini_text[:300],
+        )
+        coincides = True
+
+    return coincides, desc, tags, gemini_text
 
 
 async def _validate_candidate(
@@ -867,50 +966,13 @@ async def _validate_candidate(
         )
         sess._data_read = True
 
-    b64_data = _b64.b64encode(sess._pending_data).decode()
-    image_part = {"inlineData": {"mimeType": sess._pending_mime, "data": b64_data}}
-
     await channel.send("🔍 Dejame ver la imagen...")
 
-    if candidate_text:
-        prompt = (
-            f'El usuario dice que esta imagen es: "{candidate_text}"\n\n'
-            f"1. Describí el contenido REAL de la imagen de forma objetiva "
-            f"(2-3 oraciones).\n"
-            f"2. Decí si la descripción del usuario es RAZONABLE para esta "
-            f"imagen.\n\n"
-            f"Importante: Sé PERMISIVO. Apodos de personas, nombres propios, "
-            f"chistes internos, descripciones creativas y referencias del "
-            f"grupo son válidas aunque no sean descripciones literales. "
-            f"Solo respondé COINCIDE: no si la descripción del usuario es "
-            f"claramente de algo DISTINTO a lo que se ve en la imagen.\n\n"
-            f"Respondé EXACTAMENTE con este formato:\n"
-            f"DESCRIPCIÓN: <descripción objetiva>\n"
-            f"TAGS: tag1, tag2, tag3\n"
-            f"COINCIDE: sí\n"
-            f"o\n"
-            f"COINCIDE: no"
-        )
-    else:
-        prompt = (
-            "Describí CORRECTAMENTE el contenido de esta imagen "
-            "(no el formato, sino el contenido real) para un catálogo. "
-            "Sé conciso (2-3 oraciones máximo). "
-            "También dame 3-5 tags relevantes separados por comas.\n\n"
-            "Respondé EXACTAMENTE con este formato:\n"
-            "DESCRIPCIÓN: <tu descripción>\n"
-            "TAGS: tag1, tag2, tag3"
-        )
-
     try:
-        reply = await geminiClient.generate(
-            user_message=prompt,
-            system_instruction=(
-                "Sos un asistente que describe imágenes para un catálogo. "
-                "Sé conciso, objetivo, no inventes nada que no esté en la imagen."
-            ),
-            image_parts=[image_part],
-            max_output_tokens=512,
+        coincides, desc, tags, gemini_text = await _gemini_validate(
+            sess._pending_data,
+            sess._pending_mime,
+            candidate_text,
         )
     except _GeminiError as exc:
         if exc.status in (429, 503):
@@ -931,34 +993,6 @@ async def _validate_candidate(
         sess.advance()
         await _ask_about_current(channel, sess)
         return
-
-    gemini_text = reply.text or ""
-    desc = ""
-    tags: list[str] = []
-    coincides: Optional[bool] = None
-
-    for line in gemini_text.split("\n"):
-        line = line.strip()
-        if line.upper().startswith("DESCRIPCIÓN:"):
-            desc = line.split(":", 1)[1].strip()
-        elif line.upper().startswith("TAGS:"):
-            raw = line.split(":", 1)[1].strip()
-            tags = [t.strip().lower() for t in raw.split(",") if t.strip()]
-        elif line.upper().startswith("COINCIDE:"):
-            val = line.split(":", 1)[1].strip().lower()
-            coincides = val in ("sí", "si", "yes")
-
-    if not desc:
-        desc = gemini_text[:200]
-    if not tags:
-        tags = _extract_tags(desc)
-    if coincides is None and candidate_text:
-        logger.warning(
-            "VALIDATION: missing COINCIDE line, assuming match. candidate=%r raw=%r",
-            candidate_text[:100],
-            gemini_text[:300],
-        )
-        coincides = True
 
     sess._candidate_desc = candidate_text
     sess._pending_desc = desc
@@ -1060,6 +1094,143 @@ async def _save_user_and_gemini_desc(
         await channel.send(f"❌ No pude guardarla: {exc}")
     sess.advance()
     await _ask_about_current(channel, sess)
+
+
+async def _batch_validate_filenames(
+    channel: "discord.abc.Messageable",
+    author: "discord.User",
+    sess: _ImageDMSession,
+) -> list["_PendingImage"]:
+    """Process all remaining images using their filenames as descriptions.
+
+    Silently validates each via Gemini and saves those that pass.
+    Returns a list of ``_PendingImage`` objects that failed (generic name,
+    validation mismatch, or download/API error) so the caller can loop on
+    them one-by-one.
+    """
+    mgr = _init_image_mgr()
+    remaining = sess.pending[sess.current_index :]
+    ok_count = 0
+    failed: list[_PendingImage] = []
+    skip_names: list[str] = []
+
+    await channel.send("⏳ Procesando todas las imágenes con nombre de archivo...")
+
+    for img in remaining:
+        if _is_generic_filename(img.original_filename):
+            failed.append(img)
+            skip_names.append(img.original_filename)
+            continue
+
+        name_no_ext = (
+            img.original_filename.rsplit(".", 1)[0]
+            if "." in img.original_filename
+            else img.original_filename
+        )
+
+        try:
+            data = await img.attachment.read()
+        except Exception as exc:
+            logger.exception("batch: download failed for %s", img.original_filename)
+            failed.append(img)
+            continue
+
+        ext = (
+            img.attachment.filename.rsplit(".", 1)[-1]
+            if "." in img.attachment.filename
+            else "png"
+        )
+        mime = img.attachment.content_type or "image/png"
+
+        try:
+            coincides, desc, tags, raw = await _gemini_validate(
+                data,
+                mime,
+                name_no_ext,
+            )
+        except _GeminiError as exc:
+            if exc.status in (429, 503):
+                logger.warning(
+                    "batch: gemini overloaded after %d ok, %d failed — stopping",
+                    ok_count,
+                    len(failed),
+                )
+                await channel.send(
+                    "🕐 Google AI está saturado, dejamos el resto para procesar "
+                    "una por una."
+                )
+                failed.append(img)
+                failed.extend(remaining[remaining.index(img) + 1 :])
+                return failed
+            logger.exception("batch: gemini error for %s", img.original_filename)
+            failed.append(img)
+            continue
+        except Exception as exc:
+            logger.exception("batch: gemini error for %s", img.original_filename)
+            failed.append(img)
+            continue
+
+        if coincides is False:
+            logger.warning(
+                "BATCH: no coincide. candidate=%r img=%s raw=%r",
+                name_no_ext[:150],
+                img.original_filename,
+                raw[:500],
+            )
+            failed.append(img)
+            continue
+
+        try:
+            img_id = mgr.add_image(
+                data,
+                ext,
+                name_no_ext,
+                tags,
+                author.id,
+                img.original_filename,
+                gemini_description=desc,
+            )
+            sess.processed.append(
+                {
+                    "id": img_id,
+                    "description": name_no_ext,
+                    "gemini_description": desc,
+                    "tags": tags,
+                }
+            )
+            analytics.capture(
+                "indio_image_saved",
+                distinct_id=str(author.id),
+                properties={
+                    "method": "batch_filename",
+                    "filename": img.original_filename,
+                },
+            )
+            ok_count += 1
+        except Exception as exc:
+            logger.exception("batch: save failed for %s", img.original_filename)
+            failed.append(img)
+
+    # Summary
+    parts = []
+    if ok_count:
+        parts.append(f"✅ {ok_count} guardadas con nombre de archivo")
+    if failed:
+        n_gen = len(skip_names)
+        n_val = len(failed) - n_gen
+        detail = ""
+        if n_gen:
+            detail += f" {n_gen} con nombre genérico"
+        if n_val:
+            detail += f" {'y ' if n_gen else ''}{n_val} no pasaron validación"
+        parts.append(
+            f"❌ {len(failed)} fallaron ({detail.strip()}). Las procesamos una por una."
+        )
+    else:
+        parts.append("¡Todas guardadas!")
+    await channel.send(" — ".join(parts) + ".")
+
+    return failed
 
 
 async def _finish_session(
