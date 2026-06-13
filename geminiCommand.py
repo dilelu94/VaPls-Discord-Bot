@@ -781,10 +781,10 @@ async def _handle_session_text(
                 )
                 await channel.send(
                     f"⚠️ El nombre del archivo **{img.original_filename}** es muy "
-                    "genérico y no sirve como descripción. "
-                    "Voy a describirla con IA."
+                    "genérico. Describila vos."
                 )
-                await _validate_candidate(channel, author, sess, "")
+                sess.stage = "waiting_desc"
+                sess.last_activity = _time.time()
             else:
                 name_no_ext = (
                     img.original_filename.rsplit(".", 1)[0]
@@ -966,9 +966,8 @@ async def _validate_candidate(
             await _ask_about_current(channel, sess)
         else:
             await channel.send(
-                f"❌ No coincide. Describila de vuelta o decí **cancelar** "
-                f"para saltearla.\n"
-                f"Gemini dice: *{desc}*"
+                "❌ No coincide. Describila de vuelta o decí **cancelar** "
+                "para saltearla."
             )
             sess.stage = "waiting_desc"
             sess.last_activity = _time.time()
