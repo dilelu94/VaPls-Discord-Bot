@@ -565,6 +565,26 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 ## 📦 Últimos cambios
 
+### 2026-06-13 — Refactor: validación de descripciones del usuario contra Gemini
+
+26. **`_validate_candidate()`** reemplaza `_describe_with_gemini()`: un solo llamado
+    a Gemini describe la imagen + extrae tags + valida si el texto del usuario coincide
+    (prompt "describí CORRECTAMENTE el contenido, no el formato, sino el contenido real").
+27. **Loop de 5 intentos**: si no coincide, incrementa `_retries` y pide nueva descripción.
+    Al quinto fallo, saltea la imagen automáticamente.
+28. **Descripción de Gemini oculta durante validación**: solo se muestra cuando coincide
+    y pregunta "¿La guardo así?".
+29. **Filename genérico** ya no describe con IA automáticamente — fuerza al usuario a
+    escribir una descripción manualmente (va a `waiting_desc`).
+30. **`_save_user_and_gemini_desc()`** guarda ambas descripciones (`description` del
+    usuario + `gemini_description` de Gemini). Reemplaza `_save_with_filename`,
+    `_save_with_user_description`, `_save_with_gemini_desc`.
+31. **Menú simplificado**: `confirm` stage solo tiene **1** (filename), **cancelar**
+    (skip), o **cualquier texto** (descripción propia). `confirm_save` stage acepta
+    **sí** (primera palabra) o cualquier otra cosa (skip).
+32. **Cache de imagen**: `_pending_data` evita re-descargar en cada reintento.
+33. **`imageManager.add_image()`** recibe `gemini_description: str = ""`.
+
 ### 2026-06-12 — Indio DM: rechazo de filenames genéricos + analytics + fix coincidence de Gemini
 
 22. **Filename genéricos rechazados**: `_is_generic_filename()` detecta nombres como
@@ -629,17 +649,21 @@ Indio las use espontáneamente en conversaciones vía la tool `use_image`.
 3. VaPls corre la state machine `_ImageDMSession` y devuelve las respuestas.
 4. Userbot envía las respuestas al DM channel del usuario.
 5. Por cada imagen VaPls pregunta: "¿Qué hacemos?"
-   - **sí** + filename **genérico** (image.png, photo.jpg, etc.) → `_is_generic_filename`
-     lo rechaza, redirige a Gemini para describir la imagen
-   - **sí** + filename **válido** (bandera_argentina.png) → usa el filename como
-     descripción, extrae tags simples
-   - **no** / **describimela** → descarga la imagen, llama a Gemini UNA VEZ para
-     describir + generar tags (sin verificar coincidencia con filename)
-   - **pongo descripción** → el usuario escribe su propia descripción
+   - **1** → usar el filename como descripción candidate
+     - Si el filename es **genérico** (image.png, photo.jpg, etc.) → `_is_generic_filename`
+       lo rechaza, pide que el usuario escriba una descripción (waiting_desc)
+     - Si el filename es **válido** → se valida contra Gemini
    - **cancelar** → saltea la imagen
-6. Guarda imagen + metadata en `indio_images/manifest.json`
-7. Al final muestra resumen de lo guardado.
-8. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos".
+   - **cualquier otro texto** → se usa como descripción candidate y se valida contra Gemini
+6. **Validación con Gemini**: `_validate_candidate()` describe la imagen internamente y
+   verifica si coincide con el texto del usuario. Si coincide → muestra descripción de Gemini
+   y pregunta "¿La guardo así?". Si no coincide → loop de hasta 5 intentos (waiting_desc),
+   mostrando solo "No coincide" sin revelar la descripción de Gemini.
+7. En `confirm_save` → "**sí**" (primera palabra) guarda con ambas descripciones
+   (`description` + `gemini_description`); cualquier otra cosa saltea.
+8. Guarda imagen + metadata en `indio_images/manifest.json`
+9. Al final muestra resumen de lo guardado.
+10. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos".
 
 ### Tool `use_image`
 
