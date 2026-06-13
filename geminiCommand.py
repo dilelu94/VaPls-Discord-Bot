@@ -511,6 +511,12 @@ class _ImageDMSession:
 
     def advance(self) -> None:
         self.current_index += 1
+        self._data_read = False
+        self._pending_data = b""
+        self._pending_desc = ""
+        self._pending_tags = []
+        self._candidate_desc = ""
+        self._retries = 0
         if self.current_index >= self.total:
             self.stage = "done"
 
