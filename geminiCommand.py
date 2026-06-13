@@ -881,20 +881,16 @@ async def _describe_with_gemini(
     b64_data = _b64.b64encode(data).decode()
     mime = img.attachment.content_type or "image/png"
     image_part = {"inlineData": {"mimeType": mime, "data": b64_data}}
-    name_hint = img.original_filename
-
     await channel.send("🔍 Dejame ver la imagen...")
     try:
         reply = await geminiClient.generate(
             user_message=(
                 "Describí esta imagen BREVEMENTE (2-3 oraciones máximo) para un "
                 "catálogo de imágenes. También dame 3-5 tags relevantes separados "
-                "por comas y decime si la descripción sugerida "
-                f"'{name_hint}' coincide ALGO con lo que se ve.\n\n"
+                "por comas.\n\n"
                 "Formateá tu respuesta ASÍ:\n"
                 "DESCRIPCIÓN: <texto>\n"
-                "TAGS: tag1, tag2, tag3\n"
-                "COINCIDENCIA: sí / parcial / no"
+                "TAGS: tag1, tag2, tag3"
             ),
             system_instruction=(
                 "Sos un asistente que describe imágenes para un catálogo. "
@@ -911,10 +907,8 @@ async def _describe_with_gemini(
         return
 
     gemini_text = reply.text or ""
-    # Parse response
     desc = ""
     tags: list[str] = []
-    coincidencia = ""
     for line in gemini_text.split("\n"):
         line = line.strip()
         if line.upper().startswith("DESCRIPCIÓN:"):
@@ -922,44 +916,24 @@ async def _describe_with_gemini(
         elif line.upper().startswith("TAGS:"):
             raw = line.split(":", 1)[1].strip()
             tags = [t.strip().lower() for t in raw.split(",") if t.strip()]
-        elif line.upper().startswith("COINCIDENCIA:"):
-            coincidencia = line.split(":", 1)[1].strip()
 
     if not desc:
-        desc = gemini_text[:200]  # fallback
+        desc = gemini_text[:200]
     if not tags:
         tags = _extract_tags(desc)
-
-    match_msg = ""
-    if coincidencia:
-        match_msg = f"\n📊 Coincide **{coincidencia}** con el nombre del archivo."
 
     analytics.capture(
         "indio_image_gemini_described",
         distinct_id=str(author.id),
         properties={
-            "coincidencia": coincidencia,
             "desc": desc[:100],
             "tags": tags[:5],
             "filename": img.original_filename,
         },
     )
-    if coincidencia.lower() in ("no", "parcial"):
-        await channel.send(
-            f"📝 Descripción de IA: *{desc}*\n"
-            f"🏷️ Tags: {', '.join(tags[:5])}"
-            f"{match_msg}\n\n"
-            f"❌ La descripción no coincide. **Escribí tu propia descripción** para esta imagen."
-        )
-        sess.stage = "waiting_desc"
-        sess.last_activity = _time.time()
-        return
 
     await channel.send(
-        f"📝 Descripción: *{desc}*\n"
-        f"🏷️ Tags: {', '.join(tags[:5])}"
-        f"{match_msg}\n\n"
-        f"¿La guardo así?"
+        f"📝 Descripción: *{desc}*\n🏷️ Tags: {', '.join(tags[:5])}\n\n¿La guardo así?"
     )
 
     # Store the parsed result on the session for when user confirms
