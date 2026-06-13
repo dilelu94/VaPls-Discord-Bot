@@ -856,7 +856,14 @@ async function startUpload() {{
   const compR = await fetch(`/upload/${{TOKEN}}/complete`, {{method:"POST"}});
   if (compR.ok) {{
     uploading = false;
-    window.location.href = "/dl/" + TOKEN + "/" + encodeURIComponent(file.name);
+    document.getElementById("cancel-btn").style.display = "none";
+    document.getElementById("upload-section").style.display = "none";
+    document.getElementById("completed-filename").textContent = file.name;
+    document.getElementById("completed-link").value = window.location.origin + "/dl/" + TOKEN + "/" + encodeURIComponent(file.name);
+    document.getElementById("completed-section").style.display = "block";
+    document.getElementById("status").innerHTML = '<span class="success">✅ Archivo subido correctamente</span>';
+    loadFiles();
+    loadHistory();
     return;
   }} else {{
     const err = await compR.json();
