@@ -32,6 +32,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "actividad": "text",
     "transferir": "text",
     "spacewar": "text",
+    "story-test": "text",
     "restart": "text",
 }
 
