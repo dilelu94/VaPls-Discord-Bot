@@ -2604,6 +2604,8 @@ async def _handle_indio_image_dm(message) -> bool:
         ".svg",
         ".ico",
         ".avif",
+        ".heic",
+        ".heif",
     }
     has_images = bool(
         message.attachments
@@ -2615,6 +2617,14 @@ async def _handle_indio_image_dm(message) -> bool:
     )
 
     if not has_images:
+        if message.attachments:
+            for a in message.attachments:
+                log.info(
+                    "[INDIO-IMG-DM] attachment not detected as image: ct=%s fn=%s url=%s",
+                    getattr(a, "content_type", None),
+                    a.filename,
+                    a.url,
+                )
         # Without images the only thing we can do is forward text for an
         # existing session. We don't know if a session exists without asking
         # the server, so probe with a lightweight GET-like POST.
