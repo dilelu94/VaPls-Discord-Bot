@@ -728,8 +728,12 @@ async def _handle_session_text(
         await _save_with_user_description(channel, author, sess, text)
         return
 
+    _YES = {"sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"}
+    _NO = {"no", "nop", "nope"}
+    _first = text.split(",")[0].split()[0].strip() if text else ""
+
     if sess.stage == "confirm":
-        if text in ("sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"):
+        if _first in _YES:
             img = sess.current
             if img and _is_generic_filename(img.original_filename):
                 analytics.capture(
@@ -748,7 +752,7 @@ async def _handle_session_text(
                 await _describe_with_gemini(channel, author, sess)
             else:
                 await _save_with_filename(channel, author, sess)
-        elif text in ("no", "nop", "nope", "describimela", "describila"):
+        elif _first in _NO or text in ("describimela", "describila"):
             analytics.capture(
                 "indio_image_action",
                 distinct_id=str(author.id),
@@ -795,7 +799,7 @@ async def _handle_session_text(
                 "**pongo descripción**, o **cancelar**."
             )
     elif sess.stage == "confirm_save":
-        if text in ("sí", "si", "sis", "dale", "ok", "yes", "yep", "sip"):
+        if _first in _YES:
             analytics.capture(
                 "indio_image_action",
                 distinct_id=str(author.id),
