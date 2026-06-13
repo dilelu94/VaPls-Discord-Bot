@@ -563,7 +563,28 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 20. **Botón Cancelar en upload**: aparece durante la subida, detiene los chunks restantes y borra el archivo parcial via `DELETE /upload/{token}?dt=...`.
 21. **`transferHistory` sin guard**: se removió el chequeo `if not mgr.sessions.get(token)` que retornaba vacío para tokens desconocidos. Ahora siempre devuelve el historial completo desde `_history.jsonl`.
 
-## 📦 Últimos cambios — transferencia de archivos (/transferir)
+## 📦 Últimos cambios
+
+### 2026-06-12 — Indio DM: rechazo de filenames genéricos + analytics + fix coincidence de Gemini
+
+22. **Filename genéricos rechazados**: `_is_generic_filename()` detecta nombres como
+    `image.png`, `photo.jpg`, `IMG_1234.jpg` (tags vacíos, solo números o solo
+    palabras genéricas). Si el usuario dice "sí" con un filename así, se redirige
+    automáticamente a Gemini para que describa la imagen.
+23. **Gemini ya no verifica coincidencia**: se eliminó el prompt que le preguntaba
+    a Gemini si "image.png" coincide con la imagen — es al pedo porque Gemini dice
+    "sí" al pedo (técnicamente es una imagen). La validación de filenames es
+    ​100% client-side via `_is_generic_filename()` + `_extract_tags()`.
+24. **Analytics events** en cada paso del flujo:
+    - `indio_image_session_started` — inicio de sesión
+    - `indio_image_action` — cada respuesta del usuario (describe_with_ai,
+      user_description, skip, unrecognized, confirm_gemini_desc, reject_gemini_desc,
+      generic_filename_rejected)
+    - `indio_image_gemini_described` — resultado de la descripción de Gemini
+    - `indio_image_saved` — imagen guardada (con método: filename/user_desc/gemini_desc)
+    - `indio_image_session_finished` — sesión terminada
+25. **`_extract_tags()` filtra números**: los tokens puramente numéricos ya no se
+    consideran tags (ej: "2024" de "IMG_2024.jpg").
 
 ### 2026-06-11 — Fixes y mejoras en /transferir
 
@@ -608,16 +629,17 @@ Indio las use espontáneamente en conversaciones vía la tool `use_image`.
 3. VaPls corre la state machine `_ImageDMSession` y devuelve las respuestas.
 4. Userbot envía las respuestas al DM channel del usuario.
 5. Por cada imagen VaPls pregunta: "¿Qué hacemos?"
-   - **sí** — usa el filename como descripción, extrae tags simples
-   - **no** / **describimela** — descarga la imagen, llama a Gemini UNA VEZ para
-     describir + generar tags + verificar coincidencia con el filename
-   - **pongo descripción** — el usuario escribe su propia descripción
-   - **cancelar** — saltea la imagen
-6. Si la descripción de Gemini **no coincide** o es **parcial**, el usuario
-   **debe** escribir su propia descripción (obligatorio).
-7. Guarda imagen + metadata en `indio_images/manifest.json`
-8. Al final muestra resumen de lo guardado.
-9. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos".
+   - **sí** + filename **genérico** (image.png, photo.jpg, etc.) → `_is_generic_filename`
+     lo rechaza, redirige a Gemini para describir la imagen
+   - **sí** + filename **válido** (bandera_argentina.png) → usa el filename como
+     descripción, extrae tags simples
+   - **no** / **describimela** → descarga la imagen, llama a Gemini UNA VEZ para
+     describir + generar tags (sin verificar coincidencia con filename)
+   - **pongo descripción** → el usuario escribe su propia descripción
+   - **cancelar** → saltea la imagen
+6. Guarda imagen + metadata en `indio_images/manifest.json`
+7. Al final muestra resumen de lo guardado.
+8. Timeout de 5min sin respuesta: "te fuiste afk, más tarde seguimos".
 
 ### Tool `use_image`
 
