@@ -94,8 +94,7 @@ Cada usuario del grupo tiene un APODO (lo ves antes de cada mensaje, \
 ej. "Miles: ...") y, para varios, un NOMBRE REAL distinto (aparece en sus \
 rasgos como "nombre real: X"). Algunos tienen además apodos alternativos \
 listados como "apodos: X, Y, Z". Llamalos SIEMPRE por el apodo (el principal \
-o cualquiera de los alternativos) y usá el nombre real SOLO en silencio para \
-inferir si es hombre o mujer y hablarle con la concordancia correcta. \
+o cualquiera de los alternativos). \
 Contexto interno (NO lo expliques en el chat a menos que la charla lleve \
 directo ahí): a nadie del grupo le gusta que lo llamen por el nombre real. \
 Es algo que tenés en cuenta para no meter la pata, no algo que andás \
@@ -1178,7 +1177,9 @@ def _load_indio_state() -> None:
                 _indio_last_seen[key] = last_seen
                 loaded += 1
         if isinstance(long_term, dict) and long_term:
-            _indio_long_term[key] = _clean_music_from_long_term(long_term)
+            lt = _clean_music_from_long_term(long_term)
+            lt = _clean_gender_from_long_term(lt)
+            _indio_long_term[key] = lt
         if isinstance(current_members, list) and current_members:
             _indio_current_members[key] = [str(n) for n in current_members if n]
             _indio_members_refreshed_at[key] = current_members_at
@@ -1591,7 +1592,10 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
     """Pull manual traits/preguntas/anecdotas from users.py. Each entry can
     optionally carry ``traits``, ``preguntas_tipicas`` and ``anecdotas``
     lists; these are merged into the long-term render every time the indio
-    answers and are never overwritten by Gemini's compression cycle."""
+    answers and are never overwritten by Gemini's compression cycle.
+
+    Cualquier trait que contenga palabras de género (sexo, hombre, mujer, etc.)
+    se filtra automáticamente."""
     out: dict[str, dict[str, list[str]]] = {}
     sources = list(_USERS.values()) + list(_NON_DISCORD_MEMBERS)
     for info in sources:
@@ -1601,7 +1605,11 @@ def _static_user_traits() -> dict[str, dict[str, list[str]]]:
         if not name:
             continue
         out[name] = {
-            field: [str(t) for t in (info.get(field) or []) if t]
+            field: [
+                str(t)
+                for t in (info.get(field) or [])
+                if t and not _has_gender_words(str(t))
+            ]
             for field in _INDIO_USER_FIELDS
         }
     return out
@@ -1628,7 +1636,8 @@ def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
     """Combine the static per-user traits from users.py with whatever Gemini
     has distilled in long-term memory. Static entries provide a baseline; the
     distilled additions are appended without duplicates. Items in dynamic
-    memory matching a user's ``block_dynamic_substrings`` are filtered out."""
+    memory matching a user's ``block_dynamic_substrings`` or gender keywords
+    are filtered out."""
     merged = _static_user_traits()
     blocks_by_name = _block_lists_by_name()
     if isinstance(lt_users, dict):
@@ -1643,6 +1652,8 @@ def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
                 for item in data.get(key) or []:
                     s = str(item)
                     if not s or s in existing:
+                        continue
+                    if _has_gender_words(s):
                         continue
                     if blocks and any(b in s.lower() for b in blocks):
                         continue
@@ -1750,6 +1761,8 @@ Reglas estrictas:
 - Máx %d eventos_del_grupo y %d chistes_internos en total.
 - Conservás los nombres tal cual aparecen entre corchetes ("[nombre]: ...").
 - No incluyas al "indio" como usuario (es el bot, no un miembro del grupo).
+- NUNCA incluyas información de sexo, género ("hombre", "mujer"), ni
+  menciones que traten a un usuario como hombre o mujer.
 - Español rioplatense, casual, conciso.
 - Devolvé SOLO el JSON. Sin ```json ni explicación.
 """ % (
@@ -1788,6 +1801,23 @@ def _extract_json(text: str) -> Optional[dict]:
 # Palabras clave musicales que no deben contaminar la memoria a largo plazo
 # del Indio. Cuando aparecen en rasgos/anécdotas/eventos se filtran para que
 # el modelo no aprenda el patrón "voz → play_music" desde su propio historial.
+# Palabras de género/sexo que se filtran de la memoria a largo plazo y de
+# traits estáticos. Ningún usuario debe tener información de sexo/género
+# en su perfil ni en la memoria comprimida.
+_GENDER_BLOCK_WORDS = frozenset(
+    {
+        "sexo",
+        "hombre",
+        "mujer",
+        "género",
+        "genero",
+        "varón",
+        "varon",
+        "masculino",
+        "femenino",
+    }
+)
+
 _MUSIC_BLOCK_WORDS = frozenset(
     {
         "música",
@@ -1816,6 +1846,13 @@ def _has_music_block_words(text: str) -> bool:
     """True si el texto contiene alguna keyword musical a filtrar."""
     t = _strip_accents_lower(text)
     return any(w in t for w in _MUSIC_BLOCK_WORDS)
+
+
+def _has_gender_words(text: str) -> bool:
+    """True si el texto menciona sexo/género del usuario. Se filtra para
+    que el indio no tenga datos de género en ningún lado."""
+    t = _strip_accents_lower(text)
+    return any(w in t for w in _GENDER_BLOCK_WORDS)
 
 
 def _clean_music_from_long_term(lt: dict) -> dict:
@@ -1851,6 +1888,35 @@ def _clean_music_from_long_term(lt: dict) -> dict:
     return out
 
 
+def _clean_gender_from_long_term(lt: dict) -> dict:
+    """Filtra entradas con palabras de género/sexo de la memoria a largo plazo.
+    Remueve rasgos/anécdotas/eventos/chistes que contengan género, para que
+    el Indio no tenga datos de sexo/género de ningún usuario."""
+    if not lt:
+        return lt
+    out: dict = {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
+    users = lt.get("users") or {}
+    for name, data in users.items():
+        if not isinstance(data, dict):
+            continue
+        cleaned: dict[str, list[str]] = {}
+        for field in ("traits", "preguntas_tipicas", "anecdotas"):
+            items = [
+                s for s in (data.get(field) or []) if not _has_gender_words(str(s))
+            ]
+            if items:
+                cleaned[field] = items
+        if cleaned:
+            out["users"][name] = cleaned
+    out["eventos_del_grupo"] = [
+        e for e in (lt.get("eventos_del_grupo") or []) if not _has_gender_words(str(e))
+    ]
+    out["chistes_internos"] = [
+        j for j in (lt.get("chistes_internos") or []) if not _has_gender_words(str(j))
+    ]
+    return out
+
+
 def _clamp_long_term(lt: dict) -> dict:
     """Enforce structure + per-section caps so a misbehaving Gemini response
     can't blow up the prompt budget."""
@@ -1866,13 +1932,15 @@ def _clamp_long_term(lt: dict) -> dict:
             src_traits = [str(t)[:120] for t in (data.get("traits") or []) if t]
             src_qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t]
             src_anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t]
-            traits = [t for t in src_traits if not _has_music_block_words(t)][
+
+            def _no_music_or_gender(t):
+                return not _has_music_block_words(t) and not _has_gender_words(t)
+
+            traits = [t for t in src_traits if _no_music_or_gender(t)][
                 :_LT_TRAITS_PER_USER
             ]
-            qs = [t for t in src_qs if not _has_music_block_words(t)][
-                :_LT_QUESTIONS_PER_USER
-            ]
-            anec = [t for t in src_anec if not _has_music_block_words(t)][
+            qs = [t for t in src_qs if _no_music_or_gender(t)][:_LT_QUESTIONS_PER_USER]
+            anec = [t for t in src_anec if _no_music_or_gender(t)][
                 :_LT_ANECDOTES_PER_USER
             ]
             if traits or qs or anec:
@@ -1886,14 +1954,14 @@ def _clamp_long_term(lt: dict) -> dict:
         out["eventos_del_grupo"] = [
             e
             for e in [str(e)[:120] for e in events if e]
-            if not _has_music_block_words(e)
+            if not _has_music_block_words(e) and not _has_gender_words(e)
         ][:_LT_GROUP_EVENTS]
     jokes = lt.get("chistes_internos") if isinstance(lt, dict) else None
     if isinstance(jokes, list):
         out["chistes_internos"] = [
             j
             for j in [str(j)[:120] for j in jokes if j]
-            if not _has_music_block_words(j)
+            if not _has_music_block_words(j) and not _has_gender_words(j)
         ][:_LT_JOKES]
     # Final safety: if still too big after structural clamp, drop oldest events/jokes.
     while len(json.dumps(out, ensure_ascii=False)) > _LONG_TERM_MAX_CHARS:

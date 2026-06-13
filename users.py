@@ -14,10 +14,9 @@ Per-user keys:
   was corrected — without needing to wipe the whole memory.json on the server.
 
 Convenciones de ``traits``:
-- "nombre real: X" → el indio infiere el género del nombre y lo trata como
-  hombre/mujer. NUNCA llama al usuario por su nombre real, siempre por el
-  apodo (el ``name`` del bucket). Si no hay "nombre real", podés usar
-  "sexo: hombre/mujer" como fallback.
+- "nombre real: X" → el indio sabe el nombre real de la persona pero NUNCA
+  lo usa para hablarle. Siempre usa el apodo (el ``name`` del bucket).
+  El indio NO infiere género del nombre real ni usa concordancia de género.
 - Prefijo "(privado, no mencionar): X" → contexto interno para el indio.
   Lo usa para responder coherente pero no lo dice explícitamente.
 
@@ -50,7 +49,6 @@ USERS: dict[int, dict] = {
         "fotos": [
             "Un bombero alto y robusto sonriendo al lado de un camión de bomberos rojo.",
         ],
-        "block_dynamic_substrings": ["sexo: hombre", "es hombre"],
     },
     211354006805676032: {
         "name": "Miles",
@@ -121,7 +119,7 @@ USERS: dict[int, dict] = {
         "name": "Fide",
         "greeting": "Audios/aughhhhhhhhhh.mp3",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Fidel",
             "medio nazi (chiste interno del grupo)",
             "de Gualeguaychu",
         ],
@@ -158,7 +156,7 @@ USERS: dict[int, dict] = {
     428444575963807745: {
         "name": "Tobi",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Tobias",
             "es gobernado",
             "tiene una impresora 3D",
             "mejor amigo de toda la vida del indio (jardin y escuela juntos)",
@@ -173,7 +171,7 @@ USERS: dict[int, dict] = {
         "name": "Franko",
         "greeting": "Audios/Sale un contercito.m4a",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Franco",
             "falopero, drogadicto (chiste interno del grupo)",
             "de Gualeguaychu",
             "juega CS",
@@ -188,7 +186,7 @@ USERS: dict[int, dict] = {
         "name": "Caro",
         "greeting": "Audios/snoop-dogg-smoke-weed-everyday.mp3",
         "traits": [
-            "sexo: mujer",
+            "nombre real: Carolina",
             "tatuadora",
             "amiga del indio",
             "(privado, no mencionar): es gotica",
@@ -206,7 +204,7 @@ USERS: dict[int, dict] = {
         "name": "Enrique",
         "greeting": "Audios/enrique.mp3",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Enrique",
             "uruguayo",
             "profesor de musica",
             "ama trabajar con niños (es su laburo dando clases)",
@@ -216,7 +214,7 @@ USERS: dict[int, dict] = {
         "name": "Mati",
         "greeting": "Audios/Fart_with_reverb_sound_effect.wav",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Matias",
             "programador senior",
             "tiene una gata gorda que considera su hija",
             "es de baja estatura y no le gusta que se lo recuerden",
@@ -242,7 +240,7 @@ USERS: dict[int, dict] = {
     519594605520486428: {
         "name": "El Indio",
         "traits": [
-            "sexo: hombre",
+            "nombre real: Indio",
             "el mas grande del grupo, les lleva 30 años a todos",
             "sabe una banda de musica, de todos los generos",
             "tiene contactos en todos lados, siempre consigue lo que hace falta",
@@ -283,7 +281,6 @@ NON_DISCORD_MEMBERS: list[dict] = [
     {
         "name": "Bibi",
         "traits": [
-            "sexo: hombre",
             "mejor amigo del indio",
             "a veces llora en los muros",
             "no tiene Discord",
