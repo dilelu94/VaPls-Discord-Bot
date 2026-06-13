@@ -28,6 +28,7 @@ import discord
 import analytics
 import config
 import geminiClient
+from geminiClient import GeminiError as _GeminiError
 import gemini_keywords as _kw
 import geminiKeys
 import imageManager
@@ -900,6 +901,19 @@ async def _validate_candidate(
             image_parts=[image_part],
             max_output_tokens=512,
         )
+    except _GeminiError as exc:
+        if exc.status in (429, 503):
+            logger.warning("gemini overloaded (HTTP %d) in validate", exc.status)
+            await channel.send(
+                "🕐 Google AI está saturado, esperá y probá de vuelta en unos segundos."
+            )
+            sess.last_activity = _time.time()
+            return
+        logger.exception("gemini validate failed")
+        await channel.send(f"❌ No pude procesar la imagen: {exc}")
+        sess.advance()
+        await _ask_about_current(channel, sess)
+        return
     except Exception as exc:
         logger.exception("gemini validate failed")
         await channel.send(f"❌ No pude procesar la imagen: {exc}")
@@ -928,7 +942,12 @@ async def _validate_candidate(
     if not tags:
         tags = _extract_tags(desc)
     if coincides is None and candidate_text:
-        coincides = False
+        logger.warning(
+            "VALIDATION: missing COINCIDE line, assuming match. candidate=%r raw=%r",
+            candidate_text[:100],
+            gemini_text[:300],
+        )
+        coincides = True
 
     sess._candidate_desc = candidate_text
     sess._pending_desc = desc
@@ -965,6 +984,11 @@ async def _validate_candidate(
             sess.advance()
             await _ask_about_current(channel, sess)
         else:
+            logger.warning(
+                "VALIDATION: no coincide. candidate=%r gemini_raw=%r",
+                candidate_text[:150],
+                gemini_text[:500],
+            )
             await channel.send(
                 "❌ No coincide. Describila de vuelta o decí **cancelar** "
                 "para saltearla."
