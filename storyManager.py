@@ -200,14 +200,14 @@ def _maybe_compress_image(path: str) -> str:
         return path
 
 
-async def _relay_story(
+async def _relay_payload(
     channel_id: int,
     content: str,
-    file_path: str,
+    file_path: Optional[str] = None,
 ) -> Optional[int]:
-    """Post story via userbot relay (real Indio account) with attached image.
+    """Post a message via userbot relay (real Indio account).
 
-    Compresses images over 8 MB before sending (Discord file limit).
+    Optionally attaches an image (compressed to under 8 MB).
     Returns the first message id or None on failure.
     """
     url = config.INDIO_RELAY_URL
@@ -215,12 +215,15 @@ async def _relay_story(
     if not url or not secret:
         return None
 
-    path = _maybe_compress_image(file_path)
-    payload = {
+    sent_path: Optional[str] = None
+    payload: dict = {
         "channel_id": int(channel_id),
         "content": content,
-        "file_path": path,
     }
+    if file_path:
+        sent_path = _maybe_compress_image(file_path)
+        payload["file_path"] = sent_path
+
     headers = {"X-API-Secret": secret}
     timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
     try:
@@ -228,18 +231,18 @@ async def _relay_story(
             async with session.post(url, json=payload, headers=headers) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
-                    logger.warning("story relay HTTP %d: %s", resp.status, body[:200])
+                    logger.warning("relay HTTP %d: %s", resp.status, body[:200])
                     return None
                 data = await resp.json(content_type=None)
         ids = (data or {}).get("message_ids") or []
         return int(ids[0]) if ids else None
     except Exception as e:
-        logger.warning("story relay failed: %s", e)
+        logger.warning("relay failed: %s", e)
         return None
     finally:
-        if path != file_path:
+        if sent_path and file_path and sent_path != file_path:
             try:
-                os.unlink(path)
+                os.unlink(sent_path)
             except OSError:
                 pass
 
@@ -263,7 +266,7 @@ async def _post_review(
         return False
 
     # 1. Post story text + image via userbot (real Indio account)
-    story_msg_id = await _relay_story(channel_id, story_text, str(full))
+    story_msg_id = await _relay_payload(channel_id, story_text, str(full))
     if story_msg_id is None:
         logger.warning("story relay failed, falling back to bot post")
         img_path = _maybe_compress_image(str(full))
@@ -281,28 +284,31 @@ async def _post_review(
                 except OSError:
                     pass
 
-    # 2. Post voting instructions as a separate message from the bot
+    # 2. Post voting instructions via userbot (Indio writes it, bot adds reactions)
     vote_text = (
         "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
     )
+    vote_msg_id = await _relay_payload(channel_id, vote_text)
+    if vote_msg_id is None:
+        logger.error("vote msg relay failed")
+        return False
     try:
-        vote_msg = await ch.send(vote_text)
+        vote_msg = await ch.fetch_message(vote_msg_id)
         await vote_msg.add_reaction("✅")
         await vote_msg.add_reaction("❌")
     except Exception as e:
-        logger.error("vote msg post failed: %s", e)
-        return False
+        logger.warning("could not add reactions to vote msg: %s", e)
 
     # 3. Store both IDs in pending reviews (keyed by vote msg for reactions)
     state = {
         "story_msg_id": story_msg_id,
-        "vote_msg_id": vote_msg.id,
+        "vote_msg_id": vote_msg_id,
         "rel_path": rel_path,
         "story_text": story_text,
         "channel_id": channel_id,
         "guild_id": guild_id,
     }
-    _pending_reviews[vote_msg.id] = state
+    _pending_reviews[vote_msg_id] = state
     _pending_reviews[story_msg_id] = state
 
     # 4. Set awaiting first message for this guild
