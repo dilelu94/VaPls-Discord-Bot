@@ -274,7 +274,7 @@ async def _post_review(
     if not hasattr(ch, "send"):
         return False
 
-    full = Path(imagePool.POOL_DIR, rel_path)
+    full = Path(imagePool.POOL_DIR, rel_path).resolve()
     if not full.exists():
         logger.error("[STORY] review image not found: %s", rel_path)
         return False

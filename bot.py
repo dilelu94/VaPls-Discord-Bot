@@ -1950,12 +1950,21 @@ async def story_test(ctx):
     guild_id = ctx.guild.id
     channel_id = config.INDIO_STORY_CHANNEL_ID
     try:
-        await storyManager.trigger_story(bot, guild_id, channel_id, trigger_type="test")
-        await safe_respond(
-            ctx,
-            "🐔 Historia disparada — revisá <#{}>.".format(channel_id),
-            ephemeral=True,
+        ok = await storyManager.trigger_story(
+            bot, guild_id, channel_id, trigger_type="test"
         )
+        if ok:
+            await safe_respond(
+                ctx,
+                "🐔 Historia disparada — revisá <#{}>.".format(channel_id),
+                ephemeral=True,
+            )
+        else:
+            await safe_respond(
+                ctx,
+                "❌ No se pudo disparar la historia. Revisá los logs.",
+                ephemeral=True,
+            )
     except Exception as e:
         log.exception("story-test failed")
         await safe_respond(ctx, f"❌ Error: {e}", ephemeral=True)
