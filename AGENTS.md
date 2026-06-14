@@ -565,6 +565,12 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 ## 📦 Últimos cambios
 
+### 2026-06-13 — Sistema de historias: prompt sin nombres forzados + memoria del Indio + aprobación vía DM del owner
+
+34. **Prompt sin lista de nombres**: `_STORY_PROMPT` ya no dice "uno de los pibes (Viny, Fox...)". Gemini describe lo que realmente ve en la imagen. Si reconoce un famoso lo identifica; si no, hace un chiste sobre la situación sin inventar identidades.
+35. **Memoria del Indio en chistes**: `_generate_story()` ahora inyecta la misma memoria larga que usa `/indio` (`_format_long_term()` de `geminiCommand`). El Indio sabe quiénes son sus amigos, anécdotas y chistes internos al generar el chiste.
+36. **Aprobación vía DM del owner**: cuando alguien reacciona ✅, el Indio ya no guarda inmediatamente. Te manda **DM** con la imagen + chiste y espera tu respuesta. Respondés **"sí"** → se guarda con descripción + tags. **"no"** → se descarta. Sin timeout.
+
 ### 2026-06-13 — Refactor: validación de descripciones del usuario contra Gemini
 
 26. **`_validate_candidate()`** reemplaza `_describe_with_gemini()`: un solo llamado
@@ -634,6 +640,68 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 13. **Auto-embed de media en Discord**: en `apiServer.py:uploadComplete()`, si es imagen/video se envía el link al endpoint `/raw` para que Discord lo incruste/reproduzca. Para archivos comprimidos se mantiene el embed con botón "Descargar".
 14. **Página de descarga con preview de media**: `DOWNLOAD_HTML` + `format_download_html()` detecta si es imagen/video y muestra `<img>` o `<video>` directamente en vez del botón "Descargar". Content-Disposition `inline` para media, `attachment` para archivos.
 15. **Logs y PostHog analytics** en todos los pasos: eventos `transfer_rejected` (con razón: `path_traversal`, `format_not_allowed`, `oversize`, `disk_full`), `transfer_init`, `transfer_complete` (con `embed_type`: `image`/`video`/`archive`), `transfer_embed_failed`.
+
+## 🎭 Sistema de Historias del Indio (/story-test, pool de imágenes, review y aprobación)
+
+El Indio genera **chistes automáticos** sobre imágenes del pool cuando el chat está
+idle (>4h) o hay más de 2 humanos en voz. Las historias se postean en el canal de
+review para que el grupo las vote con ✅/❌ o feedback por reply.
+
+### Pool de imágenes (`imagePool.py`)
+
+Las imágenes viven en `indio_images/pool/` (relativo a `POOL_DIR`). Se llenan cuando
+alguien manda imágenes por DM al Indio y las rechaza (cancelar) o cuando falla la
+descripción — vuelven al pool como candidatas para historias.
+
+- `init_pool()`: escanea el directorio una vez, cachea la lista.
+- `get_random_image(mgr)`: elige una al azar, excluyendo las que ya están en el
+  manifiesto (dedup por `original_filename`).
+- `remove_from_pool(rel_path)`: borra la imagen del pool cuando se aprueba.
+
+### Pipeline de historia
+
+1. `trigger_story()`: checks guards (daily max, pending review, min messages since
+   last story) → pick del pool → Gemini genera chiste → postea al canal de review.
+2. **Guards**: `_can_post_story()`: max `INDIO_MAX_STORIES_PER_DAY` por guild,
+   no si hay review pendiente, no si no hubo `INDIO_STORY_MIN_MESSAGES_AFTER`.
+3. **Watcher**: `start_story_watcher()` corre cada 60s, chequea idle por guild.
+   Si pasó `INDIO_IDLE_MINUTES` + delay random (1-2h), dispara historia.
+
+### Prompt (`_STORY_PROMPT`)
+
+Gemini recibe instrucciones de hacer un chiste sobre **lo que realmente ve** en la
+imagen. Sin lista de nombres hardcodeada. Si reconoce un famoso lo identifica; si no,
+describe la situación de forma cómica. Además se le inyecta la **memoria larga**
+del Indio (amigos, anécdotas, chistes internos del grupo).
+
+### Flujo de review y aprobación
+
+1. **Post**: `_post_review()` relayea el chiste + imagen y el texto de voto
+   (`✅ · ❌ · respondé con otra idea`) vía userbot (el Indio real).
+2. **✅ alguien reacciona** → el Indio **te manda DM** con la imagen + chiste.
+   Respondés **"sí"** para guardar definitivamente o **"no"** para descartar.
+   Sin timeout, sin condiciones.
+   - Al decir "sí", `_save_approved_story()` describe la imagen con Gemini
+     (detecta famosos, genera tags) y la guarda en `indio_images/manifest.json`.
+   - Se borran los mensajes del review.
+3. **❌ reacción** → el chiste se rechaza, la imagen vuelve al pool.
+4. **Reply con feedback** → `handle_first_msg_after_story()` evalúa si el
+   comentario se relaciona con el chiste (`_evaluate_reply_context()` con Gemini).
+   - **Relacionado**: regenera el chiste con el feedback como contexto.
+   - **No relacionado**: el Indio manda DM con la imagen original + chiste, y
+     explica por qué llegó por DM. El usuario puede responder al DM y el Indio
+     contesta naturalmente sobre la imagen (`handle_story_dm_reply()`).
+
+### Archivos clave
+
+| Archivo                  | Rol                                                                |
+| ------------------------ | ------------------------------------------------------------------ |
+| `storyManager.py`        | Toda la lógica: pool, generación, review, aprobación, DMs          |
+| `imagePool.py`           | Pool de imágenes candidatas (`indio_images/pool/`)                 |
+| `imageManager.py`        | Manifiesto de imágenes guardadas (`indio_images/manifest.json`)    |
+| `apiServer.py:1112-1130` | Handler de DMs: story DM reply + owner approval via `/indio-image` |
+| `bot.py:1931-1970`       | `/story-test` — forzar historia para testing                       |
+| `config.py`              | `INDIO_STORY_CHANNEL_ID`, `INDIO_MAX_STORIES_PER_DAY`, etc.        |
 
 ## 🖼️ Colección de imágenes del Indio (userbot DM → relay → VaPls → catálogo)
 
