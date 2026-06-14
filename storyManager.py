@@ -39,6 +39,7 @@ _messages_since_story: dict[int, int] = {}
 _pending_reviews: dict[int, dict] = {}
 _awaiting_first_msg: dict[int, dict] = {}
 _story_dm_context: dict[int, dict] = {}
+_pending_owner_approvals: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
 
@@ -617,9 +618,49 @@ async def handle_story_reaction(payload, bot) -> None:
         return
 
     if emoji == "✅":
-        img_id = await _save_approved_story(review["rel_path"], review["story_text"])
+        full = Path(imagePool.POOL_DIR, review["rel_path"]).resolve()
+        if not full.exists():
+            logger.warning(
+                "[STORY] image vanished before owner approval: %s", review["rel_path"]
+            )
+            await _cleanup_review(review, ch)
+            return
+
+        dm_mid = await _relay_dm_file(
+            config.OWNER_ID,
+            f"✅ Quieren aprobar este chiste. ¿Lo guardo?\n\n{review['story_text']}\n\nRespondé **sí** para guardar o **no** para descartar.",
+            str(full),
+        )
+        if dm_mid is None:
+            logger.warning("[STORY] failed to DM owner for approval, saving directly")
+            img_id = await _save_approved_story(
+                review["rel_path"], review["story_text"]
+            )
+            logger.info(
+                "[STORY] approved by %s, saved as image_id=%s", payload.user_id, img_id
+            )
+            await _cleanup_review(review, ch)
+            return
+
+        _pending_reviews.pop(review["vote_msg_id"], None)
+        _pending_reviews.pop(review["story_msg_id"], None)
+        _pending_owner_approvals[config.OWNER_ID] = {
+            "rel_path": review["rel_path"],
+            "story_text": review["story_text"],
+            "vote_msg_id": review["vote_msg_id"],
+            "story_msg_id": review["story_msg_id"],
+            "channel_id": review["channel_id"],
+            "guild_id": review["guild_id"],
+        }
+        try:
+            vote_msg = await ch.fetch_message(review["vote_msg_id"])
+            await vote_msg.clear_reactions()
+        except Exception:
+            pass
         logger.info(
-            "[STORY] approved by %s, saved as image_id=%s", payload.user_id, img_id
+            "[STORY] ✅ relayed to owner for approval user=%s guild=%s",
+            payload.user_id,
+            guild_id,
         )
 
     elif emoji == "❌":
@@ -816,6 +857,44 @@ async def handle_story_dm_reply(user_id: int, text: str) -> Optional[str]:
     except geminiClient.GeminiError:
         logger.warning("[STORY] DM reply gemini error")
         return None
+
+
+async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional[str]:
+    ctx = _pending_owner_approvals.get(owner_id)
+    if ctx is None:
+        return None
+
+    text_lower = text.strip().lower()
+    if text_lower in ("sí", "si", "s", "✅", "yes", "y"):
+        _pending_owner_approvals.pop(owner_id, None)
+        img_id = await _save_approved_story(ctx["rel_path"], ctx["story_text"])
+        ch = bot.get_channel(ctx["channel_id"])
+        if ch:
+            for mid in (ctx["vote_msg_id"], ctx["story_msg_id"]):
+                if mid:
+                    try:
+                        m = await ch.fetch_message(mid)
+                        await m.delete()
+                    except Exception:
+                        pass
+        logger.info("[STORY] owner approved %s -> image_id=%s", ctx["rel_path"], img_id)
+        return f"✅ **Aprobada definitivamente.** Guardada como `{img_id}`."
+
+    if text_lower in ("no", "n", "❌", "nop"):
+        _pending_owner_approvals.pop(owner_id, None)
+        ch = bot.get_channel(ctx["channel_id"])
+        if ch:
+            for mid in (ctx["vote_msg_id"], ctx["story_msg_id"]):
+                if mid:
+                    try:
+                        m = await ch.fetch_message(mid)
+                        await m.delete()
+                    except Exception:
+                        pass
+        logger.info("[STORY] owner rejected %s", ctx["rel_path"])
+        return "❌ **Descartada.** La imagen vuelve al pool."
+
+    return "Decí **sí** para guardar la imagen o **no** para descartarla."
 
 
 async def start_story_watcher(bot) -> None:

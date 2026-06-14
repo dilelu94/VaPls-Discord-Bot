@@ -1115,6 +1115,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 reply = await storyManager.handle_story_dm_reply(uid, text)
                 if reply:
                     return web.json_response({"messages": [reply], "done": True})
+                if uid == config.OWNER_ID:
+                    reply = await storyManager.handle_owner_story_approval(
+                        uid, text, bot
+                    )
+                    if reply:
+                        return web.json_response({"messages": [reply], "done": True})
                 return web.json_response(
                     {
                         "messages": ["⏰ No tengo ninguna sesión pendiente con vos."],
