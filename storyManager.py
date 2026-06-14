@@ -664,13 +664,22 @@ async def handle_story_reaction(payload, bot) -> None:
         )
 
     elif emoji == "❌":
-        logger.info("[STORY] rejected by %s, image returns to pool", payload.user_id)
-        try:
-            await ch.send("❌ **Chiste rechazado.** La imagen vuelve al pool.")
-        except Exception:
-            pass
-
-    await _cleanup_review(review, ch)
+        logger.info(
+            "[STORY] rejected by %s, cleaning up + resetting limit", payload.user_id
+        )
+        _pending_reviews.pop(review["vote_msg_id"], None)
+        _pending_reviews.pop(review["story_msg_id"], None)
+        _stories_today.pop(guild_id, None)
+        _last_story_at.pop(guild_id, None)
+        _messages_since_story.pop(guild_id, None)
+        for mid in (review["vote_msg_id"], review["story_msg_id"]):
+            if mid:
+                try:
+                    m = await ch.fetch_message(mid)
+                    await m.delete()
+                except Exception:
+                    pass
+        return
 
 
 async def _relay_dm_file(user_id: int, content: str, file_path: str) -> Optional[int]:
