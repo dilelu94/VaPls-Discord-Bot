@@ -7,18 +7,25 @@ feedback, and saves approved stories to the image catalog.
 
 import asyncio
 import base64
+import io
 import logging
+import os
 import random
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
 
+import aiohttp
 import discord
+from PIL import Image
 
 import config
 import geminiClient
 import imageManager
 import imagePool
+
+DISCORD_FILE_LIMIT = 8 * 1024 * 1024
 
 logger = logging.getLogger("bot.story")
 
@@ -155,6 +162,87 @@ async def _generate_story(
         return None
 
 
+def _maybe_compress_image(path: str) -> str:
+    """If the image is over 8 MB, compress + resize it and return a temp path.
+
+    Returns the original path when no compression is needed.
+    Caller should clean up the returned temp file if it differs from ``path``.
+    """
+    size = os.path.getsize(path)
+    if size <= DISCORD_FILE_LIMIT:
+        return path
+
+    logger.info(
+        "compressing %s (%d MB) for Discord 8 MB limit", path, size // 1024 // 1024
+    )
+    try:
+        img = Image.open(path)
+        img = img.convert("RGB")
+        w, h = img.size
+        longest = max(w, h)
+        if longest > 1920:
+            ratio = 1920 / longest
+            img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        if buf.tell() > DISCORD_FILE_LIMIT:
+            buf.seek(0)
+            buf.truncate()
+            img.save(buf, format="JPEG", quality=60, optimize=True)
+        fd, tmp = tempfile.mkstemp(suffix=".jpg", prefix="story_")
+        with os.fdopen(fd, "wb") as f:
+            f.write(buf.getvalue())
+        logger.info("compressed %s -> %s (%d KB)", path, tmp, buf.tell() // 1024)
+        return tmp
+    except Exception as e:
+        logger.warning("image compression failed for %s: %s", path, e)
+        return path
+
+
+async def _relay_story(
+    channel_id: int,
+    content: str,
+    file_path: str,
+) -> Optional[int]:
+    """Post story via userbot relay (real Indio account) with attached image.
+
+    Compresses images over 8 MB before sending (Discord file limit).
+    Returns the first message id or None on failure.
+    """
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return None
+
+    path = _maybe_compress_image(file_path)
+    payload = {
+        "channel_id": int(channel_id),
+        "content": content,
+        "file_path": path,
+    }
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("story relay HTTP %d: %s", resp.status, body[:200])
+                    return None
+                data = await resp.json(content_type=None)
+        ids = (data or {}).get("message_ids") or []
+        return int(ids[0]) if ids else None
+    except Exception as e:
+        logger.warning("story relay failed: %s", e)
+        return None
+    finally:
+        if path != file_path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
 async def _post_review(
     channel_id: int, rel_path: str, story_text: str, guild_id: int, bot
 ) -> bool:
@@ -169,32 +257,54 @@ async def _post_review(
         return False
 
     full = Path(imagePool.POOL_DIR, rel_path)
-    file = None
-    if full.exists():
-        file = discord.File(str(full))
-
-    content = (
-        f"**🐔 El Indio vio una imagen y tiene algo que decir:**\n\n"
-        f"{story_text}\n\n"
-        f"— — —\n✅ la aprueban  ·  ❌ la rechazan  ·  "
-        f"respondé con otra idea para regenerar"
-    )
-
-    try:
-        msg = await ch.send(content, file=file)
-        await msg.add_reaction("✅")
-        await msg.add_reaction("❌")
-        _pending_reviews[msg.id] = {
-            "_msg_id": msg.id,
-            "rel_path": rel_path,
-            "story_text": story_text,
-            "channel_id": channel_id,
-            "guild_id": guild_id,
-        }
-        return True
-    except Exception as e:
-        logger.error("post review failed: %s", e)
+    if not full.exists():
+        logger.error("review image not found: %s", rel_path)
         return False
+
+    # 1. Post story text + image via userbot (real Indio account)
+    story_msg_id = await _relay_story(channel_id, story_text, str(full))
+    if story_msg_id is None:
+        logger.warning("story relay failed, falling back to bot post")
+        img_path = _maybe_compress_image(str(full))
+        file = discord.File(img_path)
+        try:
+            msg = await ch.send(story_text, file=file)
+            story_msg_id = msg.id
+        except Exception as e:
+            logger.error("fallback post failed: %s", e)
+            return False
+        finally:
+            if img_path != str(full):
+                try:
+                    os.unlink(img_path)
+                except OSError:
+                    pass
+
+    # 2. Post voting instructions as a separate message from the bot
+    vote_text = (
+        "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
+    )
+    try:
+        vote_msg = await ch.send(vote_text)
+        await vote_msg.add_reaction("✅")
+        await vote_msg.add_reaction("❌")
+    except Exception as e:
+        logger.error("vote msg post failed: %s", e)
+        return False
+
+    # 3. Store both IDs in pending reviews (keyed by vote msg for reactions)
+    state = {
+        "story_msg_id": story_msg_id,
+        "vote_msg_id": vote_msg.id,
+        "rel_path": rel_path,
+        "story_text": story_text,
+        "channel_id": channel_id,
+        "guild_id": guild_id,
+    }
+    _pending_reviews[vote_msg.id] = state
+    # Also index by story msg id so reply lookup works
+    _pending_reviews[story_msg_id] = state
+    return True
 
 
 _DESCRIBE_PROMPT = """\
@@ -344,12 +454,38 @@ async def trigger_story(
     return True
 
 
-async def _clear_review_reactions(ch, mid: int) -> None:
-    """Remove ✅/❌ reactions from a review message."""
+_CONTEXT_EVAL_PROMPT = """\
+Estás evaluando si un comentario en un grupo de amigos es positivo o aprobatorio \
+con respecto a un chiste que posteó el Indio.
+
+Chiste: {story}
+Comentario: {reply}
+
+Respondé SOLO "SI" si el comentario se ríe del chiste, lo aprueba, o le suma \
+contexto positivo. Respondé "NO" si es negativo, neutral, critica el chiste, \
+o no tiene nada que ver."""
+
+
+async def _evaluate_reply_context(story: str, reply: str) -> bool:
     try:
-        msg = await ch.fetch_message(mid)
-        await msg.clear_reaction("✅")
-        await msg.clear_reaction("❌")
+        result = await geminiClient.generate(
+            user_message=_CONTEXT_EVAL_PROMPT.format(story=story, reply=reply),
+            system_instruction="Sos un evaluador de comentarios en un grupo de amigos.",
+            max_output_tokens=16,
+        )
+        text = (result.text or "").strip().upper()
+        return text.startswith("SI")
+    except geminiClient.GeminiError:
+        return False
+
+
+async def _cleanup_review(review: dict, ch) -> None:
+    """Pop both pending entries and delete voting msg."""
+    _pending_reviews.pop(review["vote_msg_id"], None)
+    _pending_reviews.pop(review["story_msg_id"], None)
+    try:
+        msg = await ch.fetch_message(review["vote_msg_id"])
+        await msg.delete()
     except Exception:
         pass
 
@@ -375,16 +511,14 @@ async def handle_story_reaction(payload, bot) -> None:
                 await ch.send("✅ **Aprobada! La historia se guardó.**")
             except Exception:
                 pass
-        _pending_reviews.pop(mid, None)
-        await _clear_review_reactions(ch, mid)
 
     elif emoji == "❌":
-        _pending_reviews.pop(mid, None)
         try:
             await ch.send("❌ **Chiste rechazado.** La imagen vuelve al pool.")
         except Exception:
             pass
-        await _clear_review_reactions(ch, mid)
+
+    await _cleanup_review(review, ch)
 
 
 async def handle_story_reply(message, bot) -> None:
@@ -401,13 +535,27 @@ async def handle_story_reply(message, bot) -> None:
         return
 
     rel_path = review["rel_path"]
+    channel_id = review["channel_id"]
     guild_id = review.get("guild_id", 0)
-    new_story = await _generate_story(rel_path, user_feedback=feedback)
-    if new_story is None:
-        return
 
-    _pending_reviews.pop(mid, None)
-    await _post_review(review["channel_id"], rel_path, new_story, guild_id, bot)
+    # Reply to voting msg → regenerate with feedback
+    if mid == review["vote_msg_id"]:
+        new_story = await _generate_story(rel_path, user_feedback=feedback)
+        if new_story is None:
+            return
+        _pending_reviews.pop(review["vote_msg_id"], None)
+        _pending_reviews.pop(review["story_msg_id"], None)
+        await _post_review(channel_id, rel_path, new_story, guild_id, bot)
+
+    # Reply to story msg → Gemini evaluates if approving context
+    elif mid == review["story_msg_id"]:
+        if await _evaluate_reply_context(review["story_text"], feedback):
+            ch = bot.get_channel(channel_id)
+            img_id = await _save_approved_story(rel_path, review["story_text"])
+            if img_id and ch and hasattr(ch, "send"):
+                await ch.send("✅ **Aprobada! La historia se guardó.**")
+            if ch:
+                await _cleanup_review(review, ch)
 
 
 async def start_story_watcher(bot) -> None:

@@ -2889,6 +2889,7 @@ async def _relay_say(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "invalid body"}, status=400)
     reply_to_id = data.get("reply_to_message_id")
+    file_path = data.get("file_path")  # optional: send file from this path
 
     if not client.is_ready():
         return web.json_response({"error": "userbot not ready"}, status=503)
@@ -2903,8 +2904,15 @@ async def _relay_say(request: web.Request) -> web.Response:
         return web.json_response({"error": "channel not sendable"}, status=400)
 
     chunks = _split_for_relay(content)
-    if not chunks:
+    if not chunks and not file_path:
         return web.json_response({"error": "empty content"}, status=400)
+
+    file = None
+    if file_path:
+        try:
+            file = discord.File(file_path)
+        except Exception as e:
+            return web.json_response({"error": f"file not found: {e}"}, status=400)
 
     reference = None
     if reply_to_id is not None:
@@ -2919,12 +2927,25 @@ async def _relay_say(request: web.Request) -> web.Response:
 
     message_ids: list[int] = []
     try:
-        for i, chunk in enumerate(chunks):
-            kwargs = {}
-            if i == 0 and reference is not None:
+        if file:
+            kwargs = {"file": file}
+            if reference is not None:
                 kwargs["reference"] = reference
-            msg = await channel.send(chunk, **kwargs)
+            if chunks:
+                kwargs["content"] = chunks[0]
+            msg = await channel.send(**kwargs)
             message_ids.append(msg.id)
+            # remaining text chunks sent as separate messages
+            for chunk in chunks[1:]:
+                m = await channel.send(chunk)
+                message_ids.append(m.id)
+        else:
+            for i, chunk in enumerate(chunks):
+                kwargs = {}
+                if i == 0 and reference is not None:
+                    kwargs["reference"] = reference
+                msg = await channel.send(chunk, **kwargs)
+                message_ids.append(msg.id)
     except Exception as e:
         log.exception("[RELAY] send failed")
         analytics.capture_exception(e, properties={"action": "relay_send_failed"})
