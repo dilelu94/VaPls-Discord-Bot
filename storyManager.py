@@ -157,6 +157,12 @@ async def _generate_story(
             image_parts=[img_part],
             max_output_tokens=512,
         )
+        logger.info(
+            "story generated (%s, %d chars)%s",
+            "with feedback" if user_feedback else "fresh",
+            len(reply.text or ""),
+            f" feedback={user_feedback[:80]}" if user_feedback else "",
+        )
         return reply.text
     except geminiClient.GeminiError as e:
         logger.warning("story gemini error: %s", e)
@@ -231,13 +237,21 @@ async def _relay_payload(
             async with session.post(url, json=payload, headers=headers) as resp:
                 if resp.status >= 400:
                     body = await resp.text()
-                    logger.warning("relay HTTP %d: %s", resp.status, body[:200])
+                    logger.warning("[STORY] relay HTTP %d: %s", resp.status, body[:200])
                     return None
                 data = await resp.json(content_type=None)
         ids = (data or {}).get("message_ids") or []
-        return int(ids[0]) if ids else None
+        mid = int(ids[0]) if ids else None
+        logger.info(
+            "[STORY] relay OK channel=%s msg_id=%s content_len=%d has_file=%s",
+            channel_id,
+            mid,
+            len(content),
+            bool(file_path),
+        )
+        return mid
     except Exception as e:
-        logger.warning("relay failed: %s", e)
+        logger.warning("[STORY] relay failed: %s", e)
         return None
     finally:
         if sent_path and file_path and sent_path != file_path:
@@ -268,7 +282,7 @@ async def _post_review(
     # 1. Post story text + image via userbot (real Indio account)
     story_msg_id = await _relay_payload(channel_id, story_text, str(full))
     if story_msg_id is None:
-        logger.warning("story relay failed, falling back to bot post")
+        logger.warning("[STORY] relay failed for story text, falling back to bot post")
         img_path = _maybe_compress_image(str(full))
         file = discord.File(img_path)
         try:
@@ -290,7 +304,9 @@ async def _post_review(
     )
     vote_msg_id = await _relay_payload(channel_id, vote_text)
     if vote_msg_id is None:
-        logger.error("vote msg relay failed")
+        logger.error("[STORY] vote msg relay failed")
+    else:
+        logger.info("[STORY] vote msg posted via relay msg_id=%s", vote_msg_id)
         return False
     try:
         vote_msg = await ch.fetch_message(vote_msg_id)
@@ -311,6 +327,15 @@ async def _post_review(
     _pending_reviews[vote_msg_id] = state
     _pending_reviews[story_msg_id] = state
 
+    logger.info(
+        "[STORY] review posted guild=%s channel=%s rel_path=%s story_len=%d story_msg=%s vote_msg=%s",
+        guild_id,
+        channel_id,
+        rel_path,
+        len(story_text),
+        story_msg_id,
+        vote_msg_id,
+    )
     # 4. Set awaiting first message for this guild
     _awaiting_first_msg[guild_id] = state
     return True
@@ -509,6 +534,13 @@ async def handle_story_reaction(payload, bot) -> None:
 
     emoji = str(payload.emoji)
     guild_id = review.get("guild_id", 0)
+    logger.info(
+        "[STORY] reaction user=%s emoji=%s guild=%s rel_path=%s",
+        payload.user_id,
+        emoji,
+        guild_id,
+        review.get("rel_path", "?"),
+    )
     _awaiting_first_msg.pop(guild_id, None)
     ch = bot.get_channel(review["channel_id"])
     if not ch or not hasattr(ch, "send"):
@@ -516,9 +548,13 @@ async def handle_story_reaction(payload, bot) -> None:
         return
 
     if emoji == "✅":
-        await _save_approved_story(review["rel_path"], review["story_text"])
+        img_id = await _save_approved_story(review["rel_path"], review["story_text"])
+        logger.info(
+            "[STORY] approved by %s, saved as image_id=%s", payload.user_id, img_id
+        )
 
     elif emoji == "❌":
+        logger.info("[STORY] rejected by %s, image returns to pool", payload.user_id)
         try:
             await ch.send("❌ **Chiste rechazado.** La imagen vuelve al pool.")
         except Exception:
@@ -578,11 +614,26 @@ async def handle_first_msg_after_story(message, bot) -> None:
 
     rel_path = review["rel_path"]
     channel_id = review["channel_id"]
+    logger.info(
+        "[STORY] first msg after story guild=%s user=%s feedback=%s rel_path=%s",
+        guild_id,
+        message.author.id,
+        feedback[:100],
+        rel_path,
+    )
 
     if await _evaluate_reply_context(review["story_text"], feedback):
         # Related → regenerate with feedback
+        logger.info(
+            "[STORY] feedback related, regenerating story guild=%s",
+            guild_id,
+        )
         new_story = await _generate_story(rel_path, user_feedback=feedback)
         if new_story is None:
+            logger.warning(
+                "[STORY] regeneration failed (gemini returned None) guild=%s",
+                guild_id,
+            )
             return
         _pending_reviews.pop(review["vote_msg_id"], None)
         _pending_reviews.pop(review["story_msg_id"], None)
@@ -593,9 +644,19 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 await vote_msg.delete()
             except Exception:
                 pass
-        await _post_review(channel_id, rel_path, new_story, guild_id, bot)
+        ok = await _post_review(channel_id, rel_path, new_story, guild_id, bot)
+        if not ok:
+            logger.error(
+                "[STORY] _post_review failed after regeneration guild=%s",
+                guild_id,
+            )
     else:
         # Not related → Indio starts a DM about the image
+        logger.info(
+            "[STORY] feedback unrelated, sending DM to user=%s guild=%s",
+            message.author.id,
+            guild_id,
+        )
         full = Path(imagePool.POOL_DIR, rel_path)
         if full.exists():
             _pending_reviews.pop(review["vote_msg_id"], None)
@@ -607,10 +668,21 @@ async def handle_first_msg_after_story(message, bot) -> None:
                     await vote_msg.delete()
                 except Exception:
                     pass
-            await _relay_dm_file(
+            dm_mid = await _relay_dm_file(
                 message.author.id,
                 review["story_text"],
                 str(full.resolve()),
+            )
+            logger.info(
+                "[STORY] DM sent user=%s msg_id=%s",
+                message.author.id,
+                dm_mid,
+            )
+        else:
+            logger.warning(
+                "[STORY] image not found for DM guild=%s rel_path=%s",
+                guild_id,
+                rel_path,
             )
 
 
