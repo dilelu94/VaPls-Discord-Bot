@@ -22,6 +22,7 @@ from PIL import Image
 
 import config
 import geminiClient
+import geminiCommand
 import imageManager
 import imagePool
 
@@ -52,17 +53,18 @@ def _spawn(coro) -> asyncio.Task:
 
 
 _STORY_PROMPT = """\
-Sos el Indio, un amigo del grupo de Discord "VaPls". Estás viendo una imagen \
-de uno de los pibes (Viny, Fox, Yo, Eyyman, Seba, Franko, Juji, Santi, Tobi, \
-Mati, Fidel o del grupo Varios).
+Sos el Indio, un amigo del grupo de Discord "VaPls". Estás viendo una \
+imagen. Si reconocés algún famoso (actor, cantante, deportista, artista, \
+etc.) decí quién es y hacé el chiste sobre él. Si no, describí la situación \
+de forma cómica sin asumir identidades.
 
 Hacé un chiste corto sobre esta imagen, como si se lo contaras al grupo de \
-amigos. Tiene que ser una joda entre amigos, no una descripción de la imagen. \
-Tampoco digas "esta imagen" o "en esta foto" — hablalo como si fuera algo que \
-pasó o una situación que todos conocen.
+amigos. Una joda entre amigos, no una descripción. No digas "esta imagen" \
+o "en esta foto" — hablalo como si fuera algo que pasó o una situación \
+que todos conocen.
 
-Max 2-3 oraciones. En español rioplatense, con voseo. Informal, de barrio, \
-como hablan los pibes. Sin comillas, sin formato, solo el chiste."""
+Max 2-3 oraciones. Español rioplatense, con voseo, informal, de barrio. \
+Sin comillas, sin formato, solo el chiste."""
 
 
 # ── Guards ─────────────────────────────────────────────────────────────────
@@ -137,12 +139,22 @@ def _read_image_as_part(rel_path: str) -> Optional[dict]:
 
 
 async def _generate_story(
-    rel_path: str, user_feedback: Optional[str] = None
+    rel_path: str,
+    guild_id: int,
+    user_feedback: Optional[str] = None,
 ) -> Optional[str]:
     img_part = _read_image_as_part(rel_path)
     if img_part is None:
         logger.warning("story image not found: %s", rel_path)
         return None
+
+    system = _STORY_PROMPT
+    mem_key = f"guild-{guild_id}"
+    lt = geminiCommand._indio_long_term.get(mem_key, {})
+    members = geminiCommand._indio_current_members.get(mem_key, [])
+    lt_block = geminiCommand._format_long_term(lt, members)
+    if lt_block:
+        system += "\n\n" + lt_block
 
     msg = "Hacé un chiste sobre esta imagen."
     if user_feedback:
@@ -154,7 +166,7 @@ async def _generate_story(
     try:
         reply = await geminiClient.generate(
             user_message=msg,
-            system_instruction=_STORY_PROMPT,
+            system_instruction=system,
             image_parts=[img_part],
             max_output_tokens=512,
         )
@@ -512,7 +524,7 @@ async def trigger_story(
     rel_path = pick["rel_path"]
     logger.info("story trigger(%s): picked image %s", trigger_type, rel_path)
 
-    story = await _generate_story(rel_path)
+    story = await _generate_story(rel_path, guild_id)
     if story is None:
         logger.warning(
             "story trigger(%s): gemini returned no story for %s", trigger_type, rel_path
@@ -690,7 +702,7 @@ async def handle_first_msg_after_story(message, bot) -> None:
         _pending_reviews.pop(old_vote_id, None)
         _pending_reviews.pop(old_story_id, None)
 
-        new_story = await _generate_story(rel_path, user_feedback=feedback)
+        new_story = await _generate_story(rel_path, guild_id, user_feedback=feedback)
         if new_story is None:
             logger.warning(
                 "[STORY] regeneration failed (gemini returned None) guild=%s",
