@@ -694,9 +694,9 @@ async def on_message(message):
 
         # Story system: track chat activity for idle detection
         storyManager.record_chat_activity(guild_id)
-        # Detect replies to story review messages
+        # Catch first message after a story for context/feedback
         if message.channel.id == config.INDIO_STORY_CHANNEL_ID:
-            asyncio.create_task(storyManager.handle_story_reply(message, bot))
+            asyncio.create_task(storyManager.handle_first_msg_after_story(message, bot))
 
         asyncio.create_task(
             _classify_and_log_message(

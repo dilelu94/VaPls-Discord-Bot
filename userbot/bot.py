@@ -2884,22 +2884,35 @@ async def _relay_say(request: web.Request) -> web.Response:
         return web.json_response({"error": "unauthorized"}, status=401)
     try:
         data = await request.json()
-        channel_id = int(data["channel_id"])
         content = str(data["content"])
     except Exception:
         return web.json_response({"error": "invalid body"}, status=400)
+    dm_user_id = data.get("dm_user_id")
+    channel_id = data.get("channel_id")
     reply_to_id = data.get("reply_to_message_id")
-    file_path = data.get("file_path")  # optional: send file from this path
+    file_path = data.get("file_path")
 
     if not client.is_ready():
         return web.json_response({"error": "userbot not ready"}, status=503)
 
-    channel = client.get_channel(channel_id)
-    if channel is None:
+    # Resolve target channel: DM user or guild channel
+    if dm_user_id:
         try:
-            channel = await client.fetch_channel(channel_id)
+            uid = int(dm_user_id)
+            user = client.get_user(uid) or await client.fetch_user(uid)
+            channel = user.dm_channel or await user.create_dm()
+        except Exception as e:
+            return web.json_response({"error": f"dm user failed: {e}"}, status=404)
+    elif channel_id:
+        try:
+            cid = int(channel_id)
+            channel = client.get_channel(cid) or await client.fetch_channel(cid)
         except Exception as e:
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    else:
+        return web.json_response(
+            {"error": "channel_id or dm_user_id required"}, status=400
+        )
     if not hasattr(channel, "send"):
         return web.json_response({"error": "channel not sendable"}, status=400)
 
@@ -2915,11 +2928,11 @@ async def _relay_say(request: web.Request) -> web.Response:
             return web.json_response({"error": f"file not found: {e}"}, status=400)
 
     reference = None
-    if reply_to_id is not None:
+    if reply_to_id is not None and not dm_user_id:
         try:
             reference = discord.MessageReference(
                 message_id=int(reply_to_id),
-                channel_id=channel_id,
+                channel_id=channel.id,
                 fail_if_not_exists=False,
             )
         except Exception:
@@ -2935,7 +2948,6 @@ async def _relay_say(request: web.Request) -> web.Response:
                 kwargs["content"] = chunks[0]
             msg = await channel.send(**kwargs)
             message_ids.append(msg.id)
-            # remaining text chunks sent as separate messages
             for chunk in chunks[1:]:
                 m = await channel.send(chunk)
                 message_ids.append(m.id)

@@ -36,6 +36,7 @@ _last_story_at: dict[int, float] = {}
 _last_chat_activity: dict[int, float] = {}
 _messages_since_story: dict[int, int] = {}
 _pending_reviews: dict[int, dict] = {}
+_awaiting_first_msg: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
 
@@ -302,8 +303,10 @@ async def _post_review(
         "guild_id": guild_id,
     }
     _pending_reviews[vote_msg.id] = state
-    # Also index by story msg id so reply lookup works
     _pending_reviews[story_msg_id] = state
+
+    # 4. Set awaiting first message for this guild
+    _awaiting_first_msg[guild_id] = state
     return True
 
 
@@ -455,15 +458,15 @@ async def trigger_story(
 
 
 _CONTEXT_EVAL_PROMPT = """\
-Estás evaluando si un comentario en un grupo de amigos es positivo o aprobatorio \
-con respecto a un chiste que posteó el Indio.
+Estás evaluando si un comentario en un grupo de amigos tiene algo que ver \
+con un chiste o la imagen que acompañó el Indio.
 
 Chiste: {story}
 Comentario: {reply}
 
-Respondé SOLO "SI" si el comentario se ríe del chiste, lo aprueba, o le suma \
-contexto positivo. Respondé "NO" si es negativo, neutral, critica el chiste, \
-o no tiene nada que ver."""
+Respondé SOLO "SI" si el comentario se refiere al chiste, a la imagen, \
+a la persona en la imagen, o a algo relacionado. Respondé "NO" si el \
+comentario es sobre otro tema completamente distinto."""
 
 
 async def _evaluate_reply_context(story: str, reply: str) -> bool:
@@ -499,18 +502,15 @@ async def handle_story_reaction(payload, bot) -> None:
         return
 
     emoji = str(payload.emoji)
+    guild_id = review.get("guild_id", 0)
+    _awaiting_first_msg.pop(guild_id, None)
     ch = bot.get_channel(review["channel_id"])
     if not ch or not hasattr(ch, "send"):
         _pending_reviews.pop(mid, None)
         return
 
     if emoji == "✅":
-        img_id = await _save_approved_story(review["rel_path"], review["story_text"])
-        if img_id:
-            try:
-                await ch.send("✅ **Aprobada! La historia se guardó.**")
-            except Exception:
-                pass
+        await _save_approved_story(review["rel_path"], review["story_text"])
 
     elif emoji == "❌":
         try:
@@ -521,12 +521,48 @@ async def handle_story_reaction(payload, bot) -> None:
     await _cleanup_review(review, ch)
 
 
-async def handle_story_reply(message, bot) -> None:
-    ref = message.reference
-    if ref is None or ref.message_id is None:
-        return
-    mid = ref.message_id
-    review = _pending_reviews.get(mid)
+async def _relay_dm_file(user_id: int, content: str, file_path: str) -> Optional[int]:
+    """Send a message + file via userbot relay to a user's DM.
+
+    Returns the message id or None on failure.
+    """
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return None
+
+    path = _maybe_compress_image(file_path)
+    payload = {
+        "dm_user_id": int(user_id),
+        "content": content,
+        "file_path": path,
+    }
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("relay dm HTTP %d: %s", resp.status, body[:200])
+                    return None
+                data = await resp.json(content_type=None)
+        ids = (data or {}).get("message_ids") or []
+        return int(ids[0]) if ids else None
+    except Exception as e:
+        logger.warning("relay dm failed: %s", e)
+        return None
+    finally:
+        if path != file_path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+async def handle_first_msg_after_story(message, bot) -> None:
+    guild_id = message.guild.id
+    review = _awaiting_first_msg.pop(guild_id, None)
     if review is None:
         return
 
@@ -536,26 +572,40 @@ async def handle_story_reply(message, bot) -> None:
 
     rel_path = review["rel_path"]
     channel_id = review["channel_id"]
-    guild_id = review.get("guild_id", 0)
 
-    # Reply to voting msg → regenerate with feedback
-    if mid == review["vote_msg_id"]:
+    if await _evaluate_reply_context(review["story_text"], feedback):
+        # Related → regenerate with feedback
         new_story = await _generate_story(rel_path, user_feedback=feedback)
         if new_story is None:
             return
         _pending_reviews.pop(review["vote_msg_id"], None)
         _pending_reviews.pop(review["story_msg_id"], None)
+        ch = bot.get_channel(channel_id)
+        if ch and hasattr(ch, "send"):
+            try:
+                vote_msg = await ch.fetch_message(review["vote_msg_id"])
+                await vote_msg.delete()
+            except Exception:
+                pass
         await _post_review(channel_id, rel_path, new_story, guild_id, bot)
-
-    # Reply to story msg → Gemini evaluates if approving context
-    elif mid == review["story_msg_id"]:
-        if await _evaluate_reply_context(review["story_text"], feedback):
+    else:
+        # Not related → Indio starts a DM about the image
+        full = Path(imagePool.POOL_DIR, rel_path)
+        if full.exists():
+            _pending_reviews.pop(review["vote_msg_id"], None)
+            _pending_reviews.pop(review["story_msg_id"], None)
             ch = bot.get_channel(channel_id)
-            img_id = await _save_approved_story(rel_path, review["story_text"])
-            if img_id and ch and hasattr(ch, "send"):
-                await ch.send("✅ **Aprobada! La historia se guardó.**")
-            if ch:
-                await _cleanup_review(review, ch)
+            if ch and hasattr(ch, "send"):
+                try:
+                    vote_msg = await ch.fetch_message(review["vote_msg_id"])
+                    await vote_msg.delete()
+                except Exception:
+                    pass
+            await _relay_dm_file(
+                message.author.id,
+                review["story_text"],
+                str(full.resolve()),
+            )
 
 
 async def start_story_watcher(bot) -> None:
