@@ -269,76 +269,132 @@ async def _post_review(
         try:
             ch = await bot.fetch_channel(channel_id)
         except Exception:
-            logger.error("review channel %d not found", channel_id)
+            logger.error("[STORY] review channel %d not found", channel_id)
             return False
     if not hasattr(ch, "send"):
         return False
 
     full = Path(imagePool.POOL_DIR, rel_path)
     if not full.exists():
-        logger.error("review image not found: %s", rel_path)
+        logger.error("[STORY] review image not found: %s", rel_path)
         return False
 
-    # 1. Post story text + image via userbot (real Indio account)
+    # 1. Post story text + image via userbot — no fallback, retry later
     story_msg_id = await _relay_payload(channel_id, story_text, str(full))
     if story_msg_id is None:
-        logger.warning("[STORY] relay failed for story text, falling back to bot post")
-        img_path = _maybe_compress_image(str(full))
-        file = discord.File(img_path)
-        try:
-            msg = await ch.send(story_text, file=file)
-            story_msg_id = msg.id
-        except Exception as e:
-            logger.error("fallback post failed: %s", e)
-            return False
-        finally:
-            if img_path != str(full):
-                try:
-                    os.unlink(img_path)
-                except OSError:
-                    pass
-
-    # 2. Post voting instructions via userbot (Indio writes it, bot adds reactions)
-    vote_text = (
-        "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
-    )
-    vote_msg_id = await _relay_payload(channel_id, vote_text)
-    if vote_msg_id is None:
-        logger.error("[STORY] vote msg relay failed")
-    else:
-        logger.info("[STORY] vote msg posted via relay msg_id=%s", vote_msg_id)
+        logger.warning("[STORY] relay failed for story text, will retry later")
         return False
-    try:
-        vote_msg = await ch.fetch_message(vote_msg_id)
-        await vote_msg.add_reaction("✅")
-        await vote_msg.add_reaction("❌")
-    except Exception as e:
-        logger.warning("could not add reactions to vote msg: %s", e)
 
-    # 3. Store both IDs in pending reviews (keyed by vote msg for reactions)
     state = {
         "story_msg_id": story_msg_id,
-        "vote_msg_id": vote_msg_id,
+        "vote_msg_id": 0,
         "rel_path": rel_path,
         "story_text": story_text,
         "channel_id": channel_id,
         "guild_id": guild_id,
     }
-    _pending_reviews[vote_msg_id] = state
-    _pending_reviews[story_msg_id] = state
 
-    logger.info(
-        "[STORY] review posted guild=%s channel=%s rel_path=%s story_len=%d story_msg=%s vote_msg=%s",
-        guild_id,
-        channel_id,
-        rel_path,
-        len(story_text),
-        story_msg_id,
-        vote_msg_id,
+    vote_text = (
+        "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
     )
-    # 4. Set awaiting first message for this guild
+    vote_msg_id = await _relay_payload(channel_id, vote_text)
+    if vote_msg_id is not None:
+        logger.info("[STORY] vote msg posted via relay msg_id=%s", vote_msg_id)
+        state["vote_msg_id"] = vote_msg_id
+        _pending_reviews[vote_msg_id] = state
+        _pending_reviews[story_msg_id] = state
+        _awaiting_first_msg[guild_id] = state
+        try:
+            vote_msg = await ch.fetch_message(vote_msg_id)
+            await vote_msg.add_reaction("✅")
+            await vote_msg.add_reaction("❌")
+        except Exception as e:
+            logger.warning("[STORY] could not add reactions to vote msg: %s", e)
+        logger.info(
+            "[STORY] review posted guild=%s channel=%s rel_path=%s story_len=%d"
+            " story_msg=%s vote_msg=%s",
+            guild_id,
+            channel_id,
+            rel_path,
+            len(story_text),
+            story_msg_id,
+            vote_msg_id,
+        )
+        return True
+
+    # Vote relay failed — post status msg + retry in background
+    logger.error("[STORY] vote msg relay failed, spawning retry")
+    _pending_reviews[story_msg_id] = state
     _awaiting_first_msg[guild_id] = state
+    try:
+        status_msg = await ch.send(
+            "⚠️ **El Indio no pudo poner las opciones de voto. Reintentando...**"
+        )
+        status_msg_id = status_msg.id
+    except Exception:
+        status_msg_id = 0
+    _spawn(_retry_vote(bot, channel_id, status_msg_id, state))
     return True
+
+
+_VOTE_RETRY_BACKOFF = [30, 60, 120]
+_VOTE_TEXT = (
+    "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
+)
+
+
+async def _retry_vote(bot, channel_id: int, status_msg_id: int, state: dict) -> None:
+    channel = bot.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await bot.fetch_channel(channel_id)
+        except Exception:
+            logger.error("[STORY] retry_vote: channel not found")
+            return
+
+    for i, delay in enumerate(_VOTE_RETRY_BACKOFF):
+        await asyncio.sleep(delay)
+        vote_msg_id = await _relay_payload(channel_id, _VOTE_TEXT)
+        if vote_msg_id is not None:
+            logger.info(
+                "[STORY] retry_vote succeeded on attempt %d msg_id=%s",
+                i + 1,
+                vote_msg_id,
+            )
+            state["vote_msg_id"] = vote_msg_id
+            _pending_reviews[vote_msg_id] = state
+            try:
+                vote_msg = await channel.fetch_message(vote_msg_id)
+                await vote_msg.add_reaction("✅")
+                await vote_msg.add_reaction("❌")
+            except Exception:
+                pass
+            if status_msg_id:
+                try:
+                    m = await channel.fetch_message(status_msg_id)
+                    await m.delete()
+                except Exception:
+                    pass
+            return
+        logger.warning(
+            "[STORY] retry_vote attempt %d/%d failed", i + 1, len(_VOTE_RETRY_BACKOFF)
+        )
+
+    logger.error("[STORY] retry_vote exhausted, giving up")
+    sid: int = state.get("story_msg_id", 0)
+    gid: int = state.get("guild_id", 0)
+    if sid:
+        _pending_reviews.pop(sid, None)
+    if gid:
+        _awaiting_first_msg.pop(gid, None)
+    if status_msg_id and channel:
+        try:
+            m = await channel.fetch_message(status_msg_id)
+            await m.edit(
+                content="❌ **No se pudo recuperar el voto. La imagen vuelve al pool.**"
+            )
+        except Exception:
+            pass
 
 
 _DESCRIBE_PROMPT = """\
