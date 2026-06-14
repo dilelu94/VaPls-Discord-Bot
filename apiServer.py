@@ -28,6 +28,7 @@ import geminiCommand
 import geminiKeys
 from playCommand import guildPlayers
 from users import USERS
+import storyManager
 import transferCommand
 
 logger = logging.getLogger("apiServer")
@@ -1109,14 +1110,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
             )
             await handle_indio_image_dm(msg, fakes)
         elif msg_type == "text":
+            text = data.get("text", "")
             if not has_pending_image_session(uid):
+                reply = await storyManager.handle_story_dm_reply(uid, text)
+                if reply:
+                    return web.json_response({"messages": [reply], "done": True})
                 return web.json_response(
                     {
                         "messages": ["⏰ No tengo ninguna sesión pendiente con vos."],
                         "done": True,
                     }
                 )
-            text = data.get("text", "")
             msg = types.SimpleNamespace(
                 author=author,
                 channel=buf,

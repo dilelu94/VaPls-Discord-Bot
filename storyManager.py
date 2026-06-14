@@ -37,6 +37,7 @@ _last_chat_activity: dict[int, float] = {}
 _messages_since_story: dict[int, int] = {}
 _pending_reviews: dict[int, dict] = {}
 _awaiting_first_msg: dict[int, dict] = {}
+_story_dm_context: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
 
@@ -751,12 +752,58 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 message.author.id,
                 dm_mid,
             )
+            _story_dm_context[message.author.id] = {
+                "rel_path": rel_path,
+                "story_text": review["story_text"],
+                "feedback": feedback,
+            }
         else:
             logger.warning(
                 "[STORY] image not found for DM guild=%s rel_path=%s",
                 guild_id,
                 rel_path,
             )
+
+
+_DM_REPLY_PROMPT = """\
+Sos el Indio, un amigo del grupo de Discord "VaPls". Un amigo te respondió \
+al DM donde le mandaste la imagen original porque el sistema no relacionó \
+automáticamente su comentario con el chiste que hiciste.
+
+Primero explicale BREVEMENTE que no se relacionó automáticamente, por eso \
+se lo mandaste por DM. Después respondele naturalmente sobre lo que dijo \
+de la imagen, como si estuvieran charlando entre amigos.
+
+Max 3 oraciones. En español rioplatense, con voseo, informal, de barrio."""
+
+
+async def handle_story_dm_reply(user_id: int, text: str) -> Optional[str]:
+    ctx = _story_dm_context.pop(user_id, None)
+    if ctx is None:
+        return None
+    logger.info(
+        "[STORY] DM reply from user=%s text=%s rel_path=%s",
+        user_id,
+        text[:100],
+        ctx["rel_path"],
+    )
+    img_part = _read_image_as_part(ctx["rel_path"])
+    user_msg = (
+        f"Contexto — tu chiste:\n{ctx['story_text']}\n\n"
+        f"El amigo comentó en el canal:\n{ctx['feedback']}\n\n"
+        f"Ahora te respondió al DM:\n{text}"
+    )
+    try:
+        reply = await geminiClient.generate(
+            user_message=user_msg,
+            system_instruction=_DM_REPLY_PROMPT,
+            image_parts=[img_part] if img_part else None,
+            max_output_tokens=512,
+        )
+        return reply.text
+    except geminiClient.GeminiError:
+        logger.warning("[STORY] DM reply gemini error")
+        return None
 
 
 async def start_story_watcher(bot) -> None:
