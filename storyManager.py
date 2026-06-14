@@ -73,15 +73,31 @@ def _reset_daily() -> None:
 
 def _can_post_story(guild_id: int) -> bool:
     _reset_daily()
-    if _stories_today.get(guild_id, 0) >= config.INDIO_MAX_STORIES_PER_DAY:
+    cnt = _stories_today.get(guild_id, 0)
+    if cnt >= config.INDIO_MAX_STORIES_PER_DAY:
+        logger.info("story guard: guild %s already hit daily max (%d)", guild_id, cnt)
         return False
-    if any(r.get("guild_id") == guild_id for r in _pending_reviews.values()):
+    pending = [r for r in _pending_reviews.values() if r.get("guild_id") == guild_id]
+    if pending:
+        logger.info(
+            "story guard: guild %s has pending review (msg %s)",
+            guild_id,
+            pending[0].get("_msg_id", "?"),
+        )
         return False
     last = _last_story_at.get(guild_id, 0.0)
     if last == 0.0:
         return True
     since = _messages_since_story.get(guild_id, 0)
-    return since >= config.INDIO_STORY_MIN_MESSAGES_AFTER
+    if since < config.INDIO_STORY_MIN_MESSAGES_AFTER:
+        logger.info(
+            "story guard: guild %s only %d msgs since last story (need %d)",
+            guild_id,
+            since,
+            config.INDIO_STORY_MIN_MESSAGES_AFTER,
+        )
+        return False
+    return True
 
 
 # ── Image → Gemini ─────────────────────────────────────────────────────────
@@ -169,6 +185,7 @@ async def _post_review(
         await msg.add_reaction("✅")
         await msg.add_reaction("❌")
         _pending_reviews[msg.id] = {
+            "_msg_id": msg.id,
             "rel_path": rel_path,
             "story_text": story_text,
             "channel_id": channel_id,
@@ -180,6 +197,52 @@ async def _post_review(
         return False
 
 
+_DESCRIBE_PROMPT = """\
+Describí esta imagen en 1-2 oraciones en español. Si hay un famoso (actor, \
+cantante, deportista, político, artista, etc.) decí quién es. Luego, en una \
+nueva línea, escribí "TAGS:" seguido de 3-5 tags separados por coma que \
+describan la imagen (en español).
+
+Ejemplo:
+Un señor con barba y gafas oscuras, parece un árbol de Navidad andando. Es el Indio Solari.
+TAGS: indio solari, redondo, arbol de navidad, recital, rock nacional"""
+
+
+async def _describe_image(rel_path: str) -> tuple[str, list[str]]:
+    """Call Gemini to describe the image + generate tags.
+
+    Returns ``(description, tags)``. On failure returns ``("Imagen", ["indio_story"])``
+    so the save still works.
+    """
+    img_part = _read_image_as_part(rel_path)
+    if img_part is None:
+        return "Imagen", ["indio_story"]
+    try:
+        reply = await geminiClient.generate(
+            user_message="Describí esta imagen y dame tags.",
+            system_instruction=_DESCRIBE_PROMPT,
+            image_parts=[img_part],
+            max_output_tokens=256,
+        )
+        text = reply.text
+        desc, _, tags_line = text.partition("TAGS:")
+        desc = desc.strip()
+        tags = (
+            [t.strip() for t in tags_line.split(",") if t.strip()]
+            if tags_line
+            else ["indio_story"]
+        )
+        if not desc:
+            desc = "Imagen"
+        if not tags:
+            tags = ["indio_story"]
+        logger.info("describe_image: desc=%s tags=%s", desc[:60], tags)
+        return desc, tags
+    except geminiClient.GeminiError as e:
+        logger.warning("describe_image gemini error: %s", e)
+        return "Imagen", ["indio_story"]
+
+
 async def _save_approved_story(rel_path: str, story_text: str) -> Optional[str]:
     full = Path(imagePool.POOL_DIR, rel_path)
     if not full.exists():
@@ -187,17 +250,20 @@ async def _save_approved_story(rel_path: str, story_text: str) -> Optional[str]:
     mgr = _init_image_mgr()
     ext = full.suffix.lstrip(".").lower()
     raw = full.read_bytes()
+
+    desc, tags = await _describe_image(rel_path)
+
     img_id = mgr.add_image(
         file_bytes=raw,
         ext=ext,
-        description=story_text[:100],
-        tags=["indio_story"],
+        description=desc,
+        tags=tags,
         author_id=0,
         original_filename=rel_path,
         gemini_description=story_text,
     )
     imagePool.remove_from_pool(rel_path)
-    logger.info("story saved as image %s (was %s)", img_id, rel_path)
+    logger.info("story saved as image %s (was %s) desc=%s", img_id, rel_path, desc[:60])
     return img_id
 
 
@@ -216,37 +282,66 @@ def _init_image_mgr() -> imageManager.ImageManager:
 
 async def trigger_story(
     bot, guild_id: int, channel_id: int, trigger_type: str = "idle"
-) -> None:
+) -> bool:
+    logger.info("story trigger(%s) called for guild %s", trigger_type, guild_id)
+
     if not _can_post_story(guild_id):
-        return
+        logger.info(
+            "story trigger(%s): guard blocked for guild %s", trigger_type, guild_id
+        )
+        return False
+
+    pool_count = await imagePool.init_pool()
+    logger.info(
+        "story trigger(%s): pool has %d images",
+        trigger_type,
+        pool_count,
+    )
 
     mgr = _init_image_mgr()
     pick = imagePool.get_random_image(mgr)
     if pick is None:
-        logger.warning("no images left in pool for guild %s", guild_id)
-        return
+        logger.warning(
+            "story trigger(%s): no images left in pool for guild %s",
+            trigger_type,
+            guild_id,
+        )
+        return False
 
     rel_path = pick["rel_path"]
+    logger.info("story trigger(%s): picked image %s", trigger_type, rel_path)
+
     story = await _generate_story(rel_path)
     if story is None:
-        return
+        logger.warning(
+            "story trigger(%s): gemini returned no story for %s", trigger_type, rel_path
+        )
+        return False
+
+    logger.info(
+        "story trigger(%s): gemini generated story (%d chars)", trigger_type, len(story)
+    )
 
     ok = await _post_review(
         config.INDIO_STORY_CHANNEL_ID, rel_path, story, guild_id, bot
     )
     if not ok:
-        return
+        logger.warning(
+            "story trigger(%s): post_review failed for guild %s", trigger_type, guild_id
+        )
+        return False
 
     _reset_daily()
     _stories_today[guild_id] = _stories_today.get(guild_id, 0) + 1
     _last_story_at[guild_id] = time.time()
     _messages_since_story[guild_id] = 0
     logger.info(
-        "story triggered by %s for guild %s (day total: %d)",
+        "story trigger(%s): SUCCESS for guild %s (day total: %d)",
         trigger_type,
         guild_id,
         _stories_today[guild_id],
     )
+    return True
 
 
 async def handle_story_reaction(payload, bot) -> None:
