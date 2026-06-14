@@ -344,6 +344,16 @@ async def trigger_story(
     return True
 
 
+async def _clear_review_reactions(ch, mid: int) -> None:
+    """Remove ✅/❌ reactions from a review message."""
+    try:
+        msg = await ch.fetch_message(mid)
+        await msg.clear_reaction("✅")
+        await msg.clear_reaction("❌")
+    except Exception:
+        pass
+
+
 async def handle_story_reaction(payload, bot) -> None:
     mid = payload.message_id
     review = _pending_reviews.get(mid)
@@ -353,27 +363,28 @@ async def handle_story_reaction(payload, bot) -> None:
         return
 
     emoji = str(payload.emoji)
+    ch = bot.get_channel(review["channel_id"])
+    if not ch or not hasattr(ch, "send"):
+        _pending_reviews.pop(mid, None)
+        return
+
     if emoji == "✅":
         img_id = await _save_approved_story(review["rel_path"], review["story_text"])
         if img_id:
-            ch = bot.get_channel(review["channel_id"])
-            if ch and hasattr(ch, "send"):
-                try:
-                    await ch.send(
-                        f"✅ **Aprobada!** Guardé la historia como imagen **{img_id}**."
-                    )
-                except Exception:
-                    pass
+            try:
+                await ch.send("✅ **Aprobada! La historia se guardó.**")
+            except Exception:
+                pass
         _pending_reviews.pop(mid, None)
+        await _clear_review_reactions(ch, mid)
 
     elif emoji == "❌":
         _pending_reviews.pop(mid, None)
-        ch = bot.get_channel(review["channel_id"])
-        if ch and hasattr(ch, "send"):
-            try:
-                await ch.send("❌ **Chiste rechazado.** La imagen vuelve al pool.")
-            except Exception:
-                pass
+        try:
+            await ch.send("❌ **Chiste rechazado.** La imagen vuelve al pool.")
+        except Exception:
+            pass
+        await _clear_review_reactions(ch, mid)
 
 
 async def handle_story_reply(message, bot) -> None:
