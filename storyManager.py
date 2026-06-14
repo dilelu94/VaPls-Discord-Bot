@@ -684,6 +684,11 @@ async def handle_first_msg_after_story(message, bot) -> None:
             "[STORY] feedback related, regenerating story guild=%s",
             guild_id,
         )
+        old_story_id = review["story_msg_id"]
+        old_vote_id = review["vote_msg_id"]
+        _pending_reviews.pop(old_vote_id, None)
+        _pending_reviews.pop(old_story_id, None)
+
         new_story = await _generate_story(rel_path, user_feedback=feedback)
         if new_story is None:
             logger.warning(
@@ -691,21 +696,33 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 guild_id,
             )
             return
-        _pending_reviews.pop(review["vote_msg_id"], None)
-        _pending_reviews.pop(review["story_msg_id"], None)
+
         ch = bot.get_channel(channel_id)
-        if ch and hasattr(ch, "send"):
-            try:
-                vote_msg = await ch.fetch_message(review["vote_msg_id"])
-                await vote_msg.delete()
-            except Exception:
-                pass
         ok = await _post_review(channel_id, rel_path, new_story, guild_id, bot)
-        if not ok:
+        if ok:
+            logger.info(
+                "[STORY] regeneration success, cleaning up old messages guild=%s",
+                guild_id,
+            )
+            if ch and hasattr(ch, "send"):
+                for mid in (old_vote_id, old_story_id):
+                    if mid:
+                        try:
+                            m = await ch.fetch_message(mid)
+                            await m.delete()
+                        except Exception:
+                            pass
+        else:
             logger.error(
                 "[STORY] _post_review failed after regeneration guild=%s",
                 guild_id,
             )
+            if ch and hasattr(ch, "send") and old_vote_id:
+                try:
+                    m = await ch.fetch_message(old_vote_id)
+                    await m.delete()
+                except Exception:
+                    pass
     else:
         # Not related → Indio starts a DM about the image
         logger.info(
