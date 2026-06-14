@@ -250,14 +250,14 @@ y lo POSTea a un callback (típicamente el bridge de Telegram).
 
 **Servidor relay HTTP** (`127.0.0.1:8081`, secret-gated):
 
-| Endpoint                | Qué hace                                                                                                                            |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /say`             | Postea un mensaje como el usuario real (así las respuestas del Indio salen con su identidad)                                        |
-| `POST /edit`            | Edita en el lugar un mensaje ya posteado por el userbot (el Indio actúa primero y después edita su respuesta con el resultado real) |
-| `POST /record`          | Dispara una grabación de voz                                                                                                        |
-| `GET /members`          | Lista miembros del guild (sin necesitar el intent privilegiado en el bot)                                                           |
-| `POST /invoke_play`     | Invoca el `/play` de VaPls como el usuario real                                                                                     |
-| `POST /invoke_soundpad` | Invoca el `/soundpad` de VaPls como el usuario real                                                                                 |
+| Endpoint                | Qué hace                                                                                                                                            |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /say`             | Postea un mensaje como el usuario real. Soporta `channel_id` (canal) o `dm_user_id` (DM), `file_path` para adjuntar imagen, y `reply_to_message_id` |
+| `POST /edit`            | Edita en el lugar un mensaje ya posteado por el userbot (el Indio actúa primero y después edita su respuesta con el resultado real)                 |
+| `POST /record`          | Dispara una grabación de voz                                                                                                                        |
+| `GET /members`          | Lista miembros del guild (sin necesitar el intent privilegiado en el bot)                                                                           |
+| `POST /invoke_play`     | Invoca el `/play` de VaPls como el usuario real                                                                                                     |
+| `POST /invoke_soundpad` | Invoca el `/soundpad` de VaPls como el usuario real                                                                                                 |
 
 ---
 
@@ -268,14 +268,15 @@ imágenes del grupo, con revisión comunitaria.
 
 ### Pool de imágenes (`imagePool.py`)
 
-- El zip fuente (`Pibes Vapor-…zip`, 268 imágenes) se extrae en
-  `indio_images/pool/` preservando las carpetas (Viny/, Fox/, Yo/, Eyyman/,
-  Seba/, Franko/, Juji/, Varios/, Santi/, Tobi/, Mati/, Fidel/).
+- Las imágenes fuente están en `indio_images/pool/` organizadas por subcarpetas
+  (Viny/, Fox/, Yo/, Eyyman/, Seba/, Franko/, Juji/, Varios/, Santi/, Tobi/,
+  Mati/, Fidel/).
 - `get_random_image(mgr)` elige una imagen al azar que **no esté ya guardada**
   en el manifest (`indio_images/manifest.json`). Las imágenes aprobadas se
   descartan del pool.
-- El pool se inicializa al arrancar el watcher. Si no hay zip disponible
-  (dev), arranca vacío.
+- El pool arranca del directorio directamente (sin zips).
+- Las imágenes >8 MB se comprimen automáticamente (redimensiona a max 1920 px,
+  JPEG quality 85/60) antes de subir a Discord.
 
 ### Generación (`storyManager.py`)
 
@@ -295,13 +296,34 @@ imágenes del grupo, con revisión comunitaria.
 3. System prompt: Indio persona — "hacé un chiste corto sobre esta imagen,
    como si se lo contaras al grupo, max 2-3 oraciones, español rioplatense
    con voseo, sin comillas ni formato".
-4. Postea en el canal de revisión (`INDIO_STORY_CHANNEL_ID`) con la imagen
-   adjunta, el chiste, y las reacciones ✅ / ❌.
-5. **✅** → guarda la imagen en el catálogo (`imageManager.add_image()`) con
-   tags `indio_story`, la elimina del pool, y confirma en el canal.
-6. **❌** → la imagen vuelve al pool (no se guarda), avisa en el canal.
-7. **Responder al mensaje** → el texto se usa como feedback para regenerar
-   el chiste con la misma imagen (nuevo mensaje de review).
+4. Postea **el chiste** en el canal de revisión (`INDIO_STORY_CHANNEL_ID`)
+   **desde el userbot** (cuenta real del Indio, con la imagen adjunta).
+5. En un **mensaje separado**, el bot postea las instrucciones de voto:
+   "✅ la aprueban · ❌ la rechazan · respondé con otra idea para regenerar",
+   con reacciones ✅/❌.
+6. **Descripción de imagen** → llamada separada a Gemini (`_describe_image`)
+   para generar descripción + tags (reconoce famosos).
+
+### Feedback del chat (sin Reply)
+
+No hace falta clickear "Reply". Apenas el Indio postea la historia + votación, el
+**primer mensaje** que alguien escriba en el canal se toma automáticamente:
+
+1. Gemini evalúa si el mensaje **tiene algo que ver** con el chiste o la imagen.
+2. **Si tiene relación** → regenera la historia con ese mensaje como feedback
+   (nuevo chiste con la misma imagen).
+3. **Si no tiene relación** → el Indio (userbot) le **manda un DM** a esa persona
+   con la imagen y el chiste, iniciando una conversación privada.
+
+### Votación (reacciones)
+
+- **✅** → guarda la imagen en el catálogo (`imageManager.add_image()`) con
+  la descripción y tags reales de Gemini, la elimina del pool. Sin mensaje de
+  confirmación. El mensaje de votación se elimina.
+- **❌** → la imagen vuelve al pool (no se guarda), avisa "❌ **Chiste
+  rechazado.** La imagen vuelve al pool." El mensaje de votación se elimina.
+- Las reacciones ✅/❌ **cancelan** la espera del primer mensaje (si alguien
+  reacciona antes de que llegue el primer mensaje, la reacción tiene prioridad).
 
 ### Testing
 
