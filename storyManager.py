@@ -670,7 +670,7 @@ async def handle_story_reaction(payload, bot) -> None:
         }
         try:
             vote_msg = await ch.fetch_message(review["vote_msg_id"])
-            await vote_msg.clear_reactions()
+            await vote_msg.delete()
         except Exception:
             pass
         logger.info(
@@ -913,29 +913,18 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
     if text_lower in ("sí", "si", "s", "✅", "yes", "y"):
         _pending_owner_approvals.pop(owner_id, None)
         img_id = await _save_approved_story(ctx["rel_path"], ctx["story_text"])
-        ch = bot.get_channel(ctx["channel_id"])
-        if ch:
-            for mid in (ctx["vote_msg_id"], ctx["story_msg_id"]):
-                if mid:
-                    try:
-                        m = await ch.fetch_message(mid)
-                        await m.delete()
-                    except Exception:
-                        pass
         logger.info("[STORY] owner approved %s -> image_id=%s", ctx["rel_path"], img_id)
         return f"✅ **Aprobada definitivamente.** Guardada como `{img_id}`."
 
     if text_lower in ("no", "n", "❌", "nop"):
         _pending_owner_approvals.pop(owner_id, None)
         ch = bot.get_channel(ctx["channel_id"])
-        if ch:
-            for mid in (ctx["vote_msg_id"], ctx["story_msg_id"]):
-                if mid:
-                    try:
-                        m = await ch.fetch_message(mid)
-                        await m.delete()
-                    except Exception:
-                        pass
+        if ch and ctx["story_msg_id"]:
+            try:
+                m = await ch.fetch_message(ctx["story_msg_id"])
+                await m.delete()
+            except Exception:
+                pass
         logger.info("[STORY] owner rejected %s", ctx["rel_path"])
         return "❌ **Descartada.** La imagen vuelve al pool."
 
