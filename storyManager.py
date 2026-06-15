@@ -626,6 +626,19 @@ async def handle_story_reaction(payload, bot) -> None:
             await _cleanup_review(review, ch)
             return
 
+        feedback_author = review.get("feedback_author")
+        if feedback_author and feedback_author == payload.user_id:
+            img_id = await _save_approved_story(
+                review["rel_path"], review["story_text"]
+            )
+            logger.info(
+                "[STORY] feedback author %s approved, saved as image_id=%s",
+                payload.user_id,
+                img_id,
+            )
+            await _cleanup_review(review, ch)
+            return
+
         dm_mid = await _relay_dm_file(
             config.OWNER_ID,
             f"✅ Quieren aprobar este chiste. ¿Lo guardo?\n\n{review['story_text']}\n\nRespondé **sí** para guardar o **no** para descartar.",
@@ -767,6 +780,9 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 "[STORY] regeneration success, cleaning up old messages guild=%s",
                 guild_id,
             )
+            new_state = _awaiting_first_msg.get(guild_id)
+            if new_state:
+                new_state["feedback_author"] = message.author.id
             if ch and hasattr(ch, "send"):
                 for mid in (old_vote_id, old_story_id):
                     if mid:
