@@ -3089,7 +3089,7 @@ async def _dispatch_indio_actions(
                                 target_cid,
                                 caption,
                                 None,
-                                file_path=str(img_path),
+                                file_path=str(img_path.resolve()),
                             )
                             if relayed:
                                 ok = True
