@@ -578,6 +578,20 @@ def get_all_data() -> dict:
     return {"mmr": mmr, "activity": activity, "raw": raw, "daily": daily, "config": cfg}
 
 
+def get_last_voice_timestamps(guild_id: int) -> dict[int, int]:
+    """Return {user_id: last_unix_ts} from voice_session activity, grouped by user."""
+    if _conn is None:
+        return {}
+    cur = _conn.execute(
+        """SELECT user_id, MAX(created_at) AS last_seen
+           FROM activity_log
+           WHERE guild_id=? AND activity_type='voice_session'
+           GROUP BY user_id""",
+        (guild_id,),
+    )
+    return {row["user_id"]: row["last_seen"] for row in cur.fetchall()}
+
+
 def get_premium_users() -> list[int]:
     if _conn is None:
         return []

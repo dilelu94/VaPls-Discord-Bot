@@ -4298,6 +4298,25 @@ async def _relay_admin_weights(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "updated": list(data.keys())})
 
 
+async def _relay_last_voice(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        guild_id = int(request.query.get("guild_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid guild_id"}, status=400)
+    if not guild_id:
+        return web.json_response({"error": "guild_id required"}, status=400)
+    try:
+        ts = adb.get_last_voice_timestamps(guild_id)
+        return web.json_response({"timestamps": ts})
+    except Exception as e:
+        log.exception("[ACTIVITY] get_last_voice_timestamps failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def _relay_voice_summary(request: web.Request) -> web.Response:
     if not config.RELAY_SECRET:
         return web.json_response({"error": "relay disabled"}, status=503)
@@ -4351,6 +4370,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_get("/activity", _relay_activity_list)
     app.router.add_get("/activity/user", _relay_activity_user)
     app.router.add_get("/activity/leaderboard", _relay_activity_leaderboard)
+    app.router.add_get("/activity/last-voice", _relay_last_voice)
     app.router.add_get("/activity/voice-summary", _relay_voice_summary)
     app.router.add_get("/admin", _relay_admin_page)
     app.router.add_get("/admin/api/data", _relay_admin_data)

@@ -1159,6 +1159,67 @@ def makeApp(bot: discord.Bot) -> web.Application:
         channels = [{"id": ch.id, "name": ch.name} for ch in guild.text_channels]
         return web.json_response({"text_channels": channels})
 
+    async def lastVoice(request: web.Request) -> web.Response:
+        """Return Main Characters users with their last voice connection.
+
+        For users who have never connected, last_seen defaults to now so
+        the initial state doesn't trigger false alerts.
+        """
+        guild_id = request.query.get("guild_id", "")
+        if not guild_id:
+            return web.json_response({"error": "guild_id required"}, status=400)
+        try:
+            guild_id = int(guild_id)
+        except (ValueError, TypeError):
+            return web.json_response({"error": "invalid guild_id"}, status=400)
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            return web.json_response({"error": "guild not found"}, status=404)
+        role = discord.utils.get(guild.roles, name="Main Characters")
+        if role is None:
+            return web.json_response(
+                {"error": "Main Characters role not found"}, status=404
+            )
+
+        # Fetch timestamps from the userbot relay
+        timestamps: dict[str, int] = {}
+        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as sess:
+                    url = urljoin(config.INDIO_RELAY_URL, "/activity/last-voice")
+                    async with sess.get(
+                        url,
+                        params={"guild_id": str(guild_id)},
+                        headers={"X-API-Secret": config.INDIO_RELAY_SECRET},
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            timestamps = data.get("timestamps", {})
+            except Exception:
+                pass
+
+        now = int(time.time())
+        users = []
+        for m in role.members:
+            if m.bot:
+                continue
+            uid = str(m.id)
+            ts = timestamps.get(uid)
+            if ts is None:
+                ts = now
+            users.append(
+                {
+                    "id": m.id,
+                    "display_name": m.display_name,
+                    "last_seen": ts,
+                }
+            )
+
+        users.sort(key=lambda u: u["id"])
+        return web.json_response({"users": users})
+
     async def githubWebhook(request: web.Request) -> web.Response:
         """Receive GitHub issue webhooks and sync groups with issue state.
 
@@ -1542,6 +1603,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/gemini-key", submitGeminiKey)
     app.router.add_post("/indio-image", submitIndioImage)
     app.router.add_get("/channels", textChannels)
+    app.router.add_get("/last-voice", lastVoice)
     app.router.add_post("/github-webhook", githubWebhook)
     return app
 
