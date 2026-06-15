@@ -84,7 +84,7 @@ def get_random_image(mgr: imageManager.ImageManager) -> Optional[dict]:
         A dict with ``rel_path``, ``subfolder``, ``filename``, or ``None``
         when the pool is exhausted.
     """
-    available = [e for e in _pool_images if not Path(POOL_DIR, e["rel_path"]).exists()]
+    available = [e for e in _pool_images if Path(POOL_DIR, e["rel_path"]).exists()]
     if available:
         _pool_images[:] = available
     used = _manifest_original_filenames(mgr)
