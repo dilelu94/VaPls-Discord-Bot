@@ -499,11 +499,14 @@ async def trigger_story(
 ) -> bool:
     logger.info("story trigger(%s) called for guild %s", trigger_type, guild_id)
 
-    if not _can_post_story(guild_id):
-        logger.info(
-            "story trigger(%s): guard blocked for guild %s", trigger_type, guild_id
-        )
-        return False
+    if trigger_type != "test":
+        if not _can_post_story(guild_id):
+            logger.info(
+                "story trigger(%s): guard blocked for guild %s",
+                trigger_type,
+                guild_id,
+            )
+            return False
 
     pool_count = await imagePool.init_pool()
     logger.info(
@@ -815,11 +818,13 @@ async def handle_first_msg_after_story(message, bot) -> None:
             _pending_reviews.pop(review["story_msg_id"], None)
             ch = bot.get_channel(channel_id)
             if ch and hasattr(ch, "send"):
-                try:
-                    vote_msg = await ch.fetch_message(review["vote_msg_id"])
-                    await vote_msg.delete()
-                except Exception:
-                    pass
+                for mid in (review["vote_msg_id"], review["story_msg_id"]):
+                    if mid:
+                        try:
+                            m = await ch.fetch_message(mid)
+                            await m.delete()
+                        except Exception:
+                            pass
             dm_mid = await _relay_dm_file(
                 message.author.id,
                 review["story_text"],
@@ -865,6 +870,21 @@ async def handle_story_dm_reply(user_id: int, text: str) -> Optional[str]:
         text[:100],
         ctx["rel_path"],
     )
+
+    text_lower = text.strip().lower()
+    if text_lower in ("sí", "si", "s", "✅", "yes", "y"):
+        img_id = await _save_approved_story(ctx["rel_path"], ctx["story_text"])
+        logger.info(
+            "[STORY] DM reply saved as image_id=%s rel_path=%s",
+            img_id,
+            ctx["rel_path"],
+        )
+        return f"✅ **Guardada.** El chiste queda como `{img_id}`."
+
+    if text_lower in ("no", "n", "❌", "nop"):
+        logger.info("[STORY] DM reply rejected rel_path=%s", ctx["rel_path"])
+        return "❌ Descartado, vuelve al pool."
+
     img_part = _read_image_as_part(ctx["rel_path"])
     user_msg = (
         f"Contexto — tu chiste:\n{ctx['story_text']}\n\n"
