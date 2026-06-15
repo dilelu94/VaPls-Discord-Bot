@@ -8,6 +8,7 @@ feedback, and saves approved stories to the image catalog.
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
 import random
@@ -44,6 +45,79 @@ _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
 
 _background_tasks: set[asyncio.Task] = set()
+
+_PENDING_FILE = "data/pending_reviews.json"
+
+
+def _pr_flush() -> None:
+    data = {
+        "reviews": {str(k): v for k, v in _pending_reviews.items()},
+        "awaiting": {str(k): v for k, v in _awaiting_first_msg.items()},
+    }
+    p = Path(_PENDING_FILE)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, ensure_ascii=False, default=str))
+
+
+async def _recover_pending_reviews(bot, channel_id: int) -> None:
+    p = Path(_PENDING_FILE)
+    if not p.exists():
+        return
+    try:
+        data = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+    if not data:
+        return
+
+    ch = bot.get_channel(channel_id)
+    if ch is None:
+        try:
+            ch = await bot.fetch_channel(channel_id)
+        except Exception:
+            return
+    if not hasattr(ch, "fetch_message"):
+        return
+
+    reviews: dict = data.get("reviews", {})
+    restored = 0
+    for key, review in reviews.items():
+        mid = int(key)
+        vote_mid = review.get("vote_msg_id")
+        story_mid = review.get("story_msg_id")
+        if not vote_mid or not story_mid:
+            continue
+        try:
+            vote_msg = await ch.fetch_message(vote_mid)
+        except Exception:
+            continue
+        has_reactions = any(
+            r.me for r in vote_msg.reactions if str(r.emoji) in ("✅", "❌")
+        )
+        if not has_reactions:
+            continue
+        _pending_reviews[mid] = review
+        restored += 1
+
+    awaiting: dict = data.get("awaiting", {})
+    for key, review in awaiting.items():
+        gid = int(key)
+        vote_mid = review.get("vote_msg_id")
+        if not vote_mid:
+            continue
+        try:
+            await ch.fetch_message(vote_mid)
+        except Exception:
+            continue
+        _awaiting_first_msg[gid] = review
+
+    if restored:
+        logger.info(
+            "[STORY] recovered %d pending reviews + %d awaiting-first-msg",
+            restored,
+            len(awaiting),
+        )
+    # Stale file is intentionally NOT deleted — next flush overwrites it.
 
 
 def _spawn(coro) -> asyncio.Task:
@@ -344,6 +418,7 @@ async def _post_review(
         _pending_reviews[vote_msg_id] = state
         _pending_reviews[story_msg_id] = state
         _awaiting_first_msg[guild_id] = state
+        _pr_flush()
         try:
             vote_msg = await ch.fetch_message(vote_msg_id)
             await vote_msg.add_reaction("✅")
@@ -366,6 +441,7 @@ async def _post_review(
     logger.error("[STORY] vote msg relay failed, spawning retry")
     _pending_reviews[story_msg_id] = state
     _awaiting_first_msg[guild_id] = state
+    _pr_flush()
     try:
         status_msg = await ch.send(
             "⚠️ **El Indio no pudo poner las opciones de voto. Reintentando...**"
@@ -403,6 +479,7 @@ async def _retry_vote(bot, channel_id: int, status_msg_id: int, state: dict) -> 
             )
             state["vote_msg_id"] = vote_msg_id
             _pending_reviews[vote_msg_id] = state
+            _pr_flush()
             try:
                 vote_msg = await channel.fetch_message(vote_msg_id)
                 await vote_msg.add_reaction("✅")
@@ -427,6 +504,7 @@ async def _retry_vote(bot, channel_id: int, status_msg_id: int, state: dict) -> 
         _pending_reviews.pop(sid, None)
     if gid:
         _awaiting_first_msg.pop(gid, None)
+    _pr_flush()
     if status_msg_id and channel:
         try:
             m = await channel.fetch_message(status_msg_id)
@@ -616,6 +694,7 @@ async def _cleanup_review(review: dict, ch) -> None:
     """Pop both pending entries and delete voting msg."""
     _pending_reviews.pop(review["vote_msg_id"], None)
     _pending_reviews.pop(review["story_msg_id"], None)
+    _pr_flush()
     try:
         msg = await ch.fetch_message(review["vote_msg_id"])
         await msg.delete()
@@ -644,6 +723,7 @@ async def handle_story_reaction(payload, bot) -> None:
     ch = bot.get_channel(review["channel_id"])
     if not ch or not hasattr(ch, "send"):
         _pending_reviews.pop(mid, None)
+        _pr_flush()
         return
 
     if emoji == "✅":
@@ -694,6 +774,7 @@ async def handle_story_reaction(payload, bot) -> None:
             "channel_id": review["channel_id"],
             "guild_id": review["guild_id"],
         }
+        _pr_flush()
         try:
             vote_msg = await ch.fetch_message(review["vote_msg_id"])
             await vote_msg.delete()
@@ -721,6 +802,7 @@ async def handle_story_reaction(payload, bot) -> None:
                     await m.delete()
                 except Exception:
                     pass
+        _pr_flush()
         return
 
 
@@ -793,6 +875,7 @@ async def handle_first_msg_after_story(message, bot) -> None:
         old_vote_id = review["vote_msg_id"]
         _pending_reviews.pop(old_vote_id, None)
         _pending_reviews.pop(old_story_id, None)
+        _pr_flush()
 
         new_story = await _generate_story(rel_path, guild_id, user_feedback=feedback)
         if new_story is None:
@@ -842,6 +925,7 @@ async def handle_first_msg_after_story(message, bot) -> None:
         if full.exists():
             _pending_reviews.pop(review["vote_msg_id"], None)
             _pending_reviews.pop(review["story_msg_id"], None)
+            _pr_flush()
             ch = bot.get_channel(channel_id)
             if ch and hasattr(ch, "send"):
                 for mid in (review["vote_msg_id"], review["story_msg_id"]):
@@ -959,6 +1043,7 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
 
 async def start_story_watcher(bot) -> None:
     await imagePool.init_pool()
+    await _recover_pending_reviews(bot, config.INDIO_STORY_CHANNEL_ID)
     logger.info("story watcher started")
 
     while True:
