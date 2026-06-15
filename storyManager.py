@@ -53,6 +53,7 @@ def _pr_flush() -> None:
     data = {
         "reviews": {str(k): v for k, v in _pending_reviews.items()},
         "awaiting": {str(k): v for k, v in _awaiting_first_msg.items()},
+        "approvals": {str(k): v for k, v in _pending_owner_approvals.items()},
     }
     p = Path(_PENDING_FILE)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -111,11 +112,18 @@ async def _recover_pending_reviews(bot, channel_id: int) -> None:
             continue
         _awaiting_first_msg[gid] = review
 
+    approvals: dict = data.get("approvals", {})
+    for key, ctx in approvals.items():
+        oid = int(key)
+        _pending_owner_approvals[oid] = ctx
+        restored += 1
+
     if restored:
         logger.info(
-            "[STORY] recovered %d pending reviews + %d awaiting-first-msg",
+            "[STORY] recovered %d pending reviews + %d awaiting-first-msg + %d owner-approvals",
             restored,
             len(awaiting),
+            len(approvals),
         )
     # Stale file is intentionally NOT deleted — next flush overwrites it.
 
@@ -1022,12 +1030,14 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
     text_lower = text.strip().lower()
     if text_lower in ("sí", "si", "s", "✅", "yes", "y"):
         _pending_owner_approvals.pop(owner_id, None)
+        _pr_flush()
         img_id = await _save_approved_story(ctx["rel_path"], ctx["story_text"])
         logger.info("[STORY] owner approved %s -> image_id=%s", ctx["rel_path"], img_id)
         return f"✅ **Aprobada definitivamente.** Guardada como `{img_id}`."
 
     if text_lower in ("no", "n", "❌", "nop"):
         _pending_owner_approvals.pop(owner_id, None)
+        _pr_flush()
         ch = bot.get_channel(ctx["channel_id"])
         if ch and ctx["story_msg_id"]:
             try:
