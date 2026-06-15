@@ -67,6 +67,29 @@ que todos conocen.
 Max 2-3 oraciones. Español rioplatense, con voseo, informal, de barrio. \
 Sin comillas, sin formato, solo el chiste."""
 
+_GENERIC_FOLDERS = {
+    "varios",
+    "varias",
+    "grupo",
+    "group",
+    "multiple",
+    "unknown",
+    "otros",
+    "misc",
+    "various",
+    "general",
+}
+
+
+def _person_name(rel_path: str) -> Optional[str]:
+    parts = Path(rel_path).parts
+    if len(parts) < 2:
+        return None
+    folder = parts[0]
+    if folder.lower() in _GENERIC_FOLDERS:
+        return None
+    return folder
+
 
 # ── Guards ─────────────────────────────────────────────────────────────────
 
@@ -150,6 +173,9 @@ async def _generate_story(
         return None
 
     system = _STORY_PROMPT
+    name = _person_name(rel_path)
+    if name:
+        system += f"\n\nLa imagen es de {name}. Si ves a {name} en la imagen, usá su nombre para el chiste."
     mem_key = f"guild-{guild_id}"
     lt = geminiCommand._indio_long_term.get(mem_key, {})
     members = geminiCommand._indio_current_members.get(mem_key, [])

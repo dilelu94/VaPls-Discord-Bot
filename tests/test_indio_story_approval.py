@@ -220,3 +220,39 @@ async def test_owner_bogus_text_keeps_pending(cfg, bot):
 
     assert "sí" in (reply or "")
     assert cfg.OWNER_ID in storyManager._pending_owner_approvals  # still pending
+
+
+# ── _person_name helper ─────────────────────────────────────────────────────
+
+
+def test_person_name_from_subfolder():
+    assert storyManager._person_name("dilelu/foto.jpg") == "dilelu"
+    assert storyManager._person_name("mati/selfie.png") == "mati"
+    assert storyManager._person_name("pepe123/group.jpg") == "pepe123"
+
+
+def test_person_name_root_level():
+    assert storyManager._person_name("foto.jpg") is None
+    assert storyManager._person_name("directo/imagen.jpg") == "directo"
+
+
+def test_person_name_generic_folders():
+    for folder in (
+        "varios",
+        "grupo",
+        "group",
+        "multiple",
+        "unknown",
+        "otros",
+        "misc",
+        "various",
+        "general",
+    ):
+        assert storyManager._person_name(f"{folder}/img.jpg") is None, (
+            f"{folder} should be generic"
+        )
+
+
+def test_person_name_case_insensitive():
+    assert storyManager._person_name("Varios/gente.jpg") is None
+    assert storyManager._person_name("Grupo/foto.jpg") is None
