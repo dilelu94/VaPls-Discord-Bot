@@ -463,8 +463,19 @@ async def on_ready():
 
 
 # ---- Voice state tracking for MMR -----------------------------------------
-# Per-guild per-user join timestamps for duration calculation.
-_voice_joins: dict[int, dict[int, float]] = {}
+# Per-guild per-user voice sessions with mute/deafen breakdown.
+# AFK channel (451581345022476294) is excluded from tracking.
+_AFK_CHANNEL_ID = 451581345022476294
+_voice_sessions: dict[int, dict[int, dict]] = {}
+# guild_id -> user_id -> {
+#     "join_time": float,      # when user joined the channel
+#     "channel_id": int,       # current channel
+#     "state_since": float,    # when current mute/deafen state started
+#     "state": str,            # "active" | "muted" | "deafened"
+#     "active_secs": float,    # accumulated time in active state
+#     "muted_secs": float,     # accumulated time muted (can still hear)
+#     "deafened_secs": float,  # accumulated time deafened (implies muted)
+# }
 # Per-guild per-user watch-stream start timestamps.
 _watch_start: dict[int, dict[int, float]] = {}
 # Per-guild per-user cumulative watch-stream seconds today.
@@ -515,6 +526,74 @@ def _finalize_watch(user_id: int, guild_id: int) -> None:
                 user_id, guild_id, "watch_stream", duration_secs=round(duration, 1)
             )
         )
+
+
+def _voice_state_str(v):
+    if v.self_deaf:
+        return "deafened"
+    if v.self_mute:
+        return "muted"
+    return "active"
+
+
+def _start_voice_session(guild_id: int, user_id: int, channel, voice_state) -> None:
+    now = time.time()
+    s = _voice_state_str(voice_state)
+    _voice_sessions.setdefault(guild_id, {})[user_id] = {
+        "join_time": now,
+        "channel_id": channel.id,
+        "state_since": now,
+        "state": s,
+        "active_secs": 0.0,
+        "muted_secs": 0.0,
+        "deafened_secs": 0.0,
+    }
+
+
+def _finalize_voice_session(guild_id: int, user_id: int) -> None:
+    guild_sessions = _voice_sessions.get(guild_id)
+    if guild_sessions is None:
+        return
+    sess = guild_sessions.pop(user_id, None)
+    if sess is None:
+        return
+    now = time.time()
+    elapsed = now - sess["state_since"]
+    sess[sess["state"] + "_secs"] += elapsed
+    total = now - sess["join_time"]
+    if total <= 0:
+        return
+    asyncio.create_task(
+        _log_activity(
+            user_id,
+            guild_id,
+            "voice_session",
+            duration_secs=round(total, 1),
+            metadata={
+                "active_secs": round(sess["active_secs"], 1),
+                "muted_secs": round(sess["muted_secs"], 1),
+                "deafened_secs": round(sess["deafened_secs"], 1),
+                "channel_id": sess["channel_id"],
+            },
+        )
+    )
+
+
+def _update_voice_state(guild_id: int, user_id: int, voice_state) -> None:
+    guild_sessions = _voice_sessions.get(guild_id)
+    if guild_sessions is None:
+        return
+    sess = guild_sessions.get(user_id)
+    if sess is None:
+        return
+    new_state = _voice_state_str(voice_state)
+    if new_state == sess["state"]:
+        return
+    now = time.time()
+    elapsed = now - sess["state_since"]
+    sess[sess["state"] + "_secs"] += elapsed
+    sess["state"] = new_state
+    sess["state_since"] = now
 
 
 @bot.event
@@ -575,13 +654,12 @@ async def on_voice_state_update(member, before, after):
     guild_id = (after.channel or before.channel).guild.id
 
     n = member.display_name
-    # ---- Voice join/leave (track timestamps but DON'T log voice_vad — userbot handles it via VAD+Vosk) ----
+    # ---- Voice session tracking (AFK channel excluded) ----
     if before.channel is None and after.channel is not None:
-        _voice_joins.setdefault(guild_id, {})[member.id] = time.time()
-        # Start watch tracking if someone is streaming
+        if after.channel.id != _AFK_CHANNEL_ID:
+            _start_voice_session(guild_id, member.id, after.channel, after)
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
-        # Story system: trigger when enough humans in voice
         if storyManager.check_voice_trigger(guild_id, after.channel):
             asyncio.create_task(
                 storyManager.trigger_story(
@@ -593,8 +671,7 @@ async def on_voice_state_update(member, before, after):
             )
 
     elif before.channel is not None and after.channel is None:
-        guild_joins = _voice_joins.get(guild_id, {})
-        join_time = guild_joins.pop(member.id, None)
+        _finalize_voice_session(guild_id, member.id)
         _finalize_watch(member.id, guild_id)
 
     elif (
@@ -602,12 +679,17 @@ async def on_voice_state_update(member, before, after):
         and after.channel is not None
         and before.channel.id != after.channel.id
     ):
-        guild_joins = _voice_joins.setdefault(guild_id, {})
-        join_time = guild_joins.get(member.id)
-        guild_joins[member.id] = time.time()
+        if before.channel.id != _AFK_CHANNEL_ID:
+            _finalize_voice_session(guild_id, member.id)
+        if after.channel.id != _AFK_CHANNEL_ID:
+            _start_voice_session(guild_id, member.id, after.channel, after)
         _finalize_watch(member.id, guild_id)
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
+
+    elif before.channel is not None and after.channel is not None:
+        # Same channel — mute/deafen toggle
+        _update_voice_state(guild_id, member.id, after)
 
     # ---- Camera tracking (quality scales with occupancy + other cameras) ----
     try:

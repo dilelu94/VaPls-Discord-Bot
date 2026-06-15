@@ -4298,6 +4298,37 @@ async def _relay_admin_weights(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "updated": list(data.keys())})
 
 
+async def _relay_voice_summary(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        user_id = int(request.query.get("user_id", 0))
+        guild_id = int(request.query.get("guild_id", 0))
+        since = int(request.query.get("since", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid params"}, status=400)
+    if not user_id or not guild_id or not since:
+        return web.json_response(
+            {"error": "user_id, guild_id, since required"}, status=400
+        )
+    until = request.query.get("until")
+    if until:
+        try:
+            until = int(until)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "invalid until"}, status=400)
+    else:
+        until = None
+    try:
+        summary = adb.get_voice_summary(user_id, guild_id, since, until)
+        return web.json_response({"summary": summary})
+    except Exception as e:
+        log.exception("[ACTIVITY] get_voice_summary failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4320,6 +4351,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_get("/activity", _relay_activity_list)
     app.router.add_get("/activity/user", _relay_activity_user)
     app.router.add_get("/activity/leaderboard", _relay_activity_leaderboard)
+    app.router.add_get("/activity/voice-summary", _relay_voice_summary)
     app.router.add_get("/admin", _relay_admin_page)
     app.router.add_get("/admin/api/data", _relay_admin_data)
     app.router.add_post("/admin/api/weights", _relay_admin_weights)

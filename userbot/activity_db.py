@@ -16,6 +16,7 @@ DB_PATH = None
 _conn: sqlite3.Connection | None = None
 
 DEFAULT_WEIGHTS = {
+    "voice_session": 0,
     "voice_vad": 0.4,
     "camera": 0.8,
     "stream": 1.5,
@@ -468,6 +469,48 @@ def get_user_stats(user_id: int, guild_id: int) -> dict | None:
     )
     r["recent_activities"] = [dict(x) for x in cur2.fetchall()]
     return r
+
+
+def get_voice_summary(
+    user_id: int, guild_id: int, since_ts: int, until_ts: int | None = None
+) -> dict | None:
+    if _conn is None:
+        return None
+    if until_ts is None:
+        until_ts = _now()
+    cur = _conn.execute(
+        """SELECT
+               COUNT(*) AS sessions,
+               COALESCE(SUM(duration_secs), 0) AS total_connected,
+               COALESCE(SUM(json_extract(metadata, '$.active_secs')), 0) AS total_active,
+               COALESCE(SUM(json_extract(metadata, '$.muted_secs')), 0) AS total_muted,
+               COALESCE(SUM(json_extract(metadata, '$.deafened_secs')), 0) AS total_deafened
+           FROM activity_log
+           WHERE user_id=? AND guild_id=? AND activity_type='voice_session'
+           AND created_at >= ? AND created_at <= ?""",
+        (user_id, guild_id, since_ts, until_ts),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    cur2 = _conn.execute(
+        """SELECT COALESCE(SUM(duration_secs), 0) AS total_speaking
+           FROM activity_log
+           WHERE user_id=? AND guild_id=? AND activity_type='voice_vad'
+           AND created_at >= ? AND created_at <= ?""",
+        (user_id, guild_id, since_ts, until_ts),
+    )
+    row2 = cur2.fetchone()
+    return {
+        "sessions": row["sessions"],
+        "total_connected": round(row["total_connected"], 1),
+        "total_active": round(row["total_active"], 1),
+        "total_muted": round(row["total_muted"], 1),
+        "total_deafened": round(row["total_deafened"], 1),
+        "total_speaking": round(row2["total_speaking"], 1) if row2 else 0,
+        "since": since_ts,
+        "until": until_ts,
+    }
 
 
 def get_leaderboard(guild_id: int, limit: int = 20) -> list[dict]:
