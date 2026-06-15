@@ -2247,7 +2247,7 @@ _ACTION_FALLBACK_TEXT = {
     "GENERATE_IMAGE": "🎨 Generando imagen...",
     "EDIT_IMAGE": "🎨 Editando imagen...",
     "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
-    "USE_IMAGE": "🖼️ Ahí va",
+    "USE_IMAGE": "",
 }
 
 _ACTION_ARG_MAX_CHARS = 200
@@ -2466,7 +2466,7 @@ def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
         return text
     if not actions:
         return text
-    fallback = _ACTION_FALLBACK_TEXT.get(actions[0][0], "👍")
+    fallback = _ACTION_FALLBACK_TEXT.get(actions[0][0], "")
     return fallback
 
 
@@ -3084,19 +3084,30 @@ async def _dispatch_indio_actions(
                     ok = False
                     msg = ""
                     try:
-                        channel = bot.get_channel(target_cid)
-                        if channel is None:
-                            channel = await bot.fetch_channel(target_cid)
-                        if channel is not None:
-                            payload = {}
-                            if caption:
-                                payload["content"] = caption
-                            payload["file"] = _discord.File(str(img_path))
-                            await channel.send(**payload)
-                            ok = True
-                            msg = "sent"
-                        else:
-                            msg = "channel not found"
+                        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                            relayed = await _relay_to_userbot(
+                                target_cid,
+                                caption,
+                                None,
+                                file_path=str(img_path),
+                            )
+                            if relayed:
+                                ok = True
+                                msg = "sent via relay"
+                        if not ok:
+                            channel = bot.get_channel(target_cid)
+                            if channel is None:
+                                channel = await bot.fetch_channel(target_cid)
+                            if channel is not None:
+                                payload = {}
+                                if caption:
+                                    payload["content"] = caption
+                                payload["file"] = _discord.File(str(img_path))
+                                await channel.send(**payload)
+                                ok = True
+                                msg = "sent direct"
+                            else:
+                                msg = "channel not found"
                     except Exception as e:
                         logger.exception("indio USE_IMAGE failed")
                         msg = f"error: {e}"
@@ -3797,7 +3808,10 @@ def _sanitize_for_history(text: str) -> str:
 
 
 async def _relay_to_userbot(
-    channel_id: int, content: str, reply_to_id: Optional[int]
+    channel_id: int,
+    content: str,
+    reply_to_id: Optional[int],
+    file_path: Optional[str] = None,
 ) -> Optional[list[int]]:
     """POST the indio reply to the userbot's local /say endpoint so it gets
     posted by the real user account.
@@ -3815,6 +3829,8 @@ async def _relay_to_userbot(
     payload = {"channel_id": int(channel_id), "content": content}
     if reply_to_id is not None:
         payload["reply_to_message_id"] = int(reply_to_id)
+    if file_path:
+        payload["file_path"] = file_path
     headers = {"X-API-Secret": secret}
     timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
     try:
@@ -4398,7 +4414,18 @@ async def indioLogic(
         question_msg_id = getattr(question_msg, "id", None)
         channel_id = _reply_channel_id()
         opts_channel_id = channel_id
-        if (
+
+        if not clean_reply and pending_actions and not vote_open:
+            import types as _types
+
+            reply_handle = _types.SimpleNamespace(
+                via_relay=False,
+                channel_id=channel_id,
+                message_id=None,
+                message=None,
+                single=True,
+            )
+        elif (
             vote_open
             and config.INDIO_RELAY_URL
             and config.INDIO_RELAY_SECRET
