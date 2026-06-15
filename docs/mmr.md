@@ -32,6 +32,7 @@ Cada actividad tiene un peso default en `userbot/activity_db.py:DEFAULT_WEIGHTS`
 
 ```python
 DEFAULT_WEIGHTS = {
+    "voice_session": 0,    # sesión de voz (solo stats, no afecta MMR)
     "voice_vad": 0.4,      # actividad de voz
     "camera": 0.8,         # cámara encendida
     "stream": 1.5,         # haciendo stream
@@ -111,28 +112,30 @@ Si pasan más de 24 horas sin actividad:
 | `_classify_and_log_message()` (l.221)          | Clasifica mensajes: imágenes, links, tiktok, texto, stickers, archivos, polls |
 | `on_application_command()` (l.857)             | Trackea comandos slash como `slash_command`                                   |
 | `on_message()` (l.626)                         | Entry point: filtra bots, deriva a `_classify_and_log_message`                |
-| `on_voice_state_update()` (l.462)              | Trackea `voice_vad`, `camera`, `stream`, `watch_stream`                       |
+| `on_voice_state_update()`                      | Trackea `voice_vad`, `camera`, `stream`, `watch_stream` y sesiones de voz     |
 | `on_raw_reaction_add()` (l.702)                | Trackea `reaction`                                                            |
 | `on_guild_scheduled_event_subscribe()` (l.845) | Trackea `event_join`                                                          |
 
 ### Userbot (`userbot/activity_db.py`)
 
-| Location                   | Qué hace                                                               |
-| -------------------------- | ---------------------------------------------------------------------- |
-| `DEFAULT_WEIGHTS` (l.18)   | Pesos default de cada tipo de actividad                                |
-| `DEFAULT_CFG` (l.41)       | Config default del sistema Glicko                                      |
-| `log_activity()` (l.272)   | Calcula y persiste el delta Glicko-1                                   |
-| `_get_weight()` (l.198)    | Lee el peso de la DB o usa default                                     |
-| `_detect_spam()` (l.213)   | Reduce quality si hay muchas actividades del mismo tipo en 10 segundos |
-| `_glicko_update()` (l.256) | Implementación del algoritmo Glicko-1                                  |
+| Location                      | Qué hace                                                               |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `DEFAULT_WEIGHTS` (l.18)      | Pesos default de cada tipo de actividad                                |
+| `DEFAULT_CFG` (l.41)          | Config default del sistema Glicko                                      |
+| `log_activity()` (l.272)      | Calcula y persiste el delta Glicko-1                                   |
+| `get_voice_summary()` (l.474) | Consulta resumen de voz por usuario/guild/rango de fechas              |
+| `_get_weight()` (l.198)       | Lee el peso de la DB o usa default                                     |
+| `_detect_spam()` (l.213)      | Reduce quality si hay muchas actividades del mismo tipo en 10 segundos |
+| `_glicko_update()` (l.256)    | Implementación del algoritmo Glicko-1                                  |
 
 ### Userbot relay (`userbot/bot.py`)
 
-| Location                         | Qué hace                                                          |
-| -------------------------------- | ----------------------------------------------------------------- |
-| `_relay_activity_log()` (l.3766) | Endpoint HTTP `/activity/log` que recibe actividades del main bot |
-| `_relay_admin_data()`            | Endpoint que sirve datos a la admin page                          |
-| `_relay_admin_weights()`         | Endpoint que persiste cambios de peso desde la admin page         |
+| Location                         | Qué hace                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------- |
+| `_relay_activity_log()` (l.3766) | Endpoint HTTP `/activity/log` que recibe actividades del main bot         |
+| `_relay_voice_summary()`         | Endpoint HTTP `GET /activity/voice-summary` para consultar resumen de voz |
+| `_relay_admin_data()`            | Endpoint que sirve datos a la admin page                                  |
+| `_relay_admin_weights()`         | Endpoint que persiste cambios de peso desde la admin page                 |
 
 ### Config (`bot.py`)
 
@@ -147,6 +150,45 @@ Si pasan más de 24 horas sin actividad:
 - **Userbot ignorado**: el user ID `519594605520486428` se filtra en `_classify_and_log_message()` (main bot) y en `_relay_activity_log()` (userbot) para que sus actividades no cuenten.
 - **Anti-spam**: `_detect_spam()` reduce quality si hay más de 3 actividades del mismo tipo en 10 segundos.
 - **Premium**: si el usuario tiene flag premium, el quality_score se multiplica por `premium_multiplier` (default 0.85).
+
+## Voice sessions (sesiones de voz)
+
+El bot trackea el tiempo que cada usuario pasa conectado a canales de voz, con desglose por estado de mute/deafen.
+
+### Cómo funciona
+
+1. **Join**: cuando un usuario se conecta a un canal de voz (que no sea AFK), se crea una sesión en memoria con el estado inicial (`active`, `muted` o `deafened`).
+2. **Mute/Deafen toggle**: si el usuario cambia mute/deafen en el mismo canal, se acumula el tiempo del estado anterior y se cambia al nuevo.
+3. **Leave/move**: al desconectarse o cambiar de canal, se finaliza la sesión y se loguea a `activity_log` con:
+   - `activity_type = "voice_session"`
+   - `duration_secs`: duración total de la sesión
+   - `metadata.active_secs`: tiempo sin mute ni deafen
+   - `metadata.muted_secs`: tiempo muteado (puede oír)
+   - `metadata.deafened_secs`: tiempo sordeado (no oye ni habla)
+
+### AFK channel
+
+El canal con ID `451581345022476294` está excluido: las conexiones a AFK no inician sesión y los movimientos desde/hacia AFK se manejan transparentemente.
+
+### Actividad real (speaking)
+
+El tiempo de habla activa se sigue trackeando por separado vía VAD/Vosk como `voice_vad` en el userbot. La función `get_voice_summary()` combina ambos:
+
+| Campo             | Fuente                   | Descripción                       |
+| ----------------- | ------------------------ | --------------------------------- |
+| `total_connected` | `voice_session` metadata | Tiempo total conectado al canal   |
+| `total_active`    | `voice_session` metadata | Tiempo sin mute ni deafen         |
+| `total_muted`     | `voice_session` metadata | Tiempo muteado (oyendo)           |
+| `total_deafened`  | `voice_session` metadata | Tiempo sordeado                   |
+| `total_speaking`  | `voice_vad`              | Tiempo de habla activa (VAD/Vosk) |
+
+### Consulta via API
+
+```sh
+GET /activity/voice-summary?user_id=123&guild_id=456&since=1700000000&until=1700086400
+```
+
+Requiere header `X-API-Secret` igual al relay secret. Los parámetros `since` y `until` son timestamps Unix. Devuelve un JSON con todos los campos de la tabla anterior.
 
 ## Historial de cambios recientes
 
