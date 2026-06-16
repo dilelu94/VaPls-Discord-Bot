@@ -1,5 +1,8 @@
 """Static per-user configuration used by greeting playback and the indio.
 
+Loaded from ``data/users.json`` by default, falling back to the hardcoded
+dicts defined here when the file is missing or unreadable.
+
 Per-user keys:
 - ``name``: nickname/apodo. Source of truth for how the indio refers to them.
 - ``greeting``: audio path relative to CUSTOM_AUDIO_PATH played on join.
@@ -21,14 +24,19 @@ Convenciones de ``traits``:
   Lo usa para responder coherente pero no lo dice explícitamente.
 
 Static fields supplement (never overwrite) the long-term memory Gemini
-distills from conversation. Edit freely — the next /indio picks up changes.
-
-``GROUP_LORE`` carries chistes internos / eventos del grupo / contexto que
-no es de un solo usuario. Se mergea con la memoria a largo plazo igual que
-los traits per-user.
+distills from conversation. Edit ``data/users.json`` — the next /indio
+picks up changes.
 """
 
-USERS: dict[int, dict] = {
+import json
+import os
+import logging
+
+_log = logging.getLogger("bot.users")
+
+_USERS_PATH = os.getenv("USERS_PATH", "data/users.json")
+
+_FALLBACK_USERS: dict[int, dict] = {
     285116759525031937: {
         "name": "Mila",
         "greeting": "Mila/Milapollo.mp3",
@@ -268,10 +276,7 @@ USERS: dict[int, dict] = {
     },
 }
 
-
-# Lore compartido del grupo — no pertenece a un usuario en particular.
-# Se mergea en la memoria a largo plazo del indio (eventos + chistes).
-GROUP_LORE: dict[str, list[str]] = {
+_FALLBACK_GROUP_LORE: dict[str, list[str]] = {
     "eventos_del_grupo": [
         "juegan Terraria juntos a veces",
         "algunos del grupo juegan WoW, Overwatch o Dota",
@@ -288,10 +293,7 @@ GROUP_LORE: dict[str, list[str]] = {
     ],
 }
 
-
-# Personas que el indio conoce pero no tienen Discord.
-# Misma estructura que los buckets de USERS (sin ID de Discord).
-NON_DISCORD_MEMBERS: list[dict] = [
+_FALLBACK_NON_DISCORD: list[dict] = [
     {
         "name": "Bibi",
         "traits": [
@@ -307,3 +309,36 @@ NON_DISCORD_MEMBERS: list[dict] = [
         ],
     },
 ]
+
+
+def _load() -> tuple[dict[int, dict], dict[str, list[str]], list[dict]]:
+    """Load users data from JSON file, falling back to hardcoded dicts."""
+    path = _USERS_PATH
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        _log.info("users.json not found at %s, using hardcoded fallback", path)
+        return _FALLBACK_USERS, _FALLBACK_GROUP_LORE, _FALLBACK_NON_DISCORD
+    except Exception as e:
+        _log.warning("users.json load failed (%s), using hardcoded fallback", e)
+        return _FALLBACK_USERS, _FALLBACK_GROUP_LORE, _FALLBACK_NON_DISCORD
+
+    users_raw = raw.get("users") or {}
+    users: dict[int, dict] = {}
+    for k, v in users_raw.items():
+        try:
+            users[int(k)] = v
+        except (ValueError, TypeError):
+            _log.warning("users.json: skipping non-int key %r", k)
+            continue
+
+    group_lore = raw.get("group_lore") or _FALLBACK_GROUP_LORE
+    non_discord = raw.get("non_discord_members") or _FALLBACK_NON_DISCORD
+    return users, group_lore, non_discord
+
+
+USERS: dict[int, dict]
+GROUP_LORE: dict[str, list[str]]
+NON_DISCORD_MEMBERS: list[dict]
+USERS, GROUP_LORE, NON_DISCORD_MEMBERS = _load()

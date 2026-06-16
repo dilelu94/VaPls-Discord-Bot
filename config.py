@@ -72,6 +72,10 @@ INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 INDIO_IMAGES_DIR = os.getenv("INDIO_IMAGES_DIR", "indio_images")
 INDIO_IMAGE_GUILD_ID = int(os.getenv("INDIO_IMAGE_GUILD_ID", "0"))
 
+# Ruta al archivo JSON con datos estáticos de usuarios (traits, anécdotas, etc.).
+# Default: data/users.json. Si no existe, se usa el fallback hardcodeado en users.py.
+USERS_PATH = os.getenv("USERS_PATH", "data/users.json")
+
 # MMR admin page Basic Auth credentials. Fall back to defaults for
 # backward compatibility but SHOULD be overridden in production.
 ADMIN_USER = os.getenv("ADMIN_USER", "dilelu")

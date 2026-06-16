@@ -1845,13 +1845,20 @@ def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
             bucket = merged.setdefault(name_str, {f: [] for f in _INDIO_USER_FIELDS})
             for key in _INDIO_USER_FIELDS:
                 existing = bucket.setdefault(key, [])
+                existing_norm = {_strip_accents_lower(e) for e in existing}
                 for item in data.get(key) or []:
                     s = str(item)
-                    if not s or s in existing:
+                    if not s:
+                        continue
+                    if s in existing:
+                        continue
+                    norm = _strip_accents_lower(s)
+                    if norm in existing_norm:
                         continue
                     if blocks and any(b in s.lower() for b in blocks):
                         continue
                     existing.append(s)
+                    existing_norm.add(norm)
     return merged
 
 
@@ -1940,22 +1947,28 @@ exacta:
   "chistes_internos": ["chistes recurrentes o referencias del grupo"]
 }
 
-Reglas estrictas:
-- NO inventes datos. Solo guardás lo que aparece textualmente o lo que se \
-  deduce directamente de la conversación.
-- Si un usuario repite la misma información varias veces en la conversación \
-  (ej: "soy de X", "te digo que soy de X", "no te olvides que soy de X"), \
-  guardala UNA sola vez. No dupliques ni expandís un rasgo porque fue \
-  repetido. No registres el hecho de que lo repitió como rasgo ni anécdota.
-- Si un dato ya está en la memoria actual, no lo volvás a agregar aunque \
-  aparezca en la conversación nueva, ni en palabras distintas.
-- Mantenés los datos previos a menos que la conversación los contradiga.
+FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
+- Saludos, despedidas o frases sociales vacías ("hola", "buenas", "como \
+  andan", "chau", "buenas noches", "nos vemos", "gracias", "de nada").
+- Mensajes de solo emojis, stickers, o reacciones.
+- URLs, links, o referencias a contenido externo sin contexto del grupo.
+- Órdenes o comandos directos al bot ("indio poné música", "pasá tal \
+  canción", "/play x", "tirá el audio de...").
+- Información técnica, configuraciones, o discusiones sobre el \
+  funcionamiento del bot/server.
+- Hechos que no involucren a miembros del grupo (charla sobre terceros, \
+  política, actualidad sin relación al grupo).
+- Repeticiones de información ya presente en la memoria actual.
+
+REGLAS DE CALIDAD:
 - Cada string ≤120 caracteres.
 - Máx %d rasgos, %d preguntas_tipicas y %d anecdotas por usuario.
 - Máx %d eventos_del_grupo y %d chistes_internos en total.
 - Conservás los nombres tal cual aparecen entre corchetes ("[nombre]: ...").
 - No incluyas al "indio" como usuario (es el bot, no un miembro del grupo).
 - Español rioplatense, casual, conciso.
+- Priorizá hechos concretos y novedosos sobre confirmaciones de lo que ya \
+  se sabe. Un "sí, soy de X" no agrega valor si ya está registrado.
 - Devolvé SOLO el JSON. Sin ```json ni explicación.
 """ % (
     _LT_TRAITS_PER_USER,
@@ -2116,11 +2129,35 @@ def _clamp_long_term(lt: dict) -> dict:
     return out
 
 
+_TRIVIAL_PATTERNS = re.compile(
+    r"^(hola|buenas|chau|chao|nos\s*vemos|buen[ao]s?\s*(noches|días|tardes)|"
+    r"gracias|graciass*|de\s*nada|ok|okey|okis|dale|sip|sis|si|no|"
+    r"jaja|lol|lmao|k\s*|x\s*|xd|:v|"
+    r"[\U0001F000-\U0010FFFF\s]+)$",
+    re.IGNORECASE,
+)
+
+
+def _is_trivial(text: str) -> bool:
+    """True for messages that add nothing to long-term memory: greetings,
+    goodbyes, single emojis, one-word acknowledgements, etc."""
+    if not text or len(text) > 60:
+        return False
+    stripped = text.strip()
+    if len(stripped) <= 2:
+        return True
+    if _TRIVIAL_PATTERNS.match(stripped):
+        return True
+    # Only emojis/unicode symbols
+    if all(ord(c) > 127 or c in " \n\r\t" for c in stripped):
+        return True
+    return False
+
+
 def _turns_to_text(turns: list[dict]) -> str:
     """Render a list of {role,parts:[{text}]} turns as plain text for the
-    compression prompt. Turns containing ``[voz]`` are skipped — las
-    transcripciones de voz no deben alimentar la memoria a largo plazo para
-    evitar el feedback loop voz → play_music."""
+    compression prompt. Turns containing ``[voz]``, trivial messages, or bot
+    commands are skipped — no deben alimentar la memoria a largo plazo."""
     lines: list[str] = []
     for t in turns:
         role = t.get("role", "?")
@@ -2129,6 +2166,8 @@ def _turns_to_text(turns: list[dict]) -> str:
         if not text:
             continue
         if "[voz]" in text:
+            continue
+        if _is_trivial(text):
             continue
         speaker = "indio" if role == "model" else "grupo"
         lines.append(f"{speaker}: {text}")

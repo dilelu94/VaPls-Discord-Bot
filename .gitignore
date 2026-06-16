@@ -8,7 +8,9 @@ audio/*
 !audio/.gitkeep
 
 # Persisted runtime data (e.g. /indio conversation memory)
-data/
+data/*
+# ...except the static users dataset (shared via git, not runtime-generated)
+!data/users.json
 
 # File transfer session data (tracked by the server, not the repo)
 transfers/
@@ -22,7 +24,10 @@ models/*
 *.zip
 *.log
 cookies.txt
-ssh-key*.key
+ssh*.key
+
+# Local agent settings (contains server paths/hosts/IPs/keys)
+.agents/settings.local.json
 
 # Mapeo de API keys de Gemini a sus dueños (vive en el server, contiene secretos)
 gemini_keys.json
