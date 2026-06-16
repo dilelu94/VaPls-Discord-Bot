@@ -359,6 +359,7 @@ async def _classify_and_log_message(
 geminiKeys.load_from_disk()
 
 intents = discord.Intents.default()
+intents.members = True
 intents.voice_states = True
 # Necesario para que on_message reciba DMs (handler que detecta API keys
 # de Gemini cuando los users se las mandan al bot por privado).
