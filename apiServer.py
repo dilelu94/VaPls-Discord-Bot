@@ -1200,6 +1200,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
             except Exception:
                 pass
 
+        if not guild.chunked:
+            await guild.chunk(cache=True)
+
         now = int(time.time())
         users = []
         for m in role.members:
