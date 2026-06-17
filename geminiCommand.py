@@ -487,25 +487,6 @@ class _PendingImage:
     original_filename: str
 
 
-class _FakeAttachmentFromUrl:
-    """Fake discord.Attachment that downloads from a URL on read().
-
-    Mirrors ``apiServer._FakeAttachment`` but lives here to avoid a circular
-    import (apiServer imports from geminiCommand). Used by
-    ``_offer_save_images_from_chat`` to create ``_ImageDMSession`` entries from
-    image URLs that arrived via a group chat / auto-reply, not via DM."""
-
-    def __init__(self, url: str, filename: str, mime_type: str):
-        self.url = url
-        self.filename = filename
-        self.content_type = mime_type
-
-    async def read(self) -> bytes:
-        async with aiohttp.ClientSession() as s:
-            async with s.get(self.url) as resp:
-                return await resp.read()
-
-
 class _ImageDMSession:
     """State machine for collecting images one-by-one via DM."""
 
@@ -3710,68 +3691,6 @@ async def _relay_dm_user(user_id: int, content: str) -> bool:
         return False
 
 
-async def _offer_save_images_from_chat(
-    user_id: int,
-    attachment_urls: list[dict],
-) -> None:
-    """Start an ``_ImageDMSession`` for images shared in a group chat.
-
-    Called after ``indioFromVoice`` responds with Gemini text so the user can
-    save/describe the image they just shared. Sends the first session messages
-    via DM relay (the userbot's ``/dm`` endpoint). The user replies via DM →
-    userbot POSTs to ``/indio-image`` → ``has_pending_image_session`` finds our
-    session → ``handle_indio_image_dm`` continues the state machine as usual.
-
-    Silently no-ops when there are no images, the user already has a pending
-    session, or the DM relay is unavailable.
-    """
-    if not attachment_urls or not user_id:
-        return
-    images = [
-        u for u in attachment_urls if u.get("mime_type", "").startswith("image/")
-    ][:3]
-    if not images:
-        return
-    if user_id in _pending_image_sessions:
-        return
-    fakes = [
-        _FakeAttachmentFromUrl(
-            u["url"],
-            u.get("filename", "image.png"),
-            u.get("mime_type", "image/png"),
-        )
-        for u in images
-    ]
-    sess = _ImageDMSession(user_id, fakes)
-    _pending_image_sessions[user_id] = sess
-    n = len(fakes)
-    if n == 1:
-        await _relay_dm_user(int(user_id), "📸 Recibí una imagen. Vamos a revisarla.")
-    else:
-        await _relay_dm_user(
-            int(user_id), f"📸 Recibí {n} imágenes. Las revisamos una por una."
-        )
-    img = sess.current
-    name = img.original_filename if img else "imagen"
-    await _relay_dm_user(
-        int(user_id),
-        (
-            f"🖼️ Imagen **{sess.current_index + 1}/{sess.total}**:\n"
-            f"Nombre del archivo: **{name}**\n\n"
-            f"¿Qué hacemos?\n"
-            f"• **1** — usar el nombre del archivo como descripción\n"
-            f"• **cancelar** — salteamos esta imagen\n"
-            f"• *cualquier otro texto* — se usa como tu descripción"
-        ),
-    )
-    sess.stage = "confirm"
-    logger.info(
-        "indio: started image DM session for user %d from chat with %d images",
-        user_id,
-        n,
-    )
-
-
 async def _relay_say(channel_id: int, content: str) -> Optional[int]:
     """Post ``content`` via the userbot relay and return the first message id
     (so the main bot can react to it), or None if the relay is off/failed.
@@ -5188,9 +5107,6 @@ async def indioFromVoice(
             "history_size_after": history_size_after,
         },
     )
-
-    if attachment_urls and user_id and not from_voice and not reply.function_calls:
-        _spawn(_offer_save_images_from_chat(user_id, attachment_urls))
 
 
 _BOT_TESTING_CHANNEL_NAME = "bot-testing"
