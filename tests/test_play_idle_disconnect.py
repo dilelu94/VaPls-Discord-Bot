@@ -13,6 +13,7 @@ its ⏮️/⏸️/⏭️/⏹️ buttons active forever. The promise we pin here:
 Only true boundaries are faked (Discord voice/message, FFmpeg, the yt-dlp file
 on disk); our own player/watchdog code runs for real.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -123,7 +124,9 @@ async def test_idle_disconnect_kills_ghost_buttons():
     player.controlMessage = msg
     guildPlayers[100] = player
 
-    task = idleWatchdog.start_idle_watchdog(bot, 100, idle_timeout=0.05, poll_interval=0.01)
+    task = idleWatchdog.start_idle_watchdog(
+        bot, 100, idle_timeout=0.05, poll_interval=0.01
+    )
     await _wait_done(task)
 
     # The same panel was edited in place (no new chatter posted elsewhere).
@@ -156,13 +159,16 @@ async def test_idle_disconnect_without_last_song_has_no_reconnect():
     player.controlMessage = msg
     guildPlayers[100] = player
 
-    task = idleWatchdog.start_idle_watchdog(bot, 100, idle_timeout=0.05, poll_interval=0.01)
+    task = idleWatchdog.start_idle_watchdog(
+        bot, 100, idle_timeout=0.05, poll_interval=0.01
+    )
     await _wait_done(task)
 
     assert msg.last_view is not None
     buttons = _buttons(msg.last_view)
-    assert not any(b.custom_id == "btn_reconnect" for b in buttons), \
+    assert not any(b.custom_id == "btn_reconnect" for b in buttons), (
         "no song to revive → no reconnect button"
+    )
     assert all(b.disabled for b in buttons), "every leftover button must be dead"
 
 
@@ -182,7 +188,9 @@ async def test_idle_disconnect_without_panel_stays_silent():
     player.textChannel = text_channel
     guildPlayers[100] = player
 
-    task = idleWatchdog.start_idle_watchdog(bot, 100, idle_timeout=0.05, poll_interval=0.01)
+    task = idleWatchdog.start_idle_watchdog(
+        bot, 100, idle_timeout=0.05, poll_interval=0.01
+    )
     await _wait_done(task)
 
     assert vc.disconnect.await_count >= 1
@@ -204,7 +212,9 @@ async def test_reconnect_button_absent_without_song():
     from playCommand import DisconnectedControlView
 
     view = DisconnectedControlView(make_bot(), 100, None)
-    assert not any(getattr(c, "custom_id", None) == "btn_reconnect" for c in view.children)
+    assert not any(
+        getattr(c, "custom_id", None) == "btn_reconnect" for c in view.children
+    )
 
 
 # --- reconnectLastSong --------------------------------------------------------
@@ -223,7 +233,9 @@ async def test_reconnect_fails_when_nobody_in_voice(monkeypatch):
 
     bot = MagicMock()
     bot.user = SimpleNamespace(id=42)
-    bot.get_guild.return_value = SimpleNamespace(get_channel=lambda i: None, voice_client=None)
+    bot.get_guild.return_value = SimpleNamespace(
+        get_channel=lambda i: None, voice_client=None
+    )
     monkeypatch.setattr(playCommand, "_pick_voice_channel", lambda b, g: None)
 
     ok, _ = await reconnectLastSong(bot, 100, {"id": "x", "title": "T"})
@@ -249,7 +261,8 @@ async def test_reconnect_revives_the_song(monkeypatch, tmp_path):
     (downloads / "video1.mp3").write_bytes(b"\x00" * 16)
     real_dirname = os.path.dirname
     monkeypatch.setattr(
-        playCommand.os.path, "dirname",
+        playCommand.os.path,
+        "dirname",
         lambda p: str(tmp_path) if "playCommand" in str(p) else real_dirname(p),
         raising=True,
     )
@@ -274,10 +287,16 @@ async def test_reconnect_revives_the_song(monkeypatch, tmp_path):
     bot.get_guild = MagicMock(return_value=guild)
 
     song = {"id": "video1", "title": "Bohemian Rhapsody"}
-    with patch("playCommand.set_pending_trigger"), \
-         patch.object(playCommand.GuildPlayer, "startPreDownloading", new=MagicMock()):
+    with (
+        patch("playCommand.set_pending_trigger"),
+        patch.object(playCommand.GuildPlayer, "startPreDownloading", new=MagicMock()),
+    ):
         ok, title = await reconnectLastSong(
-            bot, 100, song, voice_channel_id=4242, requester=SimpleNamespace(id=7),
+            bot,
+            100,
+            song,
+            voice_channel_id=4242,
+            requester=SimpleNamespace(id=7),
         )
 
     assert ok is True
@@ -287,3 +306,41 @@ async def test_reconnect_revives_the_song(monkeypatch, tmp_path):
     assert fresh_vc.play.call_count == 1
     player = playCommand.guildPlayers.get(100)
     assert player is not None and player.currentSong["id"] == "video1"
+
+
+# --- InterruptedView ---------------------------------------------------------
+
+
+def _player_stub(queue=None):
+    """Build a minimal player stub for InterruptedView tests."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(queue=queue or [])
+
+
+async def test_interrupted_view_reconnect_present_with_queue():
+    """Queue has songs → reconnect button stays."""
+    from playCommand import InterruptedView
+
+    view = InterruptedView(_player_stub(queue=[{"id": "y", "title": "Y"}]))
+    assert any(
+        getattr(c, "custom_id", None) == "btn_int_reconnect" for c in view.children
+    )
+
+
+async def test_interrupted_view_reconnect_absent_without_queue():
+    """No queued songs → reconnect button is dropped."""
+    from playCommand import InterruptedView
+
+    view = InterruptedView(_player_stub(queue=[]))
+    assert not any(
+        getattr(c, "custom_id", None) == "btn_int_reconnect" for c in view.children
+    )
+
+
+async def test_interrupted_view_stop_button_always_present():
+    """Stop & Clear button is always in the view, regardless of queue."""
+    from playCommand import InterruptedView
+
+    view = InterruptedView(_player_stub(queue=[]))
+    assert any(getattr(c, "custom_id", None) == "btn_int_stop" for c in view.children)

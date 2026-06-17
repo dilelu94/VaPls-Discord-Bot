@@ -2836,13 +2836,24 @@ class PlayerControlView(discord.ui.View):
 class InterruptedView(discord.ui.View):
     """Minimal view shown when playback is interrupted mid-stream.
 
-    No ghost buttons — just a single ▶️ Reconectar button that resumes the
-    full GuildPlayer (current song at saved position + full queue).
+    Shows a ▶️ Reconectar button that resumes the full GuildPlayer (current
+    song at saved position + queued songs) and a ⏹️ Stop & Clear button to
+    dismiss the interrupted state.
+
+    The reconnect button is dropped when there are no queued songs after the
+    current one — resuming just to finish a single track would be misleading
+    when nothing follows it.
     """
 
     def __init__(self, player):
         super().__init__(timeout=None)
         self.player = player
+
+        # No upcoming songs → nothing meaningful to resume, drop the button.
+        if not self.player.queue:
+            for child in list(self.children):
+                if getattr(child, "custom_id", None) == "btn_int_reconnect":
+                    self.remove_item(child)
 
     @discord.ui.button(
         label="▶️ Reconectar",
