@@ -459,6 +459,9 @@ _IMAGE_SESSION_TIMEOUT = 300  # 5 min sin respuesta → se cancela
 _INDIO_IMAGE_ROLE = (
     "Main Characters"  # rol requerido para enviar imágenes al Indio por DM
 )
+_IMAGE_SESSION_STORE = os.path.join(
+    os.path.dirname(config.INDIO_MEMORY_PATH), "pending_image_sessions.json"
+)
 
 
 def _can_send_indio_images(
@@ -485,6 +488,35 @@ def _can_send_indio_images(
 class _PendingImage:
     attachment: "discord.Attachment"
     original_filename: str
+
+
+class _StoredAttachment:
+    """Serializable stand-in for discord.Attachment with URL-based read()."""
+
+    def __init__(self, url: str, filename: str, content_type: str):
+        self.url = url
+        self.filename = filename
+        self.content_type = content_type
+
+    async def read(self) -> bytes:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(self.url) as resp:
+                return await resp.read()
+
+    def to_dict(self) -> dict:
+        return {
+            "url": self.url,
+            "filename": self.filename,
+            "content_type": self.content_type,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "_StoredAttachment":
+        return cls(
+            d["url"],
+            d["filename"],
+            d.get("content_type", "image/png"),
+        )
 
 
 class _ImageDMSession:
@@ -529,6 +561,61 @@ class _ImageDMSession:
     def is_done(self) -> bool:
         return self.stage == "done" or self.current_index >= self.total
 
+    def to_dict(self) -> dict:
+        return {
+            "author_id": self.author_id,
+            "pending": [
+                {
+                    "original_filename": p.original_filename,
+                    "attachment": {
+                        "url": p.attachment.url,
+                        "filename": p.attachment.filename,
+                        "content_type": getattr(
+                            p.attachment, "content_type", "image/png"
+                        ),
+                    },
+                }
+                for p in self.pending
+            ],
+            "total": self.total,
+            "processed": self.processed,
+            "current_index": self.current_index,
+            "stage": self.stage,
+            "last_activity": self.last_activity,
+            "_candidate_desc": self._candidate_desc,
+            "_retries": self._retries,
+            "_pending_desc": self._pending_desc,
+            "_pending_tags": self._pending_tags,
+            "_pending_mime": self._pending_mime,
+            "_pending_ext": self._pending_ext,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "_ImageDMSession":
+        sess = object.__new__(cls)
+        sess.author_id = d["author_id"]
+        sess.pending = [
+            _PendingImage(
+                _StoredAttachment.from_dict(p["attachment"]),
+                p["original_filename"],
+            )
+            for p in d["pending"]
+        ]
+        sess.total = d["total"]
+        sess.processed = d.get("processed", [])
+        sess.current_index = d.get("current_index", 0)
+        sess.stage = d.get("stage", "confirm")
+        sess.last_activity = d.get("last_activity", _time.time())
+        sess._candidate_desc = d.get("_candidate_desc", "")
+        sess._retries = d.get("_retries", 0)
+        sess._pending_desc = d.get("_pending_desc", "")
+        sess._pending_tags = d.get("_pending_tags", [])
+        sess._pending_data = b""
+        sess._pending_mime = d.get("_pending_mime", "")
+        sess._pending_ext = d.get("_pending_ext", "")
+        sess._data_read = False
+        return sess
+
 
 _pending_image_sessions: dict[int, _ImageDMSession] = {}
 _image_mgr: "_Optional[imageManager.ImageManager]" = None
@@ -539,6 +626,42 @@ def _init_image_mgr() -> imageManager.ImageManager:
     if _image_mgr is None:
         _image_mgr = imageManager.ImageManager(config.INDIO_IMAGES_DIR)
     return _image_mgr
+
+
+def _persist_pending_sessions() -> None:
+    path = _IMAGE_SESSION_STORE
+    try:
+        data = {
+            str(uid): sess.to_dict() for uid, sess in _pending_image_sessions.items()
+        }
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except Exception:
+        logger.exception("failed to persist image sessions")
+
+
+def _load_pending_sessions() -> None:
+    path = _IMAGE_SESSION_STORE
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return
+    except Exception:
+        logger.exception("failed to load image sessions from %s", path)
+        return
+    restored = 0
+    for uid_str, d in data.items():
+        try:
+            sess = _ImageDMSession.from_dict(d)
+            _pending_image_sessions[int(uid_str)] = sess
+            restored += 1
+        except Exception as e:
+            logger.warning("skipping invalid image session %s: %s", uid_str, e)
+    if restored:
+        logger.info("restored %d pending image sessions from %s", restored, path)
 
 
 def has_pending_image_session(author_id: int) -> bool:
@@ -647,6 +770,8 @@ def _cleanup_stale_sessions() -> None:
         s = _pending_image_sessions.pop(uid, None)
         if s is not None:
             logger.info("image DM session %d stale — cleaned up", uid)
+    if stale:
+        _persist_pending_sessions()
 
 
 async def handle_indio_image_dm(
@@ -668,6 +793,7 @@ async def handle_indio_image_dm(
         and (_time.time() - stale.last_activity) > _IMAGE_SESSION_TIMEOUT
     ):
         _pending_image_sessions.pop(uid, None)
+        _persist_pending_sessions()
         await message.channel.send(
             "⏰ Pasaron más de 5 minutos... te fuiste afk. "
             "Más tarde seguimos, me vas a tener que volver a "
@@ -682,6 +808,7 @@ async def handle_indio_image_dm(
     if attachments and uid not in _pending_image_sessions:
         sess = _ImageDMSession(uid, attachments)
         _pending_image_sessions[uid] = sess
+        _persist_pending_sessions()
         n = len(attachments)
         analytics.capture(
             "indio_image_session_started",
@@ -1245,6 +1372,7 @@ async def _finish_session(
     """Wrap up the session and show the summary."""
     uid = sess.author_id
     _pending_image_sessions.pop(uid, None)
+    _persist_pending_sessions()
     n = len(sess.processed)
     analytics.capture(
         "indio_image_session_finished",
@@ -5199,3 +5327,4 @@ async def askIndio(
 # (incluida _sanitize_for_history) ya estan definidas — sino la sanitizacion
 # de history al startup falla con NameError.
 _load_indio_state()
+_load_pending_sessions()
