@@ -57,31 +57,32 @@ def test_block_substrings_are_not_exposed_as_user_fields():
         )
 
 
-def test_blocked_dynamic_facts_are_scrubbed_from_user_dossier():
+def test_blocked_dynamic_facts_are_scrubbed_from_user_dossier(monkeypatch):
     """Si Gemini distila un fact que matchea un block del usuario, ese fact
     se filtra del dossier de ESE usuario antes de llegar al prompt. Pinea el
     comportamiento real del feature block_dynamic_substrings."""
-    # Miles tiene block relacionados a tecnología en users.py real.
+    ghost = {"name": "Ghost", "block_dynamic_substrings": ["secreta"]}
+    monkeypatch.setattr(gc, "_NON_DISCORD_MEMBERS", [ghost])
+    monkeypatch.setattr(gc, "_USERS", {})
     lt = {
         "users": {
-            "Miles": {
+            "Ghost": {
                 "traits": [
-                    "sabe mucho de tecnología",  # debería filtrarse (matchea block)
-                    "le gusta Queen",  # debería pasar (no matchea ningún block)
+                    "tiene un dato secreta",  # debería filtrarse (matchea block)
+                    "es un tipazo",  # debería pasar
                 ]
             }
         }
     }
-    rendered = _format_long_term(lt, current_members=["Miles"])
+    rendered = _format_long_term(lt, current_members=["Ghost"])
 
-    # Sección del dossier de Miles específicamente.
-    miles_idx = rendered.find("- Miles:")
-    assert miles_idx >= 0, "expected Miles dossier section"
-    next_user_idx = rendered.find("\n- ", miles_idx + 1)
-    miles_chunk = rendered[miles_idx : next_user_idx if next_user_idx > 0 else None]
+    ghost_idx = rendered.find("- Ghost:")
+    assert ghost_idx >= 0, "expected Ghost dossier section"
+    next_idx = rendered.find("\n- ", ghost_idx + 1)
+    chunk = rendered[ghost_idx : next_idx if next_idx > 0 else None]
 
-    assert "le gusta Queen" in miles_chunk
-    assert "sabe mucho de tecnología" not in miles_chunk
+    assert "es un tipazo" in chunk
+    assert "dato secreta" not in chunk
 
 
 def test_unknown_user_field_is_ignored(monkeypatch):
