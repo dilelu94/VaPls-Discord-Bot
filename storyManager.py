@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import types
+
 import aiohttp
 import discord
 from PIL import Image
@@ -40,6 +42,7 @@ _messages_since_story: dict[int, int] = {}
 _pending_reviews: dict[int, dict] = {}
 _awaiting_first_msg: dict[int, dict] = {}
 _story_dm_context: dict[int, dict] = {}
+
 _pending_owner_approvals: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
@@ -923,9 +926,9 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 except Exception:
                     pass
     else:
-        # Not related → Indio starts a DM about the image
+        # Not related → start ImageDMSession via DM so the user can save the image
         logger.info(
-            "[STORY] feedback unrelated, sending DM to user=%s guild=%s",
+            "[STORY] feedback unrelated, starting ImageDMSession user=%s guild=%s",
             message.author.id,
             guild_id,
         )
@@ -943,21 +946,48 @@ async def handle_first_msg_after_story(message, bot) -> None:
                             await m.delete()
                         except Exception:
                             pass
-            dm_mid = await _relay_dm_file(
-                message.author.id,
-                review["story_text"],
-                str(full.resolve()),
+
+            data = full.read_bytes()
+            ext = full.suffix[1:] or "png"
+            mime = {
+                "png": "image/png",
+                "jpg": "image/jpeg",
+                "jpeg": "image/jpeg",
+                "gif": "image/gif",
+                "webp": "image/webp",
+            }.get(ext, "image/png")
+
+            class _StoryBuffer:
+                def __init__(self):
+                    self.messages = []
+
+                async def send(self, content=None):
+                    if content:
+                        self.messages.append(content)
+
+            class _FileAtt:
+                def __init__(self, data, filename, content_type):
+                    self._data = data
+                    self.filename = filename
+                    self.content_type = content_type
+
+                async def read(self):
+                    return self._data
+
+            fake_att = _FileAtt(data, full.name, mime)
+            buf = _StoryBuffer()
+            author = types.SimpleNamespace(
+                id=message.author.id, display_name=message.author.display_name
             )
-            logger.info(
-                "[STORY] DM sent user=%s msg_id=%s",
-                message.author.id,
-                dm_mid,
+            msg = types.SimpleNamespace(
+                author=author, channel=buf, attachments=[fake_att], content=""
             )
-            _story_dm_context[message.author.id] = {
-                "rel_path": rel_path,
-                "story_text": review["story_text"],
-                "feedback": feedback,
-            }
+            await geminiCommand.handle_indio_image_dm(msg, [fake_att])
+
+            session_text = (
+                "\n\n".join(buf.messages) if buf.messages else "📸 Acá está la imagen."
+            )
+            await _relay_dm_file(message.author.id, session_text, str(full.resolve()))
         else:
             logger.warning(
                 "[STORY] image not found for DM guild=%s rel_path=%s",
