@@ -1774,6 +1774,105 @@ async def actividad(ctx):
 
 
 @bot.slash_command(
+    name="estadisticas",
+    description="Muestra tus estadísticas de voz y ranking MMR",
+)
+async def estadisticas(
+    ctx,
+    usuario: discord.Option(
+        discord.Member,
+        "Usuario a consultar (opcional, default vos)",
+        required=False,
+    ) = None,
+):
+    await safe_defer(ctx, ephemeral=usuario is None)
+    _track_command(ctx, "estadisticas")
+    if ctx.guild is None:
+        await safe_respond(ctx, "❌ Este comando solo funciona en un servidor.")
+        return
+
+    target = usuario or ctx.author
+    uid = target.id
+
+    # Fetch voice summary (last 7 days)
+    now = int(time.time())
+    week_ago = now - 7 * 86400
+    voice_data = await _fetch_activity(
+        "/activity/voice-summary",
+        {"user_id": uid, "guild_id": ctx.guild.id, "since": str(week_ago)},
+    )
+
+    # Fetch leaderboard to calculate ranking position
+    lb_data = await _fetch_activity(
+        "/activity/leaderboard", {"guild_id": ctx.guild.id, "limit": "999"}
+    )
+
+    # Calculate ranking
+    ranking_pos = None
+    total_users = 0
+    target_rating = None
+    if lb_data:
+        rows = lb_data.get("leaderboard", [])
+        total_users = len(rows)
+        for i, row in enumerate(rows):
+            if row["user_id"] == uid:
+                ranking_pos = i + 1
+                target_rating = round(row["rating"], 1)
+                break
+
+    embed = discord.Embed(
+        title=f"📊 Estadísticas de {target.display_name}",
+        color=0xE94560,
+    )
+
+    # Ranking
+    if ranking_pos:
+        embed.add_field(
+            name="🏆 Ranking MMR",
+            value=f"**#{ranking_pos}** de {total_users} usuarios  •  Rating: **{target_rating}**",
+            inline=False,
+        )
+    elif total_users > 0:
+        embed.add_field(
+            name="🏆 Ranking MMR",
+            value=f"Fuera del ranking ({total_users} usuarios activos)",
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🏆 Ranking MMR",
+            value="Todavía no hay datos",
+            inline=False,
+        )
+
+    # Voice stats
+    if voice_data and voice_data.get("summary"):
+        s = voice_data["summary"]
+        conn_h = s["total_connected"] / 3600
+        muted_h = s["total_muted"] / 3600
+        embed.add_field(
+            name="🎙️ Voz (última semana)",
+            value=(
+                f"🕐 **{conn_h:.1f}h** en canales de voz\n"
+                f"🔇 **{muted_h:.1f}h** muteado\n"
+                f"📞 **{s['sessions']}** sesiones"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="🎙️ Voz (última semana)",
+            value="Sin actividad de voz registrada",
+            inline=False,
+        )
+
+    try:
+        await ctx.followup.send(embed=embed)
+    except Exception:
+        await safe_respond(ctx, "No pude mostrar las estadísticas.")
+
+
+@bot.slash_command(
     name="huh",
     description="Activa/desactiva el sonido de confirmación al detectar wake-word — hecho con ayuda de chipotlai",
 )
