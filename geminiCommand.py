@@ -1990,6 +1990,8 @@ def _merge_user_dossiers(lt_users: dict) -> dict[str, dict[str, list[str]]]:
                         continue
                     if blocks and any(b in s.lower() for b in blocks):
                         continue
+                    if _has_general_block_words(s):
+                        continue
                     existing.append(s)
                     existing_norm.add(norm)
     return merged
@@ -2136,6 +2138,27 @@ def _extract_json(text: str) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
+# Substrings globales que no deben aparecer en la memoria a largo plazo del
+# Indio bajo NINGUN concepto, independientemente del usuario o sección. Actúa
+# como filtro de seguridad para rumores, acusaciones o datos falsos que Gemini
+# haya comprimido de conversaciones. Se aplica al cargar, al comprimir y al
+# renderizar la memoria.
+_GENERAL_BLOCK_SUBSTRINGS = frozenset(
+    {
+        "endogámico",
+        "endogamico",
+        "su propia hermana",
+        "le tiene ganas a la hermana",
+    }
+)
+
+
+def _has_general_block_words(text: str) -> bool:
+    """True si el texto contiene alguna substring global bloqueada."""
+    t = _strip_accents_lower(text)
+    return any(w in t for w in _GENERAL_BLOCK_SUBSTRINGS)
+
+
 # Palabras clave musicales que no deben contaminar la memoria a largo plazo
 # del Indio. Cuando aparecen en rasgos/anécdotas/eventos se filtran para que
 # el modelo no aprenda el patrón "voz → play_music" desde su propio historial.
@@ -2173,7 +2196,8 @@ def _has_music_block_words(text: str) -> bool:
 def _clean_music_from_long_term(lt: dict) -> dict:
     """Filtra entradas relacionadas con música de la memoria a largo plazo.
     Remueve rasgos/anécdotas/eventos/chistes que contengan keywords musicales,
-    para que el Indio no acumule contexto que lo sesgue a llamar play_music."""
+    para que el Indio no acumule contexto que lo sesgue a llamar play_music.
+    También aplica _GENERAL_BLOCK_SUBSTRINGS para filtrar rumores/offsala."""
     if not lt:
         return lt
     out: dict = {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
@@ -2184,7 +2208,10 @@ def _clean_music_from_long_term(lt: dict) -> dict:
         cleaned: dict[str, list[str]] = {}
         for field in ("traits", "preguntas_tipicas", "anecdotas"):
             items = [
-                s for s in (data.get(field) or []) if not _has_music_block_words(str(s))
+                s
+                for s in (data.get(field) or [])
+                if not _has_music_block_words(str(s))
+                and not _has_general_block_words(str(s))
             ]
             if items:
                 cleaned[field] = items
@@ -2193,12 +2220,12 @@ def _clean_music_from_long_term(lt: dict) -> dict:
     out["eventos_del_grupo"] = [
         e
         for e in (lt.get("eventos_del_grupo") or [])
-        if not _has_music_block_words(str(e))
+        if not _has_music_block_words(str(e)) and not _has_general_block_words(str(e))
     ]
     out["chistes_internos"] = [
         j
         for j in (lt.get("chistes_internos") or [])
-        if not _has_music_block_words(str(j))
+        if not _has_music_block_words(str(j)) and not _has_general_block_words(str(j))
     ]
     return out
 
@@ -2218,15 +2245,13 @@ def _clamp_long_term(lt: dict) -> dict:
             src_traits = [str(t)[:120] for t in (data.get("traits") or []) if t]
             src_qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t]
             src_anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t]
-            traits = [t for t in src_traits if not _has_music_block_words(t)][
-                :_LT_TRAITS_PER_USER
-            ]
-            qs = [t for t in src_qs if not _has_music_block_words(t)][
-                :_LT_QUESTIONS_PER_USER
-            ]
-            anec = [t for t in src_anec if not _has_music_block_words(t)][
-                :_LT_ANECDOTES_PER_USER
-            ]
+
+            def _memory_ok(t):
+                return not _has_music_block_words(t) and not _has_general_block_words(t)
+
+            traits = [t for t in src_traits if _memory_ok(t)][:_LT_TRAITS_PER_USER]
+            qs = [t for t in src_qs if _memory_ok(t)][:_LT_QUESTIONS_PER_USER]
+            anec = [t for t in src_anec if _memory_ok(t)][:_LT_ANECDOTES_PER_USER]
             if traits or qs or anec:
                 out["users"][name] = {
                     "traits": traits,
@@ -2238,14 +2263,14 @@ def _clamp_long_term(lt: dict) -> dict:
         out["eventos_del_grupo"] = [
             e
             for e in [str(e)[:120] for e in events if e]
-            if not _has_music_block_words(e)
+            if not _has_music_block_words(e) and not _has_general_block_words(e)
         ][:_LT_GROUP_EVENTS]
     jokes = lt.get("chistes_internos") if isinstance(lt, dict) else None
     if isinstance(jokes, list):
         out["chistes_internos"] = [
             j
             for j in [str(j)[:120] for j in jokes if j]
-            if not _has_music_block_words(j)
+            if not _has_music_block_words(j) and not _has_general_block_words(j)
         ][:_LT_JOKES]
     # Final safety: if still too big after structural clamp, drop oldest events/jokes.
     while len(json.dumps(out, ensure_ascii=False)) > _LONG_TERM_MAX_CHARS:

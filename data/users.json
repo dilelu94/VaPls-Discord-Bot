@@ -42,12 +42,8 @@
         "Un pibe de pelo oscuro corto, sonriendo feliz frente a su laptop con pegatinas y una remera de la banda Queen."
       ],
       "block_dynamic_substrings": [
-        "le interesa la parte técnica",
-        "le interesa la parte tecnica",
-        "sabe mucho de tecnolog",
-        "programador del carajo",
-        "explicó al indio sobre sus límites técnicos",
-        "explico al indio sobre sus limites tecnicos"
+        "le tiene ganas a la hermana",
+        "según enrique"
       ]
     },
     "189830039922016256": {
@@ -184,6 +180,11 @@
         "uruguayo",
         "profesor de musica",
         "ama trabajar con niños (es su laburo dando clases)"
+      ],
+      "block_dynamic_substrings": [
+        "miles",
+        "hermana de mila",
+        "su propia hermana"
       ]
     },
     "268872891729182720": {
