@@ -151,3 +151,24 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
 | `TRANSFER_CHUNK_SIZE`    | `10MB`                 | Tamaño de cada chunk             |
 | `TRANSFER_REQUIRED_ROLE` | `Main Characters`      | Rol que puede usar el comando    |
 | `TRANSFER_BASE_URL`      | `http://141.148.84.55` | URL base para links de descarga  |
+
+## Changelog reciente
+
+### Seguridad
+
+- **Eliminada SSH key huérfana** (`repos/ssh-oracle.key`) que no conectaba a ningún server
+- **Destrackeado `.agents/settings.local.json`** de git (contenía rutas de keys e IP del server)
+- **`.gitignore` reforzado**: `ssh*.key`, `.agents/settings.local.json`, y se cambió `data/` → `data/*` para permitir exclusiones específicas
+
+### Datos de usuarios editables
+
+- **`data/users.json`**: datos estáticos de los 15 usuarios, `GROUP_LORE` y `NON_DISCORD_MEMBERS` migrados desde `users.py` a un JSON editable sin tocar código
+- **`users.py`** refactorizado para cargar desde `data/users.json` con fallback al diccionario hardcodeado. Las importaciones existentes (`from users import USERS`) siguen funcionando igual
+- **`USERS_PATH`** agregado como variable de entorno (default `data/users.json`) en `config.py` y `.env.example`
+
+### Calidad de aprendizaje del Indio
+
+- **Prompt `_COMPRESS_SYSTEM`** mejorado con reglas de filtrado estrictas: no guardar saludos/despedidas, emojis solos, URLs, comandos al bot, info técnica, ni repeticiones
+- **Filtro pre-compresión**: nueva función `_is_trivial()` que descarta mensajes de 1-2 palabras, solo emojis, salitudes y acuses de recibo antes de que lleguen a Gemini para comprimir
+- **Deduplicación mejorada**: `_merge_user_dossiers` ahora usa comparación accent-insensitive para evitar duplicados semánticos (ej. "programador" ≈ "programador jr" no se duplica si ya existe)
+- **Prompt del Indio** modificado para que sea más wholesome: incluye instrucciones de mandar buena onda, bancar a los amigos y reconocer logros, sin perder la personalidad divertida
