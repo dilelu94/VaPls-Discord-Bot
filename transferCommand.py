@@ -108,6 +108,8 @@ class TransferManager:
         sess = self.sessions.get(token)
         if not sess or sess.expired:
             return "sesión inválida o expirada"
+        if sess.filename:
+            return "upload ya iniciado"
         if "/" in filename or "\\" in filename:
             logger.warning(
                 "upload rejected path traversal token=%s filename=%s",
@@ -205,7 +207,11 @@ class TransferManager:
         dirpath = os.path.join(config.TRANSFER_DIR, token)
         filepath = os.path.join(dirpath, sess.filename)
         try:
-            with open(filepath, "ab") as f:
+            try:
+                f = open(filepath, "r+b")
+            except FileNotFoundError:
+                f = open(filepath, "wb")
+            with f:
                 f.seek(chunk_idx * sess.chunk_size)
                 f.write(data)
         except OSError as e:
@@ -226,7 +232,21 @@ class TransferManager:
         if not sess or sess.expired:
             logger.warning("complete: invalid/expired session token=%s", token[:8])
             return "sesión inválida o expirada"
+        if not sess.filename:
+            return "upload no iniciado"
+        if sess.total_size <= 0:
+            return "tamaño inválido"
         expected = (sess.total_size + sess.chunk_size - 1) // sess.chunk_size
+        if len(sess.received) != expected:
+            logger.warning(
+                "complete: missing chunks token=%s expected=%d received=%d",
+                token[:8],
+                expected,
+                len(sess.received),
+            )
+            return (
+                f"faltan chunks: esperados {expected}, recibidos {len(sess.received)}"
+            )
         actual_size = 0
         filepath = os.path.join(config.TRANSFER_DIR, token, sess.filename)
         try:
@@ -855,20 +875,25 @@ async function startUpload() {{
     const end = Math.min(start + CHUNK_SIZE, file.size);
     const chunk = file.slice(start, end);
 
-    try {{
-      const t0 = Date.now();
-      const r = await fetch(`/upload/${{TOKEN}}/chunk/${{i}}`, {{method:"POST", body:chunk}});
-      if (!r.ok) {{
-        const err = await r.json();
-        el.innerHTML = '<span class="error">❌ Error en chunk ' + i + ': ' + (err.error || "desconocido") + '</span>';
-        uploading = false;
-        return;
+    const maxRetries = 3;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {{
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000));
+      try {{
+        const r = await fetch(`/upload/${{TOKEN}}/chunk/${{i}}`, {{method:"POST", body:chunk}});
+        if (r.ok) {{ uploadedBytes += chunk.size; break; }}
+        if (attempt === maxRetries - 1) {{
+          const err = await r.json();
+          el.innerHTML = '<span class="error">❌ Error en chunk ' + i + ': ' + (err.error || "desconocido") + '</span>';
+          uploading = false;
+          return;
+        }}
+      }} catch (e) {{
+        if (attempt === maxRetries - 1) {{
+          el.innerHTML = '<span class="error">❌ Error de red en chunk ' + i + ' tras ' + maxRetries + ' intentos.</span>';
+          uploading = false;
+          return;
+        }}
       }}
-      uploadedBytes += chunk.size;
-    }} catch (e) {{
-      el.innerHTML = '<span class="error">❌ Error de red en chunk ' + i + '. Recargá para reanudar.</span>';
-      uploading = false;
-      return;
     }}
     prog.value = Math.round(((i + 1) / totalChunks) * 100);
     updateUploadETA();

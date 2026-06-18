@@ -194,6 +194,71 @@ async def test_status_expired_for_inactive_uncompleted(_fresh_manager, tmp_path)
     assert body["expired"] is True
 
 
+# --- init_upload rejects re-initialization -----------------------------------
+
+
+def test_init_upload_rejects_reinit(_fresh_manager):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    mgr.init_upload(sess.token, "test.zip", 100)
+    err = mgr.init_upload(sess.token, "otro.zip", 200)
+    assert err == "upload ya iniciado"
+    assert sess.filename == "test.zip"
+    assert sess.total_size == 100
+
+
+# --- complete_upload guards --------------------------------------------------
+
+
+def test_complete_upload_rejects_uninitialized(_fresh_manager):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    err = mgr.complete_upload(sess.token)
+    assert err == "upload no iniciado"
+
+
+def test_complete_upload_rejects_missing_chunks(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    cs = sess.chunk_size
+    mgr.init_upload(sess.token, "test.zip", cs + 1)  # spans 2 chunks
+    mgr.add_chunk(sess.token, 0, b"x" * cs)
+    # chunk 1 is missing
+    err = mgr.complete_upload(sess.token)
+    assert err is not None
+    assert "faltan chunks" in err
+
+
+def test_complete_upload_passes_with_all_chunks(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    cs = sess.chunk_size
+    mgr.init_upload(sess.token, "test.zip", cs + 1)
+    mgr.add_chunk(sess.token, 0, b"x" * cs)
+    mgr.add_chunk(sess.token, 1, b"y")
+    err = mgr.complete_upload(sess.token)
+    assert err is None
+    assert sess.completed is True
+    assert sess.ready is True
+
+
+# --- add_chunk writes to correct position (not append) -----------------------
+
+
+def test_add_chunk_writes_to_correct_position(_fresh_manager, tmp_path):
+    mgr = _fresh_manager
+    sess = mgr.create_session(1, "tester", 42, 100)
+    cs = sess.chunk_size
+    mgr.init_upload(sess.token, "test.zip", cs * 2)
+    mgr.add_chunk(sess.token, 1, b"BBBB")
+    mgr.add_chunk(sess.token, 0, b"AAAA")
+    filepath = tmp_path / "transfers" / sess.token / "test.zip"
+    with open(filepath, "rb") as f:
+        assert f.read(4) == b"AAAA"
+        f.seek(cs)
+        assert f.read(4) == b"BBBB"
+
+
 # --- required role check (extracted from bot.py) -----------------------------
 
 

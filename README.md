@@ -156,6 +156,14 @@ El botón `➕` en la página extiende +24h el tiempo restante, sin superar el m
 
 ## Changelog reciente
 
+### Resumen de subidas resilientes y verificación de integridad
+
+- **`add_chunk()` escribe en la posición correcta**: se reemplazó `"ab"` (append) por `"r+b"` con fallback a `"wb"`, por lo que `seek()` ahora funciona correctamente para todos los índices. Los chunks fuera de orden o re-subidas ya no corrompen el archivo.
+- **`init_upload()` no resetea sesiones activas**: agregado guard `if sess.filename` para evitar que una doble llamada borre el tracking de chunks recibidos.
+- **`complete_upload()` verifica integridad**: ahora valida que `filename` no esté vacío, `total_size > 0`, y que la cantidad de chunks recibidos coincida con el expected. Previene que el sistema marque "completado" un upload incompleto.
+- **Reintentos en el frontend**: el loop de subida reintenta cada chunk hasta 3 veces con 1s de backoff en errores de red, mejorando la tolerancia a conexiones inestables.
+- **Tests**: 25 tests (antes 20) cubriendo los nuevos guards y la escritura posicional.
+
 ### TTL configurable en /transferir y extend +24h
 
 - **`/transferir [dias]`**: nuevo argumento opcional (1-30, default 1) que define cuántos días vive el archivo antes de borrarse. `dias=0` equivale a 24h históricas.
