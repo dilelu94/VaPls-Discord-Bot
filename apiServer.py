@@ -1451,7 +1451,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         color=0x238636,
                     )
                     view = discord.ui.View()
-                    view.add_item(discord.ui.Button(label="🔗 Descargar", url=dl))
+                    view.add_item(discord.ui.Button(label="📋 Copiar link", url=dl))
                     await channel.send(embed=embed, view=view)
                 analytics.capture(
                     "transfer_complete",

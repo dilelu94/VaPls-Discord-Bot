@@ -422,7 +422,7 @@ async def test_upload_complete_embed_contains_download_button(_fresh_manager, tm
     view = kwargs["view"]
     assert len(view.children) == 1
     btn = view.children[0]
-    assert "Descargar" in btn.label
+    assert "Copiar link" in btn.label
     assert btn.url is not None
     assert sess.token in btn.url
 
