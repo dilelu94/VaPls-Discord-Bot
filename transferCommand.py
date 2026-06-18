@@ -62,6 +62,8 @@ class TransferSession:
     expired: bool = False
     completed_at: Optional[float] = None
     delete_token: str = ""
+    extended_secs: int = 0
+    max_ttl_secs: int = int(config.TRANSFER_EXPIRY_HOURS * 3600)
 
 
 class TransferManager:
@@ -74,15 +76,22 @@ class TransferManager:
     # --- session lifecycle ---------------------------------------------------
 
     def create_session(
-        self, author_id: int, author_name: str, channel_id: int, guild_id: int
+        self,
+        author_id: int,
+        author_name: str,
+        channel_id: int,
+        guild_id: int,
+        days: int = 1,
     ) -> TransferSession:
         token = uuid.uuid4().hex
+        max_ttl_secs = min(days, 30) * 86400
         sess = TransferSession(
             token=token,
             author_id=author_id,
             author_name=author_name,
             channel_id=channel_id,
             guild_id=guild_id,
+            max_ttl_secs=max_ttl_secs,
         )
         sess.delete_token = uuid.uuid4().hex
         self.sessions[token] = sess
@@ -266,7 +275,12 @@ class TransferManager:
     def extend(self, token: str) -> None:
         sess = self.sessions.get(token)
         if sess:
-            sess.last_activity = time.time()
+            extra = config.TRANSFER_EXPIRY_HOURS * 3600
+            max_extra = sess.max_ttl_secs - extra
+            sess.extended_secs = min(
+                sess.extended_secs + int(extra),
+                max(int(max_extra), 0),
+            )
             self._save_index()
 
     def touch(self, token: str) -> None:
@@ -283,7 +297,11 @@ class TransferManager:
             if sess.expired or not sess.ready:
                 continue
             age = now - sess.last_activity
-            remaining = config.TRANSFER_EXPIRY_HOURS * 3600 - age
+            total_ttl = min(
+                int(config.TRANSFER_EXPIRY_HOURS * 3600) + sess.extended_secs,
+                sess.max_ttl_secs,
+            )
+            remaining = total_ttl - age
             if remaining <= 0:
                 continue
             out.append(
@@ -360,7 +378,11 @@ class TransferManager:
                     continue
             if sess.ready:
                 age = now - sess.last_activity
-                if age >= config.TRANSFER_EXPIRY_HOURS * 3600:
+                total_ttl = min(
+                    int(config.TRANSFER_EXPIRY_HOURS * 3600) + sess.extended_secs,
+                    sess.max_ttl_secs,
+                )
+                if age >= total_ttl:
                     to_delete.append(token)
         for token in to_delete:
             self.delete(token)

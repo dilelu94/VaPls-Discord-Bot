@@ -1572,7 +1572,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if not sess or not sess.ready:
             return web.json_response({"error": "no encontrado"}, status=404)
         mgr.extend(token)
-        remaining = int(config.TRANSFER_EXPIRY_HOURS * 3600)
+        total_ttl = min(
+            sess.max_ttl_secs,
+            int(config.TRANSFER_EXPIRY_HOURS * 3600) + sess.extended_secs,
+        )
+        remaining = int(total_ttl - (time.time() - sess.last_activity))
         return web.json_response({"ok": True, "remaining_secs": remaining})
 
     async def transferHistory(request: web.Request) -> web.Response:

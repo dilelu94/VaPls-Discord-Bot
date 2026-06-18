@@ -1912,12 +1912,22 @@ async def huh(ctx):
     name="transferir",
     description="Subí archivos de hasta 10 GB para compartir en el server",
 )
-async def transferir(ctx):
+async def transferir(
+    ctx,
+    dias: discord.Option(
+        int,
+        "Días que dura el archivo (1-30, default 1)",
+        required=False,
+        min_value=1,
+        max_value=30,
+        default=1,
+    ) = 1,
+):
     """Slash command: generate a temp upload link for file sharing.
 
     Only users with the configured role (@Main Characters by default) may
     invoke this. The resulting token expires in 5 min unless a file is
-    uploaded, and completed files auto-delete after 24 h.
+    uploaded, and completed files auto-delete after the configured TTL.
     """
     await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "transferir")
@@ -1936,6 +1946,7 @@ async def transferir(ctx):
         ctx.author.display_name,
         ctx.channel_id,
         ctx.guild.id,
+        days=dias,
     )
     link = f"{config.TRANSFER_BASE_URL}/upload/{sess.token}"
     gb = config.TRANSFER_DEFAULT_LIMIT // (1024**3)
@@ -1946,16 +1957,19 @@ async def transferir(ctx):
             url=link,
         )
     )
+    dias_str = f"{dias} día{'s' if dias > 1 else ''}"
     try:
         if ctx.response.is_done():
             await ctx.followup.send(
-                f"📁 Max {gb} GB · Link vence en {config.TRANSFER_SESSION_TTL // 60} min",
+                f"📁 Max {gb} GB · Link vence en {config.TRANSFER_SESSION_TTL // 60} min"
+                f" · Archivo disponible {dias_str}",
                 view=view,
                 ephemeral=True,
             )
         else:
             await ctx.respond(
-                f"📁 Max {gb} GB · Link vence en {config.TRANSFER_SESSION_TTL // 60} min",
+                f"📁 Max {gb} GB · Link vence en {config.TRANSFER_SESSION_TTL // 60} min"
+                f" · Archivo disponible {dias_str}",
                 view=view,
                 ephemeral=True,
             )

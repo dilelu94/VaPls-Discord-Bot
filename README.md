@@ -11,7 +11,7 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
 - **Personas Gemini:** `/vapls` y `/indio` con respuestas en español.
 - **Saludos automáticos:** reproduce un audio al entrar a un canal de voz.
 - **Transcripción opcional:** userbot con Vosk para canales con DAVE/E2EE.
-- **/transferir:** sube archivos de hasta 10 GB via web y comparte el link en Discord.
+- **/transferir [dias]:** sube archivos de hasta 10 GB via web y comparte el link en Discord. TTL configurable (1-30 días, default 1).
 - **HTTP API:** status, miembros, cola y reproducción de audio.
 
 ## Requisitos previos
@@ -77,7 +77,7 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
    - `/indio`: Charla con el personaje con memoria.
    - `/parar`: Detiene reproducción y desconecta.
    - `/quit`: Desconecta sin tocar la cola.
-   - `/transferir`: Genera un link para subir archivos (hasta 10 GB, role-gated).
+   - `/transferir [dias]`: Genera un link para subir archivos (hasta 10 GB, role-gated, TTL configurable 1-30 días).
 
 ## Documentación
 
@@ -112,11 +112,11 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
 
 ## /transferir — cómo funciona
 
-`/transferir` permite a miembros con el rol `@Main Characters` (configurable vía `TRANSFER_REQUIRED_ROLE`) compartir archivos pesados sin depender de Discord (límite 25 MB) ni servicios externos.
+`/transferir [dias]` permite a miembros con el rol `@Main Characters` (configurable vía `TRANSFER_REQUIRED_ROLE`) compartir archivos pesados sin depender de Discord (límite 25 MB) ni servicios externos. El argumento opcional `dias` (1-30, default 1) define cuántos días estará disponible el archivo antes de borrarse. Cada click en el botón `➕` de la página suma 24h al tiempo restante sin superar el máximo inicial.
 
 ### Flujo
 
-1. **Usuario ejecuta `/transferir`** → el bot crea una sesión con token único y responde con un link ephemeral: `http://<server>/upload/<token>`
+1. **Usuario ejecuta `/transferir [dias]`** → el bot crea una sesión con token único y responde con un link ephemeral: `http://<server>/upload/<token>`. El argumento `dias` (1-30, default 1) define el TTL máximo del archivo.
 2. **Usuario abre el link** → página web con drag/click para subir archivos
 3. **Subida por chunks** (10 MB cada uno, resumible):
    - POST `/upload/{token}/init` — inicia la sesión con filename y tamaño
@@ -127,11 +127,13 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
 
 ### Expiración
 
-| Etapa                                     | TTL                                    | Comportamiento                                                  |
-| ----------------------------------------- | -------------------------------------- | --------------------------------------------------------------- |
-| Sesión sin actividad (antes de completar) | `TRANSFER_SESSION_TTL` (default 5 min) | Se invalida, link muestra "Sesión expirada"                     |
-| Post-completado                           | `TRANSFER_SESSION_TTL` (default 5 min) | Upload page deja de mostrar info, solo el link directo funciona |
-| Archivo en disco                          | `TRANSFER_EXPIRY_HOURS` (default 24 h) | El sweeper borra el archivo, el download link deja de funcionar |
+| Etapa                                     | TTL                                                                 | Comportamiento                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Sesión sin actividad (antes de completar) | `TRANSFER_SESSION_TTL` (default 5 min)                              | Se invalida, link muestra "Sesión expirada"                     |
+| Post-completado                           | `TRANSFER_SESSION_TTL` (default 5 min)                              | Upload page deja de mostrar info, solo el link directo funciona |
+| Archivo en disco                          | `dias` × 24 h (default 24 h, configurable vía `/transferir [dias]`) | El sweeper borra el archivo, el download link deja de funcionar |
+
+El botón `➕` en la página extiende +24h el tiempo restante, sin superar el máximo definido en `dias`.
 
 ### Seguridad
 
@@ -153,6 +155,12 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
 | `TRANSFER_BASE_URL`      | `http://141.148.84.55` | URL base para links de descarga  |
 
 ## Changelog reciente
+
+### TTL configurable en /transferir y extend +24h
+
+- **`/transferir [dias]`**: nuevo argumento opcional (1-30, default 1) que define cuántos días vive el archivo antes de borrarse. `dias=0` equivale a 24h históricas.
+- **Extender suma tiempo**: el botón `➕` en la página de archivos activos ahora suma +24h al tiempo restante en vez de resetear a 24h.
+- **Tope por sesión**: el extensor no puede llevar el TTL restante más allá del máximo definido al crear la sesión (`dias` × 24 h).
 
 ### Seguridad
 
