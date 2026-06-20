@@ -61,6 +61,7 @@ async def _yt_download(url: str, out_dir: str) -> tuple[str, str]:
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            "remote_components": ["ejs:github"],
         }
         cookies = _get_cookies_path()
         if cookies:
@@ -112,7 +113,12 @@ async def _yt_extract_live_url(url: str) -> tuple[str, str] | None:
     import yt_dlp
 
     def _run() -> tuple[str, str] | None:
-        opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "remote_components": ["ejs:github"],
+        }
         cookies = _get_cookies_path()
         if cookies:
             opts["cookiefile"] = cookies
