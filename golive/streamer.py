@@ -13,7 +13,7 @@ import os
 import random
 import struct
 import subprocess
-from asyncio.subprocess import DEVNULL, PIPE, Process
+
 from typing import Optional
 
 import nacl.secret
@@ -54,8 +54,8 @@ def _detect_encoder() -> str:
                     "null",
                     "-",
                 ],
-                stdout=DEVNULL,
-                stderr=DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
                 check=True,
                 timeout=10,
             )
@@ -572,7 +572,7 @@ class VideoStream:
         self._secret_key: list[int] = getattr(vc, "secret_key", [])
         self._mode: str = getattr(vc, "mode", "xsalsa20_poly1305")
 
-        self._proc: Optional[Process] = None
+        self._proc: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
         self._task: Optional[asyncio.Task] = None
         self._stop_event = asyncio.Event()
         self._frame_nals: list[bytes] = []
@@ -586,64 +586,55 @@ class VideoStream:
             _ENCODER,
             " ".join(cmd[:6]),
         )
-        self._proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=PIPE,
-            stderr=DEVNULL,
+        # Use subprocess.Popen (synchronous) so stdout is a plain file object.
+        # This lets _send_loop call stdout.read() in a thread executor without
+        # the asyncio pipe transport layer, avoiding the asyncio.wait_for
+        # timeout problem that kills the loop during HLS probe delays.
+        self._proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-        if self._proc.stdout is None:
-            raise RuntimeError("ffmpeg stdout closed")
         self._task = asyncio.create_task(self._send_loop())
         log.info(
             "[STREAM] guild=%s started (video_ssrc=%d)", self.guild_id, self.video_ssrc
         )
 
     async def _send_loop(self) -> None:
-        """Read raw H.264 from FFmpeg stdout and send encrypted RTP packets."""
+        """Read raw H.264 from FFmpeg stdout and send encrypted RTP packets.
+
+        Runs blocking stdout.read() in a thread executor so asyncio is never
+        blocked, and HLS probe delays (ffmpeg -re can take 4-8 s before the
+        first byte) never trigger a premature exit.
+        """
         assert self._proc is not None
-        stdout = self._proc.stdout
+        assert self._proc.stdout is not None
+        loop = asyncio.get_event_loop()
+        raw_stdout = self._proc.stdout
         buf = b""
-        # HLS live streams probe several renditions before emitting the first
-        # frame (can take 4-8 s). Give the first read a longer grace period so
-        # the loop doesn't mistake the probe silence for a dead process.
-        first_read = True
+
+        def _blocking_read() -> bytes:
+            return raw_stdout.read(65536)
 
         while not self._stop_event.is_set():
-            timeout = 15.0 if first_read else 2.0
             try:
-                chunk = await asyncio.wait_for(stdout.read(65536), timeout=timeout)
-                first_read = False
-            except asyncio.TimeoutError:
-                if self._proc.returncode is not None:
-                    log.warning(
-                        "[STREAM] ffmpeg exited early (rc=%d)", self._proc.returncode
-                    )
-                    break
-                if first_read:
-                    log.warning(
-                        "[STREAM] guild=%s ffmpeg probe timeout (>%.0fs), aborting",
-                        self.guild_id, timeout,
-                    )
-                    break
-                self._flush_frame()
-                continue
+                chunk = await loop.run_in_executor(None, _blocking_read)
+            except Exception as e:
+                log.warning("[STREAM] guild=%s read error: %s", self.guild_id, e)
+                break
             if not chunk:
                 break
             buf += chunk
             nals = _parse_annexb(buf)
             if not nals:
                 continue
-            consumed = len(buf)
             if nals:
                 last = nals[-1]
-                consumed = len(buf) - len(last)
                 idx = buf.rfind(last)
-                if idx >= 0:
-                    consumed = idx
-                buf = buf[consumed:]
+                buf = buf[idx:] if idx >= 0 else b""
             else:
                 buf = b""
-            for nal in nals:
+            for nal in nals[:-1]:  # last NAL may be incomplete — keep in buf
                 self._feed_nal(nal)
         self._flush_frame()
         log.info("[STREAM] guild=%s send loop ended", self.guild_id)
@@ -698,7 +689,7 @@ class VideoStream:
         if self._proc:
             try:
                 self._proc.kill()
-                await self._proc.wait()
+                self._proc.wait()
             except Exception:
                 pass
             self._proc = None
