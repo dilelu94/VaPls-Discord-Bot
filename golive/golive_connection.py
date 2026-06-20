@@ -1,5 +1,5 @@
 """
-golive_connection.py — Discord go-live (screenshare) stream connection.
+golive.py — Discord go-live (screenshare) stream connection.
 
 Protocol flow:
   1. Send op 18 (STREAM_CREATE) on the main gateway to request a go-live stream.
@@ -294,6 +294,9 @@ class GoLiveConnection:
             await self.ws.poll_event()  # type: ignore[union-attr]
         log.info("GoLive: IP discovery complete (%s:%s)", self.ip, self.port)
 
+        # Connect the UDP socket to the stream voice server endpoint
+        self.socket.connect((self.endpoint_ip, self.voice_port))
+
         # Poll until SESSION_DESCRIPTION arrives (ws.secret_key is set)
         while self.ws.secret_key is None:
             await self.ws.poll_event()
@@ -380,3 +383,185 @@ class GoLiveConnection:
                 self.socket.close()
             except Exception:
                 pass
+
+
+# ── _GoLiveVCProxy ────────────────────────────────────────────────────────────
+
+
+class _GoLiveVCProxy:
+    """
+    Adapts GoLiveConnection to the VoiceClient interface expected by
+    H264VideoPlayer.  H264VideoPlayer uses voice_client.ssrc (from which it
+    derives video_ssrc = ssrc + 1) and voice_client._connection (for
+    send_packet, mode, secret_key, and dave_session).
+    """
+
+    def __init__(self, conn: GoLiveConnection) -> None:
+        self.ssrc = conn.ssrc  # audio SSRC; H264VideoPlayer adds 1 for video
+        self._connection = conn  # conn implements the _connection interface
+
+    @property
+    def mode(self) -> str:
+        return self._connection.mode
+
+    @property
+    def secret_key(self):
+        return self._connection.secret_key
+
+
+# ── GoLiveAudioSender ─────────────────────────────────────────────────────────
+
+
+class GoLiveAudioSender(threading.Thread):
+    """
+    Reads raw PCM S16LE stereo 48 kHz from an open FIFO file object, encodes
+    each 20-ms frame to Opus, builds an RTP audio packet, encrypts it using
+    the go-live connection's negotiated cipher, and sends it via the go-live
+    UDP socket.
+    """
+
+    _SAMPLES_PER_FRAME: int = _opus.Encoder.SAMPLES_PER_FRAME  # 960 @ 48 kHz
+    _FRAME_SIZE: int = _opus.Encoder.FRAME_SIZE  # 3840 bytes = 20 ms PCM
+    _FRAME_DURATION: float = _opus.Encoder.FRAME_LENGTH / 1000.0  # 0.020 s
+
+    def __init__(
+        self,
+        file_obj,
+        conn: GoLiveConnection,
+        is_source_active: Callable[[], bool] | None = None,
+    ) -> None:
+        super().__init__(name="GoLiveAudio", daemon=True)
+        self._f = file_obj
+        self._conn = conn
+        self._end = threading.Event()
+        # Returns True while the video player may still produce output, incl. the
+        # FIFO gap during a software-encoder fallback restart.  When set, a short
+        # read is treated as that gap (wait for the new writer) rather than EOF.
+        self._is_source_active = is_source_active
+
+        self._seq: int = 0
+        self._ts: int = 0
+        self._nonce: int = 0  # running nonce counter for lite/rtpsize modes
+
+    def stop(self) -> None:
+        self._end.set()
+
+    def run(self) -> None:
+        try:
+            self._send_audio()
+        except Exception:
+            log.exception("GoLiveAudioSender error")
+        log.info("GoLiveAudioSender stopped")
+
+    def _send_audio(self) -> None:
+        encoder = _opus.Encoder()
+
+        # A/V lip-sync offset (STREAM_AV_SYNC_MS). Positive advances audio by
+        # discarding backlogged initial audio (fixes "audio behind"); negative
+        # holds audio start (fixes "audio ahead").
+        offset_ms = _av_sync_ms()
+        if offset_ms > 0:
+            for _ in range(int(offset_ms / (self._FRAME_DURATION * 1000))):
+                if self._end.is_set() or len(self._f.read(self._FRAME_SIZE)) < self._FRAME_SIZE:
+                    break
+        elif offset_ms < 0:
+            self._end.wait(timeout=(-offset_ms) / 1000.0)
+
+        log.info("GoLiveAudio: starting audio transmission (av_sync_ms=%d)", offset_ms)
+        t0 = time.perf_counter()
+        loops = 0
+
+        while not self._end.is_set():
+            pcm = self._f.read(self._FRAME_SIZE)
+            if len(pcm) < self._FRAME_SIZE:
+                # Short read = current FFmpeg closed the FIFO write end.  If the
+                # player is mid-fallback (restarting FFmpeg), wait for the new
+                # writer and resume; the read fd stays valid across the gap.
+                if self._is_source_active is not None and self._is_source_active():
+                    if self._end.wait(timeout=0.05):
+                        break
+                    t0 = time.perf_counter()  # reset pacing after the gap
+                    loops = 0
+                    continue
+                break
+
+            encoded = encoder.encode(pcm, self._SAMPLES_PER_FRAME)
+
+            # DAVE E2EE encryption (applied before transport encryption)
+            if self._conn.can_encrypt and self._conn.dave_session is not None:
+                encoded = self._conn.dave_session.encrypt_opus(encoded)
+
+            # Build RTP audio header (PT=120 for Opus, SSRC = go-live audio SSRC)
+            hdr = bytearray(12)
+            hdr[0] = 0x80
+            hdr[1] = 0x78  # marker=0, PT=120
+            struct.pack_into(">H", hdr, 2, self._seq & 0xFFFF)
+            struct.pack_into(">I", hdr, 4, self._ts & 0xFFFFFFFF)
+            struct.pack_into(">I", hdr, 8, self._conn.ssrc & 0xFFFFFFFF)
+
+            packet = _encrypt_audio(
+                bytes(hdr),
+                encoded,
+                self._conn.mode,
+                self._conn.secret_key,
+                self._nonce,
+            )
+            self._nonce = (self._nonce + 1) & 0xFFFFFFFF
+
+            self._conn.send_packet(packet)
+
+            self._seq = (self._seq + 1) & 0xFFFF
+            self._ts = (self._ts + self._SAMPLES_PER_FRAME) & 0xFFFFFFFF
+            loops += 1
+
+            # Wall-clock pacing — same technique as H264VideoPlayer
+            next_time = t0 + loops * self._FRAME_DURATION
+            delay = next_time - time.perf_counter()
+            if delay > 0.001 and self._end.wait(timeout=delay):
+                break
+
+
+# ── Encryption ────────────────────────────────────────────────────────────────
+
+
+def _encrypt_audio(
+    header: bytes,
+    payload: bytes,
+    mode: str,
+    secret_key: list[int],
+    nonce: int,
+) -> bytes:
+    """
+    Encrypt one audio RTP packet using the negotiated voice encryption mode.
+    Mirrors _encrypt() in video_player.py but takes the nonce as an int
+    (caller increments it).
+    """
+    key = bytes(secret_key)
+
+    if mode == "aead_xchacha20_poly1305_rtpsize":
+        box = nacl.secret.Aead(key)  # type: ignore[assignment]
+        nonce_buf = bytearray(24)
+        struct.pack_into(">I", nonce_buf, 0, nonce)
+        ct = box.encrypt(payload, bytes(header), bytes(nonce_buf)).ciphertext
+        return bytes(header) + ct + bytes(nonce_buf[:4])
+
+    if mode == "xsalsa20_poly1305":
+        box = nacl.secret.SecretBox(key)  # type: ignore[assignment]
+        nonce_buf = bytearray(24)
+        nonce_buf[:12] = header
+        return bytes(header) + box.encrypt(payload, bytes(nonce_buf)).ciphertext
+
+    if mode == "xsalsa20_poly1305_suffix":
+        box = nacl.secret.SecretBox(key)  # type: ignore[assignment]
+        nonce_bytes = nacl.utils.random(24)
+        ct = box.encrypt(payload, nonce_bytes).ciphertext
+        return bytes(header) + ct + nonce_bytes
+
+    if mode == "xsalsa20_poly1305_lite":
+        box = nacl.secret.SecretBox(key)  # type: ignore[assignment]
+        nonce_buf = bytearray(24)
+        struct.pack_into(">I", nonce_buf, 0, nonce)
+        ct = box.encrypt(payload, bytes(nonce_buf)).ciphertext
+        return bytes(header) + ct + bytes(nonce_buf[:4])
+
+    raise ValueError(f"Unknown voice encryption mode: {mode!r}")

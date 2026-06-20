@@ -23,8 +23,8 @@ import discord.gateway
 import config
 import video_compat as vc
 import davey_compat
-from streamer import VideoStream
 from golive_connection import GoLiveConnection
+
 
 # Must patch before any voice connections (before client.start())
 vc.patch_video(discord.gateway)
@@ -46,7 +46,116 @@ logging.getLogger("discord.client").setLevel(logging.WARNING)
 
 client = discord.Client(chunk_guilds_at_startup=False)
 
-_active_streams: dict[int, VideoStream] = {}
+class GoLiveStream:
+    def __init__(self, bot, guild_id, channel_id, vc, url):
+        self.bot = bot
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.vc = vc
+        self.url = url
+        self.conn = None
+        self.video_player = None
+        self.audio_sender = None
+        self.tmp_dir = None
+        self.video_ssrc = None
+
+    async def start(self):
+        import tempfile
+        from ytdlp import _yt_extract_live_url, _yt_download, _yt_remove_dir
+        
+        target_url = self.url
+        title = "Stream"
+        is_live = True
+        
+        if target_url.startswith(("http://", "https://")):
+            log.info("[STREAM] Checking live status via yt-dlp for %s", target_url)
+            try:
+                live_res = await _yt_extract_live_url(target_url)
+            except Exception as e:
+                log.warning("[STREAM] live check failed: %s", e)
+                live_res = None
+            
+            if live_res:
+                target_url, title = live_res
+                log.info("[STREAM] Live stream detected: %s -> %s", title, target_url)
+            else:
+                log.info("[STREAM] VOD stream detected. Downloading via yt-dlp...")
+                self.tmp_dir = tempfile.mkdtemp(prefix="golive_yt_")
+                try:
+                    file_path, title = await _yt_download(self.url, self.tmp_dir)
+                    target_url = file_path
+                    is_live = False
+                    log.info("[STREAM] Download complete: %s -> %s", title, target_url)
+                except Exception as e:
+                    log.exception("[STREAM] Download failed")
+                    if self.tmp_dir:
+                        _yt_remove_dir(self.tmp_dir)
+                        self.tmp_dir = None
+                    raise RuntimeError(f"Download failed: {e}")
+        
+        log.info("[STREAM] Establishing GoLive connection...")
+        self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
+        await self.conn.connect(timeout=30.0)
+        self.video_ssrc = self.conn.ssrc + 1
+        
+        from streamer import H264VideoPlayer, _stream_fps
+        from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
+        proxy_vc = _GoLiveVCProxy(self.conn)
+        self.video_player = H264VideoPlayer(
+            url=target_url,
+            voice_client=proxy_vc,
+            fps=_stream_fps(),
+            live=is_live,
+            audio=True,
+        )
+        self.video_player.start()
+        log.info("[STREAM] Video player started for '%s'", title)
+        
+        log.info("[STREAM] Waiting for audio FIFO...")
+        try:
+            f = await asyncio.wait_for(
+                asyncio.to_thread(open, self.video_player.audio_fifo, "rb"),
+                timeout=15.0,
+            )
+        except TimeoutError:
+            log.error("[STREAM] Timed out waiting for audio FIFO")
+            raise RuntimeError("Timed out waiting for audio FIFO")
+            
+        self.audio_sender = GoLiveAudioSender(
+            file_obj=f,
+            conn=self.conn,
+            is_source_active=self.video_player.is_source_active,
+        )
+        self.audio_sender.start()
+        log.info("[STREAM] Audio sender started for '%s'", title)
+
+    async def stop(self):
+        log.info("[STREAM] Stopping stream...")
+        from ytdlp import _yt_remove_dir
+        if self.video_player:
+            try:
+                self.video_player.stop()
+            except Exception:
+                pass
+        if self.audio_sender and self.audio_sender.is_alive():
+            try:
+                self.audio_sender.stop()
+            except Exception:
+                pass
+        if self.conn:
+            try:
+                await self.conn.disconnect()
+            except Exception:
+                pass
+        if self.tmp_dir:
+            try:
+                _yt_remove_dir(self.tmp_dir)
+            except Exception:
+                pass
+        log.info("[STREAM] Stream stopped and cleaned up")
+
+
+_active_streams: dict[int, GoLiveStream] = {}
 
 
 def _guild_allowed(guild_id: int) -> bool:
@@ -153,23 +262,11 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": "not connected"}, status=500)
     log.info("[STREAM] vc=%s", type(vc).__name__)
 
-    log.info("[STREAM] establishing GoLive connection...")
-    stream_conn = GoLiveConnection(client, guild_id, channel_id, vc)
-    try:
-        await stream_conn.connect()
-    except Exception as e:
-        log.exception("[STREAM] GoLive connection failed")
-        return web.json_response({"error": f"GoLive connection failed: {e}"}, status=500)
-
-    log.info("[STREAM] creating VideoStream url=%s", url[:80])
-    stream = VideoStream(
-        url=url,
-        guild_id=guild_id,
-        conn=stream_conn,
-    )
+    log.info("[STREAM] creating GoLiveStream url=%s", url[:80])
+    stream = GoLiveStream(client, guild_id, channel_id, vc, url)
     try:
         await stream.start()
-        log.info("[STREAM] stream.start() OK")
+        log.info("[STREAM] stream start OK")
     except Exception as e:
         log.exception("[STREAM] stream start failed")
         return web.json_response({"error": str(e)}, status=500)

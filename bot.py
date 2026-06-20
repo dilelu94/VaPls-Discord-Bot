@@ -1620,29 +1620,36 @@ async def stream(
         )
         return
 
-    results = await iptv.search(canal, limit=5)
-    if not results:
-        await safe_respond(
-            ctx,
-            f'❌ No encontré canales de IPTV para "{canal}". Probá con otro nombre.',
-        )
-        return
+    is_url = canal.startswith(("http://", "https://", "rtsp://", "rtmp://"))
+    if is_url:
+        stream_url = canal
+        channel_name = "Stream Directo"
+    else:
+        results = await iptv.search(canal, limit=5)
+        if not results:
+            await safe_respond(
+                ctx,
+                f'❌ No encontré canales de IPTV para "{canal}". Probá con otro nombre.',
+            )
+            return
 
-    ch = results[0]
+        ch = results[0]
+        if len(results) > 1:
+            names = "\n".join(f"• **{r.name}**" for r in results[:5])
+            await safe_respond(
+                ctx,
+                f'📺 Varios canales coinciden con "{canal}". Usá **/stream** con un nombre más específico:\n{names}',
+            )
+            return
+        stream_url = ch.url
+        channel_name = ch.name
+
     log.info(
-        "[STREAM] canal=%r channel=%s url=%s results=%d",
+        "[STREAM] canal=%r channel=%s url=%s",
         canal,
-        ch.name,
-        ch.url,
-        len(results),
+        channel_name,
+        stream_url,
     )
-    if len(results) > 1:
-        names = "\n".join(f"• **{r.name}**" for r in results[:5])
-        await safe_respond(
-            ctx,
-            f'📺 Varios canales coinciden con "{canal}". Usá **/stream** con un nombre más específico:\n{names}',
-        )
-        return
 
     if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
         await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
@@ -1654,14 +1661,14 @@ async def stream(
     payload = {
         "guild_id": ctx.guild_id,
         "channel_id": voice_channel.id,
-        "url": ch.url,
+        "url": stream_url,
     }
     log.info(
         "[STREAM] POST %s guild=%s channel=%s url=%s",
         url,
         ctx.guild_id,
         voice_channel.id,
-        ch.url,
+        stream_url,
     )
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     try:
@@ -1686,7 +1693,7 @@ async def stream(
 
     await safe_respond(
         ctx,
-        f"📺 Transmitiendo **{ch.name}** en **{voice_channel.name}**.\n"
+        f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\n"
         f"Usá **/stopstream** para cortar.",
     )
 

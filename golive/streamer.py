@@ -1,227 +1,76 @@
-"""GoLive video streamer: FFmpeg → H.264 → RTP → Discord voice socket.
+"""
+H.264 video player for Discord voice channels.
 
-Self-contained — no imports from userbot/. Handles SPS/VUI rewriting
-(Discord requires bitstream_restriction_flag=1, max_num_reorder_frames=0)
-and RTP encryption (XSalsa20-Poly1305 / XChaCha20-Poly1305) via PyNaCl.
+Reads a live stream URL via FFmpeg (outputting raw H.264 Annex B on stdout),
+parses NAL units, packetizes them per RFC 6184 using FU-A fragmentation for
+large NAL units, encrypts each RTP packet with the voice connection's secret
+key, and sends them via the existing voice UDP socket.
+
+The video SSRC is audio_ssrc + 1 (matching video_compat.VIDEO_SSRC_OFFSET).
+A separate nonce counter starting at 0x80000000 is used for all encrypted
+modes to prevent overlap with the audio player's own nonce counter.
 """
 
 from __future__ import annotations
 
-import asyncio
+import dataclasses
 import logging
 import os
-import random
+import re
 import struct
 import subprocess
+import threading
+import time
 
-from typing import Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from golive_connection import GoLiveConnection
-
+import discord
 import nacl.secret
 import nacl.utils
 
-log = logging.getLogger("golive.streamer")
+log = logging.getLogger(__name__)
 
-# --- RTP constants ---
-_PT_H264 = 101
-_RTP_HEADER_SIZE = 12
-_MTU = 1200
-_NAL_FU_A = 28
-_FU_START = 0x80
-_FU_END = 0x40
-_TS_PER_FRAME = 3000  # 90 kHz clock / 30 fps
+# RTP constants for H.264 video
+_H264_PT: int = 101  # payload type (matches video_compat.H264_PAYLOAD_TYPE)
+_CLOCK: int = 90_000  # 90 kHz RTP clock rate for video
+_MTU: int = 1_200  # safe MTU for Discord voice UDP
 
-# Nonce base for video — high half of 32-bit space to avoid audio overlap
-_VIDEO_NONCE_BASE = 0x8000_0000
+# Optionally spread each frame's RTP packets across a fraction of the frame
+# interval instead of bursting them. A large keyframe is dozens of packets;
+# bursting them can overrun a receiver's ingest, which drops the burst → a
+# freeze. Pacing (like a real WebRTC sender) keeps the instantaneous rate down.
+# Opt-in via STREAM_PACKET_PACE (default 0.0 = off); see _packet_pace_fraction.
+_DEFAULT_PACKET_PACE: float = 0.0
 
-_H264_ENCODERS = ["h264_nvenc", "h264_vaapi", "libx264"]
+# H.264 NAL unit type IDs (low 5 bits of NAL header byte)
+_NAL_NON_IDR: int = 1
+_NAL_IDR: int = 5
+_NAL_AUD: int = 9  # Access Unit Delimiter — marks frame boundaries
 
+# Nonce base for video — high half of 32-bit space, avoids overlap with audio
+_VIDEO_NONCE_BASE: int = 0x8000_0000
 
-def _detect_encoder() -> str:
-    for enc in _H264_ENCODERS:
-        try:
-            # Test if encoder works with a 1-frame null input
-            subprocess.run(
-                [
-                    "ffmpeg",
-                    "-hide_banner",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "color=c=black:s=1280x720:d=1",
-                    "-c:v",
-                    enc,
-                    "-f",
-                    "null",
-                    "-",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-                timeout=10,
-            )
-            log.info("golive: encoder probe OK → %s", enc)
-            return enc
-        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-            log.info("golive: encoder %s not usable (%s), trying next", enc, e)
-            continue
-    log.info("golive: falling back to libx264")
-    return "libx264"
+# How often the player logs pacing/throughput diagnostics (seconds).
+_STATS_INTERVAL: float = 10.0
 
+# Regex matching both 3-byte (\x00\x00\x01) and 4-byte (\x00\x00\x00\x01) start codes
+_START_RE = re.compile(rb"\x00\x00\x00?\x01")
 
-_ENCODER = _detect_encoder()
+# NAL types that carry encoded picture data (slice headers) — each starts a new frame
+_SLICE_NAL_TYPES = frozenset({1, 2, 3, 4, 5})
+# NAL types that carry stream parameters — buffered and prepended to the next slice
+_PARAM_NAL_TYPES = frozenset({6, 7, 8})  # SEI, SPS, PPS
 
-
-def _ffmpeg_args(url: str) -> list[str]:
-    base = [
-        "ffmpeg",
-        "-re",
-        "-fflags",
-        "nobuffer",
-        "-analyzeduration",
-        "500000",
-        "-probesize",
-        "500000",
-        "-i",
-        url,
-        "-flags",
-        "low_delay",
-        "-c:v",
-        _ENCODER,
-        "-preset",
-        "ultrafast",
-        "-tune",
-        "zerolatency",
-        "-b:v",
-        "2500k",
-        "-maxrate",
-        "2500k",
-        "-bufsize",
-        "5000k",
-        "-r",
-        "30",
-        "-g",
-        "60",
-        "-f",
-        "h264",
-        "pipe:1",
-    ]
-    if _ENCODER == "h264_nvenc":
-        base[base.index("-c:v") + 1] = "h264_nvenc"
-        # Remove libx264 specific preset/tune before adding nvenc ones
-        preset_idx = base.index("-preset")
-        del base[preset_idx:preset_idx+4]
-        base += [
-            "-preset",
-            "p1",
-            "-tune",
-            "ll",
-            "-profile:v",
-            "high",
-            "-level:v",
-            "4.2",
-        ]
-    elif _ENCODER == "h264_vaapi":
-        base[base.index("-c:v") + 1] = "h264_vaapi"
-        # Remove libx264 specific preset/tune
-        preset_idx = base.index("-preset")
-        del base[preset_idx:preset_idx+4]
-        base += [
-            "-vaapi_device",
-            "/dev/dri/renderD128",
-            "-vf",
-            "format=nv12,hwupload,scale_vaapi=1280:720",
-            "-rc_mode",
-            "CBR",
-        ]
-    return base
-
-
-def _build_rtp_header(ssrc: int, seq: int, ts: int, marker: bool = False) -> bytes:
-    first = 0x80
-    second = _PT_H264 & 0x7F
-    if marker:
-        second |= 0x80
-    return struct.pack(
-        ">BBHII", first, second, seq & 0xFFFF, ts & 0xFFFFFFFF, ssrc & 0xFFFFFFFF
-    )
-
-
-def _packetize_nal(nal: bytes, ssrc: int, seq: int, ts: int, is_last_nal: bool) -> list[tuple[bytes, int]]:
-    """Packetize one H.264 NAL unit into RTP packets (FU-A if needed)."""
-    if not nal:
-        return []
-    nh = nal[0]
-    nt = nh & 0x1F
-
-    if len(nal) <= _MTU - _RTP_HEADER_SIZE:
-        h = _build_rtp_header(ssrc, seq, ts, marker=is_last_nal)
-        return [(h + nal, (seq + 1) & 0xFFFF)]
-
-    fi = (nh & 0xE0) | _NAL_FU_A
-    payload = nal[1:]
-    max_frag = _MTU - _RTP_HEADER_SIZE - 2
-    offset = 0
-    result = []
-    while offset < len(payload):
-        end = min(offset + max_frag, len(payload))
-        frag = payload[offset:end]
-        is_first = offset == 0
-        is_last_frag = end >= len(payload)
-        fh = nt
-        if is_first:
-            fh |= _FU_START
-        if is_last_frag:
-            fh |= _FU_END
-        h = _build_rtp_header(ssrc, seq, ts, marker=(is_last_frag and is_last_nal))
-        pkt = h + bytes([fi, fh]) + frag
-        result.append((pkt, (seq + 1) & 0xFFFF))
-        offset = end
-        seq = (seq + 1) & 0xFFFF
-    return result
-
-
-def _parse_annexb(data: bytes) -> list[bytes]:
-    """Split Annex B byte stream into NAL units (stripping start codes)."""
-    nals = []
-    start = 0
-    i = 0
-    while i < len(data):
-        if data[i : i + 4] == b"\x00\x00\x00\x01":
-            if i > start:
-                nals.append(data[start:i])
-            start = i + 4
-            i = start
-        elif i + 3 <= len(data) and data[i : i + 3] == b"\x00\x00\x01":
-            if i > start:
-                nals.append(data[start:i])
-            start = i + 3
-            i = start
-        else:
-            i += 1
-    if start < len(data):
-        nals.append(data[start:])
-    return nals
-
-
-def _is_slice_nal(nal: bytes) -> bool:
-    if not nal:
-        return False
-    t = nal[0] & 0x1F
-    return t in (1, 5)
-
-
-# --- SPS/VUI rewriting --------------------------------------------------------
-# Discord requires bitstream_restriction_flag=1 and max_num_reorder_frames=0
-# in every SPS or it rejects the stream with Error 2015.
-
+# H.264 profile_idc values that use the extended SPS syntax (chroma, scaling, etc.)
 _HIGH_PROFILES = frozenset({100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 144})
 
 
+# ── H.264 SPS VUI rewriter ────────────────────────────────────────────────────
+# Discord requires bitstream_restriction_flag=1 and max_num_reorder_frames=0
+# in every SPS NAL unit or it rejects the video stream with Error 2015.
+# Reference: https://github.com/Discord-RE/Discord-video-stream (SPSVUIRewriter.ts)
+
+
 def _ep_remove(data: bytes) -> bytes:
-    """Strip emulation prevention bytes (0x00 0x00 0x03 -> 0x00 0x00)."""
+    """Strip emulation prevention bytes (0x00 0x00 0x03 → 0x00 0x00)."""
     out = bytearray()
     i = 0
     while i < len(data):
@@ -236,7 +85,7 @@ def _ep_remove(data: bytes) -> bytes:
 
 
 def _ep_add(data: bytes) -> bytes:
-    """Re-insert emulation prevention bytes."""
+    """Re-insert emulation prevention bytes so 0x00 0x00 0x{00-03} never appears raw."""
     out = bytearray()
     zeros = 0
     for byte in data:
@@ -249,13 +98,13 @@ def _ep_add(data: bytes) -> bytes:
 
 
 class _BR:
-    """H.264 RBSP bit reader."""
+    """H.264 RBSP bit reader (operates on emulation-prevention-stripped bytes)."""
 
     __slots__ = ("_d", "_p")
 
     def __init__(self, data: bytes) -> None:
         self._d = data
-        self._p = 0
+        self._p = 0  # bit position
 
     def remaining(self) -> int:
         return len(self._d) * 8 - self._p
@@ -309,6 +158,7 @@ class _BW:
         self.ue(2 * val - 1 if val > 0 else -2 * val)
 
     def to_bytes(self) -> bytes:
+        # Append RBSP stop bit then zero-pad to byte boundary
         bits = list(self._bits) + [1] + [0] * ((-len(self._bits) - 1) % 8)
         out = bytearray()
         for i in range(0, len(bits), 8):
@@ -334,15 +184,15 @@ def _copy_hrd(r: _BR, w: _BW) -> None:
     cpb = r.ue()
     w.ue(cpb)
     w.u(4, r.u(4))
-    w.u(4, r.u(4))
+    w.u(4, r.u(4))  # bit_rate_scale, cpb_size_scale
     for _ in range(cpb + 1):
         w.ue(r.ue())
         w.ue(r.ue())
-        w.u(1, r.u(1))
+        w.u(1, r.u(1))  # bit_rate, cpb_size, cbr_flag
     w.u(5, r.u(5))
     w.u(5, r.u(5))
     w.u(5, r.u(5))
-    w.u(5, r.u(5))
+    w.u(5, r.u(5))  # delay lengths
 
 
 def _do_rewrite_sps(nal: bytes) -> bytes:
@@ -351,19 +201,19 @@ def _do_rewrite_sps(nal: bytes) -> bytes:
 
     profile_idc = r.u(8)
     w.u(8, profile_idc)
-    w.u(8, r.u(8))
-    w.u(8, r.u(8))
-    w.ue(r.ue())
+    w.u(8, r.u(8))  # constraint_set_flags + reserved_zero_2bits
+    w.u(8, r.u(8))  # level_idc
+    w.ue(r.ue())  # seq_parameter_set_id
 
     chroma_format_idc = 1
     if profile_idc in _HIGH_PROFILES:
         chroma_format_idc = r.ue()
         w.ue(chroma_format_idc)
         if chroma_format_idc == 3:
-            w.u(1, r.u(1))
-        w.ue(r.ue())
-        w.ue(r.ue())
-        w.u(1, r.u(1))
+            w.u(1, r.u(1))  # separate_colour_plane_flag
+        w.ue(r.ue())  # bit_depth_luma_minus8
+        w.ue(r.ue())  # bit_depth_chroma_minus8
+        w.u(1, r.u(1))  # qpprime_y_zero_transform_bypass_flag
         ssmf = r.u(1)
         w.u(1, ssmf)
         if ssmf:
@@ -374,55 +224,57 @@ def _do_rewrite_sps(nal: bytes) -> bytes:
                 if flag:
                     _copy_scaling_list(r, w, 16 if i < 6 else 64)
 
-    w.ue(r.ue())
+    w.ue(r.ue())  # log2_max_frame_num_minus4
     poc = r.ue()
     w.ue(poc)
     if poc == 0:
-        w.ue(r.ue())
+        w.ue(r.ue())  # log2_max_pic_order_cnt_lsb_minus4
     elif poc == 1:
-        w.u(1, r.u(1))
-        w.se(r.se())
-        w.se(r.se())
+        w.u(1, r.u(1))  # delta_pic_order_always_zero_flag
+        w.se(r.se())  # offset_for_non_ref_pic
+        w.se(r.se())  # offset_for_top_to_bottom_field
         n = r.ue()
         w.ue(n)
         for _ in range(n):
-            w.se(r.se())
+            w.se(r.se())  # offset_for_ref_frame[i]
 
     max_num_ref_frames = r.ue()
     w.ue(max_num_ref_frames)
-    w.u(1, r.u(1))
-    w.ue(r.ue())
-    w.ue(r.ue())
+    w.u(1, r.u(1))  # gaps_in_frame_num_value_allowed_flag
+    w.ue(r.ue())  # pic_width_in_mbs_minus1
+    w.ue(r.ue())  # pic_height_in_map_units_minus1
     fmof = r.u(1)
     w.u(1, fmof)
     if not fmof:
-        w.u(1, r.u(1))
-    w.u(1, r.u(1))
+        w.u(1, r.u(1))  # mb_adaptive_frame_field_flag
+    w.u(1, r.u(1))  # direct_8x8_inference_flag
     fcf = r.u(1)
     w.u(1, fcf)
     if fcf:
         w.ue(r.ue())
         w.ue(r.ue())
         w.ue(r.ue())
-        w.ue(r.ue())
+        w.ue(r.ue())  # crop offsets
 
+    # Force vui_parameters_present_flag = 1
     vui_present = r.u(1) if r.remaining() > 0 else 0
     w.u(1, 1)
 
     def _write_restriction() -> None:
-        w.u(1, 1)
-        w.ue(2)
-        w.ue(1)
-        w.ue(16)
-        w.ue(16)
-        w.ue(0)
-        w.ue(max_num_ref_frames)
+        w.u(1, 1)  # motion_vectors_over_pic_boundaries_flag (default 1)
+        w.ue(2)  # max_bytes_per_pic_denom (default 2)
+        w.ue(1)  # max_bits_per_mb_denom (default 1)
+        w.ue(16)  # log2_max_mv_length_horizontal (default 16)
+        w.ue(16)  # log2_max_mv_length_vertical (default 16)
+        w.ue(0)  # max_num_reorder_frames = 0  ← CRITICAL for Discord
+        w.ue(max_num_ref_frames)  # max_dec_frame_buffering
 
     if not vui_present:
-        w.u(2, 0)
-        w.u(1, 0)
-        w.u(5, 0)
-        w.u(1, 1)
+        # No VUI at all — write a minimal one from scratch
+        w.u(2, 0)  # aspect_ratio_info_present=0, overscan_info_present=0
+        w.u(1, 0)  # video_signal_type_present=0
+        w.u(5, 0)  # chroma_loc=0, timing=0, nal_hrd=0, vcl_hrd=0, pic_struct=0
+        w.u(1, 1)  # bitstream_restriction_flag=1
         _write_restriction()
     else:
         arif = r.u(1)
@@ -430,38 +282,39 @@ def _do_rewrite_sps(nal: bytes) -> bytes:
         if arif:
             ari = r.u(8)
             w.u(8, ari)
-            if ari == 255:
+            if ari == 255:  # Extended_SAR
                 w.u(16, r.u(16))
                 w.u(16, r.u(16))
 
         oif = r.u(1)
         w.u(1, oif)
         if oif:
-            w.u(1, r.u(1))
+            w.u(1, r.u(1))  # overscan_appropriate_flag
 
+        # Read video_signal_type but write 0 — strip it for compatibility
         vstf = r.u(1)
         w.u(1, 0)
         if vstf:
             r.u(3)
-            r.u(1)
+            r.u(1)  # video_format, video_full_range_flag (discard)
             cdpf = r.u(1)
             if cdpf:
                 r.u(8)
                 r.u(8)
-                r.u(8)
+                r.u(8)  # colour_{primaries,transfer,matrix} (discard)
 
         clif = r.u(1)
         w.u(1, clif)
         if clif:
             w.ue(r.ue())
-            w.ue(r.ue())
+            w.ue(r.ue())  # chroma_sample_loc_type top/bottom
 
         tif = r.u(1)
         w.u(1, tif)
         if tif:
-            w.u(32, r.u(32))
-            w.u(32, r.u(32))
-            w.u(1, r.u(1))
+            w.u(32, r.u(32))  # num_units_in_tick
+            w.u(32, r.u(32))  # time_scale
+            w.u(1, r.u(1))  # fixed_frame_rate_flag
 
         nhp = r.u(1)
         w.u(1, nhp)
@@ -474,40 +327,375 @@ def _do_rewrite_sps(nal: bytes) -> bytes:
             _copy_hrd(r, w)
 
         if nhp or vhp:
-            w.u(1, r.u(1))
+            w.u(1, r.u(1))  # low_delay_hrd_flag
 
-        w.u(1, r.u(1))
+        w.u(1, r.u(1))  # pic_struct_present_flag
 
         brf = r.u(1)
-        w.u(1, 1)
+        w.u(1, 1)  # force bitstream_restriction_flag = 1
         if not brf:
             _write_restriction()
         else:
-            w.u(1, r.u(1))
-            w.ue(r.ue())
-            w.ue(r.ue())
-            w.ue(r.ue())
-            w.ue(r.ue())
-            r.ue()
-            w.ue(0)
-            r.ue()
+            w.u(1, r.u(1))  # motion_vectors_over_pic_boundaries_flag
+            w.ue(r.ue())  # max_bytes_per_pic_denom
+            w.ue(r.ue())  # max_bits_per_mb_denom
+            w.ue(r.ue())  # log2_max_mv_length_horizontal
+            w.ue(r.ue())  # log2_max_mv_length_vertical
+            r.ue()  # max_num_reorder_frames — discard original
+            w.ue(0)  # force 0  ← CRITICAL for Discord
+            r.ue()  # max_dec_frame_buffering — discard original
             w.ue(max_num_ref_frames)
 
     return bytes([nal[0]]) + _ep_add(w.to_bytes())
 
 
 def rewrite_sps_vui(nal: bytes) -> bytes:
-    """Force bitstream_restriction_flag=1 and max_num_reorder_frames=0."""
+    """
+    Rewrite H.264 SPS NAL unit to force bitstream_restriction_flag=1 and
+    max_num_reorder_frames=0.  Discord requires both or rejects with Error 2015.
+    Returns the original NAL unchanged if parsing/rewriting fails.
+    """
     if not nal or (nal[0] & 0x1F) != 7:
         return nal
     try:
         return _do_rewrite_sps(nal)
     except Exception:
-        log.debug("SPS rewrite failed; passthrough", exc_info=True)
+        log.debug("SPS VUI rewrite failed; passing original through", exc_info=True)
         return nal
 
 
-# --- RTP encryption -----------------------------------------------------------
+# ── Encoder detection ─────────────────────────────────────────────────────────
+
+
+# ── Stream profile (env-tunable; defaults match historical behavior) ──────────
+# Select output resolution/fps/bitrate as a single STREAM_QUALITY tier, or
+# override any one axis with the vars below. Discord enforces per-account
+# resolution/fps caps (e.g. 720p30 up to 4K60 by tier), so pick a tier your
+# account actually supports.
+
+# STREAM_QUALITY presets → (resolution, fps, video bitrate).
+_STREAM_PRESETS: dict[str, tuple[str, float, str]] = {
+    "720p": ("1280:720", 30.0, "10000k"),
+    "1080p": ("1920:1080", 60.0, "12000k"),
+    "4k": ("3840:2160", 60.0, "24000k"),
+}
+_DEFAULT_QUALITY = "1080p"
+
+
+def _packet_pace_fraction() -> float:
+    """Fraction of the frame interval to spread each frame's RTP packets across,
+    instead of bursting them (see _DEFAULT_PACKET_PACE). STREAM_PACKET_PACE,
+    default 0.0 (disabled). Clamped to 0.0-0.95 so pacing never bleeds into the
+    next frame; e.g. 0.75 spreads packets over 75% of the frame interval."""
+    raw = os.environ.get("STREAM_PACKET_PACE", "").strip()
+    if raw:
+        try:
+            return max(0.0, min(0.95, float(raw)))
+        except ValueError:
+            log.warning("STREAM_PACKET_PACE=%r not a number; pacing disabled", raw)
+    return _DEFAULT_PACKET_PACE
+
+
+def _stream_preset() -> tuple[str, float, str]:
+    """(resolution, fps, bitrate) selected by STREAM_QUALITY (720p/1080p/4k);
+    defaults to 1080p — the historical hardcoded profile."""
+    raw = os.environ.get("STREAM_QUALITY", "").strip().lower()
+    if raw:
+        if raw in _STREAM_PRESETS:
+            return _STREAM_PRESETS[raw]
+        log.warning(
+            "STREAM_QUALITY=%r unknown (want %s); using %s",
+            raw, "/".join(_STREAM_PRESETS), _DEFAULT_QUALITY,
+        )
+    return _STREAM_PRESETS[_DEFAULT_QUALITY]
+
+
+def _stream_resolution() -> str:
+    """Output size as 'W:H' for the scaler. STREAM_RESOLUTION (accepts
+    '1280:720' or '1280x720') overrides the STREAM_QUALITY preset."""
+    raw = os.environ.get("STREAM_RESOLUTION", "").strip().replace("x", ":")
+    if raw:
+        if re.fullmatch(r"\d{2,5}:\d{2,5}", raw):
+            return raw
+        log.warning("STREAM_RESOLUTION=%r invalid (want W:H); using preset", raw)
+    return _stream_preset()[0]
+
+
+def _stream_bitrate() -> str:
+    """Target video bitrate for -b:v/-maxrate/-bufsize (e.g. '2500k').
+    STREAM_VIDEO_BITRATE overrides the STREAM_QUALITY preset."""
+    return os.environ.get("STREAM_VIDEO_BITRATE", "").strip() or _stream_preset()[2]
+
+
+def _stream_fps() -> float:
+    """Output frame rate. STREAM_FPS (1-60) overrides the STREAM_QUALITY preset.
+    Matching the source fps avoids wasteful frame duplication."""
+    raw = os.environ.get("STREAM_FPS", "").strip()
+    if raw:
+        try:
+            v = float(raw)
+            if 1.0 <= v <= 60.0:
+                return v
+            log.warning("STREAM_FPS=%s out of range 1-60; using preset", raw)
+        except ValueError:
+            log.warning("STREAM_FPS=%r not a number; using preset", raw)
+    return _stream_preset()[1]
+
+
+@dataclasses.dataclass
+class _EncoderConfig:
+    name: str
+    pre_input: list[str]  # args before -i
+    post_codec: list[str]  # args after -c:v <name>
+    vf: str  # -vf value
+
+
+def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
+    """Return True if FFmpeg can actually use this encoder (device/driver check).
+
+    Mirrors the real encode pipeline: hardware encoders (notably VA-API) require
+    frames on a hardware surface, so the same -vf chain used for real output
+    (e.g. ``format=nv12,hwupload,…``) must be applied here too — otherwise the
+    probe can false-negative even when real encoding would succeed.  On failure
+    the FFmpeg stderr is logged at DEBUG so the reason (missing driver, no
+    device, etc.) is recoverable without guesswork.
+    """
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        *pre_input,
+        "-f", "lavfi",
+        "-i", "nullsrc=size=64x64:rate=1",
+        "-vframes", "1",
+    ]
+    if vf:
+        cmd += ["-vf", vf]
+    cmd += ["-c:v", name, "-f", "null", "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, timeout=10)
+        if r.returncode != 0:
+            tail = r.stderr.decode(errors="replace").strip().splitlines()[-3:]
+            log.debug(
+                "encoder %s probe failed (exit %d): %s",
+                name, r.returncode, " | ".join(tail),
+            )
+        return r.returncode == 0
+    except Exception as exc:
+        log.debug("encoder %s probe error: %s", name, exc)
+        return False
+
+
+def _detect_encoder() -> _EncoderConfig | None:
+    """Pick the best available H.264 encoder. Returns None if nothing works."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        log.warning(
+            "ffmpeg not found — video streaming disabled. "
+            "Install ffmpeg (Fedora: ffmpeg-free, Debian/Ubuntu: ffmpeg)."
+        )
+        return None
+    available = result.stdout
+
+    vaapi_pre = ["-vaapi_device", "/dev/dri/renderD128"]
+    res = _stream_resolution()
+    br = _stream_bitrate()
+    vaapi_vf = f"format=nv12,hwupload,scale_vaapi={res}"
+
+    # Hardware encoders are preferred over software, so a working GPU is always
+    # used when present.  Each is gated on an actual probe, so a compiled-in but
+    # non-functional encoder is skipped and the next option is tried.
+    if "h264_nvenc" in available:
+        if _test_encoder("h264_nvenc", []):
+            log.info("video encoder: h264_nvenc (NVIDIA)")
+            return _EncoderConfig(
+                name="h264_nvenc",
+                pre_input=[],
+                post_codec=[
+                    "-preset",
+                    "p1",
+                    "-tune",
+                    "ll",
+                    "-profile:v",
+                    "high",
+                    "-level:v",
+                    "4.2",
+                    "-aud",
+                    "1",
+                    "-rc",
+                    "cbr",
+                    "-b:v",
+                    br,
+                    "-maxrate",
+                    br,
+                    "-bufsize",
+                    br,
+                ],
+                vf=f"scale={res}",
+            )
+        log.info(
+            "h264_nvenc is compiled in but unavailable (no usable NVIDIA GPU/driver) "
+            "— skipping"
+        )
+
+    if "h264_vaapi" in available:
+        if _test_encoder("h264_vaapi", vaapi_pre, vaapi_vf):
+            log.info("video encoder: h264_vaapi (VA-API)")
+            return _EncoderConfig(
+                name="h264_vaapi",
+                pre_input=vaapi_pre,
+                post_codec=[
+                    "-rc_mode",
+                    "CBR",
+                    "-profile:v",
+                    "high",
+                    "-level",
+                    "42",
+                    "-aud",
+                    "1",
+                    "-b:v",
+                    br,
+                ],
+                vf=vaapi_vf,
+            )
+        log.warning(
+            "h264_vaapi is compiled in but the VA-API probe failed — falling back to "
+            "software. Likely a missing GPU driver (AMD needs mesa-va-drivers-freeworld, "
+            "Intel needs intel-media-driver) or no /dev/dri access. Run `vainfo` in the "
+            "container to diagnose; enable "
+            "DEBUG logging to see the FFmpeg error."
+        )
+
+    if "libx264" in available and _test_encoder("libx264", []):
+        log.info("video encoder: libx264 (software)")
+        return _EncoderConfig(
+            name="libx264",
+            pre_input=[],
+            post_codec=[
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-profile:v",
+                "high",
+                "-level:v",
+                "4.2",
+                "-x264-params",
+                "aud=1",
+                "-b:v",
+                br,
+                "-maxrate",
+                br,
+                "-bufsize",
+                br,
+            ],
+            vf=f"scale={res}",
+        )
+
+    if "libopenh264" in available and _test_encoder("libopenh264", []):
+        log.info("video encoder: libopenh264 (software)")
+        return _libopenh264_config()
+
+    log.warning(
+        "no working H.264 encoder found — video streaming disabled. "
+        "Ensure ffmpeg-free (or equivalent) is installed with libopenh264, "
+        "or that VA-API/NVENC drivers are functional."
+    )
+    return None
+
+
+def _libopenh264_config() -> _EncoderConfig:
+    """libopenh264 software encoder config — the primary on machines without a
+    working GPU encoder, and the runtime fallback (see _SW_ENCODER) when a
+    hardware encoder accepts no frames (e.g. VA-API on large MPEG-2 keyframes)."""
+    res = _stream_resolution()
+    br = _stream_bitrate()
+    return _EncoderConfig(
+        name="libopenh264",
+        pre_input=[],
+        post_codec=[
+            "-profile:v", "constrained_baseline",
+            "-level:v", "4.2",
+            "-b:v", br,
+            "-maxrate", br,
+            "-bufsize", br,
+        ],
+        vf=f"scale={res}",
+    )
+
+
+_ENCODER: _EncoderConfig | None = _detect_encoder()
+
+# Software encoder to retry with when the hardware encoder produces no output at
+# runtime.  None when the primary is already software or libopenh264 is absent.
+_SW_ENCODER: _EncoderConfig | None = (
+    _libopenh264_config()
+    if _ENCODER is not None and _ENCODER.name != "libopenh264"
+    else None
+)
+
+
+# ── NAL unit utilities ────────────────────────────────────────────────────────
+
+
+def _nal_type(nal: bytes) -> int:
+    return nal[0] & 0x1F if nal else 0
+
+
+def _rtp_header(seq: int, ts: int, ssrc: int, marker: bool = False) -> bytearray:
+    hdr = bytearray(12)
+    hdr[0] = 0x80
+    hdr[1] = (0x80 if marker else 0x00) | (_H264_PT & 0x7F)
+    struct.pack_into(">H", hdr, 2, seq & 0xFFFF)
+    struct.pack_into(">I", hdr, 4, ts & 0xFFFF_FFFF)
+    struct.pack_into(">I", hdr, 8, ssrc & 0xFFFF_FFFF)
+    return hdr
+
+
+def _packetize_nal(nal: bytes) -> list[bytes]:
+    """
+    Return a list of RTP payloads (no header) for one NAL unit.
+
+    Small NAL units (≤ _MTU - 12) become a single-NAL-unit packet.
+    Large ones are fragmented using FU-A (RFC 6184 §5.8).
+    The caller is responsible for building the RTP header and setting
+    the marker bit on the last packet of the last NAL unit in a frame.
+    """
+    max_payload = _MTU - 12
+
+    if not nal:
+        return []
+
+    if len(nal) <= max_payload:
+        return [nal]
+
+    # FU-A fragmentation
+    nal_hdr = nal[0]
+    nal_type = nal_hdr & 0x1F
+    nal_ref_idc = nal_hdr & 0x60  # NRI bits
+    fu_indicator = nal_ref_idc | 28  # FU-A NAL type = 28
+
+    data = nal[1:]  # strip original NAL header
+    payloads: list[bytes] = []
+    is_first = True
+
+    while data:
+        chunk = data[: max_payload - 2]  # -2 for FU indicator + FU header
+        data = data[len(chunk) :]
+        is_last = not data
+
+        fu_hdr = (0x80 if is_first else 0x00) | (0x40 if is_last else 0x00) | nal_type
+        payloads.append(bytes([fu_indicator, fu_hdr]) + chunk)
+        is_first = False
+
+    return payloads
+
+
+# ── Encryption (mirrors VoiceClient._encrypt_* for video packets) ─────────────
 
 
 def _encrypt(
@@ -515,13 +703,13 @@ def _encrypt(
     payload: bytes,
     mode: str,
     secret_key: list[int],
-    nonce_counter: list[int],
+    nonce_counter: list[int],  # mutable single-element list so we can increment
 ) -> bytes:
     key = bytes(secret_key)
 
     if mode == "aead_xchacha20_poly1305_rtpsize":
         aead_box = nacl.secret.Aead(key)
-        nonce = bytearray(24)
+        nonce: bytes | bytearray = bytearray(24)
         struct.pack_into(">I", nonce, 0, nonce_counter[0])
         nonce_counter[0] = (nonce_counter[0] + 1) & 0xFFFF_FFFF
         ct = aead_box.encrypt(payload, bytes(header), bytes(nonce)).ciphertext
@@ -535,7 +723,7 @@ def _encrypt(
 
     if mode == "xsalsa20_poly1305_suffix":
         box = nacl.secret.SecretBox(key)
-        nonce_bytes = nacl.utils.random(24)
+        nonce_bytes: bytes = nacl.utils.random(24)
         return (
             bytes(header) + box.encrypt(payload, nonce_bytes).ciphertext + nonce_bytes
         )
@@ -551,198 +739,534 @@ def _encrypt(
     raise ValueError(f"Unknown voice encryption mode: {mode!r}")
 
 
-# --- VideoStream --------------------------------------------------------------
+# ── Audio FIFO source ─────────────────────────────────────────────────────────
 
 
-class VideoStream:
-    """Manages one video stream: FFmpeg subprocess + encrypted RTP output."""
+class _AudioPipeSource(discord.AudioSource):
+    """Reads raw PCM S16LE stereo 48 kHz from a FIFO into 20-ms frames."""
+
+    FRAME_SIZE: int = 3840  # 48000 Hz × 2 ch × 2 bytes × 0.020 s
+
+    def __init__(self, f) -> None:
+        self._f = f
+
+    def read(self) -> bytes:
+        data = self._f.read(self.FRAME_SIZE)
+        return data if len(data) == self.FRAME_SIZE else b""
+
+    def cleanup(self) -> None:
+        try:
+            self._f.close()
+        except Exception:
+            pass
+
+    def is_opus(self) -> bool:
+        return False
+
+
+# ── H264VideoPlayer ───────────────────────────────────────────────────────────
+
+
+class H264VideoPlayer(threading.Thread):
+    """
+    Reads H.264 Annex B from an FFmpeg subprocess and streams it to Discord.
+
+    A single FFmpeg process outputs video to stdout (pipe:1) and raw PCM audio
+    to a named FIFO.  The FIFO is consumed by _AudioPipeSource in tv.py so both
+    streams are demuxed from the same packet sequence, eliminating A/V desync
+    caused by two independent HTTP connections to the same live-stream URL.
+
+    Frame grouping: Access Unit Delimiters (NAL type 9) mark frame boundaries.
+    All NAL units between two AUDs share one RTP timestamp.  The marker bit is
+    set on the last RTP packet of the last NAL unit of each frame.
+    """
 
     def __init__(
         self,
         url: str,
-        guild_id: int,
-        conn: GoLiveConnection,
-    ):
-        self.url = url
-        self.guild_id = guild_id
-        self.conn = conn
-        self.video_ssrc = conn.ssrc + 1
-        self.seq = random.randint(0, 0xFFFF)
-        self.ts = random.randint(0, 0xFFFFFFFF)
-        self._nonce = [_VIDEO_NONCE_BASE]
+        voice_client: discord.VoiceClient,
+        fps: float = 25.0,
+        live: bool | None = True,
+        audio: bool = True,
+        probe_size: int = 2_000_000,
+    ) -> None:
+        super().__init__(name="H264VideoPlayer", daemon=True)
+        self._url = url
+        self._vc = voice_client
+        self._fps = fps
+        self._end = threading.Event()
+        self._proc: subprocess.Popen | None = None
 
-        # Encryption params — set after voice handshake
-        self._secret_key: list[int] = conn.secret_key
-        self._mode: str = conn.mode
-        log.info("[STREAM] negotiated mode: %s, key len: %d", self._mode, len(self._secret_key))
+        self._live = live
+        self._audio = audio
+        self._probe_size = probe_size
+        self._seq: int = 0
+        self._ts: int = 0
+        self._ts_inc: int = round(_CLOCK / fps)
+        self._ssrc: int = voice_client.ssrc + 1  # VIDEO_SSRC_OFFSET = 1
+        self._packets_sent: int = 0
+        self._nonce: list[int] = [_VIDEO_NONCE_BASE]  # mutable for _encrypt()
 
-        self._proc: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
-        self._task: Optional[asyncio.Task] = None
-        self._stop_event = asyncio.Event()
-        self._frame_nals: list[bytes] = []
+        # Encoder for the current attempt; run() swaps this to _SW_ENCODER and
+        # retries if a hardware encoder produces no output.
+        self._enc: _EncoderConfig | None = _ENCODER
+        # Frames emitted by the most recent _stream() attempt; 0 = total failure.
+        self._frames_emitted: int = 0
 
-    async def start(self) -> None:
-        """Launch FFmpeg and begin send loop."""
-        if self.conn.dave_session and hasattr(self.conn.dave_session, "register_video_ssrc"):
-            try:
-                self.conn.dave_session.register_video_ssrc(self.video_ssrc)
-                log.info("DAVE: registered video SSRC %d with H264 codec", self.video_ssrc)
-            except Exception:
-                log.warning("DAVE: failed to register video SSRC", exc_info=True)
+        # Set by _emit() the moment the first video frame is transmitted.
+        # stream.py waits on this before calling vc.play() so audio doesn't
+        # get ahead of video during Discord's video jitter-buffer fill phase.
+        self.first_frame_sent: threading.Event = threading.Event()
 
-        cmd = _ffmpeg_args(self.url)
-        log.info(
-            "[STREAM] guild=%s encoder=%s ffmpeg: %s ...",
-            self.guild_id,
-            _ENCODER,
-            " ".join(cmd[:6]),
-        )
-        # Use subprocess.Popen (synchronous) so stdout is a plain file object.
-        # This lets _send_loop call stdout.read() in a thread executor without
-        # the asyncio pipe transport layer, avoiding the asyncio.wait_for
-        # timeout problem that kills the loop during HLS probe delays.
-        self._proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self._task = asyncio.create_task(self._send_loop())
-        log.info(
-            "[STREAM] guild=%s started (video_ssrc=%d)", self.guild_id, self.video_ssrc
-        )
+        self._audio_fifo: str = f"/tmp/slopsoil_{self._ssrc}_audio.fifo"
+        self._ensure_fifo()
 
-    async def _send_loop(self) -> None:
-        """Read raw H.264 from FFmpeg stdout and send encrypted RTP packets.
+    # ── Public API ────────────────────────────────────────────────────────────
 
-        Runs blocking stdout.read() in a thread executor so asyncio is never
-        blocked, and HLS probe delays (ffmpeg -re can take 4-8 s before the
-        first byte) never trigger a premature exit.
-        """
-        assert self._proc is not None
-        assert self._proc.stdout is not None
-        loop = asyncio.get_event_loop()
-        raw_stdout = self._proc.stdout
-        buf = b""
+    @property
+    def audio_fifo(self) -> str:
+        return self._audio_fifo
 
-        def _blocking_read() -> bytes:
-            return raw_stdout.read(65536)
+    def stop(self) -> None:
+        self._end.set()
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
 
-        while not self._stop_event.is_set():
-            try:
-                chunk = await loop.run_in_executor(None, _blocking_read)
-            except Exception as e:
-                log.warning("[STREAM] guild=%s read error: %s", self.guild_id, e)
-                break
-            if not chunk:
-                break
-            buf += chunk
-            nals = _parse_annexb(buf)
-            if not nals:
-                continue
-            if nals:
-                last = nals[-1]
-                idx = buf.rfind(last)
-                buf = buf[idx:] if idx >= 0 else b""
-            else:
-                buf = b""
-            for nal in nals[:-1]:  # last NAL may be incomplete — keep in buf
-                self._feed_nal(nal)
-        self._flush_frame()
-        
-        self._proc.poll()
-        if self._proc.returncode is not None and self._proc.returncode != 0:
-            assert self._proc.stderr is not None
-            err = self._proc.stderr.read().decode(errors="replace")
-            log.error("[STREAM] ffmpeg failed (rc=%d): %s", self._proc.returncode, err)
-            
-        log.info("[STREAM] guild=%s send loop ended", self.guild_id)
+    def is_source_active(self) -> bool:
+        """True while the player may still produce output, including the brief
+        FIFO gap between a failed hardware attempt and the software-fallback
+        restart.  Audio readers poll this so a transient EOF during that restart
+        isn't mistaken for end-of-stream."""
+        return self.is_alive() and not self._end.is_set()
 
-    def _feed_nal(self, nal: bytes) -> None:
-        """Queue a NAL unit. Flushes previous frame on new slice."""
-        if _is_slice_nal(nal) and self._frame_nals:
-            self._flush_frame()
-        # Rewrite SPS VUI so Discord accepts the stream
-        if nal and (nal[0] & 0x1F) == 7:
-            nal = rewrite_sps_vui(nal)
-        self._frame_nals.append(nal)
-
-    def _flush_frame(self) -> None:
-        """Send all buffered NALs as one frame (encrypted), advance timestamp."""
-        if not self._frame_nals:
+    @staticmethod
+    def _kill_proc(proc: subprocess.Popen) -> None:
+        """SIGTERM then SIGKILL if needed, then reap."""
+        if proc.poll() is not None:
             return
-            
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            log.warning("FFmpeg did not exit after SIGTERM — sending SIGKILL")
+            proc.kill()
+            proc.wait()
+
+    def run(self) -> None:
+        try:
+            self._stream()
+            # If a hardware encoder produced no frames at all (e.g. VA-API
+            # "Access unit too large" on large MPEG-2 keyframes), retry once on
+            # the software encoder so the stream still plays.
+            if (
+                not self._end.is_set()
+                and self._frames_emitted == 0
+                and _SW_ENCODER is not None
+                and self._enc is not _SW_ENCODER
+            ):
+                log.warning(
+                    "video encoder %s produced no output — retrying with software "
+                    "encoder %s",
+                    self._enc.name if self._enc else "?", _SW_ENCODER.name,
+                )
+                self._enc = _SW_ENCODER
+                self._proc = None
+                self._stream()
+        except Exception:
+            log.exception("H264VideoPlayer error")
+        finally:
+            if self._proc is not None:
+                self._kill_proc(self._proc)
+            self._cleanup_fifo()
+        log.info("H264VideoPlayer stopped")
+
+    # ── FIFO helpers ──────────────────────────────────────────────────────────
+
+    def _ensure_fifo(self) -> None:
+        try:
+            os.remove(self._audio_fifo)
+        except FileNotFoundError:
+            pass
+        os.mkfifo(self._audio_fifo)
+
+    def _cleanup_fifo(self) -> None:
+        try:
+            os.remove(self._audio_fifo)
+        except OSError:
+            pass
+
+    # ── Internals ─────────────────────────────────────────────────────────────
+
+    def _ffmpeg_cmd(self) -> list[str]:
+        enc = self._enc
+        assert enc is not None, "H264VideoPlayer started with no encoder available"
+
+        probe_args = [
+            "-probesize", str(self._probe_size),
+            "-analyzeduration", str(self._probe_size),
+        ]
+        pre_input = enc.pre_input
+        is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+        # Pace a local VOD file at native rate so FFmpeg emits audio+video in
+        # lockstep at real time instead of racing ahead and bursting — tighter
+        # A/V sync and smoother delivery. Live inputs / URLs are already
+        # real-time, so -re would only stall them.
+        rate_args: list[str] = [] if (self._live or is_url) else ["-re"]
+        fflags = "+discardcorrupt"
+        # -reconnect flags are HTTP-only; FFmpeg rejects them for local files.
+        reconnect_args = (
+            ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+            if is_url
+            else []
+        )
+        video_out_args = [
+            "-map", "0:v:0",
+            "-vf", enc.vf,
+            "-c:v", enc.name,
+            *enc.post_codec,
+            "-r", str(int(self._fps)),
+            "-g", str(int(self._fps)),
+            "-f", "h264",
+            "pipe:1",
+        ]
+
+        return [
+            "ffmpeg",
+            "-y",  # overwrite FIFO without interactive prompt
+            "-loglevel",
+            "warning",
+            # Tolerate initial decode errors (mpeg2video frames before the first
+            # sequence header have unknown dimensions; let FFmpeg keep going until
+            # it finds a valid GOP rather than aborting the pipeline)
+            "-max_error_rate",
+            "1",
+            *pre_input,
+            *probe_args,
+            "-fflags",
+            fflags,
+            *rate_args,
+            *reconnect_args,
+            "-i",
+            self._url,
+            *video_out_args,
+            # Audio → FIFO consumed by _AudioPipeSource in stream.py.
+            # If the source has no audio track (some IPTV streams are video-only,
+            # or audio lives in a separate HLS rendition FFmpeg doesn't auto-select),
+            # inject a lavfi silence source as input 1 so the FIFO writer always
+            # exists and GoLiveAudioSender doesn't hang waiting for data.
+            *(
+                []
+                if self._audio
+                else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+            ),
+            "-map",
+            "0:a:0" if self._audio else "1:a:0",
+            "-c:a",
+            "pcm_s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-f",
+            "s16le",
+            self._audio_fifo,
+        ]
+
+    def _send_frame(self, nal_units: list[bytes]) -> None:
+        """Packetize, encrypt, and send all NAL units for one video frame."""
+        if not nal_units:
+            return
+
+        conn = self._vc._connection
+        mode = self._vc.mode
+        key = self._vc.secret_key
+
+        # DAVE access-unit-level encryption: encrypt the complete Annex B frame
+        # once, then split the encrypted output back using input NAL sizes.
+        # Ciphertext is the same size as plaintext; the supplemental trailer
+        # (tag + LEB128 nonce + unencrypted ranges + 0xFAFA marker) is appended
+        # after the last NAL and must ride along on the last RTP payload.
         _dave = (
-            self.conn.dave_session
-            if (self.conn.dave_session and hasattr(self.conn.dave_session, "encrypt_h264"))
+            conn.dave_session
+            if (conn.dave_session and hasattr(conn.dave_session, "encrypt_h264"))
             else None
         )
 
         rtp_nals: list[bytes]
         if _dave is not None:
-            annex_b = b"".join(b"\x00\x00\x00\x01" + nal for nal in self._frame_nals)
-            try:
-                enc_frame = _dave.encrypt_h264(self.video_ssrc, annex_b)
-                if enc_frame is not annex_b:
-                    rtp_nals = []
-                    offset = 0
-                    for nal in self._frame_nals:
-                        offset += 4
-                        rtp_nals.append(enc_frame[offset : offset + len(nal)])
-                        offset += len(nal)
-                    if offset < len(enc_frame) and rtp_nals:
-                        rtp_nals[-1] = rtp_nals[-1] + enc_frame[offset:]
-                else:
-                    rtp_nals = list(self._frame_nals)
-            except Exception:
-                log.debug("DAVE encrypt_h264 failed", exc_info=True)
-                rtp_nals = list(self._frame_nals)
+            annex_b = b"".join(b"\x00\x00\x00\x01" + nal for nal in nal_units)
+            enc_frame = _dave.encrypt_h264(self._ssrc, annex_b)
+            if enc_frame is not annex_b:
+                # Encrypted: split output using input NAL sizes, append trailer to last
+                rtp_nals = []
+                offset = 0
+                for nal in nal_units:
+                    offset += 4  # skip 4-byte start code
+                    rtp_nals.append(enc_frame[offset : offset + len(nal)])
+                    offset += len(nal)
+                if offset < len(enc_frame) and rtp_nals:
+                    rtp_nals[-1] = rtp_nals[-1] + enc_frame[offset:]
+            else:
+                rtp_nals = list(nal_units)  # passthrough: DAVE key not yet ready
         else:
-            rtp_nals = list(self._frame_nals)
-            
-        pkts = []
-        for idx, nal in enumerate(rtp_nals):
-            is_last_nal = (idx == len(rtp_nals) - 1)
-            pkts.extend(_packetize_nal(nal, self.video_ssrc, self.seq, self.ts, is_last_nal))
-            if pkts:
-                self.seq = pkts[-1][1]
-        if not pkts:
-            self._frame_nals = []
+            rtp_nals = list(nal_units)
+
+        # Collect all payloads so we know which is the very last one
+        all_payloads: list[bytes] = []
+        for nal in rtp_nals:
+            all_payloads.extend(_packetize_nal(nal))
+
+        if not all_payloads:
             return
 
-        # Encrypt all packets for this frame
-        for pkt, _ in pkts:
-            hdr = pkt[:_RTP_HEADER_SIZE]
-            payload = pkt[_RTP_HEADER_SIZE:]
+        # Optionally pace the frame's packets across part of the frame interval
+        # instead of bursting them (STREAM_PACKET_PACE; off by default). Absolute-
+        # deadline sleep so it self-corrects despite ~1ms sleep granularity;
+        # interruptible by stop.
+        pace = _packet_pace_fraction()
+        n = len(all_payloads)
+        per_pkt = (
+            (pace / self._fps) / n
+            if (self._fps > 0 and n > 1 and pace > 0)
+            else 0.0
+        )
+        deadline = time.monotonic()
+        for i, payload in enumerate(all_payloads):
+            marker = i == len(all_payloads) - 1
+            hdr = _rtp_header(self._seq, self._ts, self._ssrc, marker=marker)
             try:
-                encrypted = _encrypt(
-                    hdr, payload, self._mode, self._secret_key, self._nonce
-                )
-                self.conn.send_packet(encrypted)
-            except Exception as e:
-                log.debug("[STREAM] send_packet dropped: %s", e)
+                packet = _encrypt(bytes(hdr), payload, mode, key, self._nonce)
+                self._vc._connection.send_packet(packet)
+                self._packets_sent += 1
+            except OSError:
+                log.debug("Video packet dropped (seq=%d)", self._seq)
+            self._seq = (self._seq + 1) & 0xFFFF
+            if per_pkt:
+                deadline += per_pkt
+                slack = deadline - time.monotonic()
+                if slack > 0 and self._end.wait(timeout=slack):
+                    break  # stop requested mid-frame
+
+        self._ts = (self._ts + self._ts_inc) & 0xFFFF_FFFF
+
+    # Transient errors emitted by libopenh264 when it receives P-frames before
+    # the first IDR at stream start.  They resolve within the first GOP and do
+    # not affect the output stream, so we demote them to DEBUG.
+    _STARTUP_NOISE = frozenset(
+        [
+            "DecodeFrame failed",
+            "no exist Sequence Parameter Sets",
+            "Error submitting packet to decoder",
+        ]
+    )
+
+    def _drain_stderr(self) -> None:
+        assert self._proc is not None and self._proc.stderr is not None
+        t_start = time.monotonic()
+        for raw in self._proc.stderr:
+            msg = raw.decode(errors="replace").rstrip()
+            if (
+                time.monotonic() - t_start < 10.0
+                and any(n in msg for n in self._STARTUP_NOISE)
+            ):
+                log.debug("ffmpeg (startup): %s", msg)
+            else:
+                log.warning("ffmpeg video: %s", msg)
+
+    def _stream(self) -> None:
+        conn = self._vc._connection
+        dave_ver = getattr(conn, "dave_protocol_version", 0)
+        dave_ready = (
+            getattr(conn.dave_session, "ready", False) if conn.dave_session else False
+        )
+        log.info(
+            "DAVE state: protocol_version=%d, session=%s, ready=%s, mode=%s",
+            dave_ver,
+            "present" if conn.dave_session else "absent",
+            dave_ready,
+            conn.mode,
+        )
+        if conn.dave_session and hasattr(conn.dave_session, "register_video_ssrc"):
+            try:
+                conn.dave_session.register_video_ssrc(self._ssrc)
+                log.info("DAVE: registered video SSRC %d with H264 codec", self._ssrc)
+            except Exception:
+                log.warning("DAVE: failed to register video SSRC", exc_info=True)
+        cmd = self._ffmpeg_cmd()
+        from urllib.parse import urlparse, urlunparse
+
+        _p = urlparse(self._url)
+        _safe = urlunparse(
+            _p._replace(netloc=(_p.hostname or "") + (f":{_p.port}" if _p.port else ""))
+        )
+        log.info("Starting H.264 video stream from %s", _safe)
+        # Log the encoder and full FFmpeg command (URL redacted) so the active
+        # encoder is verifiable from the logs, including after a fallback retry.
+        _safe_cmd = [_safe if arg == self._url else arg for arg in cmd]
+        log.info(
+            "FFmpeg encoder=%s command: %s",
+            self._enc.name if self._enc else "?", " ".join(_safe_cmd),
+        )
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        # If stop() was called before Popen completed, terminate immediately.
+        if self._end.is_set():
+            self._kill_proc(self._proc)
+            return
+        threading.Thread(
+            target=self._drain_stderr, daemon=True, name="ffmpeg-stderr"
+        ).start()
+        assert self._proc.stdout is not None
+
+        buf = bytearray()
+        frame: list[bytes] = []  # NAL units for the current frame
+        pending: list[bytes] = []  # SPS/PPS/SEI to prepend to the next slice
+
+        # Wall-clock pacing state.  _t0 is set on the first frame so that the
+        # pacing clock starts when real output begins (not when FFmpeg starts
+        # buffering).  Every call to _emit() advances _n and sleeps until the
+        # next frame deadline, keeping video at exactly self._fps on average.
+        _t0: float | None = None
+        _n = 0
+        self._frames_emitted = 0  # reset per attempt for the fallback check
+
+        # ── Diagnostics ────────────────────────────────────────────────────────
+        # Flushed to the log every _STATS_INTERVAL seconds.  The two signals that
+        # explain perceived stutter:
+        #   * "late" frames — emits that missed their pacing deadline (slack ≤ 0).
+        #     A burst of these is exactly what a viewer sees as a hitch.
+        #   * "read-block" — wall time the loop spent blocked in stdout.read().
+        #     Near-zero in steady state (FFmpeg encodes a VOD faster than realtime
+        #     so the pipe stays full); a spike means FFmpeg itself stalled
+        #     (decode/encode/GPU), pointing upstream of the pacing loop.
+        _stats_t0 = time.monotonic()
+        _stats_frames = 0
+        _stats_late = 0
+        _stats_late_total = 0.0
+        _stats_late_max = 0.0
+        _stats_read_block = 0.0
+        _stats_pkts0 = 0
+
+        def _flush_stats(now: float) -> None:
+            nonlocal _stats_t0, _stats_frames, _stats_late, _stats_late_total
+            nonlocal _stats_late_max, _stats_read_block, _stats_pkts0
+            window = now - _stats_t0
+            if window <= 0:
+                return
+            log.info(
+                "video stats: %.1f fps (target %.0f) | late %d/%d frames "
+                "(max %.0f ms, total %.0f ms) | ffmpeg read-block %.0f ms / %.1fs "
+                "| %d pkts",
+                _stats_frames / window, self._fps,
+                _stats_late, _stats_frames,
+                _stats_late_max * 1000, _stats_late_total * 1000,
+                _stats_read_block * 1000, window,
+                self._packets_sent - _stats_pkts0,
+            )
+            _stats_t0 = now
+            _stats_frames = 0
+            _stats_late = 0
+            _stats_late_total = 0.0
+            _stats_late_max = 0.0
+            _stats_read_block = 0.0
+            _stats_pkts0 = self._packets_sent
+
+        def _emit(f: list[bytes]) -> bool:
+            """Send a frame and pace to wall clock. Returns True → stop."""
+            nonlocal _t0, _n, _stats_frames, _stats_late
+            nonlocal _stats_late_total, _stats_late_max
+            if not f:
+                return False
+            if _t0 is None:
+                _t0 = time.monotonic()
+            self._send_frame(f)
+            if not self.first_frame_sent.is_set():
+                self.first_frame_sent.set()
+            _n += 1
+            self._frames_emitted = _n
+            _stats_frames += 1
+            now = time.monotonic()
+            due = _t0 + _n / self._fps
+            slack = due - now
+            if slack <= 0:
+                lateness = -slack
+                _stats_late += 1
+                _stats_late_total += lateness
+                if lateness > _stats_late_max:
+                    _stats_late_max = lateness
+            if now - _stats_t0 >= _STATS_INTERVAL:
+                _flush_stats(now)
+            if slack > 0.001:
+                return self._end.wait(timeout=slack)
+            return self._end.is_set()
+
+        while not self._end.is_set():
+            _read_t0 = time.monotonic()
+            chunk = self._proc.stdout.read(65_536)
+            _stats_read_block += time.monotonic() - _read_t0
+            if not chunk:
                 break
 
-        self.ts = (self.ts + _TS_PER_FRAME) & 0xFFFFFFFF
-        self._frame_nals = []
+            buf += chunk
 
-    async def stop(self) -> None:
-        """Kill FFmpeg, announce stop on WS, clean up."""
-        self._stop_event.set()
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-        if self._proc:
-            try:
-                self._proc.kill()
-                self._proc.wait()
-            except Exception:
-                pass
-            self._proc = None
+            # Split on start codes.  All parts except the last are complete.
+            # The last part may be cut off mid-NAL — keep it for next iteration.
+            parts = _START_RE.split(bytes(buf))
+            _stop = False
+            for raw in parts[:-1]:
+                nal = raw.rstrip(b"\x00")
+                if not nal:
+                    continue
+
+                nt = _nal_type(nal)
+                if nt == _NAL_AUD:
+                    # AUD: explicit frame boundary
+                    if frame:
+                        if _emit(frame):
+                            _stop = True
+                            break
+                        frame = []
+                elif nt in _SLICE_NAL_TYPES:
+                    # New slice = new frame; flush whatever was accumulating
+                    if frame:
+                        if _emit(frame):
+                            _stop = True
+                            break
+                    frame = pending + [nal]
+                    pending = []
+                elif nt in _PARAM_NAL_TYPES:
+                    if nt == 7:  # SPS: rewrite VUI so Discord accepts the stream
+                        nal = rewrite_sps_vui(nal)
+                    pending.append(nal)
+                # else: filler, end-of-stream, etc. — discard
+
+            if _stop:
+                break
+            buf = bytearray(parts[-1])  # incomplete tail, carry forward
+
+        # Flush any remaining NAL units
+        if buf:
+            nal = bytes(buf).rstrip(b"\x00")
+            if nal:
+                if _nal_type(nal) == 7:
+                    nal = rewrite_sps_vui(nal)
+                frame.append(nal)
+        _emit(frame)
+        _flush_stats(time.monotonic())
+
+        # Reap the process; SIGKILL if it's still alive after a short grace period.
+        if self._end.is_set() and self._proc.poll() is None:
+            self._kill_proc(self._proc)
         try:
-            await self.conn.disconnect()
-        except Exception:
-            log.exception("[STREAM] error disconnecting GoLiveConnection")
-        log.info("[STREAM] guild=%s stopped", self.guild_id)
+            rc = self._proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            log.warning("FFmpeg still running after stream end — killing")
+            self._proc.kill()
+            rc = self._proc.wait()
+        log.info("H.264 video stream ended (exit code %d)", rc)
