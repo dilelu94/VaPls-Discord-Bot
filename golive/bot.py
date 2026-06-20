@@ -146,21 +146,22 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": "not connected"}, status=500)
     log.info("[STREAM] vc=%s", type(vc).__name__)
 
-    for i in range(20):
+    conn = getattr(vc, "_connection", None)
+    if conn is None:
+        log.warning("[STREAM] _connection not available")
+        return web.json_response({"error": "not connected"}, status=500)
+
+    for i in range(40):
         ws = getattr(vc, "ws", None)
-        if ws is not None:
-            log.info("[STREAM] ws ready after %.1fs", i * 0.5)
+        sock = getattr(conn, "socket", None)
+        # We need to wait until the socket is initialized
+        if ws is not None and sock is not None and hasattr(sock, "sendto"):
+            log.info("[STREAM] ws and socket ready after %.1fs", i * 0.5)
             break
         await asyncio.sleep(0.5)
     else:
-        log.warning("[STREAM] ws not ready after 10s")
-        return web.json_response({"error": "ws not ready"}, status=500)
-
-    sock = getattr(vc, "socket", None)
-    if sock is None:
-        log.warning("[STREAM] socket not available")
-        return web.json_response({"error": "socket not available"}, status=500)
-    log.info("[STREAM] socket OK")
+        log.warning("[STREAM] ws/socket not ready after 20s")
+        return web.json_response({"error": "ws/socket not ready"}, status=500)
 
     ssrc = getattr(vc, "ssrc", 0)
     if not ssrc:

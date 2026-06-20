@@ -136,7 +136,7 @@ def _build_rtp_header(ssrc: int, seq: int, ts: int, marker: bool = False) -> byt
     )
 
 
-def _packetize_nal(nal: bytes, ssrc: int, seq: int, ts: int) -> list[tuple[bytes, int]]:
+def _packetize_nal(nal: bytes, ssrc: int, seq: int, ts: int, is_last_nal: bool) -> list[tuple[bytes, int]]:
     """Packetize one H.264 NAL unit into RTP packets (FU-A if needed)."""
     if not nal:
         return []
@@ -144,7 +144,7 @@ def _packetize_nal(nal: bytes, ssrc: int, seq: int, ts: int) -> list[tuple[bytes
     nt = nh & 0x1F
 
     if len(nal) <= _MTU - _RTP_HEADER_SIZE:
-        h = _build_rtp_header(ssrc, seq, ts, marker=True)
+        h = _build_rtp_header(ssrc, seq, ts, marker=is_last_nal)
         return [(h + nal, (seq + 1) & 0xFFFF)]
 
     fi = (nh & 0xE0) | _NAL_FU_A
@@ -156,13 +156,13 @@ def _packetize_nal(nal: bytes, ssrc: int, seq: int, ts: int) -> list[tuple[bytes
         end = min(offset + max_frag, len(payload))
         frag = payload[offset:end]
         is_first = offset == 0
-        is_last = end >= len(payload)
+        is_last_frag = end >= len(payload)
         fh = nt
         if is_first:
             fh |= _FU_START
-        if is_last:
+        if is_last_frag:
             fh |= _FU_END
-        h = _build_rtp_header(ssrc, seq, ts, marker=is_last)
+        h = _build_rtp_header(ssrc, seq, ts, marker=(is_last_frag and is_last_nal))
         pkt = h + bytes([fi, fh]) + frag
         result.append((pkt, (seq + 1) & 0xFFFF))
         offset = end
@@ -571,6 +571,7 @@ class VideoStream:
         # Encryption params — set after voice handshake
         self._secret_key: list[int] = getattr(vc, "secret_key", [])
         self._mode: str = getattr(vc, "mode", "xsalsa20_poly1305")
+        log.info("[STREAM] negotiated mode: %s, key len: %d", self._mode, len(self._secret_key))
 
         self._proc: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
         self._task: Optional[asyncio.Task] = None
@@ -660,8 +661,9 @@ class VideoStream:
         if not self._frame_nals:
             return
         pkts = []
-        for nal in self._frame_nals:
-            pkts.extend(_packetize_nal(nal, self.video_ssrc, self.seq, self.ts))
+        for idx, nal in enumerate(self._frame_nals):
+            is_last_nal = (idx == len(self._frame_nals) - 1)
+            pkts.extend(_packetize_nal(nal, self.video_ssrc, self.seq, self.ts, is_last_nal))
             if pkts:
                 self.seq = pkts[-1][1]
         if not pkts:
