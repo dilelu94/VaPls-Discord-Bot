@@ -1586,6 +1586,238 @@ async def entraindio(ctx):
     await safe_respond(ctx, f"🪶 El indio va para **{voice_channel.name}**.")
 
 
+async def start_iptv_stream_logic(
+    guild_id: int,
+    voice_channel: discord.VoiceChannel,
+    stream_url: str,
+    channel_name: str,
+) -> tuple[bool, str]:
+    """Sends the HTTP request to the GoLive relay to start streaming a channel.
+
+    Returns:
+        (success, status_message)
+    """
+    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+        return False, "❌ El relay GoLive no está configurado."
+
+    relay_base = config.GOLIVE_RELAY_URL
+    url = urljoin(relay_base, "/stream")
+    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
+    payload = {
+        "guild_id": guild_id,
+        "channel_id": voice_channel.id,
+        "url": stream_url,
+    }
+    log.info(
+        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s",
+        url,
+        guild_id,
+        voice_channel.id,
+        stream_url,
+    )
+    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                body = await resp.text()
+                log.info(
+                    "[STREAM_LOGIC] relay response status=%s body=%s",
+                    resp.status,
+                    body[:500],
+                )
+                if resp.status >= 400:
+                    log.warning("stream relay HTTP %s: %s", resp.status, body[:200])
+                    return False, f"⚠️ No pude iniciar el stream (HTTP {resp.status})."
+    except Exception as e:
+        log.exception("stream relay failed")
+        return False, f"⚠️ Error iniciando stream: {e}"
+
+    return True, f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."
+
+
+class IptvSearchView(discord.ui.View):
+    """Interactive UI for browsing and filtering IPTV channels."""
+
+    def __init__(self, channels: list[iptv.Channel], voice_channel: discord.VoiceChannel):
+        super().__init__(timeout=120)
+        self.channels = channels
+        self.voice_channel = voice_channel
+        self.selected_language = "es"  # default to Spanish as requested/sensible
+        self.selected_category = "all"  # default to show all categories
+        self.selected_channel_name = None
+        self.setup_components()
+
+    def get_filtered_channels(self) -> list[iptv.Channel]:
+        filtered = []
+        for ch in self.channels:
+            # Language filter: 'es', 'en', 'all'
+            if self.selected_language != "all" and ch.language != self.selected_language:
+                continue
+            # Category filter
+            if self.selected_category != "all":
+                groups = [g.strip().lower() for g in ch.group.split(";")]
+                if self.selected_category.lower() not in groups:
+                    continue
+            filtered.append(ch)
+        # Sort by channel name case-insensitively
+        filtered.sort(key=lambda x: x.name.lower())
+        return filtered
+
+    def setup_components(self):
+        self.clear_items()
+
+        # 1. Language selector dropdown (Row 0)
+        lang_options = [
+            discord.SelectOption(label="🇪🇸 Español", value="es", default=(self.selected_language == "es")),
+            discord.SelectOption(label="🇬🇧 Inglés", value="en", default=(self.selected_language == "en")),
+            discord.SelectOption(label="👥 Todos", value="all", default=(self.selected_language == "all")),
+        ]
+        lang_select = discord.ui.Select(
+            placeholder="🌍 Selecciona un idioma...",
+            options=lang_options,
+            row=0,
+            custom_id="iptv_lang_select",
+        )
+        lang_select.callback = self.on_lang_select
+        self.add_item(lang_select)
+
+        # 2. Category selector dropdown (Row 1)
+        cat_choices = [
+            ("⚽ Deportes", "Sports"),
+            ("📰 Noticias", "News"),
+            ("🎬 Películas", "Movies"),
+            ("🎵 Música", "Music"),
+            ("🧪 Documentales", "Documentary"),
+            ("🧸 Infantil", "Kids"),
+            ("🎭 Entretenimiento", "Entertainment"),
+            ("📺 Series", "Series"),
+            ("🛐 Religión", "Religious"),
+            ("🌐 Todos", "all"),
+        ]
+        cat_options = [
+            discord.SelectOption(label=label, value=value, default=(self.selected_category == value))
+            for label, value in cat_choices
+        ]
+        cat_select = discord.ui.Select(
+            placeholder="📁 Selecciona una categoría...",
+            options=cat_options,
+            row=1,
+            custom_id="iptv_cat_select",
+        )
+        cat_select.callback = self.on_cat_select
+        self.add_item(cat_select)
+
+        # 3. Dynamic Channel list dropdown (Row 2)
+        filtered = self.get_filtered_channels()
+        page_size = 25
+        display_channels = filtered[:page_size]
+
+        if display_channels:
+            channel_options = []
+            for ch in display_channels:
+                label = ch.name[:100]  # truncate to 100 characters max
+                channel_options.append(
+                    discord.SelectOption(
+                        label=label,
+                        value=ch.name,
+                        default=(ch.name == self.selected_channel_name)
+                    )
+                )
+            channel_select = discord.ui.Select(
+                placeholder=f"📺 Selecciona un canal ({len(filtered)} encontrados)...",
+                options=channel_options,
+                row=2,
+                custom_id="iptv_channel_select",
+            )
+            channel_select.callback = self.on_channel_select
+            self.add_item(channel_select)
+        else:
+            self.add_item(
+                discord.ui.Select(
+                    placeholder="⚠️ No hay canales con este filtro",
+                    options=[discord.SelectOption(label="Vacío", value="none")],
+                    disabled=True,
+                    row=2,
+                    custom_id="iptv_channel_select",
+                )
+            )
+
+    async def update_message(self, interaction: discord.Interaction, status_text: str = None):
+        embed = discord.Embed(
+            title="📺 Buscador de Canales IPTV",
+            description="Seleccioná un idioma y categoría. Al elegir un canal, se iniciará la transmisión en tu canal de voz.",
+            color=0xE94560,
+        )
+
+        lang_label = {"es": "Español", "en": "Inglés", "all": "Todos"}.get(self.selected_language, self.selected_language)
+        embed.add_field(name="🌍 Idioma", value=lang_label, inline=True)
+
+        cat_labels = {
+            "Sports": "Deportes", "News": "Noticias", "Movies": "Películas",
+            "Music": "Música", "Documentary": "Documentales", "Kids": "Infantil",
+            "Entertainment": "Entretenimiento", "Series": "Series", "Religious": "Religión",
+            "all": "Todos"
+        }
+        embed.add_field(name="📁 Categoría", value=cat_labels.get(self.selected_category, self.selected_category), inline=True)
+
+        filtered = self.get_filtered_channels()
+        embed.add_field(name="📊 Canales", value=f"{len(filtered)} canales encontrados (mostrando hasta 25)", inline=True)
+
+        if status_text:
+            embed.add_field(name="⚡ Estado", value=status_text, inline=False)
+
+        try:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(embed=embed, view=self)
+            else:
+                await interaction.response.edit_message(embed=embed, view=self)
+        except discord.NotFound:
+            pass
+
+    async def on_lang_select(self, interaction: discord.Interaction):
+        self.selected_language = interaction.data["values"][0]
+        self.selected_channel_name = None
+        self.setup_components()
+        await self.update_message(interaction)
+
+    async def on_cat_select(self, interaction: discord.Interaction):
+        self.selected_category = interaction.data["values"][0]
+        self.selected_channel_name = None
+        self.setup_components()
+        await self.update_message(interaction)
+
+    async def on_channel_select(self, interaction: discord.Interaction):
+        selected_name = interaction.data["values"][0]
+        self.selected_channel_name = selected_name
+        self.setup_components()
+
+        ch = next((c for c in self.channels if c.name == selected_name), None)
+        if not ch:
+            await interaction.response.send_message("❌ Error: No se encontró el canal seleccionado.", ephemeral=True)
+            return
+
+        voice_state = getattr(interaction.user, "voice", None)
+        voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+        if voice_channel is None:
+            await interaction.response.send_message("❌ Tenés que estar en un canal de voz para iniciar un stream.", ephemeral=True)
+            return
+
+        await interaction.response.defer()
+        await self.update_message(interaction, status_text=f"🔄 Conectando y transmitiendo **{ch.name}**...")
+
+        success, status_msg = await start_iptv_stream_logic(
+            interaction.guild_id,
+            voice_channel,
+            ch.url,
+            ch.name
+        )
+
+        if success:
+            await self.update_message(interaction, status_text=f"🟢 {status_msg}")
+        else:
+            await self.update_message(interaction, status_text=f"🔴 Error: {status_msg}")
+
+
 @bot.slash_command(
     name="stream",
     description="Transmití un canal de IPTV en tu canal de voz (Go Live)",
@@ -1595,7 +1827,8 @@ async def stream(
     canal: discord.Option(
         str,
         description="Nombre del canal de IPTV (ej: ESPN, Fox, CNN)",
-        required=True,
+        required=False,
+        default=None,
     ),
 ):
     """Slash command: search iptv-org and start a Go Live stream.
@@ -1618,6 +1851,27 @@ async def stream(
         await safe_respond(
             ctx, "❌ Tenés que estar en un canal de voz para iniciar un stream."
         )
+        return
+
+    if canal is None:
+        try:
+            channels = await iptv.get_all_channels()
+            if not channels:
+                await safe_respond(ctx, "❌ No se pudieron cargar los canales de IPTV.")
+                return
+            view = IptvSearchView(channels, voice_channel)
+            await ctx.interaction.edit_original_response(
+                embed=discord.Embed(
+                    title="📺 Buscador de Canales IPTV",
+                    description="Seleccioná un idioma y categoría. Al elegir un canal, se iniciará la transmisión en tu canal de voz.",
+                    color=0xE94560,
+                ),
+                view=view,
+            )
+            await view.update_message(ctx.interaction)
+        except Exception as e:
+            log.exception("failed to load IPTV search view")
+            await safe_respond(ctx, f"⚠️ Error cargando el buscador: {e}")
         return
 
     is_url = canal.startswith(("http://", "https://", "rtsp://", "rtmp://"))
@@ -1651,51 +1905,17 @@ async def stream(
         stream_url,
     )
 
-    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
-        return
-
-    relay_base = config.GOLIVE_RELAY_URL
-    url = urljoin(relay_base, "/stream")
-    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
-    payload = {
-        "guild_id": ctx.guild_id,
-        "channel_id": voice_channel.id,
-        "url": stream_url,
-    }
-    log.info(
-        "[STREAM] POST %s guild=%s channel=%s url=%s",
-        url,
+    success, status_msg = await start_iptv_stream_logic(
         ctx.guild_id,
-        voice_channel.id,
+        voice_channel,
         stream_url,
+        channel_name
     )
-    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async with sess.post(url, json=payload, headers=headers) as resp:
-                body = await resp.text()
-                log.info(
-                    "[STREAM] relay response status=%s body=%s",
-                    resp.status,
-                    body[:500],
-                )
-                if resp.status >= 400:
-                    log.warning("stream relay HTTP %s: %s", resp.status, body[:200])
-                    await safe_respond(
-                        ctx, f"⚠️ No pude iniciar el stream (HTTP {resp.status})."
-                    )
-                    return
-    except Exception as e:
-        log.exception("stream relay failed")
-        await safe_respond(ctx, f"⚠️ Error iniciando stream: {e}")
-        return
 
-    await safe_respond(
-        ctx,
-        f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\n"
-        f"Usá **/stopstream** para cortar.",
-    )
+    if success:
+        await safe_respond(ctx, status_msg)
+    else:
+        await safe_respond(ctx, status_msg)
 
 
 @bot.slash_command(

@@ -50,6 +50,7 @@ _last_voice_trigger: dict[int, float] = {}
 _background_tasks: set[asyncio.Task] = set()
 
 _PENDING_FILE = "data/pending_reviews.json"
+_STATE_FILE = "data/story_state.json"
 
 
 def _pr_flush() -> None:
@@ -61,6 +62,54 @@ def _pr_flush() -> None:
     p = Path(_PENDING_FILE)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, ensure_ascii=False, default=str))
+
+
+def _state_flush() -> None:
+    data = {
+        "stories_today": {str(k): v for k, v in _stories_today.items()},
+        "story_date": _story_date,
+        "last_story_at": {str(k): v for k, v in _last_story_at.items()},
+        "last_chat_activity": {str(k): v for k, v in _last_chat_activity.items()},
+        "messages_since_story": {str(k): v for k, v in _messages_since_story.items()},
+        "last_voice_trigger": {str(k): v for k, v in _last_voice_trigger.items()},
+    }
+    p = Path(_STATE_FILE)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.write_text(json.dumps(data, ensure_ascii=False))
+    except Exception as e:
+        logger.warning("[STORY] failed to write state: %s", e)
+
+
+def _recover_state() -> None:
+    global _story_date
+    p = Path(_STATE_FILE)
+    if not p.exists():
+        return
+    try:
+        data = json.loads(p.read_text())
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("[STORY] failed to read state: %s", e)
+        return
+    if not data:
+        return
+
+    _story_date = data.get("story_date", "")
+
+    def _load_int_dict(src: dict, dst: dict, val_type):
+        for k, v in src.items():
+            try:
+                dst[int(k)] = val_type(v)
+            except (ValueError, TypeError):
+                pass
+
+    _load_int_dict(data.get("stories_today", {}), _stories_today, int)
+    _load_int_dict(data.get("last_story_at", {}), _last_story_at, float)
+    _load_int_dict(data.get("last_chat_activity", {}), _last_chat_activity, float)
+    _load_int_dict(data.get("messages_since_story", {}), _messages_since_story, int)
+    _load_int_dict(data.get("last_voice_trigger", {}), _last_voice_trigger, float)
+
+    logger.info("[STORY] recovered story state from %s", _STATE_FILE)
 
 
 async def _recover_pending_reviews(bot, channel_id: int) -> None:
@@ -189,6 +238,7 @@ def _reset_daily() -> None:
     if t != _story_date:
         _stories_today.clear()
         _story_date = t
+        _state_flush()
 
 
 def _can_post_story(guild_id: int) -> bool:
@@ -667,6 +717,7 @@ async def trigger_story(
     _stories_today[guild_id] = _stories_today.get(guild_id, 0) + 1
     _last_story_at[guild_id] = time.time()
     _messages_since_story[guild_id] = 0
+    _state_flush()
     logger.info(
         "story trigger(%s): SUCCESS for guild %s (day total: %d)",
         trigger_type,
@@ -814,6 +865,7 @@ async def handle_story_reaction(payload, bot) -> None:
                 except Exception:
                     pass
         _pr_flush()
+        _state_flush()
         return
 
 
@@ -1082,6 +1134,7 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
 
 
 async def start_story_watcher(bot) -> None:
+    _recover_state()
     await imagePool.init_pool()
     await _recover_pending_reviews(bot, config.INDIO_STORY_CHANNEL_ID)
     logger.info("story watcher started")
@@ -1155,6 +1208,7 @@ def record_chat_activity(guild_id: int) -> None:
     _idle_scheduled.discard(guild_id)
     if _last_story_at.get(guild_id, 0) > 0:
         _messages_since_story[guild_id] = _messages_since_story.get(guild_id, 0) + 1
+    _state_flush()
 
 
 def check_voice_trigger(guild_id: int, channel) -> bool:
@@ -1166,5 +1220,6 @@ def check_voice_trigger(guild_id: int, channel) -> bool:
     humans = sum(1 for m in channel.members if not m.bot)
     if humans >= config.INDIO_STORY_VOICE_MIN_MEMBERS:
         _last_voice_trigger[guild_id] = now
+        _state_flush()
         return True
     return False

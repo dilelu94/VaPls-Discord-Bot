@@ -1,7 +1,12 @@
 import os
 from dotenv import load_dotenv
 
+# Load local golive env first
 load_dotenv()
+
+# Load parent project env for shared config (like YT_DLP_POT_BASE_URL)
+parent_env = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
+load_dotenv(parent_env)
 
 USER_TOKEN = os.getenv("GOLIVE_TOKEN")
 

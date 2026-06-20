@@ -42,6 +42,13 @@ def _get_cookies_path() -> str | None:
     return None
 
 
+def _get_extractor_args() -> dict | None:
+    pot_url = os.environ.get("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416").strip()
+    if pot_url:
+        return {"youtubepot-bgutilhttp": {"base_url": pot_url}}
+    return None
+
+
 async def _yt_download(url: str, out_dir: str) -> tuple[str, str]:
     """Download url into out_dir via yt-dlp. Returns (file_path, title)."""
     import yt_dlp
@@ -58,6 +65,9 @@ async def _yt_download(url: str, out_dir: str) -> tuple[str, str]:
         cookies = _get_cookies_path()
         if cookies:
             opts["cookiefile"] = cookies
+        ext_args = _get_extractor_args()
+        if ext_args:
+            opts["extractor_args"] = ext_args
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
@@ -106,6 +116,9 @@ async def _yt_extract_live_url(url: str) -> tuple[str, str] | None:
         cookies = _get_cookies_path()
         if cookies:
             opts["cookiefile"] = cookies
+        ext_args = _get_extractor_args()
+        if ext_args:
+            opts["extractor_args"] = ext_args
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
