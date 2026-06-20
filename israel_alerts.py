@@ -7,6 +7,7 @@ mapping (~1,500 locations). Attack origin is inferred from geographic region.
 """
 
 import asyncio
+import datetime
 import json
 import logging
 import time
@@ -288,9 +289,10 @@ class IsraelAlertListener:
         embed = discord.Embed(title=label, description=description, color=color)
 
         ts = raw.get("time", int(time.time()))
-        embed.set_footer(
-            text=f"\U0001f550 {time.strftime('%H:%M:%S', time.gmtime(ts))} UTC"
+        dt = datetime.datetime.fromtimestamp(
+            ts, tz=datetime.timezone(datetime.timedelta(hours=-3))
         )
+        embed.set_footer(text=f"\U0001f550 {dt.strftime('%H:%M:%S')} Bs.As.")
 
         return embed
 
