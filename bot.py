@@ -34,6 +34,7 @@ from apiServer import startApiServer
 import decifrarVoting
 import errorHandler
 import geminiKeys
+import iptv
 import decifrarVoting
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import huggingfaceImage
@@ -1586,6 +1587,139 @@ async def entraindio(ctx):
 
 
 @bot.slash_command(
+    name="stream",
+    description="Transmití un canal de IPTV en tu canal de voz (Go Live)",
+)
+async def stream(
+    ctx,
+    canal: discord.Option(
+        str,
+        description="Nombre del canal de IPTV (ej: ESPN, Fox, CNN)",
+        required=True,
+    ),
+):
+    """Slash command: search iptv-org and start a Go Live stream.
+
+    Args:
+        ctx: Discord application context.
+        canal: Search query for IPTV channel name.
+
+    Side Effects:
+        Searches the iptv-org M3U playlist, asks the userbot to join
+        the caller's voice channel, and starts transcoding the M3U8
+        stream with FFmpeg + libopenh264.
+    """
+    await safe_defer(ctx)
+    _track_command(ctx, "stream", {"query_length": len(canal or "")})
+
+    voice_state = getattr(ctx.author, "voice", None)
+    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+    if voice_channel is None:
+        await safe_respond(
+            ctx, "❌ Tenés que estar en un canal de voz para iniciar un stream."
+        )
+        return
+
+    results = await iptv.search(canal, limit=5)
+    if not results:
+        await safe_respond(
+            ctx,
+            f'❌ No encontré canales de IPTV para "{canal}". Probá con otro nombre.',
+        )
+        return
+
+    ch = results[0]
+    if len(results) > 1:
+        names = "\n".join(f"• **{r.name}**" for r in results[:5])
+        await safe_respond(
+            ctx,
+            f'📺 Varios canales coinciden con "{canal}". Usá **/stream** con un nombre más específico:\n{names}',
+        )
+        return
+
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+        return
+
+    url = urljoin(config.INDIO_RELAY_URL, "/stream")
+    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    payload = {
+        "guild_id": ctx.guild_id,
+        "channel_id": voice_channel.id,
+        "url": ch.url,
+    }
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                body = await resp.text()
+                if resp.status >= 400:
+                    log.warning("stream relay HTTP %s: %s", resp.status, body[:200])
+                    await safe_respond(
+                        ctx, f"⚠️ No pude iniciar el stream (HTTP {resp.status})."
+                    )
+                    return
+    except Exception as e:
+        log.exception("stream relay failed")
+        await safe_respond(ctx, f"⚠️ Error iniciando stream: {e}")
+        return
+
+    await safe_respond(
+        ctx,
+        f"📺 Transmitiendo **{ch.name}** en **{voice_channel.name}**.\n"
+        f"Usá **/stopstream** para cortar.",
+    )
+
+
+@bot.slash_command(
+    name="stopstream",
+    description="Detiene la transmisión de IPTV en curso",
+)
+async def stopstream(ctx):
+    """Slash command: stop the active Go Live stream.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        POSTs to the userbot relay ``/stopstream`` which kills FFmpeg
+        and cleans up the video RTP session.
+    """
+    await safe_defer(ctx)
+    _track_command(ctx, "stopstream")
+
+    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+        return
+
+    url = urljoin(config.INDIO_RELAY_URL, "/stopstream")
+    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    payload = {"guild_id": ctx.guild_id}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                body = await resp.text()
+                if resp.status == 404:
+                    await safe_respond(
+                        ctx, "❌ No hay ningún stream activo en este servidor."
+                    )
+                    return
+                if resp.status >= 400:
+                    log.warning("stopstream relay HTTP %s: %s", resp.status, body[:200])
+                    await safe_respond(
+                        ctx, f"⚠️ No pude detener el stream (HTTP {resp.status})."
+                    )
+                    return
+    except Exception as e:
+        log.exception("stopstream relay failed")
+        await safe_respond(ctx, f"⚠️ Error deteniendo stream: {e}")
+        return
+
+    await safe_respond(ctx, "🛑 Stream detenido.")
+
+
+@bot.slash_command(
     name="sensibilidad",
     description="Cambia la sensibilidad del wake-word del indio (presets 1-4)",
 )
@@ -2032,6 +2166,9 @@ async def help_cmd(ctx):
             "reproduce el que más se parezca a `query`.\n"
             "**/entraindio** — hace que el indio (userbot) entre a tu canal "
             "de voz para escuchar y responder al wake-word.\n"
+            "**/stream** `canal` — transmití un canal de IPTV en tu canal "
+            "de voz (Go Live, usa libopenh264).\n"
+            "**/stopstream** — detiene la transmisión de IPTV en curso.\n"
             "**/sensibilidad** `1|2|3|4` — ajusta la sensibilidad del wake-word "
             "(1=máxima, 2=solo 'che indio', 3=pool grande+que/eh indio, "
             "4=como 2 + Whisper confirma 'indio' (default)).\n"
