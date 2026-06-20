@@ -2179,6 +2179,58 @@ async def story_test(ctx):
         await safe_respond(ctx, f"❌ Error: {e}", ephemeral=True)
 
 
+@bot.slash_command(
+    name="alert-test",
+    description="[owner] Send a test alert to verify the alert system",
+)
+async def alert_test(ctx):
+    """Slash command (owner-only): post a test alert embed."""
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "alert-test")
+    if ctx.author.id != config.OWNER_ID:
+        await safe_respond(ctx, "❌ Solo el owner puede usar esto.", ephemeral=True)
+        return
+
+    if not config.ISRAEL_ALERTS_ENABLED or not config.ISRAEL_ALERTS_CHANNEL_ID:
+        await safe_respond(
+            ctx,
+            "❌ Israel alerts no está configurado (ISRAEL_ALERTS_ENABLED o ISRAEL_ALERTS_CHANNEL_ID).",
+            ephemeral=True,
+        )
+        return
+
+    try:
+        from israel_alerts import IsraelAlertListener, _THREAT_MAP
+
+        ch = bot.get_channel(config.ISRAEL_ALERTS_CHANNEL_ID)
+        if ch is None:
+            ch = await bot.fetch_channel(config.ISRAEL_ALERTS_CHANNEL_ID)
+
+        # Build a sample embed as if it were a real alert
+        listener = IsraelAlertListener(bot, config.ISRAEL_ALERTS_CHANNEL_ID)
+        # Inject a few known cities to test the mapping
+        listener._city_map = {"תל אביב - מרכז העיר": "Tel Aviv - City Center"}
+        listener._zone_map = {"תל אביב - מרכז העיר": "Dan"}
+
+        sample_cities = ["תל אביב - מרכז העיר"]
+        embed = listener._build_embed(
+            _THREAT_MAP[0],
+            ["Tel Aviv - City Center"],
+            sample_cities,
+            ("Unknown", "Unknown", 0),
+            {"time": int(time.time())},
+        )
+        await ch.send(embed=embed)
+        await safe_respond(
+            ctx,
+            "✅ Test alert sent to <#{}>.".format(config.ISRAEL_ALERTS_CHANNEL_ID),
+            ephemeral=True,
+        )
+    except Exception as e:
+        log.exception("alert-test failed")
+        await safe_respond(ctx, f"❌ Error: {e}", ephemeral=True)
+
+
 @bot.slash_command(name="restart", description="devtool - no usar")
 async def restart(ctx):
     """Slash command: restart the bot process (dev-only).
