@@ -227,3 +227,9 @@ AUTODJ_MAX_CHAIN = int(os.getenv("AUTODJ_MAX_CHAIN", "10"))
 # como cuando el Indio detecta el pedido en el chat de texto. Por defecto
 # coincide con INDIO_PLAY_CHANNEL_ID (el canal de música del grupo).
 AUTODJ_MENU_CHANNEL_ID = int(os.getenv("AUTODJ_MENU_CHANNEL_ID", "451607097432604672"))
+
+# --- Israel rocket/missile alerts (Tzevaadom) --------------------------------
+# When enabled, the bot connects to the Tzevaadom WebSocket and posts real-time
+# alerts to the configured channel. Requires a channel ID to post to.
+ISRAEL_ALERTS_ENABLED = os.getenv("ISRAEL_ALERTS_ENABLED", "false").lower() == "true"
+ISRAEL_ALERTS_CHANNEL_ID = int(os.getenv("ISRAEL_ALERTS_CHANNEL_ID", "0"))

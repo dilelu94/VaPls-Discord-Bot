@@ -402,6 +402,7 @@ async def on_connect():
 
 
 _api_runner = None
+_alert_listener = None
 
 
 @bot.event
@@ -461,6 +462,18 @@ async def on_ready():
         log.info("story watcher started")
     except Exception:
         log.exception("story watcher startup failed")
+
+    # Start Israel alerts listener.
+    global _alert_listener
+    if config.ISRAEL_ALERTS_ENABLED and config.ISRAEL_ALERTS_CHANNEL_ID:
+        try:
+            from israel_alerts import IsraelAlertListener
+
+            _alert_listener = IsraelAlertListener(bot, config.ISRAEL_ALERTS_CHANNEL_ID)
+            asyncio.create_task(_alert_listener.start())
+            log.info("israel alerts listener started")
+        except Exception:
+            log.exception("israel alerts listener startup failed")
 
 
 # ---- Voice state tracking for MMR -----------------------------------------
