@@ -1708,14 +1708,14 @@ async def stopstream(ctx):
     await safe_defer(ctx)
     _track_command(ctx, "stopstream")
 
-    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
         return
 
-    url = urljoin(config.INDIO_RELAY_URL, "/stopstream")
-    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    url = urljoin(config.GOLIVE_RELAY_URL, "/stopstream")
+    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
     payload = {"guild_id": ctx.guild_id}
-    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:

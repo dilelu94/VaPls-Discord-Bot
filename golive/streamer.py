@@ -14,7 +14,10 @@ import random
 import struct
 import subprocess
 
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from golive_connection import GoLiveConnection
 
 import nacl.secret
 import nacl.utils
@@ -558,29 +561,19 @@ class VideoStream:
         self,
         url: str,
         guild_id: int,
-        vc,
-        ws,
-        sock,
-        endpoint_ip: str,
-        endpoint_port: int,
-        audio_ssrc: int,
+        conn: GoLiveConnection,
     ):
         self.url = url
         self.guild_id = guild_id
-        self.vc = vc
-        self.ws = ws
-        self.sock = sock
-        self.endpoint_ip = endpoint_ip
-        self.endpoint_port = endpoint_port
-        self.audio_ssrc = audio_ssrc
-        self.video_ssrc = audio_ssrc + 1
+        self.conn = conn
+        self.video_ssrc = conn.ssrc + 1
         self.seq = random.randint(0, 0xFFFF)
         self.ts = random.randint(0, 0xFFFFFFFF)
         self._nonce = [_VIDEO_NONCE_BASE]
 
         # Encryption params — set after voice handshake
-        self._secret_key: list[int] = getattr(vc, "secret_key", [])
-        self._mode: str = getattr(vc, "mode", "xsalsa20_poly1305")
+        self._secret_key: list[int] = conn.secret_key
+        self._mode: str = conn.mode
         log.info("[STREAM] negotiated mode: %s, key len: %d", self._mode, len(self._secret_key))
 
         self._proc: Optional[subprocess.Popen] = None  # type: ignore[type-arg]
@@ -590,10 +583,9 @@ class VideoStream:
 
     async def start(self) -> None:
         """Launch FFmpeg and begin send loop."""
-        conn = self.vc._connection
-        if hasattr(conn, "dave_session") and conn.dave_session and hasattr(conn.dave_session, "register_video_ssrc"):
+        if self.conn.dave_session and hasattr(self.conn.dave_session, "register_video_ssrc"):
             try:
-                conn.dave_session.register_video_ssrc(self.video_ssrc)
+                self.conn.dave_session.register_video_ssrc(self.video_ssrc)
                 log.info("DAVE: registered video SSRC %d with H264 codec", self.video_ssrc)
             except Exception:
                 log.warning("DAVE: failed to register video SSRC", exc_info=True)
@@ -679,10 +671,9 @@ class VideoStream:
         if not self._frame_nals:
             return
             
-        conn = self.vc._connection
         _dave = (
-            conn.dave_session
-            if (hasattr(conn, "dave_session") and conn.dave_session and hasattr(conn.dave_session, "encrypt_h264"))
+            self.conn.dave_session
+            if (self.conn.dave_session and hasattr(self.conn.dave_session, "encrypt_h264"))
             else None
         )
 
@@ -726,9 +717,9 @@ class VideoStream:
                 encrypted = _encrypt(
                     hdr, payload, self._mode, self._secret_key, self._nonce
                 )
-                self.sock.sendto(encrypted, (self.endpoint_ip, self.endpoint_port))
-            except (BlockingIOError, OSError) as e:
-                log.debug("[STREAM] sendto dropped: %s", e)
+                self.conn.send_packet(encrypted)
+            except Exception as e:
+                log.debug("[STREAM] send_packet dropped: %s", e)
                 break
 
         self.ts = (self.ts + _TS_PER_FRAME) & 0xFFFFFFFF
@@ -750,4 +741,8 @@ class VideoStream:
             except Exception:
                 pass
             self._proc = None
+        try:
+            await self.conn.disconnect()
+        except Exception:
+            log.exception("[STREAM] error disconnecting GoLiveConnection")
         log.info("[STREAM] guild=%s stopped", self.guild_id)

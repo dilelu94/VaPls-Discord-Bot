@@ -22,10 +22,17 @@ import discord.gateway
 
 import config
 import video_compat as vc
+import davey_compat
 from streamer import VideoStream
+from golive_connection import GoLiveConnection
 
 # Must patch before any voice connections (before client.start())
 vc.patch_video(discord.gateway)
+
+import discord.voice_state
+discord.voice_state.davey = davey_compat
+discord.gateway.davey = davey_compat
+davey_compat.patch_reinit(discord.voice_state)
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),
@@ -146,49 +153,19 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": "not connected"}, status=500)
     log.info("[STREAM] vc=%s", type(vc).__name__)
 
-    conn = getattr(vc, "_connection", None)
-    if conn is None:
-        log.warning("[STREAM] _connection not available")
-        return web.json_response({"error": "not connected"}, status=500)
-
-    for i in range(40):
-        ws = getattr(vc, "ws", None)
-        sock = getattr(conn, "socket", None)
-        # We need to wait until the socket is initialized
-        if ws is not None and sock is not None and hasattr(sock, "sendto"):
-            log.info("[STREAM] ws and socket ready after %.1fs", i * 0.5)
-            break
-        await asyncio.sleep(0.5)
-    else:
-        log.warning("[STREAM] ws/socket not ready after 20s")
-        return web.json_response({"error": "ws/socket not ready"}, status=500)
-
-    ssrc = getattr(vc, "ssrc", 0)
-    if not ssrc:
-        log.warning("[STREAM] ssrc not available")
-        return web.json_response({"error": "ssrc not available"}, status=500)
-    log.info("[STREAM] ssrc=%s", ssrc)
-
-    conn = getattr(vc, "_connection", None)
-    endpoint_ip = getattr(conn, "endpoint_ip", None)
-    endpoint_port = getattr(conn, "voice_port", None)
-    if not endpoint_ip or not endpoint_port:
-        log.warning(
-            "[STREAM] endpoint not resolved (ip=%s port=%s)", endpoint_ip, endpoint_port
-        )
-        return web.json_response({"error": "endpoint not resolved"}, status=500)
-    log.info("[STREAM] endpoint=%s:%s", endpoint_ip, endpoint_port)
+    log.info("[STREAM] establishing GoLive connection...")
+    stream_conn = GoLiveConnection(client, guild_id, channel_id, vc)
+    try:
+        await stream_conn.connect()
+    except Exception as e:
+        log.exception("[STREAM] GoLive connection failed")
+        return web.json_response({"error": f"GoLive connection failed: {e}"}, status=500)
 
     log.info("[STREAM] creating VideoStream url=%s", url[:80])
     stream = VideoStream(
         url=url,
         guild_id=guild_id,
-        vc=vc,
-        ws=ws,
-        sock=sock,
-        endpoint_ip=endpoint_ip,
-        endpoint_port=endpoint_port,
-        audio_ssrc=ssrc,
+        conn=stream_conn,
     )
     try:
         await stream.start()
