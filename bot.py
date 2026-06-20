@@ -2212,11 +2212,9 @@ async def alert_test(ctx):
         listener._city_map = {"תל אביב - מרכז העיר": "Tel Aviv - City Center"}
         listener._zone_map = {"תל אביב - מרכז העיר": "Dan"}
 
-        sample_cities = ["תל אביב - מרכז העיר"]
         embed = listener._build_embed(
             _THREAT_MAP[0],
             ["Tel Aviv - City Center"],
-            sample_cities,
             ("Unknown", "Unknown", 0),
             {"time": int(time.time())},
         )

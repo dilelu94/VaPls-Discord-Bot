@@ -1,9 +1,10 @@
-"""Real-time Israel rocket/missile alerts via Tzevaadom WebSocket.
+"""Real-time Israel rocket/missile alerts via Tzevaadom REST polling.
 
-Connects to the community-run Tzevaadom WebSocket (no geo-blocking, no auth)
-and posts formatted Discord embeds when alerts are detected. City names are
-translated from Hebrew to English using the pikud-haoref-api cities.json
-mapping (~1,500 locations). Attack origin is inferred from geographic region.
+Polls the community-run Tzevaadom REST API (no geo-blocking, no auth) every 10
+seconds and posts formatted Discord embeds when new alerts are detected. City
+names are translated from Hebrew to English using the pikud-haoref-api
+cities.json mapping (~1,500 locations). Attack origin is inferred from
+geographic region.
 """
 
 import asyncio
@@ -23,7 +24,8 @@ logger = logging.getLogger("bot.israel_alerts")
 _CITIES_URL = (
     "https://raw.githubusercontent.com/eladnava/pikud-haoref-api/master/cities.json"
 )
-_WS_URL = "wss://ws.tzevaadom.co.il/socket?platform=WEB"
+_HISTORY_URL = "https://api.tzevaadom.co.il/alerts-history"
+_POLL_INTERVAL = 10.0
 
 _THREAT_MAP: dict[int, dict[str, Any]] = {
     0: {
@@ -58,9 +60,6 @@ _THREAT_MAP: dict[int, dict[str, Any]] = {
     },
 }
 
-# Zone → origin inference. Regions that border Gaza or Lebanon are attributed
-# to the most likely source. Eilat/Arabah → Houthis (Yemen). Everything else
-# is Unknown (deep interior or ambiguous).
 _ORIGIN_MAP: dict[str, tuple[str, str, int]] = {
     "Gaza Envelope": ("Gaza", "Hamas / PIJ", 0x2ECC71),
     "West Negev": ("Gaza", "Hamas / PIJ", 0x2ECC71),
@@ -85,12 +84,9 @@ _ORIGIN_MAP: dict[str, tuple[str, str, int]] = {
     "Aravah": ("Yemen", "Houthis", 0x2C3E50),
 }
 
-_RECONNECT_BASE = 1.0
-_RECONNECT_MAX = 60.0
-
 
 class IsraelAlertListener:
-    """Listens to Tzevaadom WebSocket for real-time Israel alerts."""
+    """Polls Tzevaadom REST API for real-time Israel alerts."""
 
     def __init__(self, bot: discord.Bot, channel_id: int) -> None:
         self.bot = bot
@@ -99,12 +95,9 @@ class IsraelAlertListener:
         self._zone_map: dict[str, str] = {}
         self._seen_ids: set[int] = set()
         self._session: Optional[aiohttp.ClientSession] = None
-        self._task: Optional[asyncio.Task[None]] = None
         self._shutdown = False
-        self._reconnect_delay = _RECONNECT_BASE
 
     async def _fetch_cities(self) -> None:
-        """Fetch and build the Hebrew-to-English city name lookup."""
         logger.info("fetching city name mappings from pikud-haoref-api...")
         try:
             timeout = aiohttp.ClientTimeout(total=15)
@@ -141,11 +134,6 @@ class IsraelAlertListener:
         return out
 
     def _infer_origin(self, cities_he: list[str]) -> tuple[str, str, int]:
-        """Infer attack origin from geographic zones of affected cities.
-
-        Returns (country, group, color) where country/group are display labels
-        and color overrides the embed color.
-        """
         votes: dict[tuple[str, str], int] = {}
         for h in cities_he:
             zone = self._zone_map.get(h, "")
@@ -169,58 +157,56 @@ class IsraelAlertListener:
         return ("Unknown", "Unknown", 0)
 
     async def start(self) -> None:
-        """Connect and listen for alerts. Runs forever (reconnects on error)."""
+        """Poll for alerts forever."""
         self._shutdown = False
         await self._fetch_cities()
         self._session = aiohttp.ClientSession()
 
         while not self._shutdown:
             try:
-                await self._listen()
+                await self._poll()
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("alert listener error: %s", e)
-            await self._reconnect_backoff()
+                logger.exception("alert poll error: %s", e)
+            await asyncio.sleep(_POLL_INTERVAL)
 
         if self._session:
             await self._session.close()
 
     def stop(self) -> None:
-        """Signal the listener to shut down."""
         self._shutdown = True
 
-    async def _listen(self) -> None:
-        """WebSocket listen loop."""
+    async def _poll(self) -> None:
+        """Fetch alerts-history and process new entries."""
         assert self._session is not None
-        logger.info("connecting to Tzevaadom WebSocket...")
-        async with self._session.ws_connect(_WS_URL) as ws:
-            logger.info("connected to Tzevaadom WebSocket")
-            self._reconnect_delay = _RECONNECT_BASE
-            async for msg in ws:
-                if self._shutdown:
-                    break
-                if msg.type == aiohttp.WSMsgType.TEXT:
-                    await self._handle_message(msg.data)
-                elif msg.type == aiohttp.WSMsgType.ERROR:
-                    logger.error("websocket error: %s", ws.exception())
-                    break
-
-    async def _handle_message(self, raw: str) -> None:
-        """Parse and dispatch an incoming WebSocket message."""
+        timeout = aiohttp.ClientTimeout(total=10)
         try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
+            async with self._session.get(_HISTORY_URL, timeout=timeout) as resp:
+                if resp.status != 200:
+                    logger.warning("alerts-history HTTP %s", resp.status)
+                    return
+                body = await resp.json()
+        except Exception as e:
+            logger.warning("alerts-history fetch failed: %s", e)
             return
 
-        msg_type = data.get("type", "")
-        if msg_type == "ALERT":
-            await self._handle_alert(data)
-        elif msg_type == "SYSTEM_MESSAGE":
-            logger.info("system message: %s", data.get("text", ""))
+        if not isinstance(body, list):
+            return
 
-    async def _handle_alert(self, data: dict[str, Any]) -> None:
-        """Process an alert and post a Discord embed."""
+        for group in body:
+            group_id = group.get("id", 0)
+            if not group_id or group_id in self._seen_ids:
+                continue
+            self._seen_ids.add(group_id)
+            if len(self._seen_ids) > 500:
+                self._seen_ids = set(list(self._seen_ids)[-250:])
+
+            alerts = group.get("alerts", [])
+            for alert in alerts:
+                await self._handle_alert(alert, group_id)
+
+    async def _handle_alert(self, data: dict[str, Any], group_id: int) -> None:
         threat = data.get("threat", 0)
         cities_he = data.get("cities", [])
         is_drill = data.get("isDrill", False)
@@ -232,14 +218,6 @@ class IsraelAlertListener:
         cities_en = self._translate_cities(cities_he)
         origin = self._infer_origin(cities_he)
 
-        alert_id = data.get("id", 0)
-        if alert_id and alert_id in self._seen_ids:
-            return
-        if alert_id:
-            self._seen_ids.add(alert_id)
-        if len(self._seen_ids) > 500:
-            self._seen_ids = set(list(self._seen_ids)[-250:])
-
         ch = self.bot.get_channel(self.channel_id)
         if ch is None:
             try:
@@ -248,7 +226,7 @@ class IsraelAlertListener:
                 logger.warning("channel %s not found for alerts", self.channel_id)
                 return
 
-        embed = self._build_embed(threat_info, cities_en, cities_he, origin, data)
+        embed = self._build_embed(threat_info, cities_en, origin, data)
         try:
             await ch.send(embed=embed)
         except Exception as e:
@@ -258,7 +236,6 @@ class IsraelAlertListener:
         self,
         threat_info: dict[str, Any],
         cities_en: list[str],
-        cities_he: list[str],
         origin: tuple[str, str, int],
         raw: dict[str, Any],
     ) -> discord.Embed:
@@ -276,8 +253,7 @@ class IsraelAlertListener:
 
         city_lines: list[str] = []
         for en in cities_en:
-            parts = [f"\u2022 **{en}**"]
-            city_lines.append("".join(parts))
+            city_lines.append(f"\u2022 **{en}**")
 
         max_cities = 20
         if len(city_lines) > max_cities:
@@ -295,9 +271,3 @@ class IsraelAlertListener:
         embed.set_footer(text=f"\U0001f550 {dt.strftime('%H:%M:%S')} Bs.As.")
 
         return embed
-
-    async def _reconnect_backoff(self) -> None:
-        delay = min(self._reconnect_delay, _RECONNECT_MAX)
-        logger.info("reconnecting in %.1f seconds...", delay)
-        await asyncio.sleep(delay)
-        self._reconnect_delay = min(self._reconnect_delay * 2, _RECONNECT_MAX)
