@@ -32,6 +32,16 @@ def _yt_format() -> str:
     return os.environ.get("YTDLP_FORMAT", "").strip() or _DEFAULT_YT_FORMAT
 
 
+def _get_cookies_path() -> str | None:
+    parent_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cookies.txt"))
+    if os.path.exists(parent_cookies):
+        return parent_cookies
+    local_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "cookies.txt"))
+    if os.path.exists(local_cookies):
+        return local_cookies
+    return None
+
+
 async def _yt_download(url: str, out_dir: str) -> tuple[str, str]:
     """Download url into out_dir via yt-dlp. Returns (file_path, title)."""
     import yt_dlp
@@ -45,6 +55,9 @@ async def _yt_download(url: str, out_dir: str) -> tuple[str, str]:
             "no_warnings": True,
             "noplaylist": True,
         }
+        cookies = _get_cookies_path()
+        if cookies:
+            opts["cookiefile"] = cookies
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
 
@@ -90,6 +103,9 @@ async def _yt_extract_live_url(url: str) -> tuple[str, str] | None:
 
     def _run() -> tuple[str, str] | None:
         opts = {"quiet": True, "no_warnings": True, "noplaylist": True}
+        cookies = _get_cookies_path()
+        if cookies:
+            opts["cookiefile"] = cookies
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
