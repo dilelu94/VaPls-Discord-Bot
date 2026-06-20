@@ -12,6 +12,7 @@ import logging
 import os
 import random
 import struct
+import subprocess
 from asyncio.subprocess import DEVNULL, PIPE, Process
 from typing import Optional
 
@@ -32,36 +33,83 @@ _TS_PER_FRAME = 3000  # 90 kHz clock / 30 fps
 # Nonce base for video — high half of 32-bit space to avoid audio overlap
 _VIDEO_NONCE_BASE = 0x8000_0000
 
-FFMPEG_VIDEO_ARGS = [
-    "-re",
-    "-fflags",
-    "nobuffer",
-    "-flags",
-    "low_delay",
-    "-analyzeduration",
-    "500000",
-    "-probesize",
-    "500000",
-    "-c:v",
-    "libopenh264",
-    "-b:v",
-    "2500k",
-    "-maxrate",
-    "2500k",
-    "-bufsize",
-    "5000k",
-    "-r",
-    "30",
-    "-g",
-    "60",
-    "-f",
-    "h264",
-    "pipe:1",
-]
+_H264_ENCODERS = ["h264_nvenc", "h264_vaapi", "libx264"]
 
 
-def _rand_ssrc() -> int:
-    return random.randint(1, 0xFFFFFFFE)
+def _detect_encoder() -> str:
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        log.warning("ffmpeg not found")
+        return "libx264"
+    available = result.stdout
+    for enc in _H264_ENCODERS:
+        if enc in available:
+            return enc
+    return "libx264"
+
+
+_ENCODER = _detect_encoder()
+
+
+def _ffmpeg_args(url: str) -> list[str]:
+    base = [
+        "ffmpeg",
+        "-i",
+        url,
+        "-re",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
+        "-analyzeduration",
+        "500000",
+        "-probesize",
+        "500000",
+        "-c:v",
+        _ENCODER,
+        "-b:v",
+        "2500k",
+        "-maxrate",
+        "2500k",
+        "-bufsize",
+        "5000k",
+        "-r",
+        "30",
+        "-g",
+        "60",
+        "-f",
+        "h264",
+        "pipe:1",
+    ]
+    if _ENCODER == "h264_nvenc":
+        base[base.index("-c:v") + 1] = "h264_nvenc"
+        base += [
+            "-preset",
+            "p1",
+            "-tune",
+            "ll",
+            "-profile:v",
+            "high",
+            "-level:v",
+            "4.2",
+        ]
+    elif _ENCODER == "h264_vaapi":
+        base[base.index("-c:v") + 1] = "h264_vaapi"
+        base += [
+            "-vaapi_device",
+            "/dev/dri/renderD128",
+            "-vf",
+            "format=nv12,hwupload,scale_vaapi=1280:720",
+            "-rc_mode",
+            "CBR",
+        ]
+    return base
 
 
 def _build_rtp_header(ssrc: int, seq: int, ts: int, marker: bool = False) -> bytes:
@@ -501,7 +549,7 @@ class VideoStream:
         self.endpoint_ip = endpoint_ip
         self.endpoint_port = endpoint_port
         self.audio_ssrc = audio_ssrc
-        self.video_ssrc = _rand_ssrc()
+        self.video_ssrc = audio_ssrc + 1
         self.seq = random.randint(0, 0xFFFF)
         self.ts = random.randint(0, 0xFFFFFFFF)
         self._nonce = [_VIDEO_NONCE_BASE]
@@ -516,10 +564,14 @@ class VideoStream:
         self._frame_nals: list[bytes] = []
 
     async def start(self) -> None:
-        """Launch FFmpeg, announce video SSRC, begin send loop."""
-        await self._announce_video_ssrc(active=True)
-        cmd = ["ffmpeg", "-i", self.url] + FFMPEG_VIDEO_ARGS
-        log.info("[STREAM] guild=%s ffmpeg: %s ...", self.guild_id, " ".join(cmd[:6]))
+        """Launch FFmpeg and begin send loop."""
+        cmd = _ffmpeg_args(self.url)
+        log.info(
+            "[STREAM] guild=%s encoder=%s ffmpeg: %s ...",
+            self.guild_id,
+            _ENCODER,
+            " ".join(cmd[:6]),
+        )
         self._proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=PIPE,
@@ -531,24 +583,6 @@ class VideoStream:
         log.info(
             "[STREAM] guild=%s started (video_ssrc=%d)", self.guild_id, self.video_ssrc
         )
-
-    async def _announce_video_ssrc(self, active: bool) -> None:
-        try:
-            await self.ws.send_as_json(
-                {
-                    "op": 12,
-                    "d": {
-                        "audio_ssrc": self.audio_ssrc,
-                        "video_ssrc": self.video_ssrc,
-                        "rtx_ssrc": 0,
-                        "stream_id": "",
-                        "quality": 1,
-                        "type": 1 if active else 0,
-                    },
-                }
-            )
-        except Exception as e:
-            log.warning("[STREAM] op=12 failed: %s", e)
 
     async def _send_loop(self) -> None:
         """Read raw H.264 from FFmpeg stdout and send encrypted RTP packets."""
@@ -642,5 +676,4 @@ class VideoStream:
             except Exception:
                 pass
             self._proc = None
-        await self._announce_video_ssrc(active=False)
         log.info("[STREAM] guild=%s stopped", self.guild_id)

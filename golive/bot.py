@@ -168,12 +168,9 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": "ssrc not available"}, status=500)
     log.info("[STREAM] ssrc=%s", ssrc)
 
-    endpoint_ip = getattr(vc, "endpoint_ip", None) or getattr(
-        getattr(vc, "_connection", None), "endpoint_ip", None
-    )
-    endpoint_port = getattr(vc, "endpoint_port", None) or getattr(
-        getattr(vc, "_connection", None), "endpoint_port", None
-    )
+    conn = getattr(vc, "_connection", None)
+    endpoint_ip = getattr(conn, "endpoint_ip", None)
+    endpoint_port = getattr(conn, "voice_port", None)
     if not endpoint_ip or not endpoint_port:
         log.warning(
             "[STREAM] endpoint not resolved (ip=%s port=%s)", endpoint_ip, endpoint_port
