@@ -74,17 +74,17 @@ _ENCODER = _detect_encoder()
 def _ffmpeg_args(url: str) -> list[str]:
     base = [
         "ffmpeg",
-        "-i",
-        url,
         "-re",
         "-fflags",
         "nobuffer",
-        "-flags",
-        "low_delay",
         "-analyzeduration",
         "500000",
         "-probesize",
         "500000",
+        "-i",
+        url,
+        "-flags",
+        "low_delay",
         "-c:v",
         _ENCODER,
         "-b:v",
@@ -593,7 +593,7 @@ class VideoStream:
         self._proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
         self._task = asyncio.create_task(self._send_loop())
         log.info(
@@ -637,6 +637,13 @@ class VideoStream:
             for nal in nals[:-1]:  # last NAL may be incomplete — keep in buf
                 self._feed_nal(nal)
         self._flush_frame()
+        
+        self._proc.poll()
+        if self._proc.returncode is not None and self._proc.returncode != 0:
+            assert self._proc.stderr is not None
+            err = self._proc.stderr.read().decode(errors="replace")
+            log.error("[STREAM] ffmpeg failed (rc=%d): %s", self._proc.returncode, err)
+            
         log.info("[STREAM] guild=%s send loop ended", self.guild_id)
 
     def _feed_nal(self, nal: bytes) -> None:
