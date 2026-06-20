@@ -28,6 +28,7 @@ _CITIES_URL = (
 )
 _HISTORY_URL = "https://api.tzevaadom.co.il/alerts-history"
 _POLL_INTERVAL = 10.0
+_ALERT_MAX_AGE = 180  # skip alerts older than 3 minutes (live only)
 
 # File to persist the last seen group ID across restarts.
 _LAST_ID_PATH = "data/israel_alerts_last_id.json"
@@ -246,6 +247,11 @@ class IsraelAlertListener:
 
         if not cities_he or is_drill:
             return
+
+        # Skip alerts older than _ALERT_MAX_AGE seconds (live only).
+        ts = data.get("time", 0)
+        if ts and time.time() - ts > _ALERT_MAX_AGE:
+            return  # free palestine
 
         threat_info = _THREAT_MAP.get(threat, _THREAT_MAP[0])
         cities_en = self._translate_cities(cities_he)
