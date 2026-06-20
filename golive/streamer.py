@@ -590,6 +590,14 @@ class VideoStream:
 
     async def start(self) -> None:
         """Launch FFmpeg and begin send loop."""
+        conn = self.vc._connection
+        if hasattr(conn, "dave_session") and conn.dave_session and hasattr(conn.dave_session, "register_video_ssrc"):
+            try:
+                conn.dave_session.register_video_ssrc(self.video_ssrc)
+                log.info("DAVE: registered video SSRC %d with H264 codec", self.video_ssrc)
+            except Exception:
+                log.warning("DAVE: failed to register video SSRC", exc_info=True)
+
         cmd = _ffmpeg_args(self.url)
         log.info(
             "[STREAM] guild=%s encoder=%s ffmpeg: %s ...",
@@ -670,9 +678,39 @@ class VideoStream:
         """Send all buffered NALs as one frame (encrypted), advance timestamp."""
         if not self._frame_nals:
             return
+            
+        conn = self.vc._connection
+        _dave = (
+            conn.dave_session
+            if (hasattr(conn, "dave_session") and conn.dave_session and hasattr(conn.dave_session, "encrypt_h264"))
+            else None
+        )
+
+        rtp_nals: list[bytes]
+        if _dave is not None:
+            annex_b = b"".join(b"\x00\x00\x00\x01" + nal for nal in self._frame_nals)
+            try:
+                enc_frame = _dave.encrypt_h264(self.video_ssrc, annex_b)
+                if enc_frame is not annex_b:
+                    rtp_nals = []
+                    offset = 0
+                    for nal in self._frame_nals:
+                        offset += 4
+                        rtp_nals.append(enc_frame[offset : offset + len(nal)])
+                        offset += len(nal)
+                    if offset < len(enc_frame) and rtp_nals:
+                        rtp_nals[-1] = rtp_nals[-1] + enc_frame[offset:]
+                else:
+                    rtp_nals = list(self._frame_nals)
+            except Exception:
+                log.debug("DAVE encrypt_h264 failed", exc_info=True)
+                rtp_nals = list(self._frame_nals)
+        else:
+            rtp_nals = list(self._frame_nals)
+            
         pkts = []
-        for idx, nal in enumerate(self._frame_nals):
-            is_last_nal = (idx == len(self._frame_nals) - 1)
+        for idx, nal in enumerate(rtp_nals):
+            is_last_nal = (idx == len(rtp_nals) - 1)
             pkts.extend(_packetize_nal(nal, self.video_ssrc, self.seq, self.ts, is_last_nal))
             if pkts:
                 self.seq = pkts[-1][1]

@@ -71,7 +71,7 @@ async def _patched_client_connect(self) -> None:
             "rtx_ssrc": rtx_ssrc,
             "streams": [
                 {
-                    "type": "video",
+                    "type": "screen",
                     "rid": "100",
                     "ssrc": video_ssrc,
                     "active": True,
