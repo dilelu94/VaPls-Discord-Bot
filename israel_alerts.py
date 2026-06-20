@@ -11,7 +11,9 @@ import asyncio
 import datetime
 import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 import aiohttp
@@ -26,6 +28,9 @@ _CITIES_URL = (
 )
 _HISTORY_URL = "https://api.tzevaadom.co.il/alerts-history"
 _POLL_INTERVAL = 10.0
+
+# File to persist the last seen group ID across restarts.
+_LAST_ID_PATH = "data/israel_alerts_last_id.json"
 
 _THREAT_MAP: dict[int, dict[str, Any]] = {
     0: {
@@ -96,6 +101,7 @@ class IsraelAlertListener:
         self._seen_ids: set[int] = set()
         self._session: Optional[aiohttp.ClientSession] = None
         self._shutdown = False
+        self._loaded_last_id = False
 
     async def _fetch_cities(self) -> None:
         logger.info("fetching city name mappings from pikud-haoref-api...")
@@ -109,7 +115,8 @@ class IsraelAlertListener:
                             resp.status,
                         )
                         return
-                    cities = await resp.json()
+                    raw = await resp.text()
+                    cities = json.loads(raw)
         except Exception as e:
             logger.warning("failed to fetch cities.json: %s", e)
             return
@@ -156,11 +163,35 @@ class IsraelAlertListener:
             return best_origin
         return ("Unknown", "Unknown", 0)
 
+    def _load_last_id(self) -> int:
+        p = Path(_LAST_ID_PATH)
+        if not p.exists():
+            return 0
+        try:
+            data = json.loads(p.read_text())
+            return data.get("last_group_id", 0)
+        except Exception:
+            return 0
+
+    def _save_last_id(self, group_id: int) -> None:
+        p = Path(_LAST_ID_PATH)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps({"last_group_id": group_id}))
+        except Exception as e:
+            logger.warning("failed to save last alert id: %s", e)
+
     async def start(self) -> None:
         """Poll for alerts forever."""
         self._shutdown = False
         await self._fetch_cities()
         self._session = aiohttp.ClientSession()
+
+        last_id = self._load_last_id()
+        if last_id:
+            self._seen_ids.add(last_id)
+            logger.info("resuming from group id %d", last_id)
+        self._loaded_last_id = True
 
         while not self._shutdown:
             try:
@@ -205,6 +236,8 @@ class IsraelAlertListener:
             alerts = group.get("alerts", [])
             for alert in alerts:
                 await self._handle_alert(alert, group_id)
+
+            self._save_last_id(group_id)
 
     async def _handle_alert(self, data: dict[str, Any], group_id: int) -> None:
         threat = data.get("threat", 0)
