@@ -164,7 +164,111 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 - `/quit`: desconecta sin limpiar cola.
 - `/entraindio`: hace que el userbot (Indio) entre al canal de voz del invocador (relay `/join`).
 - `/sensibilidad` `1|2|3`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
+- `/stream <canal>`: busca en iptv-org y transmite en Go Live dentro del canal de voz del invocador. Requiere el proceso `golive/bot.py` corriendo.
+- `/stopstream`: detiene el stream activo en el servidor.
 - `/banana` (Pausado/Inactivo): genera una imagen con Gemini (gratis, sin API key, usando Playwright). Actualmente en pausa por bloqueos de autenticación de Google.
+
+## 📺 GoLive / IPTV (`/stream`)
+
+El comando `/stream` busca canales en el playlist público de [iptv-org](https://github.com/iptv-org/iptv)
+y los transmite por Go Live dentro del canal de voz del invocador.
+
+### Arquitectura (3 procesos)
+
+```
+Usuario en Discord
+  └── /stream <canal>
+        ↓
+  [main bot — bot.py]
+  1. iptv.py busca en https://iptv-org.github.io/iptv/index.m3u (10 950+ canales)
+  2. Si hay exactamente 1 resultado → POST http://<GOLIVE_RELAY_URL>/stream
+        ↓
+  [golive/bot.py — proceso separado con user token de Discord]
+  3. Se une al canal de voz del invocador
+  4. Obtiene ws + socket + ssrc + endpoint del VoiceClient
+  5. Crea VideoStream(url=...) → lanza FFmpeg
+        ↓
+  [golive/streamer.py — VideoStream]
+  6. FFmpeg: URL HLS/IPTV → -c:v libx264/nvenc/vaapi → raw H.264 Annex-B pipe
+  7. Parsea NAL units del stream Annex-B
+  8. Reescribe SPS VUI (Discord exige bitstream_restriction_flag=1, max_num_reorder_frames=0)
+  9. RTP packetize → encrypt (XSalsa20/XChaCha20) → UDP socket al server de voz de Discord
+```
+
+### Señalización WebSocket (video_compat.py)
+
+Sin estos patches Discord descarta silenciosamente todos los paquetes RTP de video:
+
+- **`identify()`** — agrega `video: true` + `streams` descriptor al op `IDENTIFY` (op 0)
+- **`select_protocol()`** — agrega codec H264 al `SELECT_PROTOCOL` (op 1)
+- **`client_connect()`** — anuncia `video_ssrc` + `streams` al op `VIDEO` (op 12)
+
+Se aplican en `golive/bot.py` antes de cualquier conexión de voz:
+```python
+vc.patch_video(discord.gateway)
+```
+
+### Archivos clave
+
+| Archivo | Rol |
+| --- | --- |
+| `bot.py` | Slash commands `/stream` y `/stopstream` (L1589–1739) |
+| `iptv.py` | Descarga/cachea el M3U de iptv-org, busca canales por nombre. Cache en `data/iptv_cache.m3u`, TTL 6h |
+| `golive/bot.py` | Proceso GoLive: relay HTTP (`POST /stream`, `POST /stopstream`), join de canal, instancia `VideoStream` |
+| `golive/streamer.py` | FFmpeg → H.264 Annex-B → RTP encriptado → UDP. Incluye SPS VUI rewriter y `_detect_encoder()` |
+| `golive/video_compat.py` | Patches al gateway WS de discord.py-self para anunciar capacidad de video |
+| `golive/config.py` | `GOLIVE_TOKEN`, `GOLIVE_RELAY_SECRET`, `GOLIVE_RELAY_PORT` (default 8082) |
+
+### Config necesaria
+
+En el `.env` del **main bot**:
+```env
+GOLIVE_RELAY_URL=http://127.0.0.1:8082
+GOLIVE_RELAY_SECRET=<mismo secret que el golive bot>
+GOLIVE_RELAY_TIMEOUT=30
+```
+
+En `golive/.env`:
+```env
+GOLIVE_TOKEN=<user token de la cuenta Discord usada para Go Live>
+RELAY_SECRET=<mismo secret que arriba>
+RELAY_HOST=127.0.0.1
+RELAY_PORT=8082
+```
+
+### Búsqueda de canales
+
+`iptv.py` hace substring match case-insensitive sobre el nombre del canal. Si hay más de 1 resultado, el bot pide más precisión. Ejemplos que dan exactamente 1 resultado:
+- `Al Jazeera English`
+- `France 24 English`
+- `CGTN Español`
+- `1TV` (canal georgiano público)
+
+### Streams de prueba verificados (funcionales al 2026-06-20)
+
+Estos URLs responden HTTP 200 y son legibles por ffmpeg desde el server de prod:
+
+| Canal (nombre en M3U) | URL |
+| --- | --- |
+| Al Jazeera English (1080p) | `https://live-hls-apps-aje-fa.getaj.net/AJE/index.m3u8` |
+| France 24 Arabic (1080p) | `https://live.france24.com/hls/live/2037222-b/F24_AR_HI_HLS/master_5000.m3u8` |
+| CGTN (1080p) | `https://amg00405-rakutentv-cgtn-rakuten-i9tar.amagi.tv/master.m3u8` |
+| 1TV Georgia (720p) | `https://tv.cdn.xsg.ge/gpb-1tv/index.m3u8` |
+| 2M Maroc (1080p) | `https://stream-lb.livemediama.com/2m-tnt/hls/master.m3u8` |
+
+### Detección de encoder (`_detect_encoder`)
+
+El streamer prueba encoders en orden: `h264_nvenc` → `h264_vaapi` → `libx264`.
+**No usa `ffmpeg -encoders`** (que lista encoders compilados pero no verifica si el driver está disponible). En cambio, hace un encode real de 1 frame a `/dev/null` con `-f lavfi -i color=...`. Si el proceso falla (ej. `h264_nvenc` sin CUDA), pasa al siguiente. El encoder elegido se loggea al arrancar:
+```
+golive: encoder probe OK → libx264
+```
+
+### Bugs conocidos (historial)
+
+1. **(2026-06-20) `h264_nvenc` seleccionado en server ARM sin CUDA**: `_detect_encoder()` usaba `ffmpeg -encoders` para detectar disponibilidad, pero el encoder figura como compilado incluso si libcuda no está disponible. El encode fallaba silenciosamente (FFmpeg salía con rc=1 inmediatamente) y el `send_loop` terminaba en ~1s sin emitir frames. **Fix**: `_detect_encoder()` ahora prueba cada encoder con un encode real de 1 frame. Ver `golive/streamer.py`.
+
+2. **(2026-06-20) `send_loop` terminaba en el primer timeout con streams HLS**: streams HLS con múltiples renditions tardan 4-8s en probe antes de emitir el primer frame. El `asyncio.wait_for` con `timeout=2.0` expiraba, y en condiciones de race el loop detectaba `returncode is not None` (del encoder fallido) y abortaba. **Fix**: el primer `read()` tiene un timeout de 15s (`first_read=True`); los subsiguientes mantienen 2s.
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
@@ -281,6 +385,12 @@ El soundpad usa `audio_output/` (configurable con `CUSTOM_AUDIO_PATH`). En el se
 ### 5) FFmpeg estático amd64 vs arm64
 
 El branch `dnf` de `deploy.sh` baja un binario estático según `uname -m` (`amd64` o `arm64`). En Ubuntu/Debian usa `apt install ffmpeg` directamente. Si agregás soporte para otra arch, actualizá ambos branches.
+
+### 6) `h264_nvenc` seleccionado en server ARM sin CUDA (`golive`)
+
+`_detect_encoder()` originalmente usaba `ffmpeg -encoders` para detectar encoders disponibles. El encoder `h264_nvenc` aparece listado aunque no haya GPU/CUDA, porque está compilado en la librería. Al intentar usarlo, FFmpeg falla con `Cannot load libcuda.so.1` y sale con rc=1 inmediatamente — el `send_loop` termina en ~1s sin emitir ningún frame y el stream no aparece en Discord.
+
+**Fix (en `golive/streamer.py`)**: `_detect_encoder()` ahora hace un encode de prueba real (1 frame, `-f lavfi -i color=...`, salida a `pipe:null`) para cada candidato. Si falla con `CalledProcessError`, pasa al siguiente. En el server ARM, `h264_nvenc` y `h264_vaapi` fallan y se usa `libx264`.
 
 ## 🧪 Testing
 
@@ -564,6 +674,11 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 21. **`transferHistory` sin guard**: se removió el chequeo `if not mgr.sessions.get(token)` que retornaba vacío para tokens desconocidos. Ahora siempre devuelve el historial completo desde `_history.jsonl`.
 
 ## 📦 Últimos cambios
+
+### 2026-06-20 — GoLive: fix encoder ARM + fix timeout HLS
+
+1. **`_detect_encoder()` por probe real** (`golive/streamer.py`): reemplazado el chequeo de `ffmpeg -encoders` por un encode de 1 frame real a null por cada candidato. Soluciona que `h264_nvenc` se usara en el server ARM (sin CUDA) causando que FFmpeg fallara en rc=1 inmediatamente y el stream nunca emitiera frames.
+2. **Timeout inicial de 15s en `_send_loop`** (`golive/streamer.py`): streams HLS con múltiples renditions tardan 4-8s en probe antes del primer frame. El timeout original de 2s hacía que el loop detectara un "proceso muerto" y abortara. El primer `read()` ahora espera 15s (`first_read=True`); los siguientes mantienen 2s.
 
 ### 2026-06-13 — Sistema de historias: prompt sin nombres forzados + memoria del Indio + aprobación vía DM del owner
 

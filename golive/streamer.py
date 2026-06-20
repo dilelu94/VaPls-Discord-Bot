@@ -37,20 +37,34 @@ _H264_ENCODERS = ["h264_nvenc", "h264_vaapi", "libx264"]
 
 
 def _detect_encoder() -> str:
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except FileNotFoundError:
-        log.warning("ffmpeg not found")
-        return "libx264"
-    available = result.stdout
     for enc in _H264_ENCODERS:
-        if enc in available:
+        try:
+            # Test if encoder works with a 1-frame null input
+            subprocess.run(
+                [
+                    "ffmpeg",
+                    "-hide_banner",
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    "color=c=black:s=1280x720:d=1",
+                    "-c:v",
+                    enc,
+                    "-f",
+                    "null",
+                    "-",
+                ],
+                stdout=DEVNULL,
+                stderr=DEVNULL,
+                check=True,
+                timeout=10,
+            )
+            log.info("golive: encoder probe OK → %s", enc)
             return enc
+        except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
+            log.info("golive: encoder %s not usable (%s), trying next", enc, e)
+            continue
+    log.info("golive: falling back to libx264")
     return "libx264"
 
 
@@ -589,14 +603,26 @@ class VideoStream:
         assert self._proc is not None
         stdout = self._proc.stdout
         buf = b""
+        # HLS live streams probe several renditions before emitting the first
+        # frame (can take 4-8 s). Give the first read a longer grace period so
+        # the loop doesn't mistake the probe silence for a dead process.
+        first_read = True
 
         while not self._stop_event.is_set():
+            timeout = 15.0 if first_read else 2.0
             try:
-                chunk = await asyncio.wait_for(stdout.read(65536), timeout=2.0)
+                chunk = await asyncio.wait_for(stdout.read(65536), timeout=timeout)
+                first_read = False
             except asyncio.TimeoutError:
                 if self._proc.returncode is not None:
                     log.warning(
                         "[STREAM] ffmpeg exited early (rc=%d)", self._proc.returncode
+                    )
+                    break
+                if first_read:
+                    log.warning(
+                        "[STREAM] guild=%s ffmpeg probe timeout (>%.0fs), aborting",
+                        self.guild_id, timeout,
                     )
                     break
                 self._flush_frame()
