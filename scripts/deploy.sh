@@ -110,6 +110,52 @@ if [ -d "$DEPLOY_DIR/golive" ]; then
     fi
 fi
 
+# ── 5d. Ensure GoLive relay vars in main .env ──────────────────────────
+# The main bot's .env needs GOLIVE_RELAY_URL and a GOLIVE_RELAY_SECRET
+# that matches the one in golive/.env. This section reads the secret from
+# golive/.env (or uses the default from .env.example) and writes both
+# vars to the main .env if they are missing.
+MAIN_ENV="$DEPLOY_DIR/.env"
+GOLIVE_ENV="$DEPLOY_DIR/golive/.env"
+DEFAULT_SECRET="vapls-golive-shared-secret"
+
+# Read the current relay secret from golive/.env, preferring an explicit
+# non-empty value over the default.
+GOLIVE_SECRET=""
+if [ -f "$GOLIVE_ENV" ]; then
+    GOLIVE_SECRET=$(grep '^GOLIVE_RELAY_SECRET=' "$GOLIVE_ENV" | tail -1 | cut -d= -f2-)
+fi
+if [ -z "$GOLIVE_SECRET" ]; then
+    GOLIVE_SECRET="$DEFAULT_SECRET"
+    # Write it to golive/.env so it survives future deploys
+    if [ -f "$GOLIVE_ENV" ]; then
+        # If the key exists but is empty, replace it; otherwise append
+        if grep -q '^GOLIVE_RELAY_SECRET=' "$GOLIVE_ENV" 2>/dev/null; then
+            sed -i "s|^GOLIVE_RELAY_SECRET=.*|GOLIVE_RELAY_SECRET=$GOLIVE_SECRET|" "$GOLIVE_ENV"
+        else
+            echo "GOLIVE_RELAY_SECRET=$GOLIVE_SECRET" >> "$GOLIVE_ENV"
+        fi
+        echo "    Set golive/.env GOLIVE_RELAY_SECRET=$GOLIVE_SECRET"
+    fi
+fi
+
+# Ensure main .env has GOLIVE_RELAY_URL
+if [ -f "$MAIN_ENV" ]; then
+    if ! grep -q '^GOLIVE_RELAY_URL=' "$MAIN_ENV" 2>/dev/null; then
+        # Add before the closing section or at end of file
+        echo 'GOLIVE_RELAY_URL=http://127.0.0.1:8082' >> "$MAIN_ENV"
+        echo "    Added GOLIVE_RELAY_URL=http://127.0.0.1:8082 to .env"
+    fi
+    # Ensure main .env has GOLIVE_RELAY_SECRET matching golive/.env
+    if grep -q '^GOLIVE_RELAY_SECRET=' "$MAIN_ENV" 2>/dev/null; then
+        # Update existing value
+        sed -i "s|^GOLIVE_RELAY_SECRET=.*|GOLIVE_RELAY_SECRET=$GOLIVE_SECRET|" "$MAIN_ENV"
+    else
+        echo "GOLIVE_RELAY_SECRET=$GOLIVE_SECRET" >> "$MAIN_ENV"
+    fi
+    echo "    Set .env GOLIVE_RELAY_SECRET=$GOLIVE_SECRET"
+fi
+
 # ── 6. Restart services ───────────────────────────────────────────────────────
 echo "==> Restarting services..."
 SERVICES="discord-bot indio-userbot"
