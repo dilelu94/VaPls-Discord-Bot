@@ -18,11 +18,14 @@ from typing import Optional
 import aiohttp
 from aiohttp import web
 import discord
+import discord.gateway
 
 import config
+import video_compat as vc
+from streamer import VideoStream
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from userbot.streamer import VideoStream  # noqa: E402
+# Must patch before any voice connections (before client.start())
+vc.patch_video(discord.gateway)
 
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL, logging.INFO),

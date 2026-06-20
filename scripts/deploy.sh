@@ -92,7 +92,7 @@ if [ -d "$DEPLOY_DIR/golive" ]; then
         echo "    golive venv created."
         # Force reinstall discord.py-self in case discord-ext-voice-recv polluted the namespace
         "$DEPLOY_DIR/golive/venv/bin/pip" uninstall -y discord.py 2>/dev/null || true
-        "$DEPLOY_DIR/golive/venv/bin/pip" install --force-reinstall --no-deps "discord.py-self @ git+https://github.com/dolfies/discord.py-self"
+        "$DEPLOY_DIR/golive/venv/bin/pip" install --force-reinstall "discord.py-self @ git+https://github.com/dolfies/discord.py-self"
     fi
 
     if [ ! -f "$DEPLOY_DIR/golive/.env" ]; then

@@ -1,0 +1,646 @@
+"""GoLive video streamer: FFmpeg → H.264 → RTP → Discord voice socket.
+
+Self-contained — no imports from userbot/. Handles SPS/VUI rewriting
+(Discord requires bitstream_restriction_flag=1, max_num_reorder_frames=0)
+and RTP encryption (XSalsa20-Poly1305 / XChaCha20-Poly1305) via PyNaCl.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import random
+import struct
+from asyncio.subprocess import DEVNULL, PIPE, Process
+from typing import Optional
+
+import nacl.secret
+import nacl.utils
+
+log = logging.getLogger("golive.streamer")
+
+# --- RTP constants ---
+_PT_H264 = 101
+_RTP_HEADER_SIZE = 12
+_MTU = 1200
+_NAL_FU_A = 28
+_FU_START = 0x80
+_FU_END = 0x40
+_TS_PER_FRAME = 3000  # 90 kHz clock / 30 fps
+
+# Nonce base for video — high half of 32-bit space to avoid audio overlap
+_VIDEO_NONCE_BASE = 0x8000_0000
+
+FFMPEG_VIDEO_ARGS = [
+    "-re",
+    "-fflags",
+    "nobuffer",
+    "-flags",
+    "low_delay",
+    "-analyzeduration",
+    "500000",
+    "-probesize",
+    "500000",
+    "-c:v",
+    "libopenh264",
+    "-b:v",
+    "2500k",
+    "-maxrate",
+    "2500k",
+    "-bufsize",
+    "5000k",
+    "-r",
+    "30",
+    "-g",
+    "60",
+    "-f",
+    "h264",
+    "pipe:1",
+]
+
+
+def _rand_ssrc() -> int:
+    return random.randint(1, 0xFFFFFFFE)
+
+
+def _build_rtp_header(ssrc: int, seq: int, ts: int, marker: bool = False) -> bytes:
+    first = 0x80
+    second = _PT_H264 & 0x7F
+    if marker:
+        second |= 0x80
+    return struct.pack(
+        ">BBHII", first, second, seq & 0xFFFF, ts & 0xFFFFFFFF, ssrc & 0xFFFFFFFF
+    )
+
+
+def _packetize_nal(nal: bytes, ssrc: int, seq: int, ts: int) -> list[tuple[bytes, int]]:
+    """Packetize one H.264 NAL unit into RTP packets (FU-A if needed)."""
+    if not nal:
+        return []
+    nh = nal[0]
+    nt = nh & 0x1F
+
+    if len(nal) <= _MTU - _RTP_HEADER_SIZE:
+        h = _build_rtp_header(ssrc, seq, ts, marker=True)
+        return [(h + nal, (seq + 1) & 0xFFFF)]
+
+    fi = (nh & 0xE0) | _NAL_FU_A
+    payload = nal[1:]
+    max_frag = _MTU - _RTP_HEADER_SIZE - 2
+    offset = 0
+    result = []
+    while offset < len(payload):
+        end = min(offset + max_frag, len(payload))
+        frag = payload[offset:end]
+        is_first = offset == 0
+        is_last = end >= len(payload)
+        fh = nt
+        if is_first:
+            fh |= _FU_START
+        if is_last:
+            fh |= _FU_END
+        h = _build_rtp_header(ssrc, seq, ts, marker=is_last)
+        pkt = h + bytes([fi, fh]) + frag
+        result.append((pkt, (seq + 1) & 0xFFFF))
+        offset = end
+        seq = (seq + 1) & 0xFFFF
+    return result
+
+
+def _parse_annexb(data: bytes) -> list[bytes]:
+    """Split Annex B byte stream into NAL units (stripping start codes)."""
+    nals = []
+    start = 0
+    i = 0
+    while i < len(data):
+        if data[i : i + 4] == b"\x00\x00\x00\x01":
+            if i > start:
+                nals.append(data[start:i])
+            start = i + 4
+            i = start
+        elif i + 3 <= len(data) and data[i : i + 3] == b"\x00\x00\x01":
+            if i > start:
+                nals.append(data[start:i])
+            start = i + 3
+            i = start
+        else:
+            i += 1
+    if start < len(data):
+        nals.append(data[start:])
+    return nals
+
+
+def _is_slice_nal(nal: bytes) -> bool:
+    if not nal:
+        return False
+    t = nal[0] & 0x1F
+    return t in (1, 5)
+
+
+# --- SPS/VUI rewriting --------------------------------------------------------
+# Discord requires bitstream_restriction_flag=1 and max_num_reorder_frames=0
+# in every SPS or it rejects the stream with Error 2015.
+
+_HIGH_PROFILES = frozenset({100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 144})
+
+
+def _ep_remove(data: bytes) -> bytes:
+    """Strip emulation prevention bytes (0x00 0x00 0x03 -> 0x00 0x00)."""
+    out = bytearray()
+    i = 0
+    while i < len(data):
+        if i + 2 < len(data) and data[i] == 0 and data[i + 1] == 0 and data[i + 2] == 3:
+            out.append(0)
+            out.append(0)
+            i += 3
+        else:
+            out.append(data[i])
+            i += 1
+    return bytes(out)
+
+
+def _ep_add(data: bytes) -> bytes:
+    """Re-insert emulation prevention bytes."""
+    out = bytearray()
+    zeros = 0
+    for byte in data:
+        if zeros >= 2 and byte <= 3:
+            out.append(3)
+            zeros = 0
+        out.append(byte)
+        zeros = zeros + 1 if byte == 0 else 0
+    return bytes(out)
+
+
+class _BR:
+    """H.264 RBSP bit reader."""
+
+    __slots__ = ("_d", "_p")
+
+    def __init__(self, data: bytes) -> None:
+        self._d = data
+        self._p = 0
+
+    def remaining(self) -> int:
+        return len(self._d) * 8 - self._p
+
+    def u(self, n: int) -> int:
+        val = 0
+        for _ in range(n):
+            bi = self._p >> 3
+            if bi >= len(self._d):
+                raise IndexError(f"SPS read past end at bit {self._p}")
+            val = (val << 1) | ((self._d[bi] >> (7 - (self._p & 7))) & 1)
+            self._p += 1
+        return val
+
+    def ue(self) -> int:
+        z = 0
+        while self.u(1) == 0:
+            z += 1
+            if z > 31:
+                raise ValueError("Exp-Golomb: too many leading zeros")
+        return 0 if z == 0 else (1 << z) - 1 + self.u(z)
+
+    def se(self) -> int:
+        c = self.ue()
+        if c == 0:
+            return 0
+        return ((c + 1) >> 1) if c & 1 else -(c >> 1)
+
+
+class _BW:
+    """H.264 RBSP bit writer."""
+
+    __slots__ = ("_bits",)
+
+    def __init__(self) -> None:
+        self._bits: list[int] = []
+
+    def u(self, n: int, val: int) -> None:
+        for i in range(n - 1, -1, -1):
+            self._bits.append((val >> i) & 1)
+
+    def ue(self, val: int) -> None:
+        n = val + 1
+        bl = n.bit_length()
+        for _ in range(bl - 1):
+            self._bits.append(0)
+        for i in range(bl - 1, -1, -1):
+            self._bits.append((n >> i) & 1)
+
+    def se(self, val: int) -> None:
+        self.ue(2 * val - 1 if val > 0 else -2 * val)
+
+    def to_bytes(self) -> bytes:
+        bits = list(self._bits) + [1] + [0] * ((-len(self._bits) - 1) % 8)
+        out = bytearray()
+        for i in range(0, len(bits), 8):
+            b = 0
+            for j in range(8):
+                b = (b << 1) | bits[i + j]
+            out.append(b)
+        return bytes(out)
+
+
+def _copy_scaling_list(r: _BR, w: _BW, size: int) -> None:
+    last = 8
+    nxt = 8
+    for _ in range(size):
+        if nxt != 0:
+            delta = r.se()
+            w.se(delta)
+            nxt = (last + delta + 256) % 256
+        last = nxt if nxt != 0 else last
+
+
+def _copy_hrd(r: _BR, w: _BW) -> None:
+    cpb = r.ue()
+    w.ue(cpb)
+    w.u(4, r.u(4))
+    w.u(4, r.u(4))
+    for _ in range(cpb + 1):
+        w.ue(r.ue())
+        w.ue(r.ue())
+        w.u(1, r.u(1))
+    w.u(5, r.u(5))
+    w.u(5, r.u(5))
+    w.u(5, r.u(5))
+    w.u(5, r.u(5))
+
+
+def _do_rewrite_sps(nal: bytes) -> bytes:
+    r = _BR(_ep_remove(nal[1:]))
+    w = _BW()
+
+    profile_idc = r.u(8)
+    w.u(8, profile_idc)
+    w.u(8, r.u(8))
+    w.u(8, r.u(8))
+    w.ue(r.ue())
+
+    chroma_format_idc = 1
+    if profile_idc in _HIGH_PROFILES:
+        chroma_format_idc = r.ue()
+        w.ue(chroma_format_idc)
+        if chroma_format_idc == 3:
+            w.u(1, r.u(1))
+        w.ue(r.ue())
+        w.ue(r.ue())
+        w.u(1, r.u(1))
+        ssmf = r.u(1)
+        w.u(1, ssmf)
+        if ssmf:
+            n_lists = 12 if chroma_format_idc == 3 else 8
+            for i in range(n_lists):
+                flag = r.u(1)
+                w.u(1, flag)
+                if flag:
+                    _copy_scaling_list(r, w, 16 if i < 6 else 64)
+
+    w.ue(r.ue())
+    poc = r.ue()
+    w.ue(poc)
+    if poc == 0:
+        w.ue(r.ue())
+    elif poc == 1:
+        w.u(1, r.u(1))
+        w.se(r.se())
+        w.se(r.se())
+        n = r.ue()
+        w.ue(n)
+        for _ in range(n):
+            w.se(r.se())
+
+    max_num_ref_frames = r.ue()
+    w.ue(max_num_ref_frames)
+    w.u(1, r.u(1))
+    w.ue(r.ue())
+    w.ue(r.ue())
+    fmof = r.u(1)
+    w.u(1, fmof)
+    if not fmof:
+        w.u(1, r.u(1))
+    w.u(1, r.u(1))
+    fcf = r.u(1)
+    w.u(1, fcf)
+    if fcf:
+        w.ue(r.ue())
+        w.ue(r.ue())
+        w.ue(r.ue())
+        w.ue(r.ue())
+
+    vui_present = r.u(1) if r.remaining() > 0 else 0
+    w.u(1, 1)
+
+    def _write_restriction() -> None:
+        w.u(1, 1)
+        w.ue(2)
+        w.ue(1)
+        w.ue(16)
+        w.ue(16)
+        w.ue(0)
+        w.ue(max_num_ref_frames)
+
+    if not vui_present:
+        w.u(2, 0)
+        w.u(1, 0)
+        w.u(5, 0)
+        w.u(1, 1)
+        _write_restriction()
+    else:
+        arif = r.u(1)
+        w.u(1, arif)
+        if arif:
+            ari = r.u(8)
+            w.u(8, ari)
+            if ari == 255:
+                w.u(16, r.u(16))
+                w.u(16, r.u(16))
+
+        oif = r.u(1)
+        w.u(1, oif)
+        if oif:
+            w.u(1, r.u(1))
+
+        vstf = r.u(1)
+        w.u(1, 0)
+        if vstf:
+            r.u(3)
+            r.u(1)
+            cdpf = r.u(1)
+            if cdpf:
+                r.u(8)
+                r.u(8)
+                r.u(8)
+
+        clif = r.u(1)
+        w.u(1, clif)
+        if clif:
+            w.ue(r.ue())
+            w.ue(r.ue())
+
+        tif = r.u(1)
+        w.u(1, tif)
+        if tif:
+            w.u(32, r.u(32))
+            w.u(32, r.u(32))
+            w.u(1, r.u(1))
+
+        nhp = r.u(1)
+        w.u(1, nhp)
+        if nhp:
+            _copy_hrd(r, w)
+
+        vhp = r.u(1)
+        w.u(1, vhp)
+        if vhp:
+            _copy_hrd(r, w)
+
+        if nhp or vhp:
+            w.u(1, r.u(1))
+
+        w.u(1, r.u(1))
+
+        brf = r.u(1)
+        w.u(1, 1)
+        if not brf:
+            _write_restriction()
+        else:
+            w.u(1, r.u(1))
+            w.ue(r.ue())
+            w.ue(r.ue())
+            w.ue(r.ue())
+            w.ue(r.ue())
+            r.ue()
+            w.ue(0)
+            r.ue()
+            w.ue(max_num_ref_frames)
+
+    return bytes([nal[0]]) + _ep_add(w.to_bytes())
+
+
+def rewrite_sps_vui(nal: bytes) -> bytes:
+    """Force bitstream_restriction_flag=1 and max_num_reorder_frames=0."""
+    if not nal or (nal[0] & 0x1F) != 7:
+        return nal
+    try:
+        return _do_rewrite_sps(nal)
+    except Exception:
+        log.debug("SPS rewrite failed; passthrough", exc_info=True)
+        return nal
+
+
+# --- RTP encryption -----------------------------------------------------------
+
+
+def _encrypt(
+    header: bytes,
+    payload: bytes,
+    mode: str,
+    secret_key: list[int],
+    nonce_counter: list[int],
+) -> bytes:
+    key = bytes(secret_key)
+
+    if mode == "aead_xchacha20_poly1305_rtpsize":
+        aead_box = nacl.secret.Aead(key)
+        nonce = bytearray(24)
+        struct.pack_into(">I", nonce, 0, nonce_counter[0])
+        nonce_counter[0] = (nonce_counter[0] + 1) & 0xFFFF_FFFF
+        ct = aead_box.encrypt(payload, bytes(header), bytes(nonce)).ciphertext
+        return bytes(header) + ct + bytes(nonce[:4])
+
+    if mode == "xsalsa20_poly1305":
+        box = nacl.secret.SecretBox(key)
+        nonce = bytearray(24)
+        nonce[:12] = header
+        return bytes(header) + box.encrypt(payload, bytes(nonce)).ciphertext
+
+    if mode == "xsalsa20_poly1305_suffix":
+        box = nacl.secret.SecretBox(key)
+        nonce_bytes = nacl.utils.random(24)
+        return (
+            bytes(header) + box.encrypt(payload, nonce_bytes).ciphertext + nonce_bytes
+        )
+
+    if mode == "xsalsa20_poly1305_lite":
+        box = nacl.secret.SecretBox(key)
+        nonce = bytearray(24)
+        struct.pack_into(">I", nonce, 0, nonce_counter[0])
+        nonce_counter[0] = (nonce_counter[0] + 1) & 0xFFFF_FFFF
+        ct = box.encrypt(payload, bytes(nonce)).ciphertext
+        return bytes(header) + ct + bytes(nonce[:4])
+
+    raise ValueError(f"Unknown voice encryption mode: {mode!r}")
+
+
+# --- VideoStream --------------------------------------------------------------
+
+
+class VideoStream:
+    """Manages one video stream: FFmpeg subprocess + encrypted RTP output."""
+
+    def __init__(
+        self,
+        url: str,
+        guild_id: int,
+        vc,
+        ws,
+        sock,
+        endpoint_ip: str,
+        endpoint_port: int,
+        audio_ssrc: int,
+    ):
+        self.url = url
+        self.guild_id = guild_id
+        self.vc = vc
+        self.ws = ws
+        self.sock = sock
+        self.endpoint_ip = endpoint_ip
+        self.endpoint_port = endpoint_port
+        self.audio_ssrc = audio_ssrc
+        self.video_ssrc = _rand_ssrc()
+        self.seq = random.randint(0, 0xFFFF)
+        self.ts = random.randint(0, 0xFFFFFFFF)
+        self._nonce = [_VIDEO_NONCE_BASE]
+
+        # Encryption params — set after voice handshake
+        self._secret_key: list[int] = getattr(vc, "secret_key", [])
+        self._mode: str = getattr(vc, "mode", "xsalsa20_poly1305")
+
+        self._proc: Optional[Process] = None
+        self._task: Optional[asyncio.Task] = None
+        self._stop_event = asyncio.Event()
+        self._frame_nals: list[bytes] = []
+
+    async def start(self) -> None:
+        """Launch FFmpeg, announce video SSRC, begin send loop."""
+        await self._announce_video_ssrc(active=True)
+        cmd = ["ffmpeg", "-i", self.url] + FFMPEG_VIDEO_ARGS
+        log.info("[STREAM] guild=%s ffmpeg: %s ...", self.guild_id, " ".join(cmd[:6]))
+        self._proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=PIPE,
+            stderr=DEVNULL,
+        )
+        if self._proc.stdout is None:
+            raise RuntimeError("ffmpeg stdout closed")
+        self._task = asyncio.create_task(self._send_loop())
+        log.info(
+            "[STREAM] guild=%s started (video_ssrc=%d)", self.guild_id, self.video_ssrc
+        )
+
+    async def _announce_video_ssrc(self, active: bool) -> None:
+        try:
+            await self.ws.send_as_json(
+                {
+                    "op": 12,
+                    "d": {
+                        "audio_ssrc": self.audio_ssrc,
+                        "video_ssrc": self.video_ssrc,
+                        "rtx_ssrc": 0,
+                        "stream_id": "",
+                        "quality": 1,
+                        "type": 1 if active else 0,
+                    },
+                }
+            )
+        except Exception as e:
+            log.warning("[STREAM] op=12 failed: %s", e)
+
+    async def _send_loop(self) -> None:
+        """Read raw H.264 from FFmpeg stdout and send encrypted RTP packets."""
+        assert self._proc is not None
+        stdout = self._proc.stdout
+        buf = b""
+
+        while not self._stop_event.is_set():
+            try:
+                chunk = await asyncio.wait_for(stdout.read(65536), timeout=2.0)
+            except asyncio.TimeoutError:
+                if self._proc.returncode is not None:
+                    log.warning(
+                        "[STREAM] ffmpeg exited early (rc=%d)", self._proc.returncode
+                    )
+                    break
+                self._flush_frame()
+                continue
+            if not chunk:
+                break
+            buf += chunk
+            nals = _parse_annexb(buf)
+            if not nals:
+                continue
+            consumed = len(buf)
+            if nals:
+                last = nals[-1]
+                consumed = len(buf) - len(last)
+                idx = buf.rfind(last)
+                if idx >= 0:
+                    consumed = idx
+                buf = buf[consumed:]
+            else:
+                buf = b""
+            for nal in nals:
+                self._feed_nal(nal)
+        self._flush_frame()
+        log.info("[STREAM] guild=%s send loop ended", self.guild_id)
+
+    def _feed_nal(self, nal: bytes) -> None:
+        """Queue a NAL unit. Flushes previous frame on new slice."""
+        if _is_slice_nal(nal) and self._frame_nals:
+            self._flush_frame()
+        # Rewrite SPS VUI so Discord accepts the stream
+        if nal and (nal[0] & 0x1F) == 7:
+            nal = rewrite_sps_vui(nal)
+        self._frame_nals.append(nal)
+
+    def _flush_frame(self) -> None:
+        """Send all buffered NALs as one frame (encrypted), advance timestamp."""
+        if not self._frame_nals:
+            return
+        pkts = []
+        for nal in self._frame_nals:
+            pkts.extend(_packetize_nal(nal, self.video_ssrc, self.seq, self.ts))
+            if pkts:
+                self.seq = pkts[-1][1]
+        if not pkts:
+            self._frame_nals = []
+            return
+
+        # Encrypt all packets for this frame
+        for pkt, _ in pkts:
+            hdr = pkt[:_RTP_HEADER_SIZE]
+            payload = pkt[_RTP_HEADER_SIZE:]
+            try:
+                encrypted = _encrypt(
+                    hdr, payload, self._mode, self._secret_key, self._nonce
+                )
+                self.sock.sendto(encrypted, (self.endpoint_ip, self.endpoint_port))
+            except (BlockingIOError, OSError) as e:
+                log.debug("[STREAM] sendto dropped: %s", e)
+                break
+
+        self.ts = (self.ts + _TS_PER_FRAME) & 0xFFFFFFFF
+        self._frame_nals = []
+
+    async def stop(self) -> None:
+        """Kill FFmpeg, announce stop on WS, clean up."""
+        self._stop_event.set()
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        if self._proc:
+            try:
+                self._proc.kill()
+                await self._proc.wait()
+            except Exception:
+                pass
+            self._proc = None
+        await self._announce_video_ssrc(active=False)
+        log.info("[STREAM] guild=%s stopped", self.guild_id)

@@ -30,7 +30,6 @@ from discord.ext import voice_recv
 
 import config
 import greeting
-from streamer import VideoStream
 from transcript_channel import (
     resolve_transcript_channel as _resolve_transcript_channel_impl,
 )
@@ -2134,9 +2133,6 @@ def _vc_for_guild(guild: discord.Guild) -> Optional[voice_recv.VoiceRecvClient]:
 _idle_leave_tasks: dict[int, asyncio.Task] = {}
 
 
-# Active video streams per guild (Go Live IPTV).
-_active_streams: dict[int, VideoStream] = {}
-
 # Per-guild "only-this-speaker is heard" lock used while a music vote is open
 # in the main bot. The main bot toggles it via the /restrict_speaker relay
 # endpoint: while ``_vote_restrictions[guild_id] == user_id`` the sinks drop
@@ -2383,15 +2379,9 @@ async def _leave_if_empty(guild: discord.Guild):
     come back or move between channels. If anyone shows up in the meantime,
     ``on_voice_state_update`` will cancel the pending task.
 
-    Skips idle-leave while an active Go Live stream is running for the
-    guild — the stream is a legitimate reason to stay connected even if
-    the channel is momentarily empty.
     """
     vc = _vc_for_guild(guild)
     if vc is None:
-        _cancel_idle_leave(guild.id)
-        return
-    if guild.id in _active_streams:
         _cancel_idle_leave(guild.id)
         return
     if _guild_has_humans(guild):
@@ -4359,182 +4349,6 @@ async def _relay_voice_summary(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
-async def _relay_stream(request: web.Request) -> web.Response:
-    """Start an IPTV Go Live stream in a voice channel.
-
-    Body: ``{"guild_id": <int>, "channel_id": <int>, "url": <str>}``.
-    Joins the voice channel, launches FFmpeg for H.264 transcoding, and
-    starts sending video RTP packets over the voice UDP socket.
-    """
-    log.info("[RELAY-STREAM] request received from %s", request.remote)
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-        channel_id = int(data["channel_id"])
-        url = str(data["url"]).strip()
-    except Exception as e:
-        log.warning("[RELAY-STREAM] invalid body: %s", e)
-        return web.json_response({"error": "invalid body"}, status=400)
-    if not url:
-        log.warning("[RELAY-STREAM] empty url")
-        return web.json_response({"error": "empty url"}, status=400)
-    log.info(
-        "[RELAY-STREAM] parsed: guild_id=%s channel_id=%s url=%s",
-        guild_id,
-        channel_id,
-        url[:120],
-    )
-    if not client.is_ready():
-        log.warning("[RELAY-STREAM] userbot not ready")
-        return web.json_response({"error": "userbot not ready"}, status=503)
-
-    # Stop any existing stream in this guild
-    existing = _active_streams.pop(guild_id, None)
-    if existing:
-        log.info("[RELAY-STREAM] stopping existing stream for guild=%s", guild_id)
-        await existing.stop()
-
-    guild = client.get_guild(guild_id)
-    if guild is None:
-        log.warning("[RELAY-STREAM] guild not found: %s", guild_id)
-        return web.json_response({"error": "guild not found"}, status=404)
-    log.info(
-        "[RELAY-STREAM] guild=%s found, resolving channel=%s", guild_id, channel_id
-    )
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.VoiceChannel):
-        try:
-            channel = await client.fetch_channel(channel_id)
-            log.info("[RELAY-STREAM] channel fetched via API: %s", channel_id)
-        except Exception as e:
-            log.warning("[RELAY-STREAM] channel fetch failed: %s", e)
-            return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not isinstance(channel, discord.VoiceChannel):
-        log.warning("[RELAY-STREAM] channel=%s is not a voice channel", channel_id)
-        return web.json_response(
-            {"error": "channel is not a voice channel"}, status=400
-        )
-    if not _guild_allowed(guild.id):
-        log.warning("[RELAY-STREAM] guild=%s not allowed", guild_id)
-        return web.json_response({"error": "guild not allowed"}, status=403)
-
-    # Join the channel
-    log.info("[RELAY-STREAM] joining channel=%s guild=%s", channel_id, guild_id)
-    try:
-        await _join_channel(channel)
-        log.info("[RELAY-STREAM] join_channel OK")
-    except Exception as e:
-        log.exception("[RELAY-STREAM] join failed")
-        return web.json_response({"error": f"join failed: {e}"}, status=500)
-
-    vc = _vc_for_guild(guild)
-    if vc is None or not vc.is_connected():
-        log.warning("[RELAY-STREAM] not connected after join (vc=%s)", vc)
-        return web.json_response({"error": "not connected after join"}, status=500)
-    log.info("[RELAY-STREAM] vc connected: %s", type(vc).__name__)
-
-    # Wait for voice WS to be ready
-    for i in range(20):
-        ws = getattr(vc, "ws", None)
-        if ws is not None:
-            log.info("[RELAY-STREAM] voice ws ready after %.1fs", i * 0.5)
-            break
-        await asyncio.sleep(0.5)
-    else:
-        log.warning("[RELAY-STREAM] voice ws not ready after 10s")
-        return web.json_response({"error": "voice ws not ready"}, status=500)
-
-    sock = getattr(vc, "socket", None)
-    if sock is None:
-        log.warning("[RELAY-STREAM] voice socket not available")
-        return web.json_response({"error": "voice socket not available"}, status=500)
-    log.info("[RELAY-STREAM] voice socket OK")
-
-    ssrc = getattr(vc, "ssrc", 0)
-    if not ssrc:
-        log.warning("[RELAY-STREAM] audio ssrc not available")
-        return web.json_response({"error": "audio ssrc not available"}, status=500)
-    log.info("[RELAY-STREAM] audio_ssrc=%s", ssrc)
-
-    # Resolve endpoint IP/port
-    endpoint_ip = getattr(vc, "endpoint_ip", None) or getattr(
-        getattr(vc, "_connection", None), "endpoint_ip", None
-    )
-    endpoint_port = getattr(vc, "endpoint_port", None) or getattr(
-        getattr(vc, "_connection", None), "endpoint_port", None
-    )
-    if not endpoint_ip or not endpoint_port:
-        log.warning(
-            "[RELAY-STREAM] endpoint not resolved (ip=%s port=%s)",
-            endpoint_ip,
-            endpoint_port,
-        )
-        return web.json_response({"error": "endpoint not resolved"}, status=500)
-    log.info("[RELAY-STREAM] endpoint %s:%s", endpoint_ip, endpoint_port)
-
-    log.info("[RELAY-STREAM] creating VideoStream for url=%s", url[:80])
-    stream = VideoStream(
-        url=url,
-        guild_id=guild_id,
-        vc=vc,
-        ws=ws,
-        sock=sock,
-        endpoint_ip=endpoint_ip,
-        endpoint_port=endpoint_port,
-        audio_ssrc=ssrc,
-    )
-    try:
-        await stream.start()
-        log.info("[RELAY-STREAM] stream.start() OK")
-    except Exception as e:
-        log.exception("[RELAY-STREAM] stream start failed")
-        return web.json_response({"error": str(e)}, status=500)
-
-    _active_streams[guild_id] = stream
-    log.info("[RELAY-STREAM] started guild=%s channel=%s", guild_id, channel.name)
-    return web.json_response(
-        {
-            "started": True,
-            "guild_id": guild_id,
-            "channel_name": channel.name,
-            "video_ssrc": stream.video_ssrc,
-        }
-    )
-
-
-async def _relay_stopstream(request: web.Request) -> web.Response:
-    """Stop the active Go Live stream in a guild.
-
-    Body: ``{"guild_id": <int>}``.
-    """
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-    except Exception:
-        return web.json_response({"error": "invalid body"}, status=400)
-
-    stream = _active_streams.pop(guild_id, None)
-    if stream is None:
-        return web.json_response({"error": "no active stream"}, status=404)
-
-    try:
-        await stream.stop()
-    except Exception as e:
-        log.exception("[RELAY-STOPSTREAM] stop failed")
-        return web.json_response({"error": str(e)}, status=500)
-
-    log.info("[RELAY-STOPSTREAM] guild=%s", guild_id)
-    return web.json_response({"stopped": True, "guild_id": guild_id})
-
-
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4550,8 +4364,6 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_generarimagen", _relay_invoke_generarimagen)
     # app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
-    app.router.add_post("/stream", _relay_stream)
-    app.router.add_post("/stopstream", _relay_stopstream)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
     app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)
