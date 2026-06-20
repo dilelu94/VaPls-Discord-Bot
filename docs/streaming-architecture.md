@@ -31,57 +31,42 @@ golive/bot.py (GoLive userbot)
   1. Recibe POST en relay HTTP (127.0.0.1:8082)
   2. Valida X-API-Secret
   3. Hace join al voice channel via discord.py-self
-     a. video_compat.patch_video() aplica parches globales
-        a1. identify() (op 0): agrega video:true + streams descriptor
-        a2. select_protocol() (op 1): declara codec H264
-        a3. client_connect() (op 12): anuncia video_ssrc + streams
-  4. Crea VideoStream(url, vc, ws, sock, ...)
-  5. VideoStream.start():
-     a. Spawnea FFmpeg -i <M3U8> → encoder H.264 → pipe:1
+  4. Establece una conexión Go Live (screenshare) dedicada via `GoLiveConnection`
+     a. Registra futuros de eventos `STREAM_CREATE` y `STREAM_SERVER_UPDATE` en el WebSocket principal del bot.
+     b. Envía op 18 (`STREAM_CREATE`) y op 22 (`STREAM_SET_PAUSED`, paused=False) en el WebSocket principal.
+     c. Recibe credenciales de transmisión (server_id, stream_key, endpoint, token).
+     d. Crea un socket UDP y abre un WebSocket separado al servidor de stream.
+     e. Realiza el handshake de voz secundario (IDENTIFY → READY → IP discovery → SELECT_PROTOCOL → SESSION_DESCRIPTION).
+     f. Anuncia capacidad de video enviando op 12 (`VIDEO`) en el WebSocket de stream.
+  5. Crea VideoStream(url, conn)
+  6. VideoStream.start():
+     a. Registra el video SSRC en la MLS DAVE session (`dave_session.register_video_ssrc`).
+     b. Spawnea FFmpeg -i <M3U8> → encoder H.264 → pipe:1
         (encoder auto-detected: h264_nvenc > h264_vaapi > libx264)
-     b. _send_loop(): lee H.264, parte NALs, reescribe SPS,
-       encripta RTP, envía por UDP socket de Discord
-        (video_ssrc = audio_ssrc + 1, NO se envía op=12 extra)
+     c. _send_loop(): lee H.264, parte NALs, reescribe SPS,
+        aplica encriptación DAVE E2EE (`dave_session.encrypt_h264`),
+        encripta transporte RTP y envía por el socket de `GoLiveConnection`.
 ```
 
 ## Por qué funciona así (y por qué NO como antes)
 
-### Cámara (no Go-Live/Screenshare)
+### Go-Live / Screenshare real
 
 Discord tiene **dos modos** para enviar video:
 
 | Modo                      | Cómo se activa                                              | Apariencia                                   |
 | ------------------------- | ----------------------------------------------------------- | -------------------------------------------- |
 | **Cámara** (self-video)   | `client_connect()` (op 12) en el WebSocket de voz principal | Aparece como que el userbot activó su cámara |
-| **Go-Live** (screenshare) | `op 18` → `op 21` → WebSocket separado + UDP dedicado       | Aparece como "Transmitiendo" con thumbnail   |
+| **Go-Live** (screenshare) | `op 18` → `op 22` → WebSocket separado + UDP dedicado       | Aparece como "Transmitiendo" con botón "Watch Stream" |
 
-Usamos **modo cámara** porque es más simple: no requiere un WebSocket separado, no necesita el flow `STREAM_CREATE`/`STREAM_SERVER_UPDATE`, y funciona con el mismo socket UDP que el audio.
+Anteriormente usábamos **modo cámara** (falso stream) porque era más simple, pero Discord bota la transmisión si no se hace el flow completo. Ahora implementamos **Go-Live real** abriendo un WebSocket secundario y negociando la transmisión directamente mediante el opcode 18 (`STREAM_CREATE`) y 22 (`STREAM_SET_PAUSED`).
 
-### video_ssrc = audio_ssrc + 1 (no random)
+### Compatibilidad DAVE E2EE para Video
 
-`video_compat.py::_patched_client_connect()` declara `video_ssrc = audio_ssrc + 1` (VIDEO_SSRC_OFFSET) durante el handshake de voz. Si `streamer.py` después usa un SSRC random, Discord no reconoce los paquetes RTP y los descarta.
-
-**Bug original:** `VideoStream` generaba `_rand_ssrc()`. Los paquetes RTP tenían un SSRC que Discord no esperaba → el stream "iniciaba" pero nadie veía nada.
-
-**Fix:** `video_ssrc = audio_ssrc + 1` — coincide con lo declarado en `client_connect()`.
-
-### NO enviar op=12 duplicado
-
-`client_connect()` (patch de `video_compat.py`) ya envía op=12 con el payload completo incluyendo `streams`, `max_bitrate`, `max_framerate` y `max_resolution`. Si `VideoStream.start()` envía OTRO op=12 con formato distinto (sin `streams`, con campos `stream_id`/`type`), Discord se confunde.
-
-**Bug original:** `_announce_video_ssrc()` enviaba un segundo op=12 con:
-
-```json
-{"op": 12, "d": {"audio_ssrc": ..., "video_ssrc": ..., "stream_id": "", "quality": 1, "type": 1}}
-```
-
-Pero `client_connect()` ya había enviado:
-
-```json
-{"op": 12, "d": {"audio_ssrc": ..., "video_ssrc": ..., "rtx_ssrc": ..., "streams": [{"type": "video", "ssrc": ..., "max_bitrate": 10000000, ...}]}}
-```
-
-**Fix:** Eliminar `_announce_video_ssrc()` — el `client_connect()` parcheado ya lo maneja.
+El wrapper de DAVE por defecto en `discord.py-self` (`davey`) está roto para video. Para evitar que Discord tire los paquetes cifrados de video de E2EE en canales seguros, implementamos:
+1. `golive/davey_compat.py`: Shim de compatibilidad con la biblioteca nativa `libdave` (instalada vía `dave.py` de PyPI).
+2. Registro explícito del video SSRC (`dave_session.register_video_ssrc(video_ssrc)`) usando el codec H264.
+3. Cifrado nativo de la unidad Annex-B antes de packetizar (`dave_session.encrypt_h264(...)`).
 
 ### Encoder auto-detected
 
@@ -111,9 +96,16 @@ Entry point del GoLive userbot. Corre como `python3 bot.py` desde `golive/`.
   - `POST /stream` — inicia stream en un voice channel
   - `POST /stopstream` — detiene el stream activo
 - Maneja join/reconnect a voice channels
-- Aplica `video_compat.patch_video()` antes de conectar (crítico)
+- Inicializa `davey_compat` y parches de `libdave` antes del inicio de sesión.
+- Instancia y conecta `GoLiveConnection` para establecer el canal de streaming secundario.
 
-**Importante:** corre como `discord.Client()` (no Bot, no slash commands). Solo relay HTTP.
+### `golive/davey_compat.py`
+
+Shim de compatibilidad para DAVE E2EE que envuelve a `dave.py` (bindings de `libdave` de DisnakeDev) para reemplazar la implementación nativa defectuosa de `davey` en `discord.py-self`. Expone funciones para registrar y cifrar video SSRC (`register_video_ssrc` y `encrypt_h264`).
+
+### `golive/golive_connection.py`
+
+Maneja el ciclo de vida del stream de Go Live (screenshare) independiente. Envía opcodes de control a la gateway principal, abre el socket UDP y WebSocket secundarios al servidor del stream, y ejecuta el handshake de voz de la transmisión Go Live.
 
 ### `golive/video_compat.py` (104 líneas)
 
@@ -139,17 +131,9 @@ Clase `VideoStream` — el pipeline completo de streaming. Asyncio-based.
 4. Agrupa NALs en frames (slice NAL = nuevo frame)
 5. **Reescribe SPS VUI** — fuerza `bitstream_restriction_flag=1` y `max_num_reorder_frames=0` o Discord bota con Error 2015
 6. Packetiza cada frame en RTP (FU-A fragmentation si el NAL es grande)
-7. **Encripta** cada paquete con PyNaCl según el modo negociado (xsalsa20_poly1305, xchacha20, etc.)
-8. Manda por `sock.sendto()` al endpoint UDP de Discord
-
-**SPS/VUI rewriting:** Implementa un parser/escritor de H.264 RBSP bitstream completo. Soporta high profiles, scaling lists, HRD, etc.
-
-**RTP encryption:** Soporta 4 modos de Discord:
-
-- `xsalsa20_poly1305` — nonce = header de 12 bytes + padding
-- `xsalsa20_poly1305_suffix` — nonce random de 24 bytes al final
-- `xsalsa20_poly1305_lite` — nonce de 4 bytes contador al final
-- `aead_xchacha20_poly1305_rtpsize` — AEAD con header AAD
+7. **Cifrado E2EE (DAVE)** — Aplica el cifrado MLS `encrypt_h264` al stream Annex-B a través de la sesión DAVE de `GoLiveConnection`.
+8. **Encripta transporte** — Cifra el paquete RTP de transporte según el modo negociado (aead_xchacha20_poly1305_rtpsize, xsalsa20_poly1305, etc.) usando PyNaCl.
+9. Envía el paquete final mediante `self.conn.send_packet()`.
 
 ### `golive/config.py` (17 líneas)
 

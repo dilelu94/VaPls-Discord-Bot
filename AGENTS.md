@@ -185,14 +185,17 @@ Usuario en Discord
         ↓
   [golive/bot.py — proceso separado con user token de Discord]
   3. Se une al canal de voz del invocador
-  4. Obtiene ws + socket + ssrc + endpoint del VoiceClient
-  5. Crea VideoStream(url=...) → lanza FFmpeg
+  4. Establece conexión Go Live (screenshare) dedicada via GoLiveConnection (WebSocket/UDP secundario)
+     a. Envía op 18 (STREAM_CREATE) y op 22 (STREAM_SET_PAUSED) en la gateway principal
+     b. Obtiene credenciales y abre ws + socket UDP dedicados para el streaming
+  5. Instancia VideoStream(url, conn)
         ↓
   [golive/streamer.py — VideoStream]
-  6. FFmpeg: URL HLS/IPTV → -c:v libx264/nvenc/vaapi → raw H.264 Annex-B pipe
-  7. Parsea NAL units del stream Annex-B
-  8. Reescribe SPS VUI (Discord exige bitstream_restriction_flag=1, max_num_reorder_frames=0)
-  9. RTP packetize → encrypt (XSalsa20/XChaCha20) → UDP socket al server de voz de Discord
+  6. Registra el video SSRC en la MLS DAVE session
+  7. FFmpeg: URL HLS/IPTV → -c:v libx264/nvenc/vaapi → raw H.264 Annex-B pipe
+  8. Parsea NAL units y reescribe SPS VUI
+  9. Cifrado E2EE (DAVE) via `dave_session.encrypt_h264` + cifrado de transporte RTP (XSalsa20/XChaCha20)
+  10. Envía paquetes RTP al UDP socket de la GoLiveConnection
 ```
 
 ### Señalización WebSocket (video_compat.py)
@@ -214,8 +217,10 @@ vc.patch_video(discord.gateway)
 | --- | --- |
 | `bot.py` | Slash commands `/stream` y `/stopstream` (L1589–1739) |
 | `iptv.py` | Descarga/cachea el M3U de iptv-org, busca canales por nombre. Cache en `data/iptv_cache.m3u`, TTL 6h |
-| `golive/bot.py` | Proceso GoLive: relay HTTP (`POST /stream`, `POST /stopstream`), join de canal, instancia `VideoStream` |
-| `golive/streamer.py` | FFmpeg → H.264 Annex-B → RTP encriptado → UDP. Incluye SPS VUI rewriter y `_detect_encoder()` |
+| `golive/bot.py` | Proceso GoLive: relay HTTP (`POST /stream`, `POST /stopstream`), join de canal, instancia `GoLiveConnection` y `VideoStream` |
+| `golive/davey_compat.py` | Shim de compatibilidad para DAVE E2EE que envuelve a `dave.py` (DisnakeDev libdave) |
+| `golive/golive_connection.py` | Conexión Go Live secundaria: WebSocket de streaming, UDP socket, handshake y control |
+| `golive/streamer.py` | FFmpeg → H.264 Annex-B → Cifrado DAVE + RTP encriptado → UDP de GoLiveConnection. SPS VUI rewriter |
 | `golive/video_compat.py` | Patches al gateway WS de discord.py-self para anunciar capacidad de video |
 | `golive/config.py` | `GOLIVE_TOKEN`, `GOLIVE_RELAY_SECRET`, `GOLIVE_RELAY_PORT` (default 8082) |
 
