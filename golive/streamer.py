@@ -87,6 +87,10 @@ def _ffmpeg_args(url: str) -> list[str]:
         "low_delay",
         "-c:v",
         _ENCODER,
+        "-preset",
+        "ultrafast",
+        "-tune",
+        "zerolatency",
         "-b:v",
         "2500k",
         "-maxrate",
@@ -103,6 +107,9 @@ def _ffmpeg_args(url: str) -> list[str]:
     ]
     if _ENCODER == "h264_nvenc":
         base[base.index("-c:v") + 1] = "h264_nvenc"
+        # Remove libx264 specific preset/tune before adding nvenc ones
+        preset_idx = base.index("-preset")
+        del base[preset_idx:preset_idx+4]
         base += [
             "-preset",
             "p1",
@@ -115,6 +122,9 @@ def _ffmpeg_args(url: str) -> list[str]:
         ]
     elif _ENCODER == "h264_vaapi":
         base[base.index("-c:v") + 1] = "h264_vaapi"
+        # Remove libx264 specific preset/tune
+        preset_idx = base.index("-preset")
+        del base[preset_idx:preset_idx+4]
         base += [
             "-vaapi_device",
             "/dev/dri/renderD128",
