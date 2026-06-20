@@ -1629,6 +1629,13 @@ async def stream(
         return
 
     ch = results[0]
+    log.info(
+        "[STREAM] canal=%r channel=%s url=%s results=%d",
+        canal,
+        ch.name,
+        ch.url,
+        len(results),
+    )
     if len(results) > 1:
         names = "\n".join(f"• **{r.name}**" for r in results[:5])
         await safe_respond(
@@ -1637,22 +1644,35 @@ async def stream(
         )
         return
 
-    if not (config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay del indio no está configurado.")
+    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
         return
 
-    url = urljoin(config.INDIO_RELAY_URL, "/stream")
-    headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+    relay_base = config.GOLIVE_RELAY_URL
+    url = urljoin(relay_base, "/stream")
+    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
     payload = {
         "guild_id": ctx.guild_id,
         "channel_id": voice_channel.id,
         "url": ch.url,
     }
-    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    log.info(
+        "[STREAM] POST %s guild=%s channel=%s url=%s",
+        url,
+        ctx.guild_id,
+        voice_channel.id,
+        ch.url,
+    )
+    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:
                 body = await resp.text()
+                log.info(
+                    "[STREAM] relay response status=%s body=%s",
+                    resp.status,
+                    body[:500],
+                )
                 if resp.status >= 400:
                     log.warning("stream relay HTTP %s: %s", resp.status, body[:200])
                     await safe_respond(

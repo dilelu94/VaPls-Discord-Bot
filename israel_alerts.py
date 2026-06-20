@@ -226,6 +226,7 @@ class IsraelAlertListener:
         if not isinstance(body, list):
             return
 
+        processed = 0
         for group in body:
             group_id = group.get("id", 0)
             if not group_id or group_id in self._seen_ids:
@@ -239,6 +240,10 @@ class IsraelAlertListener:
                 await self._handle_alert(alert, group_id)
 
             self._save_last_id(group_id)
+            processed += 1
+
+        if processed:
+            logger.info("processed %d new alert group(s)", processed)
 
     async def _handle_alert(self, data: dict[str, Any], group_id: int) -> None:
         threat = data.get("threat", 0)

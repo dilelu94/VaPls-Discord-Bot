@@ -1,0 +1,18 @@
+[Unit]
+Description=VaPls GoLive IPTV streaming userbot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/vapls-discord-bot/golive
+EnvironmentFile=/home/ubuntu/vapls-discord-bot/golive/.env
+ExecStart=/home/ubuntu/vapls-discord-bot/golive/venv/bin/python3 bot.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

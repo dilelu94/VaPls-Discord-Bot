@@ -12,6 +12,7 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
 - **Saludos automáticos:** reproduce un audio al entrar a un canal de voz.
 - **Transcripción opcional:** userbot con Vosk para canales con DAVE/E2EE.
 - **/transferir [dias]:** sube archivos de hasta 10 GB via web y comparte el link en Discord. TTL configurable (1-30 días, default 1).
+- **/stream + /stopstream:** transmití canales IPTV en tu canal de voz (Go Live) usando un userbot dedicado.
 - **HTTP API:** status, miembros, cola y reproducción de audio.
 
 ## Requisitos previos
@@ -22,6 +23,8 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
   - Guild Members
   - Message Content
 - (Opcional) una cuenta de usuario de Discord para el userbot de transcripción.
+- (Opcional) una cuenta de usuario de Discord adicional para el userbot GoLive (streaming IPTV).
+- **FFmpeg** con `libopenh264` (requerido para GoLive).
 
 ## Instalación
 
@@ -64,6 +67,52 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
 5. **Añadir audios locales (soundpad / saludos):**
    Configura `CUSTOM_AUDIO_PATH` y coloca tus archivos por carpetas.
 
+6. **Configurar el userbot GoLive (para IPTV streaming):**
+
+   El GoLive es un userbot separado con su propia cuenta de Discord. Configuralo:
+
+   ```bash
+   # Crear virtualenv e instalar dependencias
+   cd golive
+   python3 -m venv venv
+   source venv/bin/activate
+   pip install -r requirements.txt
+   cd ..
+
+   # Editar golive/.env con el token de la cuenta GoLive
+   cp golive/.env.example golive/.env
+   ```
+
+   Variables de entorno del GoLive (`golive/.env`):
+
+   | Variable                 | Default     | Descripción                                  |
+   | ------------------------ | ----------- | -------------------------------------------- |
+   | `GOLIVE_TOKEN`           | —           | Token de la cuenta de Discord (obligatorio)  |
+   | `GOLIVE_RELAY_HOST`      | `127.0.0.1` | IP donde escucha el relay HTTP               |
+   | `GOLIVE_RELAY_PORT`      | `8082`      | Puerto del relay HTTP                        |
+   | `GOLIVE_RELAY_SECRET`    | —           | Secreto compartido con el main bot           |
+   | `GOLIVE_GUILD_ALLOWLIST` | —           | IDs de guild permitidos (separados por coma) |
+
+   Iniciar el GoLive:
+
+   ```bash
+   golive/venv/bin/python golive/bot.py
+   ```
+
+   (Opcional) Instalar como servicio systemd:
+
+   ```bash
+   sudo cp golive/golive-userbot.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now golive-userbot
+   ```
+
+   El main bot necesita `GOLIVE_RELAY_URL`, `GOLIVE_RELAY_SECRET` y `GOLIVE_RELAY_TIMEOUT` en su `.env` para poder enviar requests al GoLive.
+
+7. **Iniciar el userbot de transcripción (indio, opcional):**
+
+   Si querés transcripción de voz / wake-word, segui las instrucciones en `userbot/README.md`.
+
 ## Uso
 
 1. Inicia el bot:
@@ -78,6 +127,8 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
    - `/parar`: Detiene reproducción y desconecta.
    - `/quit`: Desconecta sin tocar la cola.
    - `/transferir [dias]`: Genera un link para subir archivos (hasta 10 GB, role-gated, TTL configurable 1-30 días).
+   - `/stream <canal>`: Transmití un canal IPTV en tu canal de voz (requiere el userbot GoLive corriendo).
+   - `/stopstream`: Detiene la transmisión IPTV en curso.
 
 ## Documentación
 
@@ -102,8 +153,14 @@ napoleon. Pasos sugeridos en [docs/contributing-docs.md](docs/contributing-docs.
 ## Estructura del proyecto
 
 - `bot.py`: Lógica principal, comandos y reproducción.
-- `userbot/bot.py`: Transcripción de voz con Vosk.
-- **Nota de Desarrollo:** Los comandos se programan en "vapls". El userbot es un usuario más; solo debe contener lógica propia para su funcionamiento como IA que simula ser una persona real o por limitaciones técnicas. Para interactuar con funciones del sistema, debe invocar los comandos de "vapls" programáticamente.
+- `userbot/bot.py`: Transcripción de voz con Vosk ("indio").
+- `golive/`: Userbot dedicado para IPTV Go Live streaming.
+  - `bot.py`: Cliente discord.py-self con relay HTTP (puerto 8082). Sin Whisper, VOSK ni voice receive.
+  - `streamer.py`: Importado desde `userbot/streamer.py` — FFmpeg → H.264 → RTP.
+  - `config.py`: Token, relay host/port/secret, guild allowlist.
+  - `.env.example`: Template con variables de entorno.
+  - `golive-userbot.service`: Systemd unit.
+- **Nota de Desarrollo:** Los comandos se programan en "vapls". Los userbots son usuarios adicionales; solo deben contener lógica propia para su funcionamiento como IA que simula ser una persona real o por limitaciones técnicas (DAVE E2EE en indio, cuenta separada para GoLive). Para interactuar con funciones del sistema, deben invocar los comandos de "vapls" programáticamente.
 - `playCommand.py`: Cola de música y yt-dlp.
 - `soundpadCommand.py`: UI de soundpad.
 - `apiServer.py`: HTTP API.

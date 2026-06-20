@@ -88,6 +88,12 @@ INDIO_RELAY_URL = os.getenv("INDIO_RELAY_URL", "")
 INDIO_RELAY_SECRET = os.getenv("INDIO_RELAY_SECRET", "")
 INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 
+# GoLive userbot relay: separate user account for IPTV Go Live streaming.
+# The /stream slash command POSTs here instead of the indio relay.
+GOLIVE_RELAY_URL = os.getenv("GOLIVE_RELAY_URL", "")
+GOLIVE_RELAY_SECRET = os.getenv("GOLIVE_RELAY_SECRET", "")
+GOLIVE_RELAY_TIMEOUT = float(os.getenv("GOLIVE_RELAY_TIMEOUT", "10"))
+
 # Cuando el indio decide poner musica via [PLAY_MUSIC: ...], los mensajes
 # de estado y el panel de control del GuildPlayer se postean siempre en
 # este text channel. Si esta en 0, el relay /play falla explicitamente y

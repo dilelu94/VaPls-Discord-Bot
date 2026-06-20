@@ -374,12 +374,23 @@ _INDIO_TOOLS = [
     {
         "name": "spacewar_guide",
         "description": (
-            "Explicar cómo obtener Spacewar (appid 480, la app de testing de Valve) "
-            "gratis en la biblioteca de Steam. "
-            "Usala SOLO cuando el usuario pregunte explícitamente cómo instalar, tener, agregar "
-            "o conseguir Spacewar en Steam, o mencione steam://run/480. "
-            "No la uses para hablar de juegos retro ni del Spacewar original de 1962. "
-            "No generes texto adicional — llamá la tool y el sistema se encarga de la guía."
+            "Guía de Spacewar en Linux para juegos que lo requieren. "
+            "Cuando el usuario pregunte cómo hacer funcionar un juego con Spacewar "
+            "en Linux, o cómo configurar launch options con WINEDLLOVERRIDES: "
+            "explicá VOS MISMO todo lo siguiente y llamá esta tool para que el sistema "
+            "también adjunte la imagen de la configuración.\n\n"
+            "Lo que tenés que explicar:\n"
+            "- WINEDLLOVERRIDES en launch options: "
+            'WINEDLLOVERRIDES="OnlineFix64=n;SteamOverlay64=n;winmm=n,b;dnet=n;'
+            'steam_api64=n" SteamAppId=480 SteamGameId=480 %command%\n'
+            "- Forzar el uso de una herramienta de compatibilidad "
+            "(GE-Proton o Proton Experimental) en Propiedades → Compatibilidad.\n"
+            "- Cómo agregar un juego no Steam a Steam si es necesario.\n"
+            "- La imagen de configuración muestra exactamente dónde se pone "
+            "GE-Proton y las opciones de compatibilidad.\n\n"
+            "Llamala SOLO cuando sea específicamente sobre Spacewar + Linux + "
+            "launch options / WINEDLLOVERRIDES / compatibilidad / Proton. "
+            "No la uses para hablar de juegos retro ni del Spacewar original de 1962."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
@@ -3202,42 +3213,24 @@ async def _dispatch_indio_actions(
                         or config.INDIO_REPLY_CHANNEL_ID
                         or 1490008278275461280
                     )
-                    guide = (
-                        "**🎮 Spacewar — guía rápida**\n\n"
-                        "Spacewar es una app de testing de Valve. No hay que instalarla, "
-                        "solo tenerla en la biblioteca para ciertos juegos que la necesitan.\n\n"
-                        "**¿Ya la tenés?**\n"
-                        "1. Abrí Steam.\n"
-                        "2. Andá a tu **Biblioteca**.\n"
-                        "3. Escribí `Spacewar` en la barra de búsqueda de la izquierda.\n"
-                        "4. Si aparece, ya la tenés, no necesitás hacer nada.\n\n"
-                        "**Si no la tenés — Windows:**\n"
-                        "1. Asegurate de que Steam esté abierto.\n"
-                        "2. Presioná `Windows + R`, pegá esto y dale Enter:\n"
-                        "   ```\n"
-                        "   steam://run/480\n"
-                        "   ```\n"
-                        "   Steam se abre solito y la descarga/agrega. "
-                        "Una vez que aparece en tu biblioteca, se queda ahí para siempre.\n\n"
-                        "**Linux / Steam Deck:**\n"
-                        "   Abrí una terminal y ejecutá:\n"
-                        "   ```\n"
-                        "   steam steam://run/480\n"
-                        "   ```\n\n"
-                        "**Bazzite:**\n"
-                        "   Abrí una terminal y ejecutá:\n"
-                        "   ```\n"
-                        "   flatpak run com.valvesoftware.Steam steam://run/480\n"
-                        "   ```\n\n"
-                        "⚠️ Si tira error, asegurate de tener Steam abierto antes de mandar el comando."
-                    )
                     ok = False
+                    msg = ""
                     try:
                         channel = bot.get_channel(target_cid)
                         if channel is None:
                             channel = await bot.fetch_channel(target_cid)
                         if channel:
-                            await channel.send(guide)
+                            _mgr = _init_image_mgr()
+                            _img_path = _mgr.get_image_path(
+                                "2ed104f9-c1f2-4ed6-aebc-76083b539f96"
+                            )
+                            if _img_path and _img_path.exists():
+                                await channel.send(
+                                    file=discord.File(
+                                        str(_img_path),
+                                        filename="spacewar_guide.png",
+                                    )
+                                )
                             ok = True
                             msg = "guide sent"
                         else:

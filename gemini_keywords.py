@@ -115,6 +115,12 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "steam://run/480",
         "necesito spacewar en la biblioteca",
         "agregá spacewar",
+        "juego con spacewar en linux",
+        "winedlloverrides spacewar",
+        "onlinefix spacewar linux",
+        "launch options spacewar",
+        "ge-proton spacewar",
+        "spacewar compatibilidad",
     ],
     "use_image": [
         "mostrá la imagen de",

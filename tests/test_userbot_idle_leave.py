@@ -3,6 +3,7 @@ the guild goes quiet, then disconnects. Any human (re)joining cancels the
 pending disconnect. The wake-up re-checks the state so a race-late join
 doesn't get abandoned. Timers are kept per-guild so multiple guilds don't
 interfere."""
+
 from __future__ import annotations
 
 import asyncio
@@ -43,8 +44,12 @@ def _extract_func_block(src_lines: list[str], names: list[str]) -> str:
             ln = src_lines[i]
             if ln and not ln.startswith((" ", "\t")):
                 # Top-level statement — end of body.
-                if (ln.startswith("def ") or ln.startswith("async def ")
-                        or ln.startswith("@") or ln.startswith("class ")):
+                if (
+                    ln.startswith("def ")
+                    or ln.startswith("async def ")
+                    or ln.startswith("@")
+                    or ln.startswith("class ")
+                ):
                     break
                 # A top-level non-def line also ends the body.
                 break
@@ -83,17 +88,21 @@ def _load_idle_leave_helpers(idle_seconds: float = 0.05):
         "discord": SimpleNamespace(Guild=object),
         "voice_recv": SimpleNamespace(VoiceRecvClient=object),
         "_idle_leave_tasks": {},
+        "_active_streams": {},
     }
 
-    block = _extract_func_block(lines, [
-        "_vc_for_guild",
-        "_channel_has_humans",
-        "_guild_has_humans",
-        "_cancel_idle_leave",
-        "_idle_leave_after_delay",
-        "_schedule_idle_leave",
-        "_leave_if_empty",
-    ])
+    block = _extract_func_block(
+        lines,
+        [
+            "_vc_for_guild",
+            "_channel_has_humans",
+            "_guild_has_humans",
+            "_cancel_idle_leave",
+            "_idle_leave_after_delay",
+            "_schedule_idle_leave",
+            "_leave_if_empty",
+        ],
+    )
     exec(block, ns)
     return ns, config_stub, client_stub, voice_clients_list
 
@@ -104,6 +113,7 @@ def _load_idle_leave_helpers(idle_seconds: float = 0.05):
 class _FakeVoiceClient:
     """Minimal VoiceClient stand-in: records disconnect/stop_listening
     invocations so tests can verify what happened."""
+
     def __init__(self, guild):
         self.guild = guild
         self.disconnected = False
@@ -123,7 +133,9 @@ class _FakeVoiceClient:
 
 def _make_guild(*, name="g", guild_id=1, channels=None):
     return SimpleNamespace(
-        id=guild_id, name=name, voice_channels=list(channels or []),
+        id=guild_id,
+        name=name,
+        voice_channels=list(channels or []),
     )
 
 
