@@ -367,6 +367,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
         log.info("[STREAM] stream start OK")
     except Exception as e:
         log.exception("[STREAM] stream start failed")
+        await stream.stop()
         return web.json_response({"error": str(e)}, status=500)
 
     _active_streams[guild_id] = stream
