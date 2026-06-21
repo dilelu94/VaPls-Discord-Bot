@@ -25,11 +25,14 @@ def test_dossier_keys_match_allowlist():
 def test_greeting_never_leaks_to_indio_prompt():
     """Los paths de greeting (e.g. 'hava-nagila-cut.mp3') están en USERS pero
     nunca deben aparecer en el bloque de long-term que ve Gemini."""
-    greetings = [
-        info["greeting"]
-        for info in USERS.values()
-        if isinstance(info, dict) and info.get("greeting")
-    ]
+    greetings = []
+    for info in USERS.values():
+        if isinstance(info, dict) and info.get("greeting"):
+            g = info["greeting"]
+            if isinstance(g, list):
+                greetings.extend(g)
+            else:
+                greetings.append(g)
     assert greetings, "expected at least one user with greeting in USERS"
 
     members = [

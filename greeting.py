@@ -50,6 +50,9 @@ def _resolve_greeting_path(user_id):
         Absolute or relative path to the greeting audio file.
     """
     rel = USERS.get(user_id, {}).get("greeting") if user_id is not None else None
+    if isinstance(rel, list) and rel:
+        import random
+        rel = random.choice(rel)
     if rel is None:
         rel = DEFAULT_GREETING
     return os.path.join(config.CUSTOM_AUDIO_PATH, rel)

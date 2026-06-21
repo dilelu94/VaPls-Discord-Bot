@@ -61,6 +61,10 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     211354006805676032: {
         "name": "Miles",
+        "greeting": [
+            "Miles/niconiconilovesyou-3_cutted.mp3",
+            "Miles/manteca-alonso.mp3"
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Leonel",
