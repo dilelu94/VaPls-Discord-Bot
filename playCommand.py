@@ -41,7 +41,7 @@ _downloadsDirInit = os.path.join(
 )
 if os.path.exists(_downloadsDirInit):
     for _f in os.listdir(_downloadsDirInit):
-        if _f.endswith(".mp3") or _f.endswith(".webm"):
+        if _f.endswith(".opus") or _f.endswith(".webm"):
             try:
                 os.remove(os.path.join(_downloadsDirInit, _f))
             except Exception:
@@ -1079,7 +1079,7 @@ class GuildPlayer:
             dl_dir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "downloads"
             )
-            fpath = os.path.join(dl_dir, f"{self.autodj_predownload_id}.mp3")
+            fpath = os.path.join(dl_dir, f"{self.autodj_predownload_id}.opus")
             try:
                 if os.path.exists(fpath):
                     os.remove(fpath)
@@ -1326,7 +1326,7 @@ class GuildPlayer:
         if videoId in self.downloadingIds:
             return
         filepath = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "downloads", f"{videoId}.mp3"
+            os.path.dirname(os.path.abspath(__file__)), "downloads", f"{videoId}.opus"
         )
         if os.path.exists(filepath):
             return
@@ -1350,7 +1350,7 @@ class GuildPlayer:
         args += [
             "-x",
             "--audio-format",
-            "mp3",
+            "opus",
             "--no-playlist",
             "-o",
             os.path.join(downloadsDir, "%(id)s.%(ext)s"),
@@ -1451,7 +1451,7 @@ class GuildPlayer:
             dl_dir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "downloads"
             )
-            fpath = os.path.join(dl_dir, f"{vetoed_id}.mp3")
+            fpath = os.path.join(dl_dir, f"{vetoed_id}.opus")
             try:
                 if os.path.exists(fpath):
                     os.remove(fpath)
@@ -1851,7 +1851,7 @@ class GuildPlayer:
             os.path.dirname(os.path.abspath(__file__)), "downloads"
         )
         os.makedirs(downloadsDir, exist_ok=True)
-        filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
+        filepath = os.path.join(downloadsDir, f"{videoId}.opus")
 
         # Guild is sourced from the bot (not self.vc) because we may not be
         # connected yet — the connect is deferred until after the download.
@@ -1892,7 +1892,7 @@ class GuildPlayer:
                 ytDlpArgs += [
                     "-x",
                     "--audio-format",
-                    "mp3",
+                    "opus",
                     "--no-playlist",
                     "-o",
                     os.path.join(downloadsDir, "%(id)s.%(ext)s"),
@@ -2241,7 +2241,7 @@ class GuildPlayer:
             downloadsDir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "downloads"
             )
-            filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
+            filepath = os.path.join(downloadsDir, f"{videoId}.opus")
             try:
                 if os.path.exists(filepath):
                     fileSize = os.path.getsize(filepath)
@@ -2319,7 +2319,7 @@ class GuildPlayer:
                 path = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
                     "downloads",
-                    f"{vid}.mp3",
+                    f"{vid}.opus",
                 )
                 if not os.path.exists(path) and vid not in self.downloadingIds:
                     targetSong = song
@@ -2334,7 +2334,7 @@ class GuildPlayer:
             downloadsDir = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "downloads"
             )
-            filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
+            filepath = os.path.join(downloadsDir, f"{videoId}.opus")
 
             self.downloadingIds.add(videoId)
             playLogger.info(
@@ -2358,7 +2358,7 @@ class GuildPlayer:
                 ytDlpArgs += [
                     "-x",
                     "--audio-format",
-                    "mp3",
+                    "opus",
                     "--no-playlist",
                     "-o",
                     os.path.join(downloadsDir, "%(id)s.%(ext)s"),
@@ -3112,7 +3112,7 @@ def clearGuildPlayer(guildId: int):
             filesToDelete.append(song["id"])
 
         for videoId in filesToDelete:
-            filepath = os.path.join(downloadsDir, f"{videoId}.mp3")
+            filepath = os.path.join(downloadsDir, f"{videoId}.opus")
             webmpath = os.path.join(downloadsDir, f"{videoId}.webm")
             try:
                 if os.path.exists(filepath):
@@ -3804,7 +3804,7 @@ async def playSoundFromIndio(bot, guild_id: int, sound_query: str) -> tuple[bool
     matches: list[str] = []
     for dirpath, _dirs, files in os.walk(root):
         for f in files:
-            if not f.lower().endswith((".mp3", ".wav", ".ogg", ".m4a", ".flac")):
+            if not f.lower().endswith((".opus", ".wav", ".ogg", ".m4a", ".flac")):
                 continue
             if needle in f.lower():
                 matches.append(os.path.join(dirpath, f))
