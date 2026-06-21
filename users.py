@@ -93,7 +93,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     189830039922016256: {
         "name": "Viny",
-        "greeting": "Audios/ay-ay-necesito-pito.mp3",
+        "greeting": [
+            {
+                "path": "Audios/ay-ay-necesito-pito.mp3",
+                "weight": 99
+            },
+            {
+                "path": "Audios/el-monte-everest-no-tiene-nada-en-contra-de-mi_cut_025338.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Juan",
