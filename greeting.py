@@ -52,7 +52,19 @@ def _resolve_greeting_path(user_id):
     rel = USERS.get(user_id, {}).get("greeting") if user_id is not None else None
     if isinstance(rel, list) and rel:
         import random
-        rel = random.choice(rel)
+        paths = []
+        weights = []
+        for item in rel:
+            if isinstance(item, dict) and "path" in item:
+                paths.append(item["path"])
+                weights.append(item.get("weight", 1))
+            elif isinstance(item, str):
+                paths.append(item)
+                weights.append(1)
+        if paths:
+            rel = random.choices(paths, weights=weights, k=1)[0]
+        else:
+            rel = None
     if rel is None:
         rel = DEFAULT_GREETING
     return os.path.join(config.CUSTOM_AUDIO_PATH, rel)

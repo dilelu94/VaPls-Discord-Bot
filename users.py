@@ -235,7 +235,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     268872891729182720: {
         "name": "Mati",
-        "greeting": "Audios/Fart_with_reverb_sound_effect.wav",
+        "greeting": [
+            {
+                "path": "Audios/Fart_with_reverb_sound_effect.wav",
+                "weight": 99
+            },
+            {
+                "path": "Audios/oniiiiiiiiiiiii.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Matias",

@@ -30,7 +30,11 @@ def test_greeting_never_leaks_to_indio_prompt():
         if isinstance(info, dict) and info.get("greeting"):
             g = info["greeting"]
             if isinstance(g, list):
-                greetings.extend(g)
+                for item in g:
+                    if isinstance(item, dict) and "path" in item:
+                        greetings.append(item["path"])
+                    elif isinstance(item, str):
+                        greetings.append(item)
             else:
                 greetings.append(g)
     assert greetings, "expected at least one user with greeting in USERS"
