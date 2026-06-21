@@ -97,24 +97,13 @@ async def safe_defer(ctx, ephemeral: bool = False):
         return False
 
 
-async def safe_respond(ctx, message, ephemeral: bool = False):
-    """Send a response or follow-up safely.
-
-    Args:
-        ctx: Discord command context/interaction wrapper.
-        message: Message content to send.
-
-    Side Effects:
-        Sends a message to Discord.
-
-    Async:
-        This function is a coroutine and must be awaited.
-    """
+async def safe_respond(ctx, message, ephemeral: bool = False, view=None):
+    """Send a response or follow-up safely."""
     try:
         if ctx.response.is_done():
-            await ctx.followup.send(message, ephemeral=ephemeral)
+            return await ctx.followup.send(message, ephemeral=ephemeral, view=view)
         else:
-            await ctx.respond(message, ephemeral=ephemeral)
+            return await ctx.respond(message, ephemeral=ephemeral, view=view)
     except Exception:
         pass
 
@@ -1684,6 +1673,25 @@ class StreamControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.guild_id = guild_id
         self.is_paused = False
+        self.message: discord.Message | None = None
+        self._checker_task = asyncio.create_task(self._check_loop())
+
+    async def _check_loop(self):
+        try:
+            await asyncio.sleep(5)
+            while True:
+                await asyncio.sleep(15)
+                success = await _send_stream_control(self.guild_id, "status")
+                if not success:
+                    if self.message:
+                        try:
+                            await self.message.edit(view=None)
+                        except Exception:
+                            pass
+                    self.stop()
+                    break
+        except asyncio.CancelledError:
+            pass
 
     @discord.ui.button(label="⏸ Pausa / ▶ Reanudar", style=discord.ButtonStyle.primary, custom_id="stream_pause_toggle")
     async def toggle_pause(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -1704,10 +1712,13 @@ class StreamControlView(discord.ui.View):
         await interaction.response.send_message("⏹ Deteniendo el stream...", ephemeral=True, delete_after=3)
         ctx = type('Obj', (object,), {'guild_id': self.guild_id, 'respond': interaction.followup.send})()
         await stopstream(ctx)
-        for child in self.children:
-            child.disabled = True
+        
+        self.stop()
+        if self._checker_task:
+            self._checker_task.cancel()
+            
         try:
-            await interaction.edit_original_response(view=self)
+            await interaction.edit_original_response(view=None)
         except Exception:
             pass
 
@@ -1747,10 +1758,11 @@ class IptvSearchView(discord.ui.View):
 
     PAGE_SIZE = 25
 
-    def __init__(self, channels: list[iptv.Channel], voice_channel: discord.VoiceChannel):
+    def __init__(self, channels: list[iptv.Channel], voice_channel: discord.VoiceChannel, redirect_ch=None):
         super().__init__(timeout=180)
         self.channels = channels
         self.voice_channel = voice_channel
+        self.redirect_ch = redirect_ch
         self.selected_language = "es"
         self.selected_category = "all"
         self.selected_channel_idx: int | None = None
@@ -2028,7 +2040,21 @@ class IptvSearchView(discord.ui.View):
         )
 
         if success:
-            await self.update_message(interaction, status_text=f"🟢 {status_msg}")
+            view = StreamControlView(interaction.guild_id) if not _is_live else None
+            if self.redirect_ch:
+                msg = await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}", view=view)
+                if view:
+                    view.message = msg
+                await self.update_message(interaction, status_text=f"🟢 Transmisión iniciada en {voice_channel.name}")
+            else:
+                await interaction.edit_original_response(
+                    content=f"🟢 {status_msg}", embed=None, view=view
+                )
+                if view:
+                    try:
+                        view.message = await interaction.original_response()
+                    except Exception:
+                        pass
         else:
             await self.update_message(interaction, status_text=f"🔴 Error: {status_msg}")
 
@@ -2036,10 +2062,11 @@ class IptvSearchView(discord.ui.View):
 class IptvMultiSourceView(discord.ui.View):
     """Shows numbered buttons for multiple IPTV sources with the same name."""
 
-    def __init__(self, results: list[iptv.Channel], voice_channel: discord.VoiceChannel):
+    def __init__(self, results: list[iptv.Channel], voice_channel: discord.VoiceChannel, redirect_ch=None):
         super().__init__(timeout=60)
         self.results = results
         self.voice_channel = voice_channel
+        self.redirect_ch = redirect_ch
 
         lang_emoji = {"es": "🇪🇸", "en": "🇺🇸"}
         num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
@@ -2099,9 +2126,23 @@ class IptvMultiSourceView(discord.ui.View):
             )
 
             if success:
-                await interaction.edit_original_response(
-                    content=f"🟢 {status_msg}", embed=None, view=None
-                )
+                view = StreamControlView(interaction.guild_id) if not _is_live else None
+                if self.redirect_ch:
+                    msg = await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}", view=view)
+                    if view:
+                        view.message = msg
+                    await interaction.edit_original_response(
+                        content=f"🟢 Transmisión iniciada en {voice_channel.name}", embed=None, view=None
+                    )
+                else:
+                    await interaction.edit_original_response(
+                        content=f"🟢 {status_msg}", embed=None, view=view
+                    )
+                    if view:
+                        try:
+                            view.message = await interaction.original_response()
+                        except Exception:
+                            pass
             else:
                 await interaction.edit_original_response(
                     content=f"🔴 {status_msg}", embed=None, view=None
@@ -2134,7 +2175,23 @@ async def stream(
         the caller's voice channel, and starts transcoding the M3U8
         stream with FFmpeg + libopenh264.
     """
-    await safe_defer(ctx)
+    will_redirect = (
+        config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    )
+    await safe_defer(ctx, ephemeral=will_redirect)
+    redirect_ch = None
+    if will_redirect:
+        try:
+            await ctx.interaction.edit_original_response(
+                content=f"musica en <#{config.INDIO_PLAY_CHANNEL_ID}>"
+            )
+        except Exception:
+            pass
+        if ctx.guild:
+            ch = ctx.guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+            if ch is not None and hasattr(ch, "send"):
+                redirect_ch = ch
+
     _track_command(ctx, "stream", {"query_length": len(canal or "")})
 
     voice_state = getattr(ctx.author, "voice", None)
@@ -2151,7 +2208,7 @@ async def stream(
             if not channels:
                 await safe_respond(ctx, "❌ No se pudieron cargar los canales de IPTV.")
                 return
-            view = IptvSearchView(channels, voice_channel)
+            view = IptvSearchView(channels, voice_channel, redirect_ch=redirect_ch)
             await ctx.interaction.edit_original_response(
                 embed=discord.Embed(
                     title="📺 Buscador de Canales IPTV",
@@ -2181,7 +2238,7 @@ async def stream(
 
         ch = results[0]
         if len(results) > 1:
-            view = IptvMultiSourceView(results, voice_channel)
+            view = IptvMultiSourceView(results, voice_channel, redirect_ch=redirect_ch)
             embed = discord.Embed(
                 title=f'📺 {len(results)} fuentes para "{canal}"',
                 description="Elegí una fuente para transmitir:",
@@ -2208,9 +2265,22 @@ async def stream(
 
     if success:
         view = StreamControlView(ctx.guild_id) if not is_live else None
-        await safe_respond(ctx, status_msg, view=view)
+        if redirect_ch:
+            msg = await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}", view=view)
+            if view:
+                view.message = msg
+        else:
+            await safe_respond(ctx, status_msg, view=view)
+            if view:
+                try:
+                    view.message = await ctx.interaction.original_response()
+                except Exception:
+                    pass
     else:
-        await safe_respond(ctx, status_msg)
+        if redirect_ch:
+            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
+        else:
+            await safe_respond(ctx, status_msg)
 
 
 @bot.slash_command(

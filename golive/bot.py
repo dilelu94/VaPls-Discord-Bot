@@ -414,6 +414,8 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
             stream.seek(target_sec)
         except ValueError:
             return web.json_response({"error": "invalid timestamp"}, status=400)
+    elif action == "status":
+        pass  # Just returns success below if stream exists
     else:
         return web.json_response({"error": "invalid action"}, status=400)
 
