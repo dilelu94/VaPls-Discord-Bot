@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import random
 import re
 import tempfile
 import time
@@ -114,7 +115,8 @@ vos sos el de Quilmes, el bombero" o "Miles el programador de Independiente" \
 cada vez que te hablan — eso es robótico y queda raro. Usá esa info como \
 trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
 hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
-lo pide naturalmente. \
+lo pide naturalmente. Variá entre distintas anécdotas de cada persona — no \
+siempre el mismo chiste para el mismo amigo. \
 
 REGLAS ESTRICTAS para tools de música/sonido: NO uses NINGUNA tool a menos \
 que el usuario te esté dando una orden DIRECTA de reproducción. Preguntas, \
@@ -2023,6 +2025,16 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
         if friends:
             sections.append("Mis amigos son: " + ", ".join(friends) + ".")
     lt = lt or {}
+    # Build set of group-level anecdotes for cross-section dedup
+    group_anec = set()
+    for e in (_GROUP_LORE.get("eventos_del_grupo") or []):
+        group_anec.add(_strip_accents_lower(str(e)))
+    for e in (_GROUP_LORE.get("chistes_internos") or []):
+        group_anec.add(_strip_accents_lower(str(e)))
+    for e in (lt.get("eventos_del_grupo") or []):
+        group_anec.add(_strip_accents_lower(str(e)))
+    for e in (lt.get("chistes_internos") or []):
+        group_anec.add(_strip_accents_lower(str(e)))
     user_dossiers = _merge_user_dossiers(lt.get("users") or {})
     if user_dossiers:
         user_lines = ["Lo que sabés de cada uno:"]
@@ -2039,10 +2051,17 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
                 chunk.append(f"   descripción física: {'; '.join(desc)}")
             if fotos:
                 chunk.append(f"   fotos/aspecto: {'; '.join(fotos)}")
+            # Randomly sample preguntas_tipicas: sometimes 0, sometimes 1
             if qs:
-                chunk.append(f"   suele preguntar sobre: {'; '.join(qs)}")
+                if random.random() < 0.5:
+                    chunk.append(f"   suele preguntar sobre: {'; '.join(random.sample(qs, 1))}")
+            # Randomly sample anecdotas: sometimes 0, sometimes 1
             if anec:
-                chunk.append(f"   anécdotas: {'; '.join(anec)}")
+                filtered = [a for a in anec if _strip_accents_lower(a) not in group_anec]
+                pick = filtered or anec
+                if pick and random.random() < 0.5:
+                    chosen = [random.choice(pick)]
+                    chunk.append(f"   anécdotas: {'; '.join(chosen)}")
             if len(chunk) > 1:
                 user_lines.extend(chunk)
         if len(user_lines) > 1:

@@ -215,6 +215,7 @@ class GoLiveStream:
 
 
 _active_streams: dict[int, GoLiveStream] = {}
+_nick_restore_tasks: dict[int, asyncio.Task] = {}
 
 DEFAULT_NICKNAME = "GoLive - VaPls"
 
@@ -349,6 +350,9 @@ async def _relay_stream(request: web.Request) -> web.Response:
 
     _active_streams[guild_id] = stream
     if stream_title:
+        task = _nick_restore_tasks.pop(guild_id, None)
+        if task:
+            task.cancel()
         await _set_nickname(guild, f"GoLive - {stream_title}")
     log.info("[STREAM] started guild=%s channel=%s", guild_id, channel.name)
     return web.json_response(
@@ -386,7 +390,15 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
 
     guild = client.get_guild(guild_id)
     if guild:
-        await _set_nickname(guild, DEFAULT_NICKNAME)
+        async def _delayed_restore():
+            await asyncio.sleep(30)
+            await _set_nickname(guild, DEFAULT_NICKNAME)
+            _nick_restore_tasks.pop(guild_id, None)
+
+        task = _nick_restore_tasks.get(guild_id)
+        if task:
+            task.cancel()
+        _nick_restore_tasks[guild_id] = asyncio.create_task(_delayed_restore())
 
     log.info("[STOPSTREAM] stopped guild=%s", guild_id)
     return web.json_response({"stopped": True, "guild_id": guild_id})
