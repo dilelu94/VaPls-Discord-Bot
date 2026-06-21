@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import sys
-import time
 from typing import Optional
 
 import aiohttp
@@ -140,36 +139,16 @@ class GoLiveStream:
         self._inactivity_task = asyncio.create_task(self._inactivity_loop())
 
     async def _inactivity_loop(self):
-        """Check every 30s: auto-stop on natural end or 5 min no viewers."""
-        empty_since = None
+        """Every 30s: auto-stop on natural end only."""
         try:
             while not self._stopped:
                 await asyncio.sleep(30)
                 if self._stopped:
                     break
 
-                # Natural end: video player thread exited
                 if self.video_player and not self.video_player.is_alive():
                     log.info("[STREAM] Video player ended naturally — auto-stopping")
                     break
-
-                # Inactivity: no other members in voice channel for 5 min
-                try:
-                    ch = self.vc.channel
-                    if ch is not None:
-                        others = [m for m in ch.members if m.id != client.user.id]
-                        if not others:
-                            if empty_since is None:
-                                empty_since = time.monotonic()
-                            elif time.monotonic() - empty_since >= 300:
-                                log.info(
-                                    "[STREAM] No viewers for 5 min — auto-stopping"
-                                )
-                                break
-                        else:
-                            empty_since = None
-                except Exception:
-                    log.warning("[STREAM] inactivity member check error", exc_info=True)
         except asyncio.CancelledError:
             return
 
