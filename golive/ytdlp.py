@@ -46,7 +46,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
             "no_warnings": True,
             "noplaylist": True,
             "remote_components": ["ejs:github"],
-            "format": "bestvideo[height<=1080][fps<=60]+bestaudio/best",
+            "format": "best",
         }
         cookies = _get_cookies_path()
         if cookies:
