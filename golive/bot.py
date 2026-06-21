@@ -56,14 +56,12 @@ class GoLiveStream:
         self.conn = None
         self.video_player = None
         self.audio_sender = None
-        self.tmp_dir = None
         self.video_ssrc = None
         self._stopped = False
         self._inactivity_task = None
 
     async def start(self):
-        import tempfile
-        from ytdlp import _yt_extract_live_url, _yt_download, _yt_remove_dir
+        from ytdlp import _yt_extract_url
         
         target_url = self.url
         title = "Stream"
@@ -75,30 +73,18 @@ class GoLiveStream:
             if _path.endswith((".m3u8", ".mpd", ".m3u")):
                 log.info("[STREAM] Direct stream URL detected — skipping yt-dlp")
             else:
-                log.info("[STREAM] Checking live status via yt-dlp for %s", target_url)
+                log.info("[STREAM] Checking stream URL via yt-dlp for %s", target_url)
                 try:
-                    live_res = await _yt_extract_live_url(target_url)
+                    res = await _yt_extract_url(target_url)
                 except Exception as e:
-                    log.warning("[STREAM] live check failed: %s", e)
-                    live_res = None
+                    log.warning("[STREAM] yt-dlp extraction failed: %s", e)
+                    res = None
 
-                if live_res:
-                    target_url, title = live_res
-                    log.info("[STREAM] Live stream detected: %s -> %s", title, target_url)
+                if res:
+                    target_url, title, is_live = res
+                    log.info("[STREAM] Extracted stream: %s -> %s (live=%s)", title, target_url, is_live)
                 else:
-                    log.info("[STREAM] VOD stream detected. Downloading via yt-dlp...")
-                    self.tmp_dir = tempfile.mkdtemp(prefix="golive_yt_")
-                    try:
-                        file_path, title = await _yt_download(self.url, self.tmp_dir)
-                        target_url = file_path
-                        is_live = False
-                        log.info("[STREAM] Download complete: %s -> %s", title, target_url)
-                    except Exception as e:
-                        log.exception("[STREAM] Download failed")
-                        if self.tmp_dir:
-                            _yt_remove_dir(self.tmp_dir)
-                            self.tmp_dir = None
-                        raise RuntimeError(f"Download failed: {e}")
+                    raise RuntimeError("Failed to extract stream URL via yt-dlp")
         
         log.info("[STREAM] Establishing GoLive connection...")
         self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
@@ -180,11 +166,6 @@ class GoLiveStream:
         if self.conn:
             try:
                 await self.conn.disconnect()
-            except Exception:
-                pass
-        if self.tmp_dir:
-            try:
-                _yt_remove_dir(self.tmp_dir)
             except Exception:
                 pass
 
