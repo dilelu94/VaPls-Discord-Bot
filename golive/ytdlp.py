@@ -46,7 +46,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
             "no_warnings": True,
             "noplaylist": True,
             "remote_components": ["ejs:github"],
-            "format": "best",
+            "format": "bestvideo[height<=1080][fps<=60]+bestaudio/best",
         }
         cookies = _get_cookies_path()
         if cookies:
@@ -75,6 +75,11 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
         if hls:
             best = max(hls, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
             return best["url"], title, is_live
+
+        if info.get("requested_formats"):
+            req = info["requested_formats"]
+            if len(req) == 2:
+                return (req[0]["url"], req[1]["url"]), title, is_live
 
         if info.get("url"):
             return info["url"], title, is_live

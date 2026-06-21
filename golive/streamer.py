@@ -912,7 +912,17 @@ class H264VideoPlayer(threading.Thread):
         pre_input = list(enc.pre_input)
         if self._start_time > 0:
             pre_input.extend(["-ss", str(self._start_time)])
-        is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+        
+        input_args = []
+        if isinstance(self._url, (tuple, list)):
+            for u in self._url:
+                input_args.extend(["-i", u])
+            is_url = True
+            audio_map_idx = 1
+        else:
+            input_args = ["-i", self._url]
+            is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+            audio_map_idx = 0
         # Pace a local VOD file at native rate so FFmpeg emits audio+video in
         # lockstep at real time instead of racing ahead and bursting — tighter
         # A/V sync and smoother delivery. Live inputs / URLs are already
@@ -952,13 +962,12 @@ class H264VideoPlayer(threading.Thread):
             fflags,
             *rate_args,
             *reconnect_args,
-            "-i",
-            self._url,
+            *input_args,
             *video_out_args,
             # Audio → FIFO consumed by _AudioPipeSource in stream.py.
             # If the source has no audio track (some IPTV streams are video-only,
             # or audio lives in a separate HLS rendition FFmpeg doesn't auto-select),
-            # inject a lavfi silence source as input 1 so the FIFO writer always
+            # inject a lavfi silence source as input so the FIFO writer always
             # exists and GoLiveAudioSender doesn't hang waiting for data.
             *(
                 []
@@ -966,7 +975,7 @@ class H264VideoPlayer(threading.Thread):
                 else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
             ),
             "-map",
-            "0:a:0" if self._audio else "1:a:0",
+            f"{audio_map_idx}:a:0" if self._audio else f"{len(self._url) if isinstance(self._url, (tuple, list)) else 1}:a:0",
             "-c:a",
             "pcm_s16le",
             "-ar",
