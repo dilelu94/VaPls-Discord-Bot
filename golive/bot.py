@@ -152,7 +152,6 @@ class GoLiveStream:
             self._inactivity_task = None
 
         log.info("[STREAM] Stopping stream...")
-        from ytdlp import _yt_remove_dir
         if self.video_player:
             try:
                 self.video_player.stop()
