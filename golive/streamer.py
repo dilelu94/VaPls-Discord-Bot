@@ -1100,6 +1100,10 @@ class H264VideoPlayer(threading.Thread):
         _safe = urlunparse(
             _p._replace(netloc=(_p.hostname or "") + (f":{_p.port}" if _p.port else ""))
         )
+        _pace = _packet_pace_fraction()
+        if _pace > 0:
+            log.info("packet pacing active: spreading each frame's pkts across %.0f%% of frame interval", _pace * 100)
+
         log.info("Starting H.264 video stream from %s", _safe)
         # Log the encoder and full FFmpeg command (URL redacted) so the active
         # encoder is verifiable from the logs, including after a fallback retry.
@@ -1153,21 +1157,24 @@ class H264VideoPlayer(threading.Thread):
         _stats_read_block = 0.0
         _stats_pkts0 = 0
 
+        pace = _packet_pace_fraction()
+
         def _flush_stats(now: float) -> None:
             nonlocal _stats_t0, _stats_frames, _stats_late, _stats_late_total
             nonlocal _stats_late_max, _stats_read_block, _stats_pkts0
             window = now - _stats_t0
             if window <= 0:
                 return
+            pct = f" | pace {pace*100:.0f}%" if pace > 0 else ""
             log.info(
                 "video stats: %.1f fps (target %.0f) | late %d/%d frames "
                 "(max %.0f ms, total %.0f ms) | ffmpeg read-block %.0f ms / %.1fs "
-                "| %d pkts",
+                "| %d pkts%s",
                 _stats_frames / window, self._fps,
                 _stats_late, _stats_frames,
                 _stats_late_max * 1000, _stats_late_total * 1000,
                 _stats_read_block * 1000, window,
-                self._packets_sent - _stats_pkts0,
+                self._packets_sent - _stats_pkts0, pct,
             )
             _stats_t0 = now
             _stats_frames = 0
