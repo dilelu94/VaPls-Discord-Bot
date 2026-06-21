@@ -1656,7 +1656,7 @@ class IptvSearchModal(discord.ui.Modal):
         query = self.children[0].value.strip() if self.children[0].value else ""
         self.parent_view.search_query = query or None
         self.parent_view.current_page = 0
-        self.parent_view.selected_channel_name = None
+        self.parent_view.selected_channel_idx = None
         self.parent_view.setup_components()
         await self.parent_view.update_message(interaction)
 
@@ -1677,7 +1677,7 @@ class IptvSearchView(discord.ui.View):
         self.voice_channel = voice_channel
         self.selected_language = "es"
         self.selected_category = "all"
-        self.selected_channel_name = None
+        self.selected_channel_idx: int | None = None
         self.search_query: str | None = None
         self.current_page = 0
         self.setup_components()
@@ -1754,13 +1754,14 @@ class IptvSearchView(discord.ui.View):
 
         if page_channels:
             channel_options = []
-            for ch in page_channels:
+            for i, ch in enumerate(page_channels):
+                idx = start + i
                 label = ch.name[:100]
                 channel_options.append(
                     discord.SelectOption(
                         label=label,
-                        value=ch.name,
-                        default=(ch.name == self.selected_channel_name),
+                        value=str(idx),
+                        default=(idx == self.selected_channel_idx),
                     )
                 )
             page_label = f"Pág {self.current_page + 1}/{total_pages}" if total_pages > 1 else ""
@@ -1887,21 +1888,21 @@ class IptvSearchView(discord.ui.View):
 
     async def on_lang_select(self, interaction: discord.Interaction):
         self.selected_language = interaction.data["values"][0]
-        self.selected_channel_name = None
+        self.selected_channel_idx = None
         self.current_page = 0
         self.setup_components()
         await self.update_message(interaction)
 
     async def on_cat_select(self, interaction: discord.Interaction):
         self.selected_category = interaction.data["values"][0]
-        self.selected_channel_name = None
+        self.selected_channel_idx = None
         self.current_page = 0
         self.setup_components()
         await self.update_message(interaction)
 
     async def on_prev_page(self, interaction: discord.Interaction):
         self.current_page = max(0, self.current_page - 1)
-        self.selected_channel_name = None
+        self.selected_channel_idx = None
         self.setup_components()
         await self.update_message(interaction)
 
@@ -1909,7 +1910,7 @@ class IptvSearchView(discord.ui.View):
         filtered = self.get_filtered_channels()
         max_page = self._total_pages(len(filtered)) - 1
         self.current_page = min(max_page, self.current_page + 1)
-        self.selected_channel_name = None
+        self.selected_channel_idx = None
         self.setup_components()
         await self.update_message(interaction)
 
@@ -1919,19 +1920,20 @@ class IptvSearchView(discord.ui.View):
     async def on_clear_search(self, interaction: discord.Interaction):
         self.search_query = None
         self.current_page = 0
-        self.selected_channel_name = None
+        self.selected_channel_idx = None
         self.setup_components()
         await self.update_message(interaction)
 
     async def on_channel_select(self, interaction: discord.Interaction):
-        selected_name = interaction.data["values"][0]
-        self.selected_channel_name = selected_name
+        selected_idx = int(interaction.data["values"][0])
+        self.selected_channel_idx = selected_idx
         self.setup_components()
 
-        ch = next((c for c in self.channels if c.name == selected_name), None)
-        if not ch:
-            await interaction.response.send_message("❌ Error: No se encontró el canal seleccionado.", ephemeral=True)
+        filtered = self.get_filtered_channels()
+        if selected_idx < 0 or selected_idx >= len(filtered):
+            await interaction.response.send_message("❌ Error: Canal no encontrado.", ephemeral=True)
             return
+        ch = filtered[selected_idx]
 
         voice_state = getattr(interaction.user, "voice", None)
         voice_channel = getattr(voice_state, "channel", None) if voice_state else None
