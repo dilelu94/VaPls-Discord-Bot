@@ -271,10 +271,70 @@ Common errors:
 - `409` – no active voice channel and no users to auto-pick
 - `500` – Discord or playback failure
 
-## Transcript forwarding
+## Telegram memory pipeline
 
-The userbot can POST transcripts to `BOT_API_BASE/transcript`, but this handler
-is **not** implemented in `apiServer.py` and must be added separately.
+Endpoints called by the Telegram bridge (`vapls-telegram-bot`) to feed messages
+into the Indio's long-term memory.
+
+### POST `/telegram-message`
+
+Injects a text message into Indio's per-guild conversation history (no reply is
+generated — Indio only "listens"). Periodic compression will distill it into
+long-term notes (traits, anecdotes, inside jokes).
+
+**Body (JSON)**
+
+```json
+{
+  "guild_id": 451575911704428554,
+  "speaker": "Mati",
+  "text": "hola que hace",
+  "ts": 1712345678.0
+}
+```
+
+- `guild_id` (required) — the Discord guild whose Indio memory bucket to use.
+- `speaker` (required) — the display name (Telegram name, Discord name, or any
+  label the Indio will recognize).
+- `text` (required) — the message content.
+- `ts` (optional, default `time.time()`) — Unix timestamp of the original
+  message. Keeps the temporal ordering correct during compression.
+
+**Response**
+
+```json
+{ "ok": true }
+```
+
+Processing is fire-and-forget (`asyncio.create_task`). The endpoint returns
+immediately.
+
+### POST `/telegram-image`
+
+Receives an image from the Telegram bridge, sends it to Gemini for a short
+textual description, then injects the description into Indio's history as
+`"{speaker}: [imagen: {description}]"`.
+
+**Body (multipart/form-data)**
+
+- `guild_id` (required) — Discord guild ID.
+- `speaker` (required) — display name.
+- `ts` (optional) — Unix timestamp.
+- `file` (required) — image binary (JPEG, PNG, GIF, or WebP).
+
+**Response**
+
+```json
+{
+  "ok": true,
+  "description": "una gata naranja durmiendo en un teclado"
+}
+```
+
+The description is truncated to 200 characters in the response for display
+purposes; the full description is stored in Indio's memory.
+
+## Transcript forwarding
 
 ---
 

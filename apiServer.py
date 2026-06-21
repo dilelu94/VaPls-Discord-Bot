@@ -1283,6 +1283,93 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         return web.json_response({"ok": True, "skipped": f"action={action}"})
 
+    # ---- Telegram message pipeline ----------------------------------------
+
+    async def telegramMessage(request: web.Request) -> web.Response:
+        """Receive a text message from the Telegram bridge and inject it
+        into Indio's per-guild memory.
+
+        Body JSON: {guild_id, speaker, text, ts}
+        """
+        try:
+            data = await request.json()
+            guild_id = int(data["guild_id"])
+            speaker = str(data["speaker"])
+            text = str(data["text"])
+            ts = float(data.get("ts", time.time()))
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        if not text.strip():
+            return web.json_response({"error": "empty text"}, status=400)
+
+        asyncio.create_task(
+            geminiCommand.inject_telegram_message(
+                guild_id=guild_id, speaker=speaker, text=text.strip(), ts=ts
+            )
+        )
+        return web.json_response({"ok": True})
+
+    async def telegramImage(request: web.Request) -> web.Response:
+        """Receive an image from the Telegram bridge, describe it via Gemini,
+        and inject the description into Indio's per-guild memory.
+
+        Multipart fields: guild_id, speaker, ts, file
+        """
+        if not request.content_type.startswith("multipart/"):
+            return web.json_response({"error": "expected multipart"}, status=400)
+
+        reader = await request.multipart()
+        guild_id: Optional[int] = None
+        speaker: Optional[str] = None
+        ts: float = time.time()
+        file_bytes: Optional[bytes] = None
+        mime_type: str = "image/jpeg"
+
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            if part.name == "guild_id":
+                try:
+                    guild_id = int((await part.read()).decode())
+                except (ValueError, TypeError):
+                    pass
+            elif part.name == "speaker":
+                speaker = (await part.read()).decode().strip()
+            elif part.name == "ts":
+                try:
+                    ts = float((await part.read()).decode())
+                except (ValueError, TypeError):
+                    pass
+            elif part.name == "file":
+                raw = await part.read()
+                if raw:
+                    file_bytes = raw
+                    if part.filename:
+                        ext = os.path.splitext(part.filename.lower())[1]
+                        if ext in (".png",):
+                            mime_type = "image/png"
+                        elif ext in (".gif",):
+                            mime_type = "image/gif"
+                        elif ext in (".webp",):
+                            mime_type = "image/webp"
+
+        if guild_id is None or speaker is None or file_bytes is None:
+            return web.json_response({"error": "missing guild_id, speaker, or file"}, status=400)
+
+        # Describe the image asynchronously
+        description = await geminiCommand.describe_image(file_bytes, mime_type)
+        text = f"[imagen: {description}]"
+        logger.info(
+            "telegram image from %s -> %r", speaker, description[:100]
+        )
+        asyncio.create_task(
+            geminiCommand.inject_telegram_message(
+                guild_id=guild_id, speaker=speaker, text=text, ts=ts
+            )
+        )
+        return web.json_response({"ok": True, "description": description[:200]})
+
     # ---- MMR Admin routes (Basic Auth) --------------------------------
 
     async def adminPage(request: web.Request) -> web.Response:
@@ -1610,6 +1697,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/channels", textChannels)
     app.router.add_get("/last-voice", lastVoice)
     app.router.add_post("/github-webhook", githubWebhook)
+    app.router.add_post("/telegram-message", telegramMessage)
+    app.router.add_post("/telegram-image", telegramImage)
     return app
 
 

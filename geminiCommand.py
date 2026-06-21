@@ -5360,6 +5360,68 @@ async def askIndio(
     return True
 
 
+# ---- Telegram memory pipeline -----------------------------------------------
+
+
+async def inject_telegram_message(
+    guild_id: int,
+    speaker: str,
+    text: str,
+    ts: float,
+) -> None:
+    """Inject a Telegram message into Indio's per-guild memory.
+
+    The message is appended as a user turn (no model turn — Indio does not
+    reply).  Periodic compression will distill it into long-term notes.
+    """
+    mem_key = f"guild-{guild_id}"
+    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    sanitized = _sanitize_for_history(f"{speaker}: {text}")
+    user_turn: dict = {
+        "role": "user",
+        "parts": [{"text": sanitized[:_STORED_MSG_MAX_CHARS]}],
+        "ts": ts,
+    }
+    async with lock:
+        history = list(_indio_history.get(mem_key, []))
+        history.append(user_turn)
+        _indio_history[mem_key] = history
+        _indio_last_seen[mem_key] = ts
+        size = len(history)
+    await _persist_indio_state()
+    if size >= _HISTORY_COMPRESS_THRESHOLD:
+        _spawn(_maybe_compress(mem_key))
+    logger.info(
+        "injected telegram message from %s (%d chars, mem=%s, hist=%d)",
+        speaker,
+        len(text),
+        mem_key,
+        size,
+    )
+
+
+async def describe_image(file_bytes: bytes, mime_type: str = "image/jpeg") -> str:
+    """Send an image to Gemini and return a short description."""
+    import base64
+
+    b64 = base64.b64encode(file_bytes).decode()
+    image_part = {"inlineData": {"mimeType": mime_type, "data": b64}}
+    prompt = "Describí esta imagen en 1-2 oraciones como si se la contaras a un amigo. Decí qué se ve."
+    try:
+        reply = await geminiClient.generate(
+            user_message=prompt,
+            system_instruction="Sos un amigo del grupo describiendo una imagen que compartió otro amigo.",
+            image_parts=[image_part],
+            max_output_tokens=200,
+        )
+        desc = reply.text.strip()
+        if desc:
+            return desc
+    except Exception:
+        logger.exception("describe_image failed")
+    return "(imagen sin descripción)"
+
+
 # Cargar el estado persistido al final, cuando todas las funciones helpers
 # (incluida _sanitize_for_history) ya estan definidas — sino la sanitizacion
 # de history al startup falla con NameError.
