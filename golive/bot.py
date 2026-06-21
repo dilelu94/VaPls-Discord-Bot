@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import sys
+import time
 from typing import Optional
 
 import aiohttp
@@ -58,6 +59,8 @@ class GoLiveStream:
         self.audio_sender = None
         self.tmp_dir = None
         self.video_ssrc = None
+        self._stopped = False
+        self._inactivity_task = None
 
     async def start(self):
         import tempfile
@@ -129,7 +132,55 @@ class GoLiveStream:
         self.audio_sender.start()
         log.info("[STREAM] Audio sender started for '%s'", title)
 
+        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
+
+    async def _inactivity_loop(self):
+        """Check every 30s: auto-stop on natural end or 5 min no viewers."""
+        empty_since = None
+        try:
+            while not self._stopped:
+                await asyncio.sleep(30)
+                if self._stopped:
+                    break
+
+                # Natural end: video player thread exited
+                if self.video_player and not self.video_player.is_alive():
+                    log.info("[STREAM] Video player ended naturally — auto-stopping")
+                    break
+
+                # Inactivity: no other members in voice channel for 5 min
+                try:
+                    ch = self.vc.channel
+                    if ch is not None:
+                        others = [m for m in ch.members if m.id != client.user.id]
+                        if not others:
+                            if empty_since is None:
+                                empty_since = time.monotonic()
+                            elif time.monotonic() - empty_since >= 300:
+                                log.info(
+                                    "[STREAM] No viewers for 5 min — auto-stopping"
+                                )
+                                break
+                        else:
+                            empty_since = None
+                except Exception:
+                    log.warning("[STREAM] inactivity member check error", exc_info=True)
+        except asyncio.CancelledError:
+            return
+
+        if not self._stopped:
+            _active_streams.pop(self.guild_id, None)
+            await self.stop()
+
     async def stop(self):
+        if self._stopped:
+            return
+        self._stopped = True
+
+        if self._inactivity_task:
+            self._inactivity_task.cancel()
+            self._inactivity_task = None
+
         log.info("[STREAM] Stopping stream...")
         from ytdlp import _yt_remove_dir
         if self.video_player:
@@ -152,6 +203,14 @@ class GoLiveStream:
                 _yt_remove_dir(self.tmp_dir)
             except Exception:
                 pass
+
+        # Disconnect from voice channel
+        if self.vc and self.vc.is_connected():
+            try:
+                await self.vc.disconnect(force=True)
+            except Exception:
+                pass
+
         log.info("[STREAM] Stream stopped and cleaned up")
 
 
