@@ -1965,11 +1965,13 @@ class IptvMultiSourceView(discord.ui.View):
         self.results = results
         self.voice_channel = voice_channel
 
+        lang_emoji = {"es": "🇪🇸", "en": "🇺🇸"}
         num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
         for i, ch in enumerate(results[:5]):
             label = ch.name
             if ch.group:
                 label += f" ({ch.group})"
+            label += f" {lang_emoji.get(ch.language, '🌐')}"
             btn = discord.ui.Button(
                 label=f"{num_emojis[i]} {label}",
                 style=discord.ButtonStyle.secondary,
