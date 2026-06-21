@@ -239,6 +239,7 @@ GOLIVE_TOKEN=<user token de la cuenta Discord usada para Go Live>
 RELAY_SECRET=<mismo secret que arriba>
 RELAY_HOST=127.0.0.1
 RELAY_PORT=8082
+YT_DLP_POT_BASE_URL=http://127.0.0.1:4416  # (Requerido para YouTube) Proveedor anti-bloqueo PoT
 ```
 
 ### Búsqueda de canales
@@ -274,6 +275,11 @@ golive: encoder probe OK → libx264
 1. **(2026-06-20) `h264_nvenc` seleccionado en server ARM sin CUDA**: `_detect_encoder()` usaba `ffmpeg -encoders` para detectar disponibilidad, pero el encoder figura como compilado incluso si libcuda no está disponible. El encode fallaba silenciosamente (FFmpeg salía con rc=1 inmediatamente) y el `send_loop` terminaba en ~1s sin emitir frames. **Fix**: `_detect_encoder()` ahora prueba cada encoder con un encode real de 1 frame. Ver `golive/streamer.py`.
 
 2. **(2026-06-20) `send_loop` terminaba en el primer timeout con streams HLS**: streams HLS con múltiples renditions tardan 4-8s en probe antes de emitir el primer frame. El `asyncio.wait_for` con `timeout=2.0` expiraba, y en condiciones de race el loop detectaba `returncode is not None` (del encoder fallido) y abortaba. **Fix**: el primer `read()` tiene un timeout de 15s (`first_read=True`); los subsiguientes mantienen 2s.
+
+3. **(2026-06-21) `/stream` con videos de YouTube (VODs) tiraba HTTP 500 y no transmitía**: 
+   - *Causa 1*: Faltaba configurar `YT_DLP_POT_BASE_URL` en `golive/.env`. Como el server tiene IP de Oracle, YouTube exige cuenta y cookie obligatoria. Sin el token PoT, YouTube bloquea la IP, rota/invalida la cookie del usuario como medida de seguridad y devuelve error `Sign in to confirm you’re not a bot`.
+   - *Causa 2*: El código de Python extraía el formato con `bestvideo+bestaudio/best`. Esto hace que `yt-dlp` devuelva dos URLs separadas en vez de la URL combinada esperada por ffmpeg, resultando en que la variable extraída sea `None` y crashee.
+   - **Fix**: Se agregó `YT_DLP_POT_BASE_URL` en el servidor y se cambió a `"format": "best"` en `golive/ytdlp.py`.
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
