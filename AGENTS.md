@@ -397,6 +397,11 @@ El branch `dnf` de `deploy.sh` baja un binario estático según `uname -m` (`amd
 
 **Fix (en `golive/streamer.py`)**: `_detect_encoder()` ahora hace un encode de prueba real (1 frame, `-f lavfi -i color=...`, salida a `pipe:null`) para cada candidato. Si falla con `CalledProcessError`, pasa al siguiente. En el server ARM, `h264_nvenc` y `h264_vaapi` fallan y se usa `libx264`.
 
+### 7) yt-dlp y FFmpeg sin soporte MP3
+
+El binario de FFmpeg customizado/estático en el server de producción no incluye el encoder `libmp3lame`. Si se le pide a `yt-dlp` que post-procese audios descargados a formato MP3 (`--audio-format mp3`), va a fallar silenciosamente o tirar el error `Encoder not found`. 
+**Workaround:** `playCommand.py` y el bot en general usan `--audio-format opus` y manipulan archivos `.opus` en el código, que sí tiene soporte nativo en el ffmpeg del server y además no requiere re-codificar (YouTube entrega Opus de forma nativa). ¡No intentar usar MP3!
+
 ## 🧪 Testing
 
 Los tests viven en `tests/` y corren con **pytest** (+ `pytest-asyncio`). La
