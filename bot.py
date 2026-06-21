@@ -1777,6 +1777,9 @@ class IptvSearchView(discord.ui.View):
                 if self.selected_language == "ar":
                     if ch.country != "AR":
                         continue
+                elif self.selected_language == "ar2":
+                    if ch.country != "AR2":
+                        continue
                 elif ch.language != self.selected_language:
                     continue
             if self.selected_category != "all":
@@ -1799,6 +1802,7 @@ class IptvSearchView(discord.ui.View):
         # Row 0 — Language selector
         lang_options = [
             discord.SelectOption(label="🇦🇷 Argentina", value="ar", default=(self.selected_language == "ar")),
+            discord.SelectOption(label="🇦🇷 Argentina 2", value="ar2", default=(self.selected_language == "ar2")),
             discord.SelectOption(label="🇪🇸 Español", value="es", default=(self.selected_language == "es")),
             discord.SelectOption(label="🇬🇧 Inglés", value="en", default=(self.selected_language == "en")),
             discord.SelectOption(label="🌐 Todos", value="all", default=(self.selected_language == "all")),

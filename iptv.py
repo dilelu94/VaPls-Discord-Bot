@@ -15,11 +15,13 @@ IPTV_M3U_URL = "https://iptv-org.github.io/iptv/index.m3u"
 IPTV_SPA_URL = "https://iptv-org.github.io/iptv/languages/spa.m3u"
 IPTV_ENG_URL = "https://iptv-org.github.io/iptv/languages/eng.m3u"
 IPTV_AR_URL = "https://iptv-org.github.io/iptv/countries/ar.m3u"
+IPTV_AR2_URL = "https://gist.githubusercontent.com/frantdse/f6989518c73826ade6734c63c367af4c/raw/"
 
 CACHE_PATH = "data/iptv_cache.m3u"
 CACHE_SPA_PATH = "data/iptv_spa_cache.m3u"
 CACHE_ENG_PATH = "data/iptv_eng_cache.m3u"
 CACHE_AR_PATH = "data/iptv_ar_cache.m3u"
+CACHE_AR2_PATH = "data/iptv_ar2_cache.m3u"
 CACHE_MAX_AGE = 6 * 3600
 
 
@@ -115,8 +117,9 @@ async def _ensure_cache(session: aiohttp.ClientSession) -> list[Channel]:
         _fetch_and_cache(session, IPTV_SPA_URL, CACHE_SPA_PATH),
         _fetch_and_cache(session, IPTV_ENG_URL, CACHE_ENG_PATH),
         _fetch_and_cache(session, IPTV_AR_URL, CACHE_AR_PATH),
+        _fetch_and_cache(session, IPTV_AR2_URL, CACHE_AR2_PATH),
     ]
-    main_text, spa_text, eng_text, ar_text = await asyncio.gather(*tasks)
+    main_text, spa_text, eng_text, ar_text, ar2_text = await asyncio.gather(*tasks)
 
     if not main_text:
         if _cached:
@@ -144,6 +147,10 @@ async def _ensure_cache(session: aiohttp.ClientSession) -> list[Channel]:
     ar_ids = {ch.tvg_id for ch in ar_channels if ch.tvg_id}
     ar_urls = {ch.url for ch in ar_channels if ch.url}
 
+    ar2_channels = _parse_m3u(ar2_text)
+    ar2_ids = {ch.tvg_id for ch in ar2_channels if ch.tvg_id}
+    ar2_urls = {ch.url for ch in ar2_channels if ch.url}
+
     # Parse main playlist
     entries = _parse_m3u(main_text)
 
@@ -158,6 +165,19 @@ async def _ensure_cache(session: aiohttp.ClientSession) -> list[Channel]:
 
         if (ch.tvg_id and ch.tvg_id in ar_ids) or ch.url in ar_urls:
             ch.country = "AR"
+        elif (ch.tvg_id and ch.tvg_id in ar2_ids) or ch.url in ar2_urls:
+            ch.country = "AR2"
+        elif ch.url in ar2_urls or ch in ar2_channels:
+            ch.country = "AR2"
+
+    # Some channels in AR2 might not be in the main playlist.
+    # We should merge AR2 channels that are missing from main playlist.
+    existing_urls = {ch.url for ch in entries}
+    for ch2 in ar2_channels:
+        if ch2.url not in existing_urls:
+            ch2.country = "AR2"
+            ch2.language = "es"
+            entries.append(ch2)
 
     _cached = entries
     _cache_ts = time.time()
