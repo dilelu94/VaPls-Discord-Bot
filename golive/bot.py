@@ -71,30 +71,35 @@ class GoLiveStream:
         is_live = True
         
         if target_url.startswith(("http://", "https://")):
-            log.info("[STREAM] Checking live status via yt-dlp for %s", target_url)
-            try:
-                live_res = await _yt_extract_live_url(target_url)
-            except Exception as e:
-                log.warning("[STREAM] live check failed: %s", e)
-                live_res = None
-            
-            if live_res:
-                target_url, title = live_res
-                log.info("[STREAM] Live stream detected: %s -> %s", title, target_url)
+            from urllib.parse import urlparse
+            _path = urlparse(target_url).path.lower()
+            if _path.endswith((".m3u8", ".mpd", ".m3u")):
+                log.info("[STREAM] Direct stream URL detected — skipping yt-dlp")
             else:
-                log.info("[STREAM] VOD stream detected. Downloading via yt-dlp...")
-                self.tmp_dir = tempfile.mkdtemp(prefix="golive_yt_")
+                log.info("[STREAM] Checking live status via yt-dlp for %s", target_url)
                 try:
-                    file_path, title = await _yt_download(self.url, self.tmp_dir)
-                    target_url = file_path
-                    is_live = False
-                    log.info("[STREAM] Download complete: %s -> %s", title, target_url)
+                    live_res = await _yt_extract_live_url(target_url)
                 except Exception as e:
-                    log.exception("[STREAM] Download failed")
-                    if self.tmp_dir:
-                        _yt_remove_dir(self.tmp_dir)
-                        self.tmp_dir = None
-                    raise RuntimeError(f"Download failed: {e}")
+                    log.warning("[STREAM] live check failed: %s", e)
+                    live_res = None
+
+                if live_res:
+                    target_url, title = live_res
+                    log.info("[STREAM] Live stream detected: %s -> %s", title, target_url)
+                else:
+                    log.info("[STREAM] VOD stream detected. Downloading via yt-dlp...")
+                    self.tmp_dir = tempfile.mkdtemp(prefix="golive_yt_")
+                    try:
+                        file_path, title = await _yt_download(self.url, self.tmp_dir)
+                        target_url = file_path
+                        is_live = False
+                        log.info("[STREAM] Download complete: %s -> %s", title, target_url)
+                    except Exception as e:
+                        log.exception("[STREAM] Download failed")
+                        if self.tmp_dir:
+                            _yt_remove_dir(self.tmp_dir)
+                            self.tmp_dir = None
+                        raise RuntimeError(f"Download failed: {e}")
         
         log.info("[STREAM] Establishing GoLive connection...")
         self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
