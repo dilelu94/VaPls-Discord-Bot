@@ -58,6 +58,9 @@ class GoLiveStream:
         self.audio_sender = None
         self.video_ssrc = None
         self.is_live = True
+        self.target_url = None
+        self.title = None
+        self.reconnect_attempts = 0
         self._stopped = False
         self._inactivity_task = None
 
@@ -83,28 +86,34 @@ class GoLiveStream:
 
                 if res:
                     target_url, title, self.is_live = res
-                    is_live = self.is_live
-                    log.info("[STREAM] Extracted stream: %s -> %s (live=%s)", title, target_url, is_live)
+                    log.info("[STREAM] Extracted stream: %s -> %s (live=%s)", title, target_url, self.is_live)
                 else:
                     raise RuntimeError("Failed to extract stream URL via yt-dlp")
         
+        self.target_url = target_url
+        self.title = title
+
         log.info("[STREAM] Establishing GoLive connection...")
         self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
         await self.conn.connect(timeout=30.0)
         self.video_ssrc = self.conn.ssrc + 1
         
+        await self._start_players()
+        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
+
+    async def _start_players(self):
         from streamer import H264VideoPlayer, _stream_fps
         from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
         proxy_vc = _GoLiveVCProxy(self.conn)
         self.video_player = H264VideoPlayer(
-            url=target_url,
+            url=self.target_url,
             voice_client=proxy_vc,
             fps=_stream_fps(),
-            live=is_live,
+            live=self.is_live,
             audio=True,
         )
         self.video_player.start()
-        log.info("[STREAM] Video player started for '%s'", title)
+        log.info("[STREAM] Video player started for '%s'", self.title)
         
         log.info("[STREAM] Waiting for audio FIFO...")
         try:
@@ -122,21 +131,57 @@ class GoLiveStream:
             is_source_active=self.video_player.is_source_active,
         )
         self.audio_sender.start()
-        log.info("[STREAM] Audio sender started for '%s'", title)
+        log.info("[STREAM] Audio sender started for '%s'", self.title)
 
-        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
+    async def _stop_players(self):
+        if self.video_player:
+            self.video_player.stop()
+        if self.audio_sender:
+            self.audio_sender.stop()
+        
+        await asyncio.to_thread(self._wait_players)
+        
+        self.video_player = None
+        self.audio_sender = None
+        
+    def _wait_players(self):
+        if self.video_player and self.video_player.is_alive():
+            self.video_player.join(timeout=2.0)
+        if self.audio_sender and self.audio_sender.is_alive():
+            self.audio_sender.join(timeout=2.0)
 
     async def _inactivity_loop(self):
-        """Every 30s: auto-stop on natural end only."""
+        """Monitors player health and reconnects if live, or auto-stops."""
         try:
             while not self._stopped:
-                await asyncio.sleep(30)
+                await asyncio.sleep(2)
                 if self._stopped:
                     break
 
                 if self.video_player and not self.video_player.is_alive():
-                    log.info("[STREAM] Video player ended naturally — auto-stopping")
-                    break
+                    if self.is_live:
+                        self.reconnect_attempts += 1
+                        emitted = getattr(self.video_player, "_frames_emitted", 0)
+                        if emitted > 900:  # ~30s at 30fps means stable stream
+                            self.reconnect_attempts = 1
+                            
+                        if self.reconnect_attempts > 5:
+                            log.error("[STREAM] Video player died too many times. Auto-stopping.")
+                            break
+                        
+                        log.warning("[STREAM] Video player died (attempt %d). Reconnecting in 3s...", self.reconnect_attempts)
+                        await self._stop_players()
+                        await asyncio.sleep(3)
+                        if self._stopped:
+                            break
+                        try:
+                            await self._start_players()
+                        except Exception as e:
+                            log.error("[STREAM] Failed to restart players: %s", e)
+                            break
+                    else:
+                        log.info("[STREAM] Video player ended naturally — auto-stopping")
+                        break
         except asyncio.CancelledError:
             return
 
@@ -166,16 +211,10 @@ class GoLiveStream:
             self._inactivity_task = None
 
         log.info("[STREAM] Stopping stream...")
-        if self.video_player:
-            try:
-                self.video_player.stop()
-            except Exception:
-                pass
-        if self.audio_sender and self.audio_sender.is_alive():
-            try:
-                self.audio_sender.stop()
-            except Exception:
-                pass
+        try:
+            await self._stop_players()
+        except Exception:
+            pass
         if self.conn:
             try:
                 await self.conn.disconnect()

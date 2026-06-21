@@ -933,13 +933,7 @@ class H264VideoPlayer(threading.Thread):
         fflags = "+discardcorrupt"
         # -reconnect flags are HTTP-only; FFmpeg rejects them for local files.
         reconnect_args = (
-            [
-                "-reconnect", "1",
-                "-reconnect_streamed", "1",
-                "-reconnect_delay_max", "5",
-                "-reconnect_on_network_error", "1",
-                "-reconnect_on_http_error", "4xx,5xx",
-            ]
+            ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
             if is_url
             else []
         )
