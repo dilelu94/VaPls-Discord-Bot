@@ -14,10 +14,12 @@ logger = logging.getLogger("iptv")
 IPTV_M3U_URL = "https://iptv-org.github.io/iptv/index.m3u"
 IPTV_SPA_URL = "https://iptv-org.github.io/iptv/languages/spa.m3u"
 IPTV_ENG_URL = "https://iptv-org.github.io/iptv/languages/eng.m3u"
+IPTV_AR_URL = "https://iptv-org.github.io/iptv/countries/ar.m3u"
 
 CACHE_PATH = "data/iptv_cache.m3u"
 CACHE_SPA_PATH = "data/iptv_spa_cache.m3u"
 CACHE_ENG_PATH = "data/iptv_eng_cache.m3u"
+CACHE_AR_PATH = "data/iptv_ar_cache.m3u"
 CACHE_MAX_AGE = 6 * 3600
 
 
@@ -28,6 +30,7 @@ class Channel:
     tvg_logo: str
     group: str
     language: str
+    country: str
 
     def __init__(self) -> None:
         self.name = ""
@@ -36,6 +39,7 @@ class Channel:
         self.tvg_logo = ""
         self.group = ""
         self.language = "other"
+        self.country = ""
 
 
 _cached: list[Channel] = []
@@ -110,8 +114,9 @@ async def _ensure_cache(session: aiohttp.ClientSession) -> list[Channel]:
         _fetch_and_cache(session, IPTV_M3U_URL, CACHE_PATH),
         _fetch_and_cache(session, IPTV_SPA_URL, CACHE_SPA_PATH),
         _fetch_and_cache(session, IPTV_ENG_URL, CACHE_ENG_PATH),
+        _fetch_and_cache(session, IPTV_AR_URL, CACHE_AR_PATH),
     ]
-    main_text, spa_text, eng_text = await asyncio.gather(*tasks)
+    main_text, spa_text, eng_text, ar_text = await asyncio.gather(*tasks)
 
     if not main_text:
         if _cached:
@@ -135,6 +140,10 @@ async def _ensure_cache(session: aiohttp.ClientSession) -> list[Channel]:
     eng_ids = {ch.tvg_id for ch in eng_channels if ch.tvg_id}
     eng_urls = {ch.url for ch in eng_channels if ch.url}
 
+    ar_channels = _parse_m3u(ar_text)
+    ar_ids = {ch.tvg_id for ch in ar_channels if ch.tvg_id}
+    ar_urls = {ch.url for ch in ar_channels if ch.url}
+
     # Parse main playlist
     entries = _parse_m3u(main_text)
 
@@ -146,6 +155,9 @@ async def _ensure_cache(session: aiohttp.ClientSession) -> list[Channel]:
             ch.language = "en"
         else:
             ch.language = "other"
+
+        if (ch.tvg_id and ch.tvg_id in ar_ids) or ch.url in ar_urls:
+            ch.country = "AR"
 
     _cached = entries
     _cache_ts = time.time()
@@ -183,3 +195,32 @@ async def get_best(query: str) -> Optional[Channel]:
     """Return the single best match for a query, or None."""
     results = await search(query, limit=1)
     return results[0] if results else None
+
+
+async def search_autocomplete(query: str, limit: int = 25) -> list[str]:
+    """Autocomplete search prioritising AR channels."""
+    async with aiohttp.ClientSession() as session:
+        entries = await _ensure_cache(session)
+    if not entries:
+        return []
+    
+    if not query:
+        # Return top AR channels
+        ar_channels = [ch.name for ch in entries if ch.country == "AR"]
+        return list(dict.fromkeys(ar_channels))[:limit]
+        
+    query_lower = query.lower()
+    scored: list[tuple[int, Channel]] = []
+    for ch in entries:
+        name_lower = ch.name.lower()
+        if query_lower in name_lower:
+            score = len(query) / max(len(ch.name), 1) * 100
+            if name_lower.startswith(query_lower):
+                score += 50
+            if ch.country == "AR":
+                score += 20
+            scored.append((score, ch))
+            
+    scored.sort(key=lambda x: x[0], reverse=True)
+    results = [ch.name for _, ch in scored]
+    return list(dict.fromkeys(results))[:limit]

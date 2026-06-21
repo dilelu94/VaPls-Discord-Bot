@@ -2151,6 +2151,14 @@ class IptvMultiSourceView(discord.ui.View):
         return callback
 
 
+async def stream_autocomplete(ctx: discord.AutocompleteContext):
+    query = ctx.value or ""
+    try:
+        return await iptv.search_autocomplete(query)
+    except Exception:
+        return []
+
+
 @bot.slash_command(
     name="stream",
     description="Transmití un canal de IPTV en tu canal de voz (Go Live)",
@@ -2162,6 +2170,7 @@ async def stream(
         description="Nombre del canal de IPTV (ej: ESPN, Fox, CNN)",
         required=False,
         default=None,
+        autocomplete=stream_autocomplete,
     ),
 ):
     """Slash command: search iptv-org and start a Go Live stream.
