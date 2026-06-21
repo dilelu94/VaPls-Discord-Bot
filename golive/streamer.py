@@ -592,13 +592,15 @@ def _libopenh264_config() -> _EncoderConfig:
     br = _stream_bitrate()
     return _EncoderConfig(
         name="libopenh264",
-        pre_input=[],
+        pre_input=["-threads", "4"],
         post_codec=[
             "-profile:v", "constrained_baseline",
             "-level:v", "4.2",
             "-b:v", br,
             "-maxrate", br,
             "-bufsize", br,
+            "-threads", "4",
+            "-allow_skip_frames", "1",
         ],
         vf=f"scale={res}",
     )
