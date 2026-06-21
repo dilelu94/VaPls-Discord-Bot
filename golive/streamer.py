@@ -570,32 +570,8 @@ def _detect_encoder() -> _EncoderConfig | None:
             "DEBUG logging to see the FFmpeg error."
         )
 
-    if "libx264" in available and _test_encoder("libx264", []):
-        log.info("video encoder: libx264 (software)")
-        return _EncoderConfig(
-            name="libx264",
-            pre_input=[],
-            post_codec=[
-                "-preset",
-                "ultrafast",
-                "-tune",
-                "zerolatency",
-                "-profile:v",
-                "high",
-                "-level:v",
-                "4.2",
-                "-x264-params",
-                "aud=1",
-                "-b:v",
-                br,
-                "-maxrate",
-                br,
-                "-bufsize",
-                br,
-            ],
-            vf=f"scale={res}",
-        )
-
+    # libx264 intentionally skipped — Discord's video server drops streams
+    # encoded with libx264 (see slopsoil STREAMING.md).
     if "libopenh264" in available and _test_encoder("libopenh264", []):
         log.info("video encoder: libopenh264 (software)")
         return _libopenh264_config()
