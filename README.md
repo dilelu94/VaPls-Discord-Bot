@@ -245,3 +245,24 @@ El botón `➕` en la página extiende +24h el tiempo restante, sin superar el m
 - **Filtro pre-compresión**: nueva función `_is_trivial()` que descarta mensajes de 1-2 palabras, solo emojis, salitudes y acuses de recibo antes de que lleguen a Gemini para comprimir
 - **Deduplicación mejorada**: `_merge_user_dossiers` ahora usa comparación accent-insensitive para evitar duplicados semánticos (ej. "programador" ≈ "programador jr" no se duplica si ya existe)
 - **Prompt del Indio** modificado para que sea más wholesome: incluye instrucciones de mandar buena onda, bancar a los amigos y reconocer logros, sin perder la personalidad divertida
+
+## Telegram memory pipeline
+
+El bot de Telegram (`vapls-telegram-bot`) reenvía mensajes de texto e imágenes
+de los grupos autorizados a este bot via HTTP API (`POST /telegram-message` y
+`POST /telegram-image`). Los mensajes se inyectan en el historial de Indio
+como si hubieran sido escritos en Discord, con el nombre de Telegram del emisor.
+
+- **Texto**: se guarda directo en `_indio_history` como turno de `user`
+- **Imágenes**: se describen via Gemini y se inyecta `"<speaker>: [imagen: {descripción}]"`
+- **Fire-and-forget**: si falla, solo queda un warning en logs
+- **Indio no responde**: solo escucha y comprime periódicamente
+
+Para más detalle de los endpoints, ver `docs/api.md` (sección "Telegram memory pipeline").
+
+El server corre en `141.148.84.55`. Acceso SSH:
+
+| Host             | Clave                   | Uso                                     |
+| ---------------- | ----------------------- | --------------------------------------- |
+| `vapls`          | `~/.ssh/vapls`          | Discord bot (lsyncd, deploy manual)     |
+| `vapls-telegram` | `~/.ssh/vapls-telegram` | Telegram bot (CI/CD, deploy automático) |
