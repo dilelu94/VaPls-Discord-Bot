@@ -39,7 +39,16 @@ _USERS_PATH = os.getenv("USERS_PATH", "data/users.json")
 _FALLBACK_USERS: dict[int, dict] = {
     285116759525031937: {
         "name": "Mila",
-        "greeting": "Mila/Milapollo.mp3",
+        "greeting": [
+            {
+                "path": "Mila/Milapollo.mp3",
+                "weight": 99
+            },
+            {
+                "path": "Mila/dorime_WdWNsGk.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Santiago",
