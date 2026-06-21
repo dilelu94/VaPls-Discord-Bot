@@ -1773,8 +1773,12 @@ class IptvSearchView(discord.ui.View):
     def get_filtered_channels(self) -> list[iptv.Channel]:
         filtered = []
         for ch in self.channels:
-            if self.selected_language != "all" and ch.language != self.selected_language:
-                continue
+            if self.selected_language != "all":
+                if self.selected_language == "ar":
+                    if ch.country != "AR":
+                        continue
+                elif ch.language != self.selected_language:
+                    continue
             if self.selected_category != "all":
                 groups = [g.strip().lower() for g in ch.group.split(";")]
                 if self.selected_category.lower() not in groups:
@@ -1794,6 +1798,7 @@ class IptvSearchView(discord.ui.View):
 
         # Row 0 — Language selector
         lang_options = [
+            discord.SelectOption(label="🇦🇷 Argentina", value="ar", default=(self.selected_language == "ar")),
             discord.SelectOption(label="🇪🇸 Español", value="es", default=(self.selected_language == "es")),
             discord.SelectOption(label="🇬🇧 Inglés", value="en", default=(self.selected_language == "en")),
             discord.SelectOption(label="🌐 Todos", value="all", default=(self.selected_language == "all")),
