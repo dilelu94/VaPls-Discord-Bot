@@ -38,14 +38,16 @@ golive/bot.py (GoLive userbot)
      d. Crea un socket UDP y abre un WebSocket separado al servidor de stream.
      e. Realiza el handshake de voz secundario (IDENTIFY → READY → IP discovery → SELECT_PROTOCOL → SESSION_DESCRIPTION).
      f. Anuncia capacidad de video enviando op 12 (`VIDEO`) en el WebSocket de stream.
-  5. Crea VideoStream(url, conn)
-  6. VideoStream.start():
-     a. Registra el video SSRC en la MLS DAVE session (`dave_session.register_video_ssrc`).
-     b. Spawnea FFmpeg -i <M3U8> → encoder H.264 → pipe:1
-        (encoder auto-detected: h264_nvenc > h264_vaapi > libx264)
-     c. _send_loop(): lee H.264, parte NALs, reescribe SPS,
-        aplica encriptación DAVE E2EE (`dave_session.encrypt_h264`),
-        encripta transporte RTP y envía por el socket de `GoLiveConnection`.
+   5. Crea VideoStream(url, conn)
+   6. VideoStream.start():
+      a. Registra el video SSRC en la MLS DAVE session (`dave_session.register_video_ssrc`).
+      b. Spawnea FFmpeg -i <M3U8> → encoder H.264 → pipe:1
+         (encoder auto-detected: h264_nvenc > h264_vaapi > libopenh264)
+      c. Aplica packet pacing: cada frame distribuye sus RTP packets en un % del intervalo
+         para evitar bursts (configurable vía `STREAM_PACKET_PACE`, default 75%).
+      d. _send_loop(): lee H.264, parte NALs, reescribe SPS,
+         aplica encriptación DAVE E2EE (`dave_session.encrypt_h264`),
+         encripta transporte RTP y envía por el socket de `GoLiveConnection`.
 ```
 
 ## Por qué funciona así (y por qué NO como antes)
@@ -54,9 +56,9 @@ golive/bot.py (GoLive userbot)
 
 Discord tiene **dos modos** para enviar video:
 
-| Modo                      | Cómo se activa                                              | Apariencia                                   |
-| ------------------------- | ----------------------------------------------------------- | -------------------------------------------- |
-| **Cámara** (self-video)   | `client_connect()` (op 12) en el WebSocket de voz principal | Aparece como que el userbot activó su cámara |
+| Modo                      | Cómo se activa                                              | Apariencia                                            |
+| ------------------------- | ----------------------------------------------------------- | ----------------------------------------------------- |
+| **Cámara** (self-video)   | `client_connect()` (op 12) en el WebSocket de voz principal | Aparece como que el userbot activó su cámara          |
 | **Go-Live** (screenshare) | `op 18` → `op 22` → WebSocket separado + UDP dedicado       | Aparece como "Transmitiendo" con botón "Watch Stream" |
 
 Anteriormente usábamos **modo cámara** (falso stream) porque era más simple, pero Discord bota la transmisión si no se hace el flow completo. Ahora implementamos **Go-Live real** abriendo un WebSocket secundario y negociando la transmisión directamente mediante el opcode 18 (`STREAM_CREATE`) y 22 (`STREAM_SET_PAUSED`).
@@ -64,15 +66,16 @@ Anteriormente usábamos **modo cámara** (falso stream) porque era más simple, 
 ### Compatibilidad DAVE E2EE para Video
 
 El wrapper de DAVE por defecto en `discord.py-self` (`davey`) está roto para video. Para evitar que Discord tire los paquetes cifrados de video de E2EE en canales seguros, implementamos:
+
 1. `golive/davey_compat.py`: Shim de compatibilidad con la biblioteca nativa `libdave` (instalada vía `dave.py` de PyPI).
 2. Registro explícito del video SSRC (`dave_session.register_video_ssrc(video_ssrc)`) usando el codec H264.
 3. Cifrado nativo de la unidad Annex-B antes de packetizar (`dave_session.encrypt_h264(...)`).
 
-### Encoder auto-detected
+### Encoder detection y el problema de libx264
 
-El server no tiene `libopenh264` compilado en FFmpeg (solo `libx264`, `h264_nvenc`, `h264_vaapi`). El código original hardcodeaba `libopenh264` → FFmpeg fallaba silenciosamente (stderr a DEVNULL) → send loop terminaba sin datos.
+El encoder detection prueba en orden: `h264_nvenc` > `h264_vaapi` > `libopenh264`. **libx264 se saltea intencionalmente** porque Discord's video server descarta streams encodeados con libx264 (documentado por [slopsoil](https://github.com/dev-topsoil/slopsoil/)).
 
-**Fix:** `_detect_encoder()` prueba `h264_nvenc` > `h264_vaapi` > `libx264` y usa el primero disponible. Se eliminó el hardcodeo de `libopenh264`.
+El server tiene FFmpeg 7.1 compilado desde source con `libopenh264` y `--enable-gnutls`. Si no hay encoder de hardware disponible (como en Oracle Cloud ARM), se usa `libopenh264` con `profile:v constrained_baseline`, que es el único encoder software que Discord acepta consistentemente.
 
 ### endpoint_port vs voice_port
 
@@ -107,7 +110,7 @@ Shim de compatibilidad para DAVE E2EE que envuelve a `dave.py` (bindings de `lib
 
 Maneja el ciclo de vida del stream de Go Live (screenshare) independiente. Envía opcodes de control a la gateway principal, abre el socket UDP y WebSocket secundarios al servidor del stream, y ejecuta el handshake de voz de la transmisión Go Live.
 
-### `golive/video_compat.py` (104 líneas)
+### `golive/video_compat.py` (117 líneas)
 
 Parches a `discord.gateway.DiscordVoiceWebSocket` para que Discord sepa que mandamos video. Sin estos parches, Discord ignora todos los paquetes RTP de video.
 
@@ -115,27 +118,43 @@ Tres parches:
 
 1. **`identify()`** (op 0) — agrega `"video": true` + `streams` descriptor
 2. **`select_protocol()`** (op 1) — agrega codec H264
-3. **`client_connect()`** (op 3, antes op 12) — agrega `video_ssrc`, `rtx_ssrc`, y metadata del stream (resolución, bitrate, fps)
+3. **`client_connect()`** (op 12, `self.VIDEO`) — agrega `video_ssrc`, `rtx_ssrc`, y metadata del stream
 
-Basado en [slopsoil](https://github.com/dev-topsoil/slopsoil/).
+**Importante:** `client_connect()` declara **siempre** valores altos y fijos a Discord (`max_bitrate: 10_000_000`, `max_framerate: 60`, `max_resolution: 1920x1080`) independientemente de la resolución real del encoder. Esto hace que Discord asigne un jitter buffer más grande y más ancho de banda, eliminando el stuttering 1s-on/1s-off. Basado en [slopsoil](https://github.com/dev-topsoil/slopsoil/).
 
-### `golive/streamer.py` (646 líneas)
+### `golive/streamer.py` (1250+ líneas)
 
-Clase `VideoStream` — el pipeline completo de streaming. Asyncio-based.
+Clase `H264VideoPlayer` (thread) — el pipeline completo de streaming en un thread daemon. Usa un solo proceso FFmpeg para audio y video desde la misma URL, eliminando A/V desync.
 
 **Pipeline:**
 
-1. Spawnea FFmpeg: `ffmpeg -i <M3U8> -c:v libopenh264 -b:v 2500k -r 30 -f h264 pipe:1`
-2. Lee raw H.264 AnnexB de stdout en chunks de 64KB
-3. Parte NAL units por start codes (`\x00\x00\x00\x01`)
-4. Agrupa NALs en frames (slice NAL = nuevo frame)
-5. **Reescribe SPS VUI** — fuerza `bitstream_restriction_flag=1` y `max_num_reorder_frames=0` o Discord bota con Error 2015
-6. Packetiza cada frame en RTP (FU-A fragmentation si el NAL es grande)
-7. **Cifrado E2EE (DAVE)** — Aplica el cifrado MLS `encrypt_h264` al stream Annex-B a través de la sesión DAVE de `GoLiveConnection`.
-8. **Encripta transporte** — Cifra el paquete RTP de transporte según el modo negociado (aead_xchacha20_poly1305_rtpsize, xsalsa20_poly1305, etc.) usando PyNaCl.
-9. Envía el paquete final mediante `self.conn.send_packet()`.
+1. **Encoder detection** (`_detect_encoder()`): prueba `h264_nvenc` > `h264_vaapi` > `libopenh264`. Saltea `libx264` (roto con Discord). Si un encoder hardware falla en runtime, reintenta con software (`_SW_ENCODER`).
+2. **Spawnea FFmpeg**: `ffmpeg -i <M3U8> -c:v libopenh264 -b:v 10000k -r 30 -g 30 -profile:v constrained_baseline -f h264 pipe:1`
+   - Video a stdout (pipe:1), audio PCM a FIFO (`/tmp/slopsoil_{ssrc}_audio.fifo`)
+   - `-max_error_rate 1` tolera errores iniciales sin abortar
+   - `-reconnect 1 -reconnect_streamed 1` para URLs HTTP
+3. **Lee raw H.264 AnnexB** de stdout en chunks de 64KB
+4. **Parte NAL units** por start codes (`\x00\x00\x00\x01`)
+5. **Agrupa NALs en frames** — AUD (type 9) marca boundaries de frame, slice NALs (1-5) inician frame nuevo
+6. **Reescribe SPS VUI** — fuerza `bitstream_restriction_flag=1` y `max_num_reorder_frames=0` o Discord bota con Error 2015
+7. **Packet pacing** — Opcionalmente distribuye los RTP packets de cada frame en un % del intervalo (`STREAM_PACKET_PACE`, default 75%). Evita bursts que sobrecargan el receive buffer de Discord.
+8. **Packetiza cada frame en RTP** (FU-A fragmentation si el NAL > 1188 bytes), RFC 6184
+9. **Cifrado E2EE (DAVE)** — Aplica `encrypt_h264()` a nivel de frame Annex-B si la sesión DAVE está activa
+10. **Encripta transporte RTP** — Según modo negociado (`aead_xchacha20_poly1305_rtpsize`, etc.) usando PyNaCl
+11. **Envía** por `vc._connection.send_packet()` (UDP socket)
+12. **Stats cada 10s**: fps real, late frames, read-block time, packets sent — loggeados para diagnóstico
 
-### `golive/config.py` (17 líneas)
+**Presets de calidad** (configurables vía `STREAM_QUALITY`):
+
+| Quality | Resolution | FPS | Bitrate |
+| ------- | ---------- | --- | ------- |
+| 720p    | 1280x720   | 30  | 10000k  |
+| 1080p   | 1920x1080  | 60  | 12000k  |
+| 4k      | 3840x2160  | 60  | 24000k  |
+
+Default: `1080p` (alineado con slopsoil). Para cuentas free de Discord (capped a 720p30), setear `STREAM_QUALITY=720p`.
+
+### `golive/config.py`
 
 Lee `.env` con:
 
@@ -143,6 +162,11 @@ Lee `.env` con:
 - `GOLIVE_RELAY_HOST/PORT` — para el relay HTTP
 - `GOLIVE_RELAY_SECRET` — compartido con el bot principal
 - `GOLIVE_GUILD_ALLOWLIST` — opcional, restringe guilds
+- `STREAM_QUALITY` — preset de calidad: `720p`, `1080p`, `4k` (default `1080p`)
+- `STREAM_RESOLUTION` — override manual de resolución (ej. `1280:720`)
+- `STREAM_FPS` — override manual de fps
+- `STREAM_VIDEO_BITRATE` — override manual de bitrate (ej. `5000k`)
+- `STREAM_PACKET_PACE` — fracción del intervalo de frame para distribuir packets (0.0-0.95, default 0.75)
 
 ### `golive/requirements.txt`
 
@@ -188,6 +212,8 @@ GOLIVE_RELAY_PORT=8082
 GOLIVE_RELAY_SECRET=vapls-golive-shared-secret
 GOLIVE_GUILD_ALLOWLIST=
 LOG_LEVEL=INFO
+STREAM_QUALITY=720p
+STREAM_PACKET_PACE=0.75
 ```
 
 ---
@@ -253,6 +279,20 @@ Los canales se obtienen de [iptv-org](https://github.com/iptv-org/iptv), que man
 
 **Fix:** El SPS rewriter en `golive/streamer.py` maneja esto automáticamente. Si el encoder usado no genera SPS con VUI, falla porque el encoder no se reconoce como high profile.
 
+### El stream se ve trabado (1 segundo reproduce, 1 segundo congelado)
+
+**Causa 1:** El encoder detectado es `libx264`. Discord descarta streams de libx264.
+
+**Fix:** Verificar logs: `journalctl -u golive-userbot | grep "video encoder"`. Debe decir `libopenh264`. Si dice `libx264`, el server tiene libx264 disponible y el detection lo elige antes que libopenh264. Se parcheó `_detect_encoder()` para saltear libx264.
+
+**Causa 2:** `video_compat.py` declara valores bajos en op 12 (VIDEO). Discord asigna un jitter buffer pequeño y menos ancho de banda, causando drops.
+
+**Fix:** Declarar siempre `max_bitrate: 10_000_000`, `max_framerate: 60`, `max_resolution: 1920x1080` independientemente de la salida real del encoder (alineado con slopsoil).
+
+**Causa 3:** Los packets de cada frame se envian en burst (todos juntos). Si el burst supera el buffer de Discord, se pierden y el decoder espera al próximo keyframe.
+
+**Fix:** Activar packet pacing: `STREAM_PACKET_PACE=0.75` distribuye los packets en 75% del intervalo del frame.
+
 ### El bot principal responde HTTP 500
 
 **Causa:** El golive userbot no está corriendo, o el relay no responde.
@@ -261,9 +301,22 @@ Los canales se obtienen de [iptv-org](https://github.com/iptv-org/iptv), que man
 
 ---
 
+## Alineación con slopsoil
+
+El pipeline de streaming está basado en [slopsoil](https://github.com/dev-topsoil/slopsoil/). Las diferencias clave resueltas:
+
+| Aspecto                 | VaPls (antes)                        | slopsoil / VaPls (ahora)     |
+| ----------------------- | ------------------------------------ | ---------------------------- |
+| Encoder                 | libx264 (roto)                       | libopenh264 (saltea libx264) |
+| op 12 caps              | Dinámicas según env (2.5Mbps/720p30) | Fijas: 10Mbps/60fps/1080p    |
+| Bitrate 720p            | 2200k                                | 10000k                       |
+| Default quality         | 720p                                 | 1080p                        |
+| Packet pacing           | No                                   | Sí (75%)                     |
+| `client_connect` opcode | `getattr(self, "VIDEO", 12)`         | `self.VIDEO`                 |
+
 ## Referencias externas
 
-- [slopsoil](https://github.com/dev-topsoil/slopsoil/) — inspiración para `video_compat.py` y el SPS rewriter
+- [slopsoil](https://github.com/dev-topsoil/slopsoil/) — inspiración para `video_compat.py`, el SPS rewriter y la configuración de streaming
 - [discord.py-self](https://github.com/dolfies/discord.py-self) — fork de discord.py para user tokens
 - [iptv-org](https://github.com/iptv-org/iptv) — playlist M3U pública de canales IPTV
 - [RFC 6184](https://datatracker.ietf.org/doc/html/rfc6184) — RTP Payload Format for H.264 Video (FU-A fragmentation)
