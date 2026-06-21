@@ -66,3 +66,4 @@ dump_elements.py
 test_app_url.py
 test_app_url_headful.py
 
+.aider*
