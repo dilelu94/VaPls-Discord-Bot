@@ -143,6 +143,7 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     231217010522980352: {
         "name": "Juji",
+        "greeting": "Juji/juji la-concha-de-tu-madre-bob-esponja_to Juji.mp3",
         "traits": [
             "pronombres: él",
             "nombre real: Nicolás",
