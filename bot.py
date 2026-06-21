@@ -1957,6 +1957,81 @@ class IptvSearchView(discord.ui.View):
             await self.update_message(interaction, status_text=f"🔴 Error: {status_msg}")
 
 
+class IptvMultiSourceView(discord.ui.View):
+    """Shows numbered buttons for multiple IPTV sources with the same name."""
+
+    def __init__(self, results: list[iptv.Channel], voice_channel: discord.VoiceChannel):
+        super().__init__(timeout=60)
+        self.results = results
+        self.voice_channel = voice_channel
+
+        num_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+        for i, ch in enumerate(results[:5]):
+            label = ch.name
+            if ch.group:
+                label += f" ({ch.group})"
+            btn = discord.ui.Button(
+                label=f"{num_emojis[i]} {label}",
+                style=discord.ButtonStyle.secondary,
+                row=i // 3,
+                custom_id=f"iptv_multi_{i}",
+            )
+            btn.callback = self._make_callback(i)
+            self.add_item(btn)
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            msg = self._last_interaction
+            if msg:
+                await msg.edit_original_response(view=self)
+        except Exception:
+            pass
+
+    def _make_callback(self, idx: int):
+        async def callback(interaction: discord.Interaction):
+            ch = self.results[idx]
+            self._last_interaction = interaction
+
+            for child in self.children:
+                child.disabled = True
+            try:
+                await interaction.response.edit_message(view=self)
+            except Exception:
+                pass
+
+            voice_state = getattr(interaction.user, "voice", None)
+            voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+            if voice_channel is None or voice_channel.id != self.voice_channel.id:
+                await interaction.edit_original_response(
+                    content="❌ Ya no estás en el canal de voz.", embed=None, view=None
+                )
+                return
+
+            embed = discord.Embed(
+                title="🔄 Iniciando transmisión...",
+                description=f"**{ch.name}** en **{voice_channel.name}**",
+                color=0xE94560,
+            )
+            await interaction.edit_original_response(embed=embed, view=None)
+
+            success, status_msg = await start_iptv_stream_logic(
+                interaction.guild_id, self.voice_channel, ch.url, ch.name
+            )
+
+            if success:
+                await interaction.edit_original_response(
+                    content=f"🟢 {status_msg}", embed=None, view=None
+                )
+            else:
+                await interaction.edit_original_response(
+                    content=f"🔴 {status_msg}", embed=None, view=None
+                )
+
+        return callback
+
+
 @bot.slash_command(
     name="stream",
     description="Transmití un canal de IPTV en tu canal de voz (Go Live)",
@@ -2028,11 +2103,13 @@ async def stream(
 
         ch = results[0]
         if len(results) > 1:
-            names = "\n".join(f"• **{r.name}**" for r in results[:5])
-            await safe_respond(
-                ctx,
-                f'📺 Varios canales coinciden con "{canal}". Usá **/stream** con un nombre más específico:\n{names}',
+            view = IptvMultiSourceView(results, voice_channel)
+            embed = discord.Embed(
+                title=f'📺 {len(results)} fuentes para "{canal}"',
+                description="Elegí una fuente para transmitir:",
+                color=0xE94560,
             )
+            await ctx.interaction.edit_original_response(embed=embed, view=view)
             return
         stream_url = ch.url
         channel_name = ch.name
