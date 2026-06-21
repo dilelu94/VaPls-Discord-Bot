@@ -797,14 +797,35 @@ class H264VideoPlayer(threading.Thread):
         self._audio_fifo: str = f"/tmp/slopsoil_{self._ssrc}_audio.fifo"
         self._ensure_fifo()
 
+        # Playback control state
+        self._paused: threading.Event = threading.Event()
+        self._paused.set()  # Initial state is playing
+        self._start_time: float = 0.0
+        self._seeking: bool = False
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     @property
     def audio_fifo(self) -> str:
         return self._audio_fifo
 
+    def pause(self) -> None:
+        self._paused.clear()
+
+    def resume(self) -> None:
+        self._paused.set()
+
+    def seek(self, target_sec: float) -> None:
+        self._start_time = max(0.0, target_sec)
+        self._seeking = True
+        self._paused.set()  # wake if paused
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            self._kill_proc(proc)
+
     def stop(self) -> None:
         self._end.set()
+        self._paused.set()  # wake if paused
         proc = self._proc
         if proc is not None and proc.poll() is None:
             proc.terminate()
@@ -831,24 +852,30 @@ class H264VideoPlayer(threading.Thread):
 
     def run(self) -> None:
         try:
-            self._stream()
-            # If a hardware encoder produced no frames at all (e.g. VA-API
-            # "Access unit too large" on large MPEG-2 keyframes), retry once on
-            # the software encoder so the stream still plays.
-            if (
-                not self._end.is_set()
-                and self._frames_emitted == 0
-                and _SW_ENCODER is not None
-                and self._enc is not _SW_ENCODER
-            ):
-                log.warning(
-                    "video encoder %s produced no output — retrying with software "
-                    "encoder %s",
-                    self._enc.name if self._enc else "?", _SW_ENCODER.name,
-                )
-                self._enc = _SW_ENCODER
-                self._proc = None
+            while not self._end.is_set():
+                self._seeking = False
                 self._stream()
+                
+                if self._seeking and not self._end.is_set():
+                    log.info("Seeking to %.2fs, restarting stream loop", self._start_time)
+                    continue
+
+                if (
+                    not self._end.is_set()
+                    and self._frames_emitted == 0
+                    and _SW_ENCODER is not None
+                    and self._enc is not _SW_ENCODER
+                ):
+                    log.warning(
+                        "video encoder %s produced no output — retrying with software "
+                        "encoder %s",
+                        self._enc.name if self._enc else "?", _SW_ENCODER.name,
+                    )
+                    self._enc = _SW_ENCODER
+                    self._proc = None
+                    continue
+                
+                break
         except Exception:
             log.exception("H264VideoPlayer error")
         finally:
@@ -882,7 +909,9 @@ class H264VideoPlayer(threading.Thread):
             "-probesize", str(self._probe_size),
             "-analyzeduration", str(self._probe_size),
         ]
-        pre_input = enc.pre_input
+        pre_input = list(enc.pre_input)
+        if self._start_time > 0:
+            pre_input.extend(["-ss", str(self._start_time)])
         is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
         # Pace a local VOD file at native rate so FFmpeg emits audio+video in
         # lockstep at real time instead of racing ahead and bursting — tighter
@@ -1190,6 +1219,10 @@ class H264VideoPlayer(threading.Thread):
             return self._end.is_set()
 
         while not self._end.is_set():
+            self._paused.wait()
+            if self._seeking or self._end.is_set():
+                break
+
             _read_t0 = time.monotonic()
             chunk = self._proc.stdout.read(65_536)
             _stats_read_block += time.monotonic() - _read_t0

@@ -1591,14 +1591,14 @@ async def start_iptv_stream_logic(
     voice_channel: discord.VoiceChannel,
     stream_url: str,
     channel_name: str,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, bool]:
     """Sends the HTTP request to the GoLive relay to start streaming a channel.
 
     Returns:
-        (success, status_message)
+        (success, status_message, is_live)
     """
     if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-        return False, "❌ El relay GoLive no está configurado."
+        return False, "❌ El relay GoLive no está configurado.", True
 
     relay_base = config.GOLIVE_RELAY_URL
     url = urljoin(relay_base, "/stream")
@@ -1617,23 +1617,99 @@ async def start_iptv_stream_logic(
         stream_url,
     )
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
+    is_live = True
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:
-                body = await resp.text()
-                log.info(
-                    "[STREAM_LOGIC] relay response status=%s body=%s",
-                    resp.status,
-                    body[:500],
-                )
                 if resp.status >= 400:
+                    body = await resp.text()
                     log.warning("stream relay HTTP %s: %s", resp.status, body[:200])
-                    return False, f"⚠️ No pude iniciar el stream (HTTP {resp.status})."
+                    return False, f"⚠️ No pude iniciar el stream (HTTP {resp.status}).", True
+                data = await resp.json()
+                is_live = data.get("is_live", True)
     except Exception as e:
         log.exception("stream relay failed")
-        return False, f"⚠️ Error iniciando stream: {e}"
+        return False, f"⚠️ Error iniciando stream: {e}", True
 
-    return True, f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."
+    return True, f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\nUsá **/stopstream** para cortar.", is_live
+
+
+async def _send_stream_control(guild_id: int, action: str, timestamp: float = 0.0) -> bool:
+    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+        return False
+    url = urljoin(config.GOLIVE_RELAY_URL, "/stream/control")
+    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
+    payload = {"guild_id": guild_id, "action": action, "timestamp": timestamp}
+    try:
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                return resp.status < 400
+    except Exception:
+        return False
+
+
+class StreamSeekModal(discord.ui.Modal):
+    def __init__(self, guild_id: int):
+        super().__init__(title="Saltar a un momento exacto")
+        self.guild_id = guild_id
+        self.add_item(
+            discord.ui.InputText(
+                label="Tiempo (MM:SS o segundos)",
+                placeholder="Ej: 2:30 o 150",
+                max_length=10,
+            )
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        val = self.children[0].value.strip()
+        try:
+            if ":" in val:
+                parts = val.split(":")
+                sec = int(parts[0]) * 60 + int(parts[1])
+            else:
+                sec = int(val)
+        except ValueError:
+            await interaction.response.send_message("❌ Formato inválido.", ephemeral=True)
+            return
+
+        success = await _send_stream_control(self.guild_id, "seek", sec)
+        if success:
+            await interaction.response.send_message(f"⏩ Saltando al segundo {sec}...", ephemeral=True, delete_after=3)
+        else:
+            await interaction.response.send_message("❌ Error de comunicación con el stream.", ephemeral=True)
+
+
+class StreamControlView(discord.ui.View):
+    def __init__(self, guild_id: int):
+        super().__init__(timeout=None)
+        self.guild_id = guild_id
+        self.is_paused = False
+
+    @discord.ui.button(label="⏸ Pausa / ▶ Reanudar", style=discord.ButtonStyle.primary, custom_id="stream_pause_toggle")
+    async def toggle_pause(self, button: discord.ui.Button, interaction: discord.Interaction):
+        action = "resume" if self.is_paused else "pause"
+        success = await _send_stream_control(self.guild_id, action)
+        if success:
+            self.is_paused = not self.is_paused
+            await interaction.response.edit_message(view=self)
+        else:
+            await interaction.response.send_message("❌ Error de comunicación con el stream.", ephemeral=True)
+
+    @discord.ui.button(label="⏱️ Saltar a...", style=discord.ButtonStyle.secondary, custom_id="stream_seek")
+    async def jump_to(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_modal(StreamSeekModal(self.guild_id))
+
+    @discord.ui.button(label="⏹ Detener", style=discord.ButtonStyle.danger, custom_id="stream_stop_btn")
+    async def stop_stream_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_message("⏹ Deteniendo el stream...", ephemeral=True, delete_after=3)
+        ctx = type('Obj', (object,), {'guild_id': self.guild_id, 'respond': interaction.followup.send})()
+        await stopstream(ctx)
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.edit_original_response(view=self)
+        except Exception:
+            pass
 
 
 class IptvSearchModal(discord.ui.Modal):
@@ -1944,7 +2020,7 @@ class IptvSearchView(discord.ui.View):
         await interaction.response.defer()
         await self.update_message(interaction, status_text=f"🔄 Conectando y transmitiendo **{ch.name}**...")
 
-        success, status_msg = await start_iptv_stream_logic(
+        success, status_msg, _is_live = await start_iptv_stream_logic(
             interaction.guild_id,
             voice_channel,
             ch.url,
@@ -2018,7 +2094,7 @@ class IptvMultiSourceView(discord.ui.View):
             )
             await interaction.edit_original_response(embed=embed, view=None)
 
-            success, status_msg = await start_iptv_stream_logic(
+            success, status_msg, _is_live = await start_iptv_stream_logic(
                 interaction.guild_id, self.voice_channel, ch.url, ch.name
             )
 
@@ -2123,7 +2199,7 @@ async def stream(
         stream_url,
     )
 
-    success, status_msg = await start_iptv_stream_logic(
+    success, status_msg, is_live = await start_iptv_stream_logic(
         ctx.guild_id,
         voice_channel,
         stream_url,
@@ -2131,7 +2207,8 @@ async def stream(
     )
 
     if success:
-        await safe_respond(ctx, status_msg)
+        view = StreamControlView(ctx.guild_id) if not is_live else None
+        await safe_respond(ctx, status_msg, view=view)
     else:
         await safe_respond(ctx, status_msg)
 

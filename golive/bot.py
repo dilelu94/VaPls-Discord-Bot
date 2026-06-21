@@ -57,6 +57,7 @@ class GoLiveStream:
         self.video_player = None
         self.audio_sender = None
         self.video_ssrc = None
+        self.is_live = True
         self._stopped = False
         self._inactivity_task = None
 
@@ -81,7 +82,8 @@ class GoLiveStream:
                     res = None
 
                 if res:
-                    target_url, title, is_live = res
+                    target_url, title, self.is_live = res
+                    is_live = self.is_live
                     log.info("[STREAM] Extracted stream: %s -> %s (live=%s)", title, target_url, is_live)
                 else:
                     raise RuntimeError("Failed to extract stream URL via yt-dlp")
@@ -141,6 +143,18 @@ class GoLiveStream:
         if not self._stopped:
             _active_streams.pop(self.guild_id, None)
             await self.stop()
+
+    def pause(self):
+        if self.video_player:
+            self.video_player.pause()
+
+    def resume(self):
+        if self.video_player:
+            self.video_player.resume()
+
+    def seek(self, target_sec: float):
+        if self.video_player:
+            self.video_player.seek(target_sec)
 
     async def stop(self):
         if self._stopped:
@@ -342,6 +356,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
             "guild_id": guild_id,
             "channel_name": channel.name,
             "video_ssrc": stream.video_ssrc,
+            "is_live": stream.is_live,
         }
     )
 
@@ -373,6 +388,38 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
     return web.json_response({"stopped": True, "guild_id": guild_id})
 
 
+async def _relay_stream_control(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        action = data.get("action")
+    except Exception as e:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    stream = _active_streams.get(guild_id)
+    if stream is None:
+        return web.json_response({"error": "no active stream"}, status=404)
+
+    if action == "pause":
+        stream.pause()
+    elif action == "resume":
+        stream.resume()
+    elif action == "seek":
+        try:
+            target_sec = float(data.get("timestamp", 0))
+            stream.seek(target_sec)
+        except ValueError:
+            return web.json_response({"error": "invalid timestamp"}, status=400)
+    else:
+        return web.json_response({"error": "invalid action"}, status=400)
+
+    return web.json_response({"success": True})
+
+
 # ---------- Events ----------------------------------------------------------
 
 
@@ -391,6 +438,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app = web.Application()
     app.router.add_post("/stream", _relay_stream)
     app.router.add_post("/stopstream", _relay_stopstream)
+    app.router.add_post("/stream/control", _relay_stream_control)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)
