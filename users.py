@@ -152,7 +152,20 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     293815496866922507: {
         "name": "Seba",
-        "greeting": "Audios/hava-nagila-cut.mp3",
+        "greeting": [
+            {
+                "path": "Audios/hava-nagila-cut.mp3",
+                "weight": 495
+            },
+            {
+                "path": "Seba/moneymoneymoney.mp3",
+                "weight": 495
+            },
+            {
+                "path": "Seba/mr-krabs-money_z55UHab.mp3",
+                "weight": 10
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Sebastián",
