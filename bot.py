@@ -1607,6 +1607,7 @@ async def start_iptv_stream_logic(
         "guild_id": guild_id,
         "channel_id": voice_channel.id,
         "url": stream_url,
+        "channel_name": channel_name,
     }
     log.info(
         "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s",
@@ -1635,45 +1636,82 @@ async def start_iptv_stream_logic(
     return True, f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."
 
 
+class IptvSearchModal(discord.ui.Modal):
+    """Modal for free-text channel search within the IPTV browser."""
+
+    def __init__(self, parent_view: "IptvSearchView"):
+        super().__init__(title="🔍 Buscar canal por nombre")
+        self.parent_view = parent_view
+        self.add_item(
+            discord.ui.InputText(
+                label="Nombre del canal",
+                placeholder="Ej: ESPN, Fox, CNN...",
+                required=False,
+                value=parent_view.search_query or "",
+                max_length=100,
+            )
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        query = self.children[0].value.strip() if self.children[0].value else ""
+        self.parent_view.search_query = query or None
+        self.parent_view.current_page = 0
+        self.parent_view.selected_channel_name = None
+        self.parent_view.setup_components()
+        await self.parent_view.update_message(interaction)
+
+
 class IptvSearchView(discord.ui.View):
-    """Interactive UI for browsing and filtering IPTV channels."""
+    """Interactive UI for browsing and filtering IPTV channels.
+
+    Supports pagination (25 channels per page with ◀️ ▶️ buttons) and
+    free-text search via a 🔍 modal to handle Discord's 25-option limit
+    on select menus.
+    """
+
+    PAGE_SIZE = 25
 
     def __init__(self, channels: list[iptv.Channel], voice_channel: discord.VoiceChannel):
-        super().__init__(timeout=120)
+        super().__init__(timeout=180)
         self.channels = channels
         self.voice_channel = voice_channel
-        self.selected_language = "es"  # default to Spanish as requested/sensible
-        self.selected_category = "all"  # default to show all categories
+        self.selected_language = "es"
+        self.selected_category = "all"
         self.selected_channel_name = None
+        self.search_query: str | None = None
+        self.current_page = 0
         self.setup_components()
 
     def get_filtered_channels(self) -> list[iptv.Channel]:
         filtered = []
         for ch in self.channels:
-            # Language filter: 'es', 'en', 'all'
             if self.selected_language != "all" and ch.language != self.selected_language:
                 continue
-            # Category filter
             if self.selected_category != "all":
                 groups = [g.strip().lower() for g in ch.group.split(";")]
                 if self.selected_category.lower() not in groups:
                     continue
+            if self.search_query:
+                if self.search_query.lower() not in ch.name.lower():
+                    continue
             filtered.append(ch)
-        # Sort by channel name case-insensitively
         filtered.sort(key=lambda x: x.name.lower())
         return filtered
+
+    def _total_pages(self, total: int) -> int:
+        return max(1, (total + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
 
     def setup_components(self):
         self.clear_items()
 
-        # 1. Language selector dropdown (Row 0)
+        # Row 0 — Language selector
         lang_options = [
             discord.SelectOption(label="🇪🇸 Español", value="es", default=(self.selected_language == "es")),
             discord.SelectOption(label="🇬🇧 Inglés", value="en", default=(self.selected_language == "en")),
-            discord.SelectOption(label="👥 Todos", value="all", default=(self.selected_language == "all")),
+            discord.SelectOption(label="🌐 Todos", value="all", default=(self.selected_language == "all")),
         ]
         lang_select = discord.ui.Select(
-            placeholder="🌍 Selecciona un idioma...",
+            placeholder="🌍 Idioma",
             options=lang_options,
             row=0,
             custom_id="iptv_lang_select",
@@ -1681,7 +1719,7 @@ class IptvSearchView(discord.ui.View):
         lang_select.callback = self.on_lang_select
         self.add_item(lang_select)
 
-        # 2. Category selector dropdown (Row 1)
+        # Row 1 — Category selector
         cat_choices = [
             ("⚽ Deportes", "Sports"),
             ("📰 Noticias", "News"),
@@ -1699,7 +1737,7 @@ class IptvSearchView(discord.ui.View):
             for label, value in cat_choices
         ]
         cat_select = discord.ui.Select(
-            placeholder="📁 Selecciona una categoría...",
+            placeholder="📁 Categoría",
             options=cat_options,
             row=1,
             custom_id="iptv_cat_select",
@@ -1707,24 +1745,27 @@ class IptvSearchView(discord.ui.View):
         cat_select.callback = self.on_cat_select
         self.add_item(cat_select)
 
-        # 3. Dynamic Channel list dropdown (Row 2)
+        # Row 2 — Channel list (paged)
         filtered = self.get_filtered_channels()
-        page_size = 25
-        display_channels = filtered[:page_size]
+        total_pages = self._total_pages(len(filtered))
+        self.current_page = max(0, min(self.current_page, total_pages - 1))
+        start = self.current_page * self.PAGE_SIZE
+        page_channels = filtered[start : start + self.PAGE_SIZE]
 
-        if display_channels:
+        if page_channels:
             channel_options = []
-            for ch in display_channels:
-                label = ch.name[:100]  # truncate to 100 characters max
+            for ch in page_channels:
+                label = ch.name[:100]
                 channel_options.append(
                     discord.SelectOption(
                         label=label,
                         value=ch.name,
-                        default=(ch.name == self.selected_channel_name)
+                        default=(ch.name == self.selected_channel_name),
                     )
                 )
+            page_label = f"Pág {self.current_page + 1}/{total_pages}" if total_pages > 1 else ""
             channel_select = discord.ui.Select(
-                placeholder=f"📺 Selecciona un canal ({len(filtered)} encontrados)...",
+                placeholder=f"📺 {len(filtered)} canales {page_label}".strip(),
                 options=channel_options,
                 row=2,
                 custom_id="iptv_channel_select",
@@ -1742,30 +1783,100 @@ class IptvSearchView(discord.ui.View):
                 )
             )
 
-    async def update_message(self, interaction: discord.Interaction, status_text: str = None):
+        # Row 3 — Pagination buttons + search
+        has_multiple_pages = total_pages > 1
+
+        btn_prev = discord.ui.Button(
+            emoji="◀️",
+            style=discord.ButtonStyle.secondary,
+            row=3,
+            custom_id="iptv_prev",
+            disabled=(not has_multiple_pages or self.current_page == 0),
+        )
+        btn_prev.callback = self.on_prev_page
+        self.add_item(btn_prev)
+
+        btn_page = discord.ui.Button(
+            label=f"{self.current_page + 1}/{total_pages}",
+            style=discord.ButtonStyle.secondary,
+            row=3,
+            custom_id="iptv_page_indicator",
+            disabled=True,
+        )
+        self.add_item(btn_page)
+
+        btn_next = discord.ui.Button(
+            emoji="▶️",
+            style=discord.ButtonStyle.secondary,
+            row=3,
+            custom_id="iptv_next",
+            disabled=(not has_multiple_pages or self.current_page >= total_pages - 1),
+        )
+        btn_next.callback = self.on_next_page
+        self.add_item(btn_next)
+
+        search_label = "🔍" if not self.search_query else f"🔍 {self.search_query[:15]}"
+        btn_search = discord.ui.Button(
+            label=search_label,
+            style=discord.ButtonStyle.primary if not self.search_query else discord.ButtonStyle.success,
+            row=3,
+            custom_id="iptv_search",
+        )
+        btn_search.callback = self.on_search
+        self.add_item(btn_search)
+
+        if self.search_query:
+            btn_clear = discord.ui.Button(
+                label="✕",
+                style=discord.ButtonStyle.danger,
+                row=3,
+                custom_id="iptv_clear_search",
+            )
+            btn_clear.callback = self.on_clear_search
+            self.add_item(btn_clear)
+
+    def _build_embed(self, status_text: str = None) -> discord.Embed:
         embed = discord.Embed(
             title="📺 Buscador de Canales IPTV",
-            description="Seleccioná un idioma y categoría. Al elegir un canal, se iniciará la transmisión en tu canal de voz.",
+            description="Seleccioná idioma y categoría, luego elegí un canal para transmitir.",
             color=0xE94560,
         )
-
-        lang_label = {"es": "Español", "en": "Inglés", "all": "Todos"}.get(self.selected_language, self.selected_language)
+        lang_label = {"es": "🇪🇸 Español", "en": "🇬🇧 Inglés", "all": "🌐 Todos"}.get(
+            self.selected_language, self.selected_language
+        )
         embed.add_field(name="🌍 Idioma", value=lang_label, inline=True)
 
         cat_labels = {
-            "Sports": "Deportes", "News": "Noticias", "Movies": "Películas",
-            "Music": "Música", "Documentary": "Documentales", "Kids": "Infantil",
-            "Entertainment": "Entretenimiento", "Series": "Series", "Religious": "Religión",
-            "all": "Todos"
+            "Sports": "⚽ Deportes", "News": "📰 Noticias", "Movies": "🎬 Películas",
+            "Music": "🎵 Música", "Documentary": "🧪 Documentales", "Kids": "🧸 Infantil",
+            "Entertainment": "🎭 Entretenimiento", "Series": "📺 Series",
+            "Religious": "🛐 Religión", "all": "🌐 Todos",
         }
-        embed.add_field(name="📁 Categoría", value=cat_labels.get(self.selected_category, self.selected_category), inline=True)
+        embed.add_field(
+            name="📁 Categoría",
+            value=cat_labels.get(self.selected_category, self.selected_category),
+            inline=True,
+        )
 
         filtered = self.get_filtered_channels()
-        embed.add_field(name="📊 Canales", value=f"{len(filtered)} canales encontrados (mostrando hasta 25)", inline=True)
+        total_pages = self._total_pages(len(filtered))
+        page_info = f" · pág {self.current_page + 1}/{total_pages}" if total_pages > 1 else ""
+        embed.add_field(
+            name="📊 Canales",
+            value=f"{len(filtered)} encontrados{page_info}",
+            inline=True,
+        )
+
+        if self.search_query:
+            embed.add_field(name="🔍 Búsqueda", value=f'"{self.search_query}"', inline=True)
 
         if status_text:
             embed.add_field(name="⚡ Estado", value=status_text, inline=False)
 
+        return embed
+
+    async def update_message(self, interaction: discord.Interaction, status_text: str = None):
+        embed = self._build_embed(status_text)
         try:
             if interaction.response.is_done():
                 await interaction.edit_original_response(embed=embed, view=self)
@@ -1777,11 +1888,37 @@ class IptvSearchView(discord.ui.View):
     async def on_lang_select(self, interaction: discord.Interaction):
         self.selected_language = interaction.data["values"][0]
         self.selected_channel_name = None
+        self.current_page = 0
         self.setup_components()
         await self.update_message(interaction)
 
     async def on_cat_select(self, interaction: discord.Interaction):
         self.selected_category = interaction.data["values"][0]
+        self.selected_channel_name = None
+        self.current_page = 0
+        self.setup_components()
+        await self.update_message(interaction)
+
+    async def on_prev_page(self, interaction: discord.Interaction):
+        self.current_page = max(0, self.current_page - 1)
+        self.selected_channel_name = None
+        self.setup_components()
+        await self.update_message(interaction)
+
+    async def on_next_page(self, interaction: discord.Interaction):
+        filtered = self.get_filtered_channels()
+        max_page = self._total_pages(len(filtered)) - 1
+        self.current_page = min(max_page, self.current_page + 1)
+        self.selected_channel_name = None
+        self.setup_components()
+        await self.update_message(interaction)
+
+    async def on_search(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(IptvSearchModal(self))
+
+    async def on_clear_search(self, interaction: discord.Interaction):
+        self.search_query = None
+        self.current_page = 0
         self.selected_channel_name = None
         self.setup_components()
         await self.update_message(interaction)

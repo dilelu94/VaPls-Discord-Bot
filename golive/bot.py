@@ -157,6 +157,22 @@ class GoLiveStream:
 
 _active_streams: dict[int, GoLiveStream] = {}
 
+DEFAULT_NICKNAME = "GoLive - VaPls"
+
+
+async def _set_nickname(guild: discord.Guild, name: str) -> None:
+    """Change the golive bot's nickname in a guild (32-char Discord limit)."""
+    nick = name[:32]
+    try:
+        me = guild.get_member(client.user.id)
+        if me is not None:
+            await me.edit(nick=nick)
+            log.info("[NICK] set to '%s' in guild=%s", nick, guild.id)
+        else:
+            log.warning("[NICK] bot member not found in guild=%s", guild.id)
+    except Exception as e:
+        log.warning("[NICK] failed to set nick in guild=%s: %s", guild.id, e)
+
 
 def _guild_allowed(guild_id: int) -> bool:
     return config.GUILD_ALLOWLIST is None or guild_id in config.GUILD_ALLOWLIST
@@ -217,7 +233,8 @@ async def _relay_stream(request: web.Request) -> web.Response:
     if not url:
         log.warning("[STREAM] empty url")
         return web.json_response({"error": "empty url"}, status=400)
-    log.info("[STREAM] guild=%s channel=%s url=%s", guild_id, channel_id, url[:120])
+    stream_title = str(data.get("channel_name", "")).strip() or None
+    log.info("[STREAM] guild=%s channel=%s url=%s title=%s", guild_id, channel_id, url[:120], stream_title)
 
     if not client.is_ready():
         log.warning("[STREAM] client not ready")
@@ -272,6 +289,8 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
     _active_streams[guild_id] = stream
+    if stream_title:
+        await _set_nickname(guild, f"GoLive - {stream_title}")
     log.info("[STREAM] started guild=%s channel=%s", guild_id, channel.name)
     return web.json_response(
         {
@@ -305,6 +324,10 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
     except Exception as e:
         log.exception("[STOPSTREAM] stop failed")
         return web.json_response({"error": str(e)}, status=500)
+
+    guild = client.get_guild(guild_id)
+    if guild:
+        await _set_nickname(guild, DEFAULT_NICKNAME)
 
     log.info("[STOPSTREAM] stopped guild=%s", guild_id)
     return web.json_response({"stopped": True, "guild_id": guild_id})

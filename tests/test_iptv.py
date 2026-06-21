@@ -137,3 +137,101 @@ async def test_search_view_filtering():
     assert filtered[0].name == "A Sports ES"
     assert filtered[1].name == "B News EN"
     assert filtered[2].name == "C Music Other"
+
+
+@pytest.mark.asyncio
+async def test_search_view_pagination():
+    """Pagination splits channels into pages of PAGE_SIZE and clamps bounds."""
+    from bot import IptvSearchView
+    import discord
+    from unittest.mock import MagicMock
+
+    # Create 30 channels (more than PAGE_SIZE=25)
+    channels = []
+    for i in range(30):
+        ch = iptv.Channel()
+        ch.name = f"Channel {i:02d}"
+        ch.group = "Sports"
+        ch.language = "es"
+        channels.append(ch)
+
+    mock_vc = MagicMock(spec=discord.VoiceChannel)
+    view = IptvSearchView(channels, mock_vc)
+    view.selected_language = "es"
+    view.selected_category = "all"
+
+    filtered = view.get_filtered_channels()
+    assert len(filtered) == 30
+
+    # Page 0 should show first 25
+    assert view.current_page == 0
+    assert view._total_pages(len(filtered)) == 2
+
+    # Navigate to page 1
+    view.current_page = 1
+    start = view.current_page * view.PAGE_SIZE
+    page_channels = filtered[start : start + view.PAGE_SIZE]
+    assert len(page_channels) == 5  # remaining 5
+
+    # Clamping: page beyond max goes to last page
+    view.current_page = 99
+    view.setup_components()
+    assert view.current_page == 1  # clamped to last valid page
+
+    # Clamping: negative page goes to 0
+    view.current_page = -1
+    view.setup_components()
+    assert view.current_page == 0
+
+
+@pytest.mark.asyncio
+async def test_search_view_text_search():
+    """Free-text search filters channels by substring match."""
+    from bot import IptvSearchView
+    import discord
+    from unittest.mock import MagicMock
+
+    ch1 = iptv.Channel()
+    ch1.name = "ESPN Deportes"
+    ch1.group = "Sports"
+    ch1.language = "es"
+
+    ch2 = iptv.Channel()
+    ch2.name = "Fox Sports"
+    ch2.group = "Sports"
+    ch2.language = "es"
+
+    ch3 = iptv.Channel()
+    ch3.name = "CNN en Español"
+    ch3.group = "News"
+    ch3.language = "es"
+
+    channels = [ch1, ch2, ch3]
+    mock_vc = MagicMock(spec=discord.VoiceChannel)
+    view = IptvSearchView(channels, mock_vc)
+    view.selected_language = "es"
+    view.selected_category = "all"
+
+    # Search for "espn"
+    view.search_query = "espn"
+    filtered = view.get_filtered_channels()
+    assert len(filtered) == 1
+    assert filtered[0].name == "ESPN Deportes"
+
+    # Search for "sports" matches Fox Sports only (ESPN has "Deportes")
+    view.search_query = "sports"
+    filtered = view.get_filtered_channels()
+    assert len(filtered) == 1
+    assert filtered[0].name == "Fox Sports"
+
+    # Search is case-insensitive
+    view.search_query = "CNN"
+    filtered = view.get_filtered_channels()
+    assert len(filtered) == 1
+    assert filtered[0].name == "CNN en Español"
+
+    # Clear search shows all again
+    view.search_query = None
+    filtered = view.get_filtered_channels()
+    assert len(filtered) == 3
+
