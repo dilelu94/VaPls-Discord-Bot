@@ -39,6 +39,82 @@ logger = logging.getLogger("apiServer")
 _PROCESS_START = time.time()
 _GATEWAY_CONNECTED_AT: Optional[float] = None
 
+# ---- Pending image retry queue --------------------------------------------
+# Images that failed to describe (e.g. Gemini rate-limited) are queued here
+# and retried periodically until they succeed or the bot restarts.
+_pending_images: list[dict] = []
+_PENDING_QUEUE_PATH = os.path.join(os.path.dirname(__file__), "data", "pending_images.json")
+_PENDING_RETRY_INTERVAL = 60
+
+def _save_pending_queue() -> None:
+    data = [
+        {
+            "guild_id": item["guild_id"],
+            "speaker": item["speaker"],
+            "ts": item["ts"],
+            "mime": item["mime"],
+            "retries": item["retries"],
+            "b64": base64.b64encode(item["bytes"]).decode(),
+        }
+        for item in _pending_images
+    ]
+    with open(_PENDING_QUEUE_PATH, "w") as f:
+        json.dump(data, f)
+
+
+def _load_pending_queue() -> None:
+    try:
+        with open(_PENDING_QUEUE_PATH) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return
+    for item in data:
+        _pending_images.append({
+            "guild_id": item["guild_id"],
+            "speaker": item["speaker"],
+            "ts": item["ts"],
+            "mime": item["mime"],
+            "retries": item.get("retries", 0),
+            "bytes": base64.b64decode(item["b64"]),
+        })
+    if _pending_images:
+        logger.info("loaded %d pending images for retry", len(_pending_images))
+
+
+async def _process_pending_images() -> None:
+    while True:
+        await asyncio.sleep(_PENDING_RETRY_INTERVAL)
+        if not _pending_images:
+            continue
+        for item in list(_pending_images):
+            desc = await geminiCommand.describe_image(item["bytes"], item["mime"])
+            if desc and desc != "(imagen sin descripción)":
+                text = f"[imagen: {desc}]"
+                asyncio.create_task(
+                    geminiCommand.inject_telegram_message(
+                        guild_id=item["guild_id"],
+                        speaker=item["speaker"],
+                        text=text,
+                        ts=item["ts"],
+                    )
+                )
+                _pending_images.remove(item)
+                _save_pending_queue()
+                logger.info(
+                    "retried image from %s -> success: %r", item["speaker"], desc[:100]
+                )
+            else:
+                item["retries"] += 1
+                _save_pending_queue()
+                logger.warning(
+                    "retry %d for image from %s still failed",
+                    item["retries"],
+                    item["speaker"],
+                )
+
+
+_load_pending_queue()
+
 
 class _BufferChannel:
     """Fake Discord channel that buffers send() calls for API relay."""
@@ -1357,12 +1433,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if guild_id is None or speaker is None or file_bytes is None:
             return web.json_response({"error": "missing guild_id, speaker, or file"}, status=400)
 
-        # Describe the image asynchronously
+        # Describe the image; if it fails, queue for retry instead of injecting garbage
         description = await geminiCommand.describe_image(file_bytes, mime_type)
+        if not description or description == "(imagen sin descripción)":
+            _pending_images.append({
+                "guild_id": guild_id,
+                "speaker": speaker,
+                "ts": ts,
+                "bytes": file_bytes,
+                "mime": mime_type,
+                "retries": 0,
+            })
+            _save_pending_queue()
+            logger.warning("image from %s queued for retry (describe failed)", speaker)
+            return web.json_response({"ok": False, "error": "describe failed, queued for retry"})
+
         text = f"[imagen: {description}]"
-        logger.info(
-            "telegram image from %s -> %r", speaker, description[:100]
-        )
+        logger.info("telegram image from %s -> %r", speaker, description[:100])
         asyncio.create_task(
             geminiCommand.inject_telegram_message(
                 guild_id=guild_id, speaker=speaker, text=text, ts=ts
@@ -1726,5 +1813,6 @@ async def startApiServer(bot: discord.Bot) -> web.AppRunner:
     await runner.setup()
     site = web.TCPSite(runner, host=config.API_HOST, port=config.API_PORT)
     await site.start()
+    asyncio.create_task(_process_pending_images())
     logger.info(f"HTTP API listening on http://{config.API_HOST}:{config.API_PORT}")
     return runner
