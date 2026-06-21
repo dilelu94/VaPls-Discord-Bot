@@ -211,6 +211,10 @@ class GoLiveStream:
             except Exception:
                 pass
 
+        guild = client.get_guild(self.guild_id)
+        if guild:
+            _schedule_nickname_restore(guild)
+
         log.info("[STREAM] Stream stopped and cleaned up")
 
 
@@ -232,6 +236,18 @@ async def _set_nickname(guild: discord.Guild, name: str) -> None:
             log.warning("[NICK] bot member not found in guild=%s", guild.id)
     except Exception as e:
         log.warning("[NICK] failed to set nick in guild=%s: %s", guild.id, e)
+
+
+def _schedule_nickname_restore(guild: discord.Guild) -> None:
+    async def _delayed_restore():
+        await asyncio.sleep(30)
+        await _set_nickname(guild, DEFAULT_NICKNAME)
+        _nick_restore_tasks.pop(guild.id, None)
+
+    task = _nick_restore_tasks.get(guild.id)
+    if task:
+        task.cancel()
+    _nick_restore_tasks[guild.id] = asyncio.create_task(_delayed_restore())
 
 
 def _guild_allowed(guild_id: int) -> bool:
@@ -387,18 +403,6 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
     except Exception as e:
         log.exception("[STOPSTREAM] stop failed")
         return web.json_response({"error": str(e)}, status=500)
-
-    guild = client.get_guild(guild_id)
-    if guild:
-        async def _delayed_restore():
-            await asyncio.sleep(30)
-            await _set_nickname(guild, DEFAULT_NICKNAME)
-            _nick_restore_tasks.pop(guild_id, None)
-
-        task = _nick_restore_tasks.get(guild_id)
-        if task:
-            task.cancel()
-        _nick_restore_tasks[guild_id] = asyncio.create_task(_delayed_restore())
 
     log.info("[STOPSTREAM] stopped guild=%s", guild_id)
     return web.json_response({"stopped": True, "guild_id": guild_id})
