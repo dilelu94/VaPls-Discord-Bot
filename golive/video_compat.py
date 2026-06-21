@@ -1,69 +1,32 @@
-"""Patches discord.py-self DiscordVoiceWebSocket to advertise H.264 video.
+"""
+video_compat.py – Patches discord.py-self to support H.264 video streaming.
 
-Three patches must be applied before any voice connections:
+Three patches are applied in bot.py before any voice connections are made:
 
-1. identify() — adds video: true + streams descriptor to IDENTIFY (op 0)
-2. select_protocol() — adds H264 codec to SELECT_PROTOCOL (op 1)
-3. client_connect() — adds video_ssrc + streams to VIDEO (op 12)
+1.  DiscordVoiceWebSocket.identify
+    Adds `video: true` and a `streams` descriptor to the IDENTIFY (op 0)
+    payload.  Without this the voice server never sets up video forwarding,
+    so all video RTP packets are silently dropped regardless of op 12.
 
-Without these, Discord silently drops all video RTP packets.
+2.  DiscordVoiceWebSocket.select_protocol
+    Adds a `codecs` field to the SELECT_PROTOCOL (op 1) payload so Discord's
+    voice server knows we support H.264 video alongside Opus audio.
 
-client_connect() reads the actual encoder config from env vars (same vars as
-streamer.py) so max_bitrate/max_framerate/max_resolution match what FFmpeg is
-configured to produce. Free Discord accounts are capped at 720p30.
+3.  DiscordVoiceWebSocket.client_connect
+    Extends the VIDEO (op 12) payload to include `video_ssrc`, `rtx_ssrc`, and
+    a `streams` array with the required `max_bitrate`, `max_framerate`, and
+    `max_resolution` fields that Discord needs to allocate bandwidth.
+
+The video SSRC is always audio_ssrc + 1 (VIDEO_SSRC_OFFSET).  The RTX SSRC
+(used for retransmission, not sent by the bot) is audio_ssrc + 2.
 """
 
 from __future__ import annotations
 
-import os
-import re
-
+# H.264 dynamic payload type Discord uses (matches what the official client sends)
 H264_PAYLOAD_TYPE: int = 101
 VIDEO_SSRC_OFFSET: int = 1
 RTX_SSRC_OFFSET: int = 2
-
-_STREAM_PRESETS: dict[str, tuple[int, int, int, int]] = {
-    "720p": (1280, 720, 30, 2_500_000),
-    "1080p": (1920, 1080, 30, 4_500_000),
-    "4k": (3840, 2160, 30, 8_000_000),
-}
-
-
-def _stream_cfg() -> tuple[int, int, int, int]:
-    """(width, height, fps, bitrate) from env, capped at 720p30 for free accts."""
-    raw_q = os.environ.get("STREAM_QUALITY", "").strip().lower()
-    w, h, f, br = _STREAM_PRESETS.get(raw_q, _STREAM_PRESETS["720p"])
-
-    raw_res = os.environ.get("STREAM_RESOLUTION", "").strip().replace("x", ":")
-    if raw_res and re.fullmatch(r"\d{2,5}:\d{2,5}", raw_res):
-        parts = raw_res.split(":")
-        w, h = int(parts[0]), int(parts[1])
-
-    raw_fps = os.environ.get("STREAM_FPS", "").strip()
-    if raw_fps:
-        try:
-            f = int(float(raw_fps))
-        except ValueError:
-            pass
-
-    raw_br = os.environ.get("STREAM_VIDEO_BITRATE", "").strip()
-    if raw_br:
-        br = _parse_bitrate(raw_br)
-
-    # Cap at 720p30 (Discord free account limit)
-    w = min(w, 1280)
-    h = min(h, 720)
-    f = min(f, 30)
-    return w, h, f, br
-
-
-def _parse_bitrate(s: str) -> int:
-    s = s.lower().strip()
-    if s.endswith("k"):
-        return int(float(s[:-1]) * 1000)
-    if s.endswith("m"):
-        return int(float(s[:-1]) * 1_000_000)
-    return int(s)
 
 
 async def _patched_identify(self) -> None:
@@ -113,9 +76,8 @@ async def _patched_client_connect(self) -> None:
     ssrc = self._connection.ssrc
     video_ssrc = ssrc + VIDEO_SSRC_OFFSET
     rtx_ssrc = ssrc + RTX_SSRC_OFFSET
-    w, h, f, br = _stream_cfg()
     payload = {
-        "op": getattr(self, "VIDEO", 12),
+        "op": self.VIDEO,
         "d": {
             "audio_ssrc": ssrc,
             "video_ssrc": video_ssrc,
@@ -128,12 +90,12 @@ async def _patched_client_connect(self) -> None:
                     "active": True,
                     "quality": 100,
                     "rtx_ssrc": rtx_ssrc,
-                    "max_bitrate": br,
-                    "max_framerate": f,
+                    "max_bitrate": 10_000_000,
+                    "max_framerate": 60,
                     "max_resolution": {
                         "type": "fixed",
-                        "width": w,
-                        "height": h,
+                        "width": 1920,
+                        "height": 1080,
                     },
                 }
             ],
