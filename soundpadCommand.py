@@ -8,7 +8,7 @@ import discord
 import config
 import analytics
 import geminiKeys
-from greeting import set_pending_trigger
+
 
 _log = logging.getLogger("bot.soundpad")
 
@@ -649,7 +649,6 @@ class SoundpadView(discord.ui.View):
                 except Exception:
                     pass
         try:
-            set_pending_trigger(interaction.user.voice.channel.id, interaction.user.id)
             vc = await interaction.user.voice.channel.connect(
                 reconnect=True, timeout=10.0
             )
@@ -1154,14 +1153,11 @@ async def soundpadLogic(
     vc = ctx.guild.voice_client
     if not vc:
         try:
-            set_pending_trigger(ctx.author.voice.channel.id, ctx.author.id)
             vc = await ctx.author.voice.channel.connect(reconnect=True, timeout=10.0)
         except Exception as e:
             return await ctx.followup.send(f"❌ Error al conectar: {e}", ephemeral=True)
-        # trigger_soundboard_entry ya se dispara por on_voice_state_update
     elif vc.channel.id != ctx.author.voice.channel.id:
         try:
-            set_pending_trigger(ctx.author.voice.channel.id, ctx.author.id)
             await vc.move_to(ctx.author.voice.channel)
         except Exception as e:
             _log.warning("Failed to move_to in soundpadLogic: %s", e)

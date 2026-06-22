@@ -21,7 +21,7 @@ from urllib.parse import urljoin
 
 import aiohttp
 
-from greeting import set_pending_trigger
+
 
 # Configure a rotating logger for play command steps
 playLogger = logging.getLogger("play_logger")
@@ -2023,7 +2023,6 @@ class GuildPlayer:
             self.pendingVoiceChannel = None
             self.pendingTriggerUserId = None
             try:
-                set_pending_trigger(target.id, trigger_user)
                 self.vc = await target.connect(reconnect=True)
             except Exception as e:
                 playLogger.exception("[PLAY] deferred voice connect failed")
@@ -3229,7 +3228,6 @@ async def playLogic(
                 except Exception:
                     pass
                 setattr(vc, "recording", False)
-            set_pending_trigger(channel.id, ctx.author.id)
             await vc.move_to(channel)
         if player.interrupted and player.currentSong:
             try:
@@ -3246,7 +3244,6 @@ async def playLogic(
         # Saved song to resume but no live vc — reconnect now (file is still
         # cached because onSongFinished short-circuits when interrupted).
         try:
-            set_pending_trigger(channel.id, ctx.author.id)
             vc = await channel.connect(reconnect=True)
             await player.resumeFromInterruption(vc)
         except Exception:
@@ -3617,7 +3614,6 @@ async def playFromIndio(
                 except Exception:
                     pass
                 setattr(vc, "recording", False)
-            set_pending_trigger(voice_channel.id, bot.user.id if bot.user else 0)
             await vc.move_to(voice_channel)
     except Exception as e:
         playLogger.warning(f"[PLAY-INDIO] voice connect failed: {e}")
@@ -3753,7 +3749,6 @@ async def reconnectLastSong(
             player.pendingVoiceChannel = voice_channel
             player.pendingTriggerUserId = trigger_user
         elif vc.channel.id != voice_channel.id:
-            set_pending_trigger(voice_channel.id, trigger_user)
             await vc.move_to(voice_channel)
             player.vc = vc
         else:

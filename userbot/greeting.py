@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import time
 from typing import Optional
 
@@ -43,8 +44,12 @@ def resolve_greeting_path(user_id: int) -> Optional[str]:
     """Return the absolute greeting path for a user, or ``None`` when the user
     has no explicit greeting configured.
 
-    Unlike the main bot's :func:`greeting._resolve_greeting_path`, there is no
-    default fallback: only users with an explicit ``greeting`` key in
+    Supports three greeting formats:
+    - Plain string: ``"Audios/bokita.mp3"``
+    - List of strings: ``["a.mp3", "b.mp3"]`` — picks one at random
+    - List of dicts with weights: ``[{"path": "a.mp3", "weight": 99}, ...]``
+
+    No default fallback — only users with an explicit ``greeting`` key in
     ``users.USERS`` produce a path.
     """
     if user_id is None:
@@ -52,6 +57,22 @@ def resolve_greeting_path(user_id: int) -> Optional[str]:
     info = _users_map().get(user_id) or {}
     rel = info.get("greeting")
     if not rel:
+        return None
+    if isinstance(rel, list) and rel:
+        paths = []
+        weights = []
+        for item in rel:
+            if isinstance(item, dict) and "path" in item:
+                paths.append(item["path"])
+                weights.append(item.get("weight", 1))
+            elif isinstance(item, str):
+                paths.append(item)
+                weights.append(1)
+        if paths:
+            rel = random.choices(paths, weights=weights, k=1)[0]
+        else:
+            return None
+    if not isinstance(rel, str):
         return None
     return os.path.join(config.CUSTOM_AUDIO_PATH, rel)
 

@@ -26,7 +26,6 @@ from suggestionsCommand import (
     migrate_existing_suggestions,
     sync_closed_issues,
 )
-from greeting import trigger_soundboard_entry, set_pending_trigger
 import config
 import analytics
 import apiServer
@@ -620,13 +619,10 @@ async def on_voice_state_update(member, before, after):
                     "trigger": "state_update",
                 },
             )
-            asyncio.create_task(trigger_soundboard_entry(after.channel))
             try:
                 start_idle_watchdog(bot, after.channel.guild.id)
             except Exception:
                 log.exception("failed to start idle watchdog")
-        elif before.channel and after.channel and before.channel.id != after.channel.id:
-            asyncio.create_task(trigger_soundboard_entry(after.channel))
         elif before.channel and not after.channel:
             analytics.capture(
                 "voice channel left",
