@@ -333,6 +333,15 @@ def _vc_for_guild(guild: discord.Guild) -> Optional[discord.VoiceClient]:
 async def _join_channel(channel: discord.VoiceChannel):
     if not _guild_allowed(channel.guild.id):
         return
+    if not client.is_ready():
+        log.info("[VOICE] client not ready, waiting up to 30s...")
+        for _ in range(30):
+            if client.is_ready():
+                break
+            await asyncio.sleep(1)
+        if not client.is_ready():
+            log.warning("[VOICE] client still not ready after 30s")
+            return
     existing = _vc_for_guild(channel.guild)
     try:
         if existing:
@@ -382,8 +391,14 @@ async def _relay_stream(request: web.Request) -> web.Response:
     log.info("[STREAM] guild=%s channel=%s url=%s title=%s", guild_id, channel_id, url[:120], stream_title)
 
     if not client.is_ready():
-        log.warning("[STREAM] client not ready")
-        return web.json_response({"error": "client not ready"}, status=503)
+        log.info("[STREAM] client not ready, waiting up to 30s...")
+        for _ in range(30):
+            if client.is_ready():
+                break
+            await asyncio.sleep(1)
+        if not client.is_ready():
+            log.warning("[STREAM] client still not ready after 30s")
+            return web.json_response({"error": "client not ready"}, status=503)
 
     existing = _active_streams.pop(guild_id, None)
     if existing:
