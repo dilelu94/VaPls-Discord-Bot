@@ -1479,6 +1479,10 @@ _indio_locks: dict[str, asyncio.Lock] = {}
 _persist_lock = asyncio.Lock()
 # Per-key flag: a compression task is in-flight, don't spawn another.
 _indio_compressing: set[str] = set()
+# Per-key queue for turns that arrive while a compression cycle is running.
+# Drained back into history when compression finishes. Persisted so it
+# survives server restarts.
+_indio_compress_queue: dict[str, list[dict]] = {}
 # "Main characters" roster persisted alongside long-term memory. Refreshed
 # at most once per ``_ROSTER_REFRESH_INTERVAL_SEC``; see _maybe_refresh_current_members.
 _indio_current_members: dict[str, list[str]] = {}
@@ -1533,6 +1537,9 @@ def _load_indio_state() -> None:
         if isinstance(current_members, list) and current_members:
             _indio_current_members[key] = [str(n) for n in current_members if n]
             _indio_members_refreshed_at[key] = current_members_at
+        compress_queue = val.get("compress_queue") or []
+        if isinstance(compress_queue, list) and compress_queue:
+            _indio_compress_queue[key] = [_sanitize_turn_on_load(t) for t in compress_queue]
     if loaded or _indio_long_term or _indio_current_members:
         logger.info(
             "indio memory: loaded %d entries (long_term=%d, roster=%d) from %s",
@@ -1563,7 +1570,12 @@ async def _persist_indio_state() -> None:
     so concurrent turns don't clobber each other's writes."""
     path = config.INDIO_MEMORY_PATH
     async with _persist_lock:
-        keys = set(_indio_history) | set(_indio_long_term) | set(_indio_current_members)
+        keys = (
+            set(_indio_history)
+            | set(_indio_long_term)
+            | set(_indio_current_members)
+            | set(_indio_compress_queue)
+        )
         payload = {
             "entries": {
                 k: {
@@ -1574,6 +1586,7 @@ async def _persist_indio_state() -> None:
                     "current_members_refreshed_at": _indio_members_refreshed_at.get(
                         k, 0.0
                     ),
+                    "compress_queue": _indio_compress_queue.get(k, []),
                 }
                 for k in keys
             }
@@ -2620,6 +2633,26 @@ async def _maybe_compress(mem_key: str) -> None:
             drop_count,
             len(new_lt.get("users", {})),
         )
+        # Drain queued turns that arrived while compression was running.
+        queue_turns = _indio_compress_queue.pop(mem_key, [])
+        if queue_turns:
+            async with lock:
+                history = list(_indio_history.get(mem_key, []))
+                history.extend(queue_turns)
+                if len(history) > _HISTORY_HARD_CAP:
+                    history = history[-_HISTORY_HARD_CAP:]
+                _indio_history[mem_key] = history
+                _indio_last_seen[mem_key] = time.time()
+                size_after_drain = len(history)
+            await _persist_indio_state()
+            logger.info(
+                "indio compress: drained %d queued turns for %s (hist=%d)",
+                len(queue_turns),
+                mem_key,
+                size_after_drain,
+            )
+            if size_after_drain >= _HISTORY_COMPRESS_THRESHOLD:
+                _spawn(_maybe_compress(mem_key))
     finally:
         _indio_compressing.discard(mem_key)
 
@@ -4980,20 +5013,27 @@ async def indioLogic(
             ],
             "ts": _turn_ts,
         }
-        async with lock:
-            existing = _indio_history.get(mem_key, history_snapshot)
-            new_hist = list(existing) + [user_turn, model_turn]
-            # Hard cap as a safety net if compression keeps failing.
-            if len(new_hist) > _HISTORY_HARD_CAP:
-                new_hist = new_hist[-_HISTORY_HARD_CAP:]
-            _indio_history[mem_key] = new_hist
-            _indio_last_seen[mem_key] = time.time()
-            history_size_after = len(new_hist)
-        await _persist_indio_state()
+        if mem_key in _indio_compressing:
+            async with lock:
+                queue = _indio_compress_queue.setdefault(mem_key, [])
+                queue.append(user_turn)
+                queue.append(model_turn)
+            await _persist_indio_state()
+        else:
+            async with lock:
+                existing = _indio_history.get(mem_key, history_snapshot)
+                new_hist = list(existing) + [user_turn, model_turn]
+                # Hard cap as a safety net if compression keeps failing.
+                if len(new_hist) > _HISTORY_HARD_CAP:
+                    new_hist = new_hist[-_HISTORY_HARD_CAP:]
+                _indio_history[mem_key] = new_hist
+                _indio_last_seen[mem_key] = time.time()
+                history_size_after = len(new_hist)
+            await _persist_indio_state()
 
-        # Background distillation when the short-term log grows past threshold.
-        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-            _spawn(_maybe_compress(mem_key))
+            # Background distillation when the short-term log grows past threshold.
+            if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+                _spawn(_maybe_compress(mem_key))
 
     analytics.capture(
         "indio invoked",
@@ -5427,18 +5467,25 @@ async def indioFromVoice(
             ],
             "ts": _turn_ts,
         }
-        async with lock:
-            existing = _indio_history.get(mem_key, history_snapshot)
-            new_hist = list(existing) + [user_turn, model_turn]
-            if len(new_hist) > _HISTORY_HARD_CAP:
-                new_hist = new_hist[-_HISTORY_HARD_CAP:]
-            _indio_history[mem_key] = new_hist
-            _indio_last_seen[mem_key] = time.time()
-            history_size_after = len(new_hist)
-        await _persist_indio_state()
+        if mem_key in _indio_compressing:
+            async with lock:
+                queue = _indio_compress_queue.setdefault(mem_key, [])
+                queue.append(user_turn)
+                queue.append(model_turn)
+            await _persist_indio_state()
+        else:
+            async with lock:
+                existing = _indio_history.get(mem_key, history_snapshot)
+                new_hist = list(existing) + [user_turn, model_turn]
+                if len(new_hist) > _HISTORY_HARD_CAP:
+                    new_hist = new_hist[-_HISTORY_HARD_CAP:]
+                _indio_history[mem_key] = new_hist
+                _indio_last_seen[mem_key] = time.time()
+                history_size_after = len(new_hist)
+            await _persist_indio_state()
 
-        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-            _spawn(_maybe_compress(mem_key))
+            if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+                _spawn(_maybe_compress(mem_key))
 
     # Si la respuesta se redirigio a otro canal, fallback al primer mensaje
     # del Indio en el target como landing point del link cuando no hubo header.
@@ -5600,15 +5647,20 @@ async def inject_telegram_message(
         "parts": [{"text": sanitized[:_STORED_MSG_MAX_CHARS]}],
         "ts": ts,
     }
-    async with lock:
-        history = list(_indio_history.get(mem_key, []))
-        history.append(user_turn)
-        _indio_history[mem_key] = history
-        _indio_last_seen[mem_key] = ts
-        size = len(history)
-    await _persist_indio_state()
-    if size >= _HISTORY_COMPRESS_THRESHOLD:
-        _spawn(_maybe_compress(mem_key))
+    if mem_key in _indio_compressing:
+        async with lock:
+            _indio_compress_queue.setdefault(mem_key, []).append(user_turn)
+        await _persist_indio_state()
+    else:
+        async with lock:
+            history = list(_indio_history.get(mem_key, []))
+            history.append(user_turn)
+            _indio_history[mem_key] = history
+            _indio_last_seen[mem_key] = ts
+            size = len(history)
+        await _persist_indio_state()
+        if size >= _HISTORY_COMPRESS_THRESHOLD:
+            _spawn(_maybe_compress(mem_key))
     logger.info(
         "injected telegram message from %s (%d chars, mem=%s, hist=%d)",
         speaker,
