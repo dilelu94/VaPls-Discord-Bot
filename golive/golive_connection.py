@@ -114,6 +114,7 @@ class GoLiveConnection:
 
         self._poll_task: asyncio.Task | None = None
         self._socket_reader: SocketReader | None = None
+        self._ws_healthy = True
 
     # ── VoiceConnectionState-compatible properties ────────────────────────────
     # DiscordVoiceWebSocket.identify() (patched by video_compat) reads these.
@@ -331,6 +332,7 @@ class GoLiveConnection:
             pass
         except Exception as exc:
             log.warning("GoLive WS poller ended: %s", exc)
+            self._ws_healthy = False
 
     def add_socket_listener(self, callback) -> None:
         if self._socket_reader is not None:
@@ -339,6 +341,10 @@ class GoLiveConnection:
     def remove_socket_listener(self, callback) -> None:
         if self._socket_reader is not None:
             self._socket_reader.unregister(callback)
+
+    @property
+    def healthy(self) -> bool:
+        return self._ws_healthy and bool(self.ws) and not self.ws.is_closed()
 
     def send_packet(self, packet: bytes) -> None:
         """Send a raw RTP packet to the go-live stream server."""

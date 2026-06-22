@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import sys
 from typing import Optional
 
@@ -145,10 +146,14 @@ class GoLiveStream:
         self.audio_sender = None
         
     def _wait_players(self):
-        if self.video_player and self.video_player.is_alive():
-            self.video_player.join(timeout=2.0)
-        if self.audio_sender and self.audio_sender.is_alive():
-            self.audio_sender.join(timeout=2.0)
+        deadline = time.monotonic() + 5.0
+        for p in (self.video_player, self.audio_sender):
+            if p and p.is_alive():
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    p.join(timeout=remaining)
+                if p.is_alive():
+                    log.warning('[STREAM] %s still alive after 5s', p.name)
 
     async def _inactivity_loop(self):
         """Monitors player health and reconnects if live, or auto-stops."""
@@ -158,17 +163,27 @@ class GoLiveStream:
                 if self._stopped:
                     break
 
+                if self.conn and not self.conn.healthy:
+                    log.warning("[STREAM] GoLive connection lost. Reconnecting...")
+                    ok = await self._restart_connection()
+                    if self._stopped:
+                        break
+                    if not ok:
+                        log.error("[STREAM] GoLive reconnect failed. Auto-stopping.")
+                        break
+                    continue
+
                 if self.video_player and not self.video_player.is_alive():
                     if self.is_live:
                         self.reconnect_attempts += 1
                         emitted = getattr(self.video_player, "_frames_emitted", 0)
                         if emitted > 900:  # ~30s at 30fps means stable stream
-                            self.reconnect_attempts = 1
-                            
+                            self.reconnect_attempts = 0
+
                         if self.reconnect_attempts > 5:
                             log.error("[STREAM] Video player died too many times. Auto-stopping.")
                             break
-                        
+
                         log.warning("[STREAM] Video player died (attempt %d). Reconnecting in 3s...", self.reconnect_attempts)
                         await self._stop_players()
                         await asyncio.sleep(3)
@@ -188,6 +203,39 @@ class GoLiveStream:
         if not self._stopped:
             _active_streams.pop(self.guild_id, None)
             await self.stop()
+
+    async def _restart_connection(self) -> bool:
+        """Re-establish the GoLive connection from scratch after a WS/UDP drop.
+        Returns True on success, False on failure or exhausted retries."""
+        if self._stopped:
+            return False
+        self.reconnect_attempts += 1
+        if self.reconnect_attempts > 5:
+            log.error("[STREAM] GoLive reconnect too many times. Auto-stopping.")
+            return False
+
+        await self._stop_players()
+
+        if self.conn:
+            try:
+                await self.conn.disconnect()
+            except Exception:
+                pass
+
+        await asyncio.sleep(3)
+        if self._stopped:
+            return False
+
+        try:
+            self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
+            await self.conn.connect(timeout=30.0)
+            self.video_ssrc = self.conn.ssrc + 1
+            await self._start_players()
+            log.info("[STREAM] GoLive reconnected successfully")
+            return True
+        except Exception as e:
+            log.error("[STREAM] GoLive reconnect failed: %s", e)
+            return False
 
     def pause(self):
         if self.video_player:
@@ -215,6 +263,10 @@ class GoLiveStream:
             await self._stop_players()
         except Exception:
             pass
+        # Drain window: let any in-flight nacl/opus encrypt calls complete
+        # before closing the UDP socket, to avoid heap corruption from
+        # concurrent C-level crypto operations.
+        await asyncio.sleep(0.05)
         if self.conn:
             try:
                 await self.conn.disconnect()
