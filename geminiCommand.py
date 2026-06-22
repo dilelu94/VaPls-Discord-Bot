@@ -2618,22 +2618,25 @@ async def _maybe_compress(mem_key: str) -> None:
             old_turns = history[:drop_count]
             current_lt = dict(_indio_long_term.get(mem_key, {}))
         new_lt = await _compress_per_user(current_lt, old_turns)
-        if new_lt is None:
+        success = new_lt is not None
+        if success:
+            async with lock:
+                history = _indio_history.get(mem_key, [])
+                if len(history) >= drop_count:
+                    _indio_history[mem_key] = history[drop_count:]
+                _indio_long_term[mem_key] = new_lt
+            await _persist_indio_state()
+            logger.info(
+                "indio compress: ok for %s (dropped %d turns, users=%d)",
+                mem_key,
+                drop_count,
+                len(new_lt.get("users", {})),
+            )
+        else:
             logger.info("indio compress: skipped (lt unchanged) for %s", mem_key)
-            return
-        async with lock:
-            history = _indio_history.get(mem_key, [])
-            if len(history) >= drop_count:
-                _indio_history[mem_key] = history[drop_count:]
-            _indio_long_term[mem_key] = new_lt
-        await _persist_indio_state()
-        logger.info(
-            "indio compress: ok for %s (dropped %d turns, users=%d)",
-            mem_key,
-            drop_count,
-            len(new_lt.get("users", {})),
-        )
+
         # Drain queued turns that arrived while compression was running.
+        # Always runs, regardless of whether compression succeeded.
         queue_turns = _indio_compress_queue.pop(mem_key, [])
         if queue_turns:
             async with lock:
@@ -2651,7 +2654,7 @@ async def _maybe_compress(mem_key: str) -> None:
                 mem_key,
                 size_after_drain,
             )
-            if size_after_drain >= _HISTORY_COMPRESS_THRESHOLD:
+            if not success and size_after_drain >= _HISTORY_COMPRESS_THRESHOLD:
                 _spawn(_maybe_compress(mem_key))
     finally:
         _indio_compressing.discard(mem_key)
