@@ -1887,9 +1887,10 @@ def _names_from_users_py() -> list[str]:
     the source of truth because discord.py-self can't reliably enumerate every
     guild member from a user account (the cache is partial and fetch_members
     only returns members the gateway has surfaced)."""
+    sources = list(_USERS.values()) + list(_NON_DISCORD_MEMBERS)
     return [
         info["name"]
-        for info in _USERS.values()
+        for info in sources
         if isinstance(info, dict) and info.get("name")
     ]
 
@@ -2143,6 +2144,74 @@ REGLAS DE CALIDAD:
     _LT_JOKES,
 )
 
+_COMPRESS_PER_USER_SYSTEM = """\
+Sos un asistente que mantiene la ficha de un amigo del grupo. Recibís (a) la \
+ficha actual de este usuario en JSON y (b) mensajes del chat grupal donde este \
+usuario participó o fue mencionado. Los mensajes son entre amigos hablando \
+entre sí, NO necesariamente dirigiéndose al Indio.
+
+Tu trabajo: devolver SOLO el JSON actualizado de este usuario, sin texto \
+adicional ni bloques markdown, con esta estructura exacta:
+{
+  "traits": ["rasgos de personalidad o intereses del usuario"],
+  "preguntas_tipicas": ["qué tipo de cosas suele preguntar o decir"],
+  "anecdotas": ["momentos del grupo que lo involucran"]
+}
+
+FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
+- Saludos, despedidas o frases sociales vacías ("hola", "buenas", "como \
+  andan", "chau", "gracias", "de nada").
+- Mensajes de solo emojis, stickers, o reacciones.
+- URLs, links, o referencias a contenido externo sin contexto del grupo.
+- Órdenes o comandos directos al bot ("indio poné música", "/play x").
+- Información técnica, configuraciones, o discusiones sobre el \
+  funcionamiento del bot/server.
+- Hechos que no involucren a este usuario.
+- Repeticiones de información ya presente en la ficha actual.
+- Música, pedidos de play, soundpad o DJ mode.
+
+REGLAS DE CALIDAD:
+- Solo incluí información sobre el usuario de la ficha, no de otros.
+- Cada string ≤120 caracteres.
+- Máx %d rasgos, %d preguntas_tipicas y %d anecdotas.
+- Español rioplatense, casual, conciso.
+- Priorizá hechos concretos y novedosos sobre confirmaciones.
+- Devolvé SOLO el JSON. Sin ```json ni explicación.
+""" % (
+    _LT_TRAITS_PER_USER,
+    _LT_QUESTIONS_PER_USER,
+    _LT_ANECDOTES_PER_USER,
+)
+
+_COMPRESS_GROUP_SYSTEM = """\
+Sos un asistente que mantiene la memoria grupal de un grupo de amigos en un \
+server de Discord. Recibís (a) la memoria actual en JSON y (b) una \
+conversación del grupo. Los mensajes son entre amigos hablando entre sí.
+
+Tu trabajo: devolver SOLO el JSON actualizado, sin texto adicional ni bloques \
+markdown, con esta estructura exacta:
+{
+  "eventos_del_grupo": ["cosas memorables que pasaron en el chat"],
+  "chistes_internos": ["chistes recurrentes o referencias del grupo"]
+}
+
+FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
+- Saludos, despedidas o frases sociales vacías.
+- Mensajes de solo emojis, stickers.
+- URLs, comandos, información técnica del bot.
+- Hechos que no involucren a miembros del grupo.
+- Repeticiones de información ya presente en la memoria actual.
+
+REGLAS:
+- Cada string ≤120 caracteres.
+- Máx %d eventos_del_grupo y %d chistes_internos en total.
+- Español rioplatense, casual, conciso.
+- Devolvé SOLO el JSON. Sin ```json ni explicación.
+""" % (
+    _LT_GROUP_EVENTS,
+    _LT_JOKES,
+)
+
 
 def _extract_json(text: str) -> Optional[dict]:
     """Defensive JSON parser: handles raw JSON, ```json``` fenced blocks, and
@@ -2362,44 +2431,152 @@ def _turns_to_text(turns: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def _compress_long_term(
+def _group_turns_by_speaker(turns: list[dict]) -> dict[str, list[str]]:
+    """Parse history turns and group formatted lines by speaker name.
+    Returns {speaker: [line, ...]} with lines like "Name: message".
+    Skips empty, voz, and trivial turns. Model turns get key "__indio__"."""
+    groups: dict[str, list[str]] = {}
+    for t in turns:
+        role = t.get("role", "?")
+        parts = t.get("parts") or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        if not text:
+            continue
+        if "[voz]" in text:
+            continue
+        if _is_trivial(text):
+            continue
+        if role == "model":
+            groups.setdefault("__indio__", []).append(f"indio: {text}")
+        elif role == "user":
+            colon_idx = text.find(":")
+            if colon_idx == -1:
+                continue
+            speaker = text[:colon_idx].strip()
+            msg = text[colon_idx + 1:].strip()
+            if not speaker or not msg:
+                continue
+            if _is_trivial(msg):
+                continue
+            groups.setdefault(speaker, []).append(text)
+    return groups
+
+
+async def _compress_per_user(
     current_lt: dict, old_turns: list[dict]
 ) -> Optional[dict]:
-    """Run a Gemini call to fold old verbatim turns into the long-term notes.
-    Returns the new long-term dict on success, None on any failure."""
+    """Run per-user + group Gemini calls to fold old turns into long-term notes.
+    One call per user with new messages (extracts their dossier), plus one group
+    call for eventos/chistes. Returns merged long-term dict or None on failure."""
     if not old_turns:
         return None
-    convo_text = _turns_to_text(old_turns)
-    if not convo_text.strip():
+    groups = _group_turns_by_speaker(old_turns)
+    if not groups or all(not v for v in groups.values()):
         return None
-    user_message = (
-        "Memoria actual:\n"
-        f"{json.dumps(current_lt or {}, ensure_ascii=False, indent=2)}\n\n"
-        "Conversación nueva del grupo:\n"
-        f"{convo_text}\n\n"
-        "Devolveme SOLO el JSON actualizado."
-    )
-    try:
-        reply = await geminiClient.generate(
-            user_message=user_message,
-            system_instruction=_COMPRESS_SYSTEM,
-            history=None,
-            max_output_tokens=2048,
+
+    new_lt: dict = {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
+    if isinstance(current_lt, dict):
+        for k in ("users", "eventos_del_grupo", "chistes_internos"):
+            new_lt[k] = current_lt.get(k) or ({} if k == "users" else [])
+
+    names = _names_from_users_py()
+
+    # 1. Per-user compression — one call per user that has new messages
+    for name in names:
+        lines = groups.get(name)
+        if not lines:
+            continue
+        convo_text = "\n".join(lines)
+        current_user = new_lt["users"].get(name, {})
+        user_msg = (
+            "Ficha actual de este usuario:\n"
+            f"{json.dumps(current_user, ensure_ascii=False, indent=2)}\n\n"
+            "Mensajes del chat donde este usuario participó:\n"
+            f"{convo_text}\n\n"
+            "Devolveme SOLO el JSON actualizado de este usuario."
         )
-    except geminiClient.GeminiError as e:
-        logger.warning(
-            "indio compress: gemini failed (%s, status=%s)", e.kind, e.status
+        try:
+            reply = await geminiClient.generate(
+                user_message=user_msg,
+                system_instruction=_COMPRESS_PER_USER_SYSTEM,
+                history=None,
+                max_output_tokens=1024,
+            )
+        except geminiClient.GeminiError as e:
+            logger.warning(
+                "indio compress per-user(%s): gemini failed (%s, status=%s)",
+                name, e.kind, e.status,
+            )
+            continue
+        except Exception as e:
+            logger.exception("indio compress per-user(%s) error", name)
+            analytics.capture_exception(
+                e, properties={"action": "indio_compress_per_user_error", "user": name}
+            )
+            continue
+        parsed = _extract_json(reply.text)
+        if parsed is None:
+            logger.warning(
+                "indio compress per-user(%s): JSON parse failed; raw=%r",
+                name, reply.text[:200],
+            )
+            continue
+        dossier = {}
+        for field in ("traits", "preguntas_tipicas", "anecdotas"):
+            if field in parsed and isinstance(parsed[field], list):
+                dossier[field] = parsed[field]
+        if dossier:
+            new_lt["users"][name] = dossier
+
+    # 2. Group compression — eventos and chistes from the full conversation
+    indio_lines = groups.get("__indio__", [])
+    user_lines: list[str] = []
+    for name in names:
+        user_lines.extend(groups.get(name, []))
+    all_lines = indio_lines + user_lines
+    if all_lines:
+        convo_text = "\n".join(all_lines)
+        current_group = {
+            "eventos_del_grupo": new_lt.get("eventos_del_grupo", []),
+            "chistes_internos": new_lt.get("chistes_internos", []),
+        }
+        group_msg = (
+            "Memoria actual:\n"
+            f"{json.dumps(current_group, ensure_ascii=False, indent=2)}\n\n"
+            "Conversación del grupo:\n"
+            f"{convo_text}\n\n"
+            "Devolveme SOLO el JSON actualizado."
         )
-        return None
-    except Exception as e:
-        logger.exception("indio compress: unexpected error")
-        analytics.capture_exception(e, properties={"action": "indio_compress_error"})
-        return None
-    parsed = _extract_json(reply.text)
-    if parsed is None:
-        logger.warning("indio compress: JSON parse failed; raw=%r", reply.text[:200])
-        return None
-    return _clamp_long_term(parsed)
+        try:
+            reply = await geminiClient.generate(
+                user_message=group_msg,
+                system_instruction=_COMPRESS_GROUP_SYSTEM,
+                history=None,
+                max_output_tokens=1024,
+            )
+        except geminiClient.GeminiError as e:
+            logger.warning(
+                "indio compress group: gemini failed (%s, status=%s)", e.kind, e.status
+            )
+        except Exception as e:
+            logger.exception("indio compress group error")
+            analytics.capture_exception(
+                e, properties={"action": "indio_compress_group_error"}
+            )
+        else:
+            parsed = _extract_json(reply.text)
+            if parsed is None:
+                logger.warning(
+                    "indio compress group: JSON parse failed; raw=%r",
+                    reply.text[:200],
+                )
+            else:
+                if "eventos_del_grupo" in parsed:
+                    new_lt["eventos_del_grupo"] = parsed["eventos_del_grupo"]
+                if "chistes_internos" in parsed:
+                    new_lt["chistes_internos"] = parsed["chistes_internos"]
+
+    return _clamp_long_term(new_lt)
 
 
 async def _maybe_compress(mem_key: str) -> None:
@@ -2427,7 +2604,7 @@ async def _maybe_compress(mem_key: str) -> None:
                 return
             old_turns = history[:drop_count]
             current_lt = dict(_indio_long_term.get(mem_key, {}))
-        new_lt = await _compress_long_term(current_lt, old_turns)
+        new_lt = await _compress_per_user(current_lt, old_turns)
         if new_lt is None:
             logger.info("indio compress: skipped (lt unchanged) for %s", mem_key)
             return
@@ -2476,6 +2653,47 @@ _ACTION_FALLBACK_TEXT = {
     "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
     "USE_IMAGE": "",
 }
+
+SPACEWAR_GUIDE_TEXT = """\
+**🎮 Spacewar — guía completa**
+
+Spacewar es una app de testing de Valve. Muchos juegos la necesitan en la biblioteca aunque no se "instale" como tal.
+
+**¿Ya la tenés?**
+1. Abrí Steam.
+2. Andá a tu **Biblioteca**.
+3. Escribí `Spacewar` en la barra de búsqueda de la izquierda.
+4. Si aparece, ya la tenés.
+
+**Si no la tenés — Windows:**
+1. Asegurate de que Steam esté abierto.
+2. Presioná `Windows + R`, pegá esto y dale Enter:
+   ```
+   steam://run/480
+   ```
+   Steam se abre solito y la descarga/agrega.
+
+**Linux / Steam Deck:**
+   Abrí una terminal y ejecutá:
+   ```
+   steam steam://run/480
+   ```
+
+**Bazzite:**
+   Abrí una terminal y ejecutá:
+   ```
+   flatpak run com.valvesoftware.Steam steam://run/480
+   ```
+
+⚠️ Si tira error, asegurate de tener Steam abierto antes de mandar el comando.
+
+**Configuración avanzada para Linux (WINEDLLOVERRIDES / Proton):**
+Si un juego requiere configurar Spacewar con launch options:
+```
+WINEDLLOVERRIDES="OnlineFix64=n;SteamOverlay64=n;winmm=n,b;dnet=n;steam_api64=n" SteamAppId=480 SteamGameId=480 %command%
+```
+- En Propiedades → Compatibilidad, forzá el uso de **GE-Proton** o **Proton Experimental**.
+- Si el juego no está en Steam, agregalo como juego no Steam primero."""
 
 _ACTION_ARG_MAX_CHARS = 200
 
@@ -3243,13 +3461,13 @@ async def _dispatch_indio_actions(
                             _img_path = _mgr.get_image_path(
                                 "2ed104f9-c1f2-4ed6-aebc-76083b539f96"
                             )
+                            kwargs = {}
                             if _img_path and _img_path.exists():
-                                await channel.send(
-                                    file=discord.File(
-                                        str(_img_path),
-                                        filename="spacewar_guide.png",
-                                    )
+                                kwargs["file"] = discord.File(
+                                    str(_img_path),
+                                    filename="spacewar_guide.png",
                                 )
+                            await channel.send(SPACEWAR_GUIDE_TEXT, **kwargs)
                             ok = True
                             msg = "guide sent"
                         else:
