@@ -1433,9 +1433,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if guild_id is None or speaker is None or file_bytes is None:
             return web.json_response({"error": "missing guild_id, speaker, or file"}, status=400)
 
-        # Describe the image; if it fails, queue for retry instead of injecting garbage
+        is_backfill = request.headers.get("X-Backfill", "").lower() == "1"
+
         description = await geminiCommand.describe_image(file_bytes, mime_type)
         if not description or description == "(imagen sin descripción)":
+            if is_backfill:
+                return web.json_response({"ok": False, "error": "describe failed"})
             _pending_images.append({
                 "guild_id": guild_id,
                 "speaker": speaker,

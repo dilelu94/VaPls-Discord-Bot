@@ -4,7 +4,8 @@ Spanish prompt block, and flattening turns to text for compression. These are
 deterministic, so we test them directly."""
 import geminiCommand as gc
 from geminiCommand import (
-    _clamp_long_term,
+    _sanitize_long_term,
+    _clamp_for_render,
     _extract_json,
     _format_long_term,
     _turns_to_text,
@@ -33,38 +34,39 @@ def test_extract_json_returns_none_for_non_object():
     assert _extract_json("[1, 2, 3]") is None
 
 
-# ---- _clamp_long_term ----------------------------------------------------
-def test_clamp_enforces_structure_on_garbage():
-    out = _clamp_long_term("not a dict")
+# ---- _sanitize_long_term ----------------------------------------------------
+def test_sanitize_enforces_structure_on_garbage():
+    out = _sanitize_long_term("not a dict")
     assert out == {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
 
 
-def test_clamp_caps_traits_per_user():
+def test_sanitize_keeps_all_items_within_reason():
+    """_sanitize_long_term does NOT cap per-user counts (that's _clamp_for_render's job)."""
     raw = {"users": {"Mati": {"traits": [f"t{i}" for i in range(20)]}}}
-    out = _clamp_long_term(raw)
-    assert len(out["users"]["Mati"]["traits"]) == gc._LT_TRAITS_PER_USER
+    out = _sanitize_long_term(raw)
+    assert len(out["users"]["Mati"]["traits"]) == 20
 
 
-def test_clamp_caps_events_and_jokes():
+def test_sanitize_keeps_all_events_and_jokes():
     raw = {
         "eventos_del_grupo": [f"e{i}" for i in range(50)],
         "chistes_internos": [f"j{i}" for i in range(50)],
     }
-    out = _clamp_long_term(raw)
-    assert len(out["eventos_del_grupo"]) == gc._LT_GROUP_EVENTS
-    assert len(out["chistes_internos"]) == gc._LT_JOKES
+    out = _sanitize_long_term(raw)
+    assert len(out["eventos_del_grupo"]) == 50
+    assert len(out["chistes_internos"]) == 50
 
 
-def test_clamp_truncates_long_strings():
+def test_sanitize_truncates_long_strings():
     raw = {"eventos_del_grupo": ["x" * 500]}
-    out = _clamp_long_term(raw)
-    assert len(out["eventos_del_grupo"][0]) <= 120
+    out = _sanitize_long_term(raw)
+    assert len(out["eventos_del_grupo"][0]) == gc._LT_STRING_MAX_CHARS
 
 
-def test_clamp_excludes_indio_as_user():
+def test_sanitize_excludes_indio_as_user():
     raw = {"users": {"indio": {"traits": ["soy el bot"]},
                      "Mati": {"traits": ["fan de python"]}}}
-    out = _clamp_long_term(raw)
+    out = _sanitize_long_term(raw)
     assert "indio" not in out["users"]
     assert "Mati" in out["users"]
 

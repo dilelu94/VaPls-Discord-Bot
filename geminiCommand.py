@@ -443,12 +443,14 @@ _HISTORY_KEEP_AFTER_COMPRESS = 14  # se queda con los ~7 más recientes user+mod
 _HISTORY_HARD_CAP = 50
 
 # Long-term memory bounds.
-_LONG_TERM_MAX_CHARS = 8000  # JSON dumpeado no debe pasar de esto
-_LT_TRAITS_PER_USER = 5
-_LT_QUESTIONS_PER_USER = 5
-_LT_ANECDOTES_PER_USER = 5
-_LT_GROUP_EVENTS = 10
-_LT_JOKES = 10
+_LT_STRING_MAX_CHARS = 300     # cada string individual
+_LT_MAX_USERS = 30             # máx usuarios almacenados
+_RENDER_MAX_CHARS = 96000      # tope del JSON renderizado al prompt del Indio
+_LT_TRAITS_PER_USER = 50
+_LT_QUESTIONS_PER_USER = 30
+_LT_ANECDOTES_PER_USER = 50
+_LT_GROUP_EVENTS = 50
+_LT_JOKES = 50
 
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
@@ -2032,7 +2034,11 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
     ``current_members`` is the friend roster (from users.py), rendered as a
     short header so the indio always knows who his amigos are from his own
     memory. Per-user dossiers merge static traits (users.py) with Gemini's
-    distilled long-term data."""
+    distilled long-term data.
+
+    The input dict is first clamped to ``_RENDER_MAX_CHARS`` so the rendered
+    output never blows the prompt budget."""
+    lt = _clamp_for_render(lt) if isinstance(lt, dict) else lt
     sections: list[str] = []
     if current_members:
         friends = [n for n in current_members if n != "El Indio"]
@@ -2185,16 +2191,12 @@ FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
 
 REGLAS DE CALIDAD:
 - Solo incluí información sobre el usuario de la ficha, no de otros.
-- Cada string ≤120 caracteres.
-- Máx %d rasgos, %d preguntas_tipicas y %d anecdotas.
+- Cada string ≤300 caracteres. Priorizá calidad sobre cantidad.
+- No hay límite de cantidad de rasgos, preguntas o anécdotas — guardá \
+  todo lo relevante.
 - Español rioplatense, casual, conciso.
 - Priorizá hechos concretos y novedosos sobre confirmaciones.
-- Devolvé SOLO el JSON. Sin ```json ni explicación.
-""" % (
-    _LT_TRAITS_PER_USER,
-    _LT_QUESTIONS_PER_USER,
-    _LT_ANECDOTES_PER_USER,
-)
+- Devolvé SOLO el JSON. Sin ```json ni explicación."""
 
 _COMPRESS_GROUP_SYSTEM = """\
 Sos un asistente que mantiene la memoria grupal de un grupo de amigos en un \
@@ -2216,14 +2218,11 @@ FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
 - Repeticiones de información ya presente en la memoria actual.
 
 REGLAS:
-- Cada string ≤120 caracteres.
-- Máx %d eventos_del_grupo y %d chistes_internos en total.
+- Cada string ≤300 caracteres. Priorizá calidad sobre cantidad.
+- No hay límite de cantidad de eventos o chistes — guardá todo lo \
+  relevante.
 - Español rioplatense, casual, conciso.
-- Devolvé SOLO el JSON. Sin ```json ni explicación.
-""" % (
-    _LT_GROUP_EVENTS,
-    _LT_JOKES,
-)
+- Devolvé SOLO el JSON. Sin ```json ni explicación."""
 
 
 def _extract_json(text: str) -> Optional[dict]:
@@ -2342,58 +2341,66 @@ def _clean_music_from_long_term(lt: dict) -> dict:
     return out
 
 
-def _clamp_long_term(lt: dict) -> dict:
-    """Enforce structure + per-section caps so a misbehaving Gemini response
-    can't blow up the prompt budget."""
+def _sanitize_long_term(lt: dict) -> dict:
+    """Sanitize long-term memory for storage. Enforces structure, truncates
+    strings, filters blocked words. No per-user/per-section caps — compression
+    decides how much to keep. Size clamping happens at render time."""
     out: dict = {"users": {}, "eventos_del_grupo": [], "chistes_internos": []}
     users = lt.get("users") if isinstance(lt, dict) else None
     if isinstance(users, dict):
-        for name, data in list(users.items())[:30]:
+        for name, data in list(users.items())[:_LT_MAX_USERS]:
             if not isinstance(data, dict):
                 continue
             name = str(name)[:60]
             if name.lower() == "indio":
                 continue
-            src_traits = [str(t)[:120] for t in (data.get("traits") or []) if t]
-            src_qs = [str(t)[:120] for t in (data.get("preguntas_tipicas") or []) if t]
-            src_anec = [str(t)[:120] for t in (data.get("anecdotas") or []) if t]
+            filtered: dict[str, list[str]] = {}
+            for field in ("traits", "preguntas_tipicas", "anecdotas"):
+                items = data.get(field) or []
+                cleaned = [
+                    str(s)[:_LT_STRING_MAX_CHARS]
+                    for s in items
+                    if s
+                    and not _has_music_block_words(str(s))
+                    and not _has_general_block_words(str(s))
+                ]
+                if cleaned:
+                    filtered[field] = cleaned
+            if filtered:
+                out["users"][name] = filtered
+    for key in ("eventos_del_grupo", "chistes_internos"):
+        items = lt.get(key) if isinstance(lt, dict) else None
+        if isinstance(items, list):
+            out[key] = [
+                str(s)[:_LT_STRING_MAX_CHARS]
+                for s in items
+                if s
+                and not _has_music_block_words(str(s))
+                and not _has_general_block_words(str(s))
+            ]
+    return out
 
-            def _memory_ok(t):
-                return not _has_music_block_words(t) and not _has_general_block_words(t)
 
-            traits = [t for t in src_traits if _memory_ok(t)][:_LT_TRAITS_PER_USER]
-            qs = [t for t in src_qs if _memory_ok(t)][:_LT_QUESTIONS_PER_USER]
-            anec = [t for t in src_anec if _memory_ok(t)][:_LT_ANECDOTES_PER_USER]
-            if traits or qs or anec:
-                out["users"][name] = {
-                    "traits": traits,
-                    "preguntas_tipicas": qs,
-                    "anecdotas": anec,
-                }
-    events = lt.get("eventos_del_grupo") if isinstance(lt, dict) else None
-    if isinstance(events, list):
-        out["eventos_del_grupo"] = [
-            e
-            for e in [str(e)[:120] for e in events if e]
-            if not _has_music_block_words(e) and not _has_general_block_words(e)
-        ][:_LT_GROUP_EVENTS]
-    jokes = lt.get("chistes_internos") if isinstance(lt, dict) else None
-    if isinstance(jokes, list):
-        out["chistes_internos"] = [
-            j
-            for j in [str(j)[:120] for j in jokes if j]
-            if not _has_music_block_words(j) and not _has_general_block_words(j)
-        ][:_LT_JOKES]
-    # Final safety: if still too big after structural clamp, drop oldest events/jokes.
-    while len(json.dumps(out, ensure_ascii=False)) > _LONG_TERM_MAX_CHARS:
-        if out["eventos_del_grupo"]:
-            out["eventos_del_grupo"].pop(0)
-        elif out["chistes_internos"]:
-            out["chistes_internos"].pop(0)
-        elif out["users"]:
-            # Drop the oldest-inserted user.
-            first = next(iter(out["users"]))
-            out["users"].pop(first)
+def _clamp_for_render(lt: dict) -> dict:
+    """Drop lowest-value data until JSON size ≤ _RENDER_MAX_CHARS.
+    Preserves users first, then events, then jokes."""
+    out = dict(lt)
+    max_chars = _RENDER_MAX_CHARS
+    while len(json.dumps(out, ensure_ascii=False)) > max_chars:
+        if out.get("chistes_internos"):
+            out["chistes_internos"].pop()
+        elif out.get("eventos_del_grupo"):
+            out["eventos_del_grupo"].pop()
+        elif out.get("users"):
+            worst = min(
+                out["users"].keys(),
+                key=lambda n: (
+                    sum(len(v) for v in out["users"][n].values())
+                    if isinstance(out["users"][n], dict)
+                    else 0
+                ),
+            )
+            del out["users"][worst]
         else:
             break
     return out
@@ -2589,7 +2596,7 @@ async def _compress_per_user(
                 if "chistes_internos" in parsed:
                     new_lt["chistes_internos"] = parsed["chistes_internos"]
 
-    return _clamp_long_term(new_lt)
+    return _sanitize_long_term(new_lt)
 
 
 async def _maybe_compress(mem_key: str) -> None:
