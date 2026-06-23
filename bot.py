@@ -19,7 +19,7 @@ from discord.ext import commands
 from playCommand import playLogic, openDjMenu
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
-from geminiCommand import vaplsLogic, indioLogic
+from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
 from suggestionsCommand import (
     sugerenciasLogic,
     sugerenciasVerLogic,
@@ -2868,36 +2868,7 @@ async def spacewar(ctx):
     await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "spacewar")
 
-    msg = (
-        "**🎮 Spacewar — guía rápida**\n\n"
-        "Spacewar es una app de testing de Valve. No hay que instalarla, "
-        "solo tenerla en la biblioteca para ciertos juegos que la necesitan.\n\n"
-        "**¿Ya la tenés?**\n"
-        "1. Abrí Steam.\n"
-        "2. Andá a tu **Biblioteca**.\n"
-        "3. Escribí `Spacewar` en la barra de búsqueda de la izquierda.\n"
-        "4. Si aparece, ya la tenés, no necesitás hacer nada.\n\n"
-        "**Si no la tenés — Windows:**\n"
-        "1. Asegurate de que Steam esté abierto.\n"
-        "2. Presioná `Windows + R`, pegá esto y dale Enter:\n"
-        "   ```\n"
-        "   steam://run/480\n"
-        "   ```\n"
-        "   Steam se abre solito y la descarga/agrega. "
-        "Una vez que aparece en tu biblioteca, se queda ahí para siempre.\n\n"
-        "**Linux / Steam Deck:**\n"
-        "   Abrí una terminal y ejecutá:\n"
-        "   ```\n"
-        "   steam steam://run/480\n"
-        "   ```\n\n"
-        "**Bazzite:**\n"
-        "   Abrí una terminal y ejecutá:\n"
-        "   ```\n"
-        "   flatpak run com.valvesoftware.Steam steam://run/480\n"
-        "   ```\n\n"
-        "⚠️ Si tira error, asegurate de tener Steam abierto antes de mandar el comando."
-    )
-    await safe_respond(ctx, msg, ephemeral=True)
+    await safe_respond(ctx, SPACEWAR_GUIDE_TEXT, ephemeral=True)
 
 
 @bot.slash_command(
@@ -2992,24 +2963,78 @@ async def alert_test(ctx):
         await safe_respond(ctx, f"❌ Error: {e}", ephemeral=True)
 
 
-@bot.slash_command(name="restart", description="devtool - no usar")
-async def restart(ctx):
-    """Slash command: restart the bot process (dev-only).
+@bot.slash_command(name="restart", description="devtool - reinicia procesos del bot (vapls/indio/golive)")
+async def restart(
+    ctx,
+    target: discord.Option(
+        str,
+        description="Qué reiniciar (default: todo)",
+        choices=["vapls", "indio", "golive", "all"],
+        required=False,
+        default="all",
+    ) = "all",
+):
+    """Slash command: restart bot processes (dev-only).
 
     Args:
         ctx: Discord application context.
+        target: Which process(es) to restart: vapls, indio, golive, or all.
 
     Side Effects:
-        Calls os.execv to replace the current process.
+        Calls os.execv to replace the current vapls process, and/or
+        sudo systemctl restart for indio/golive userbots.
 
     Async:
         This function is a coroutine and must be awaited.
     """
-    _track_command(ctx, "restart")
-    await ctx.respond("♻️ Reiniciando bot... (Esto cerrara el proceso actual)")
-    log.info("[RESTART] Rebooting bot process...")
-    analytics.shutdown()
-    os.execv(sys.executable, [sys.executable, "/home/ubuntu/vapls-discord-bot/bot.py"])
+    _track_command(ctx, "restart", {"target": target})
+    await ctx.defer(ephemeral=True)
+
+    async def _svc(name: str) -> str | None:
+        proc = await asyncio.create_subprocess_exec(
+            "sudo", "systemctl", "restart", name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            return stderr.decode(errors="replace").strip()
+        return None
+
+    parts: list[str] = []
+    errs: list[str] = []
+
+    if target in ("indio", "all"):
+        err = await _svc("indio-userbot")
+        if err:
+            errs.append(f"indio: {err}")
+        else:
+            parts.append("indio")
+
+    if target in ("golive", "all"):
+        err = await _svc("golive-userbot")
+        if err:
+            errs.append(f"golive: {err}")
+        else:
+            parts.append("golive")
+
+    msg = ""
+    if parts:
+        msg += "♻️ " + " ".join(p.capitalize() for p in parts) + " reiniciado."
+    if errs:
+        msg += "\n❌ " + "\n".join(errs)
+    if target in ("vapls", "all"):
+        msg += "\n♻️ Reiniciando Vapls..."
+    await ctx.followup.send(msg or "✅ Sin cambios.", ephemeral=True)
+
+    log.info("[RESTART] target=%s parts=%s", target, parts)
+
+    if target in ("vapls", "all"):
+        analytics.shutdown()
+        os.execv(
+            sys.executable,
+            [sys.executable, "/home/ubuntu/vapls-discord-bot/bot.py"],
+        )
 
 
 if __name__ == "__main__":
