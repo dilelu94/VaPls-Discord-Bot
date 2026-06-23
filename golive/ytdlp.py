@@ -46,7 +46,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
             "no_warnings": True,
             "noplaylist": True,
             "remote_components": ["ejs:github"],
-            "format": "best",
+            "format": "bestvideo+bestaudio/best",
         }
         cookies = _get_cookies_path()
         if cookies:
@@ -64,7 +64,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
         title: str = info.get("title") or "YouTube Stream"
         is_live = info.get("live_status") == "is_live"
 
-        # Prefer an HLS variant with both video and audio tracks.
+        # HLS for live streams only (avoids YouTube's unreliable HLS for VODs).
         formats: list[dict] = info.get("formats") or []
         hls = [
             f for f in formats
@@ -72,7 +72,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
             and f.get("url")
             and f.get("vcodec") not in (None, "none")
         ]
-        if hls:
+        if is_live and hls:
             best = max(hls, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0))
             return best["url"], title, is_live
 
