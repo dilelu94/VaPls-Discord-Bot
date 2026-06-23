@@ -1116,7 +1116,8 @@ class H264VideoPlayer(threading.Thread):
         cmd = self._ffmpeg_cmd()
         from urllib.parse import urlparse, urlunparse
 
-        _p = urlparse(self._url)
+        _log_url = self._url[0] if isinstance(self._url, (tuple, list)) else self._url
+        _p = urlparse(_log_url)
         _safe = urlunparse(
             _p._replace(netloc=(_p.hostname or "") + (f":{_p.port}" if _p.port else ""))
         )
@@ -1127,7 +1128,8 @@ class H264VideoPlayer(threading.Thread):
         log.info("Starting H.264 video stream from %s", _safe)
         # Log the encoder and full FFmpeg command (URL redacted) so the active
         # encoder is verifiable from the logs, including after a fallback retry.
-        _safe_cmd = [_safe if arg == self._url else arg for arg in cmd]
+        _urls = self._url if isinstance(self._url, (tuple, list)) else [self._url]
+        _safe_cmd = [_safe if arg in _urls else arg for arg in cmd]
         log.info(
             "FFmpeg encoder=%s command: %s",
             self._enc.name if self._enc else "?", " ".join(_safe_cmd),
