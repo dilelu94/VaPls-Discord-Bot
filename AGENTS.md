@@ -207,26 +207,28 @@ Sin estos patches Discord descarta silenciosamente todos los paquetes RTP de vid
 - **`client_connect()`** — anuncia `video_ssrc` + `streams` al op `VIDEO` (op 12)
 
 Se aplican en `golive/bot.py` antes de cualquier conexión de voz:
+
 ```python
 vc.patch_video(discord.gateway)
 ```
 
 ### Archivos clave
 
-| Archivo | Rol |
-| --- | --- |
-| `bot.py` | Slash commands `/stream` y `/stopstream` (L1589–1739) |
-| `iptv.py` | Descarga/cachea el M3U de iptv-org, busca canales por nombre. Cache en `data/iptv_cache.m3u`, TTL 6h |
-| `golive/bot.py` | Proceso GoLive: relay HTTP (`POST /stream`, `POST /stopstream`), join de canal, instancia `GoLiveConnection` y `VideoStream` |
-| `golive/davey_compat.py` | Shim de compatibilidad para DAVE E2EE que envuelve a `dave.py` (DisnakeDev libdave) |
-| `golive/golive_connection.py` | Conexión Go Live secundaria: WebSocket de streaming, UDP socket, handshake y control |
-| `golive/streamer.py` | FFmpeg → H.264 Annex-B → Cifrado DAVE + RTP encriptado → UDP de GoLiveConnection. SPS VUI rewriter |
-| `golive/video_compat.py` | Patches al gateway WS de discord.py-self para anunciar capacidad de video |
-| `golive/config.py` | `GOLIVE_TOKEN`, `GOLIVE_RELAY_SECRET`, `GOLIVE_RELAY_PORT` (default 8082) |
+| Archivo                       | Rol                                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `bot.py`                      | Slash commands `/stream` y `/stopstream` (L1589–1739)                                                                        |
+| `iptv.py`                     | Descarga/cachea el M3U de iptv-org, busca canales por nombre. Cache en `data/iptv_cache.m3u`, TTL 6h                         |
+| `golive/bot.py`               | Proceso GoLive: relay HTTP (`POST /stream`, `POST /stopstream`), join de canal, instancia `GoLiveConnection` y `VideoStream` |
+| `golive/davey_compat.py`      | Shim de compatibilidad para DAVE E2EE que envuelve a `dave.py` (DisnakeDev libdave)                                          |
+| `golive/golive_connection.py` | Conexión Go Live secundaria: WebSocket de streaming, UDP socket, handshake y control                                         |
+| `golive/streamer.py`          | FFmpeg → H.264 Annex-B → Cifrado DAVE + RTP encriptado → UDP de GoLiveConnection. SPS VUI rewriter                           |
+| `golive/video_compat.py`      | Patches al gateway WS de discord.py-self para anunciar capacidad de video                                                    |
+| `golive/config.py`            | `GOLIVE_TOKEN`, `GOLIVE_RELAY_SECRET`, `GOLIVE_RELAY_PORT` (default 8082)                                                    |
 
 ### Config necesaria
 
 En el `.env` del **main bot**:
+
 ```env
 GOLIVE_RELAY_URL=http://127.0.0.1:8082
 GOLIVE_RELAY_SECRET=<mismo secret que el golive bot>
@@ -234,6 +236,7 @@ GOLIVE_RELAY_TIMEOUT=30
 ```
 
 En `golive/.env`:
+
 ```env
 GOLIVE_TOKEN=<user token de la cuenta Discord usada para Go Live>
 RELAY_SECRET=<mismo secret que arriba>
@@ -245,6 +248,7 @@ YT_DLP_POT_BASE_URL=http://127.0.0.1:4416  # (Requerido para YouTube) Proveedor 
 ### Búsqueda de canales
 
 `iptv.py` hace substring match case-insensitive sobre el nombre del canal. Si hay más de 1 resultado, el bot pide más precisión. Ejemplos que dan exactamente 1 resultado:
+
 - `Al Jazeera English`
 - `France 24 English`
 - `CGTN Español`
@@ -254,18 +258,19 @@ YT_DLP_POT_BASE_URL=http://127.0.0.1:4416  # (Requerido para YouTube) Proveedor 
 
 Estos URLs responden HTTP 200 y son legibles por ffmpeg desde el server de prod:
 
-| Canal (nombre en M3U) | URL |
-| --- | --- |
-| Al Jazeera English (1080p) | `https://live-hls-apps-aje-fa.getaj.net/AJE/index.m3u8` |
-| France 24 Arabic (1080p) | `https://live.france24.com/hls/live/2037222-b/F24_AR_HI_HLS/master_5000.m3u8` |
-| CGTN (1080p) | `https://amg00405-rakutentv-cgtn-rakuten-i9tar.amagi.tv/master.m3u8` |
-| 1TV Georgia (720p) | `https://tv.cdn.xsg.ge/gpb-1tv/index.m3u8` |
-| 2M Maroc (1080p) | `https://stream-lb.livemediama.com/2m-tnt/hls/master.m3u8` |
+| Canal (nombre en M3U)      | URL                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| Al Jazeera English (1080p) | `https://live-hls-apps-aje-fa.getaj.net/AJE/index.m3u8`                       |
+| France 24 Arabic (1080p)   | `https://live.france24.com/hls/live/2037222-b/F24_AR_HI_HLS/master_5000.m3u8` |
+| CGTN (1080p)               | `https://amg00405-rakutentv-cgtn-rakuten-i9tar.amagi.tv/master.m3u8`          |
+| 1TV Georgia (720p)         | `https://tv.cdn.xsg.ge/gpb-1tv/index.m3u8`                                    |
+| 2M Maroc (1080p)           | `https://stream-lb.livemediama.com/2m-tnt/hls/master.m3u8`                    |
 
 ### Detección de encoder (`_detect_encoder`)
 
 El streamer prueba encoders en orden: `h264_nvenc` → `h264_vaapi` → `libx264`.
 **No usa `ffmpeg -encoders`** (que lista encoders compilados pero no verifica si el driver está disponible). En cambio, hace un encode real de 1 frame a `/dev/null` con `-f lavfi -i color=...`. Si el proceso falla (ej. `h264_nvenc` sin CUDA), pasa al siguiente. El encoder elegido se loggea al arrancar:
+
 ```
 golive: encoder probe OK → libx264
 ```
@@ -276,10 +281,11 @@ golive: encoder probe OK → libx264
 
 2. **(2026-06-20) `send_loop` terminaba en el primer timeout con streams HLS**: streams HLS con múltiples renditions tardan 4-8s en probe antes de emitir el primer frame. El `asyncio.wait_for` con `timeout=2.0` expiraba, y en condiciones de race el loop detectaba `returncode is not None` (del encoder fallido) y abortaba. **Fix**: el primer `read()` tiene un timeout de 15s (`first_read=True`); los subsiguientes mantienen 2s.
 
-3. **(2026-06-21) `/stream` con videos de YouTube (VODs) tiraba HTTP 500 y no transmitía**: 
-   - *Causa 1*: Faltaba configurar `YT_DLP_POT_BASE_URL` en `golive/.env`. Como el server tiene IP de Oracle, YouTube exige cuenta y cookie obligatoria. Sin el token PoT, YouTube bloquea la IP, rota/invalida la cookie del usuario como medida de seguridad y devuelve error `Sign in to confirm you’re not a bot`.
-   - *Causa 2*: El código de Python extraía el formato con `bestvideo+bestaudio/best`. Esto hace que `yt-dlp` devuelva dos URLs separadas en vez de la URL combinada esperada por ffmpeg, resultando en que la variable extraída sea `None` y crashee.
-   - **Fix**: Se agregó `YT_DLP_POT_BASE_URL` en el servidor y se cambió a `"format": "best"` en `golive/ytdlp.py`.
+3. **(2026-06-21) `/stream` con videos de YouTube (VODs) — troubleshooting histórico**:
+   - _Causa original_: Faltaba configurar `YT_DLP_POT_BASE_URL` en `golive/.env`. YouTube exige PoT en IPs de Oracle.
+   - **Fix inicial**: Se agregó `YT_DLP_POT_BASE_URL` y se cambió format a `"bestvideo[height<=1080][fps<=60]+bestaudio/best"` para 1080p60.
+   - **Problemas secundarios**: `bestvideo` elegía AV1 (sin decoder en ARM), y devolvía tuple de URLs (video+audio separados) que el streamer no manejaba. Además, `-http_persistent 0` estaba aplicado a URLs YouTube y fallaba con "Option not found" en direct MP4 de googlevideo.com.
+   - **Fix final (a0b0e2e)**: `"format": "best"` (combined H264, single URL, max 720p) y `-http_persistent 0` solo para URLs HTTP que NO sean googlevideo.com (IPTV sí, YouTube no).
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
@@ -405,7 +411,7 @@ El branch `dnf` de `deploy.sh` baja un binario estático según `uname -m` (`amd
 
 ### 7) yt-dlp y FFmpeg sin soporte MP3
 
-El binario de FFmpeg customizado/estático en el server de producción no incluye el encoder `libmp3lame`. Si se le pide a `yt-dlp` que post-procese audios descargados a formato MP3 (`--audio-format mp3`), va a fallar silenciosamente o tirar el error `Encoder not found`. 
+El binario de FFmpeg customizado/estático en el server de producción no incluye el encoder `libmp3lame`. Si se le pide a `yt-dlp` que post-procese audios descargados a formato MP3 (`--audio-format mp3`), va a fallar silenciosamente o tirar el error `Encoder not found`.
 **Workaround:** `playCommand.py` y el bot en general usan `--audio-format opus` y manipulan archivos `.opus` en el código, que sí tiene soporte nativo en el ffmpeg del server y además no requiere re-codificar (YouTube entrega Opus de forma nativa). ¡No intentar usar MP3!
 
 ## 🧪 Testing
