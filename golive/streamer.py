@@ -918,11 +918,15 @@ class H264VideoPlayer(threading.Thread):
         input_args = []
         if isinstance(self._url, (tuple, list)):
             for u in self._url:
-                input_args.extend(["-i", u])
+                if u.startswith(("http://", "https://")):
+                    input_args += ["-http_persistent", "0"]
+                input_args += ["-i", u]
             is_url = True
             audio_map_idx = 1
         else:
-            input_args = ["-i", self._url]
+            if self._url.startswith(("http://", "https://")):
+                input_args += ["-http_persistent", "0"]
+            input_args += ["-i", self._url]
             is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
             audio_map_idx = 0
         # Pace a local VOD file at native rate so FFmpeg emits audio+video in
