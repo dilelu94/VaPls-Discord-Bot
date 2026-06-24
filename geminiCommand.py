@@ -5692,7 +5692,7 @@ async def describe_image(file_bytes: bytes, mime_type: str = "image/jpeg") -> st
 
     b64 = base64.b64encode(file_bytes).decode()
     image_part = {"inlineData": {"mimeType": mime_type, "data": b64}}
-    prompt = "Describí esta imagen en 1-2 oraciones como si se la contaras a un amigo. Decí qué se ve."
+    prompt = "Describí esta imagen en UNA oración breve. Decí qué revela sobre los intereses o la situación de la persona que la compartió. Si tiene texto legible, incluílo. Ej: 'compartió un meme de gatos', 'tiene problemas con la PC y pide ayuda', 'captura de pantalla de un error: blue screen'. No agregues opiniones ni emociones."
     try:
         reply = await geminiClient.generate(
             user_message=prompt,
