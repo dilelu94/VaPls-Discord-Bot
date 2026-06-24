@@ -28,6 +28,7 @@ DEFAULT_TIMEOUT_SEC = 45
 # Cooldown aplicado a una key cuando devuelve HTTP 429. El free tier de Gemini
 # es 10 RPM, asi que 60s alcanza para que el cupo se libere.
 _KEY_COOLDOWN_SEC = 60.0
+_KEY_DEAD_COOLDOWN_SEC = 86400.0  # 24h — keys that returned 401 (dead service account)
 # Cuando todas las keys estan en cooldown, esperamos como mucho esto antes de
 # rendirnos y devolver el ultimo 429 al caller.
 _MAX_FAILOVER_WAIT_SEC = 3.0
@@ -286,6 +287,12 @@ async def generate(
                             except Exception:
                                 logger.debug("on_retry callback failed", exc_info=True)
                         continue
+                    if status == 401:
+                        _key_cooldowns[picked] = time.monotonic() + _KEY_DEAD_COOLDOWN_SEC
+                        logger.warning(
+                            "gemini key …%s is DEAD (401), disabled for 24h",
+                            picked[-6:],
+                        )
                     logger.warning(
                         "gemini http %d (key …%s): %s",
                         status,

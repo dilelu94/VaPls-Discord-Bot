@@ -2506,6 +2506,10 @@ async def _compress_per_user(
 
     names = _names_from_users_py()
 
+    # Track whether any Gemini call actually returned updated data
+    any_user_updated = False
+    group_updated = False
+
     # 1. Per-user compression — one call per user that has new messages
     for name in names:
         lines = groups.get(name)
@@ -2552,6 +2556,7 @@ async def _compress_per_user(
                 dossier[field] = parsed[field]
         if dossier:
             new_lt["users"][name] = dossier
+            any_user_updated = True
 
     # 2. Group compression — eventos and chistes from the full conversation
     indio_lines = groups.get("__indio__", [])
@@ -2577,7 +2582,7 @@ async def _compress_per_user(
                 user_message=group_msg,
                 system_instruction=_COMPRESS_GROUP_SYSTEM,
                 history=None,
-                max_output_tokens=1024,
+                max_output_tokens=4096,
             )
         except geminiClient.GeminiError as e:
             logger.warning(
@@ -2600,7 +2605,11 @@ async def _compress_per_user(
                     new_lt["eventos_del_grupo"] = parsed["eventos_del_grupo"]
                 if "chistes_internos" in parsed:
                     new_lt["chistes_internos"] = parsed["chistes_internos"]
+                if parsed.get("eventos_del_grupo") or parsed.get("chistes_internos"):
+                    group_updated = True
 
+    if not any_user_updated and not group_updated:
+        return None
     return _sanitize_long_term(new_lt)
 
 
