@@ -2038,7 +2038,7 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
 
     The input dict is first clamped to ``_RENDER_MAX_CHARS`` so the rendered
     output never blows the prompt budget."""
-    lt = _clamp_for_render(lt) if isinstance(lt, dict) else lt
+    lt = _clamp_for_render(lt, current_members) if isinstance(lt, dict) else lt
     sections: list[str] = []
     if current_members:
         friends = [n for n in current_members if n != "El Indio"]
@@ -2381,25 +2381,30 @@ def _sanitize_long_term(lt: dict) -> dict:
     return out
 
 
-def _clamp_for_render(lt: dict) -> dict:
+def _clamp_for_render(
+    lt: dict, current_members: Optional[list[str]] = None
+) -> dict:
     """Drop lowest-value data until JSON size ≤ _RENDER_MAX_CHARS.
-    Preserves users first, then events, then jokes."""
+    Drops oldest items first (pop(0)) so newer memories survive.
+    Prefers dropping non-current-members over current members."""
     out = dict(lt)
     max_chars = _RENDER_MAX_CHARS
     while len(json.dumps(out, ensure_ascii=False)) > max_chars:
         if out.get("chistes_internos"):
-            out["chistes_internos"].pop()
+            out["chistes_internos"].pop(0)
         elif out.get("eventos_del_grupo"):
-            out["eventos_del_grupo"].pop()
+            out["eventos_del_grupo"].pop(0)
         elif out.get("users"):
-            worst = min(
-                out["users"].keys(),
-                key=lambda n: (
+            members = set(current_members or [])
+            # Prefer non-members, then least data
+            def sort_key(n: str) -> tuple[int, int]:
+                data_len = (
                     sum(len(v) for v in out["users"][n].values())
                     if isinstance(out["users"][n], dict)
                     else 0
-                ),
-            )
+                )
+                return (0 if n in members else 1, data_len)
+            worst = min(out["users"].keys(), key=sort_key)
             del out["users"][worst]
         else:
             break
@@ -5661,6 +5666,10 @@ async def inject_telegram_message(
         async with lock:
             _indio_compress_queue.setdefault(mem_key, []).append(user_turn)
         await _persist_indio_state()
+        logger.info(
+            "injected telegram message from %s (%d chars, mem=%s, queue)",
+            speaker, len(text), mem_key,
+        )
     else:
         async with lock:
             history = list(_indio_history.get(mem_key, []))
@@ -5669,15 +5678,12 @@ async def inject_telegram_message(
             _indio_last_seen[mem_key] = ts
             size = len(history)
         await _persist_indio_state()
+        logger.info(
+            "injected telegram message from %s (%d chars, mem=%s, hist=%d)",
+            speaker, len(text), mem_key, size,
+        )
         if size >= _HISTORY_COMPRESS_THRESHOLD:
             _spawn(_maybe_compress(mem_key))
-    logger.info(
-        "injected telegram message from %s (%d chars, mem=%s, hist=%d)",
-        speaker,
-        len(text),
-        mem_key,
-        size,
-    )
 
 
 async def describe_image(file_bytes: bytes, mime_type: str = "image/jpeg") -> str:
