@@ -184,11 +184,7 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
         if cookies_path:
             cj = http.cookiejar.MozillaCookieJar(cookies_path)
             cj.load()
-            for c in cj:
-                if c.value and not c.is_expired():
-                    L.context.session.cookies.set(
-                        c.name, c.value, domain=c.domain, path=c.path
-                    )
+            L.context.update_cookies(cj)
 
         parsed = urlparse(url)
         path = parsed.path.rstrip("/")
