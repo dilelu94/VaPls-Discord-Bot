@@ -134,6 +134,9 @@ async def _yt_extract_instagram(url: str) -> dict | None:
         if not video_url:
             return None
 
+        if audio_url == video_url:
+            audio_url = None
+
         return {
             "video_url": video_url,
             "audio_url": audio_url,
