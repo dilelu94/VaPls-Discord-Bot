@@ -2369,9 +2369,12 @@ async def stopstream(ctx):
 async def instagram(ctx):
     """Slash command: start infinite Instagram Reel streaming.
 
-    Requires the GoLive relay and Instagram credentials (INSTAGRAM_USER /
-    INSTAGRAM_PASS in golive/.env).  Reels play back-to-back in an infinite
-    loop with vertical letterboxing.  Use /stopstream to end.
+    Uses yt-dlp to discover reel URLs from an Instagram source page
+    (configurable via INSTAGRAM_REEL_SOURCE in golive/.env, defaults to
+    explore/tags/reels).  Each reel is extracted via yt-dlp for proper
+    video+audio DASH streams with vertical letterboxing.  No Instagram
+    credentials required — the shared cookies.txt handles auth if needed.
+    Use /stopstream to end.
 
     Args:
         ctx: Discord application context.

@@ -2,8 +2,9 @@
 
 Provides two entry points:
 
-* ``start_instagram_stream_logic()`` — infinite-scroll feed mode (requires
-  ``INSTAGRAM_USER`` / ``INSTAGRAM_PASS`` in ``golive/.env``).
+* ``start_instagram_stream_logic()`` — infinite-scroll feed mode.
+  Discovers reel URLs via yt-dlp ``flat_playlist`` and extracts each
+  reel with video+audio DASH streams.  No credentials needed.
 
 * ``start_instagram_reel_stream_logic()`` — single-reel mode that extracts
   the video via yt-dlp (no credentials needed).
@@ -25,8 +26,8 @@ async def start_instagram_stream_logic(
 ) -> tuple[bool, str]:
     """Sends the HTTP request to the GoLive relay to start Instagram streaming.
 
-    The relay (golive/bot.py) handles feed login, GoLive connection, and
-    the infinite reel loop.
+    The relay (golive/bot.py) handles yt-dlp feed discovery, GoLive
+    connection, and the infinite reel extraction loop.
 
     Returns:
         (success, status_message)

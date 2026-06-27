@@ -3,11 +3,12 @@
 Extends H264VideoPlayer with:
   - Vertical-orientation letterboxing (1080×1920 → 1920×1080 with black bars)
   - Single-reel URL mode via yt-dlp (no credentials needed)
-  - Infinite-scroll feed mode via InstagramFeed (needs INSTAGRAM_USER/PASS)
+  - Infinite-scroll feed mode via InstagramReelFeed (yt-dlp flat_playlist)
 
-/stream now auto-detects Instagram URLs and plays them in URL mode
-with proper letterboxing.  The feed-based `/instagram` command still
-requires INSTAGRAM_USER / INSTAGRAM_PASS for infinite scroll.
+URL mode (``video_url`` + ``audio_url``) plays one reel.  Feed mode
+discovers reel page URLs via yt-dlp ``flat_playlist``, then extracts
+each reel with yt-dlp for proper video+audio DASH streams — no
+Instagram credentials required.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from streamer import (
 
 from golive_connection import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
 
-from instagram_feed import InstagramFeed
+from instagram_feed import InstagramReelFeed
 
 log = logging.getLogger(__name__)
 
@@ -80,9 +81,9 @@ class InstagramReelPlayer(H264VideoPlayer):
 
     Two modes:
 
-    1. **Feed mode** (pass ``feed``): infinite scroll — plays reels from a
-       :class:`InstagramFeed` instance back-to-back.  Requires Instagram
-       credentials (``INSTAGRAM_USER`` / ``INSTAGRAM_PASS``).
+    1. **Feed mode** (pass ``feed``): infinite scroll — discovers reel page
+       URLs via yt-dlp ``flat_playlist``, then extracts each reel's
+       video+audio DASH streams before playing.  No credentials needed.
 
     2. **URL mode** (pass ``video_url`` + optionally ``audio_url``): plays a
        single reel extracted via yt-dlp, then stops.  No credentials needed.
@@ -90,11 +91,13 @@ class InstagramReelPlayer(H264VideoPlayer):
        if ``None`` the player falls back to a single-input pipeline.
 
     Both modes apply vertical letterboxing (9:16 → 16:9 with black bars).
+    The player runs in a daemon thread — the first reel's extraction happens
+    inside :meth:`run` so it never blocks the async event loop.
     """
 
     def __init__(
         self,
-        feed: InstagramFeed | None = None,
+        feed: InstagramReelFeed | None = None,
         voice_client=None,
         fps: float = 30.0,
         audio: bool = True,
@@ -109,10 +112,8 @@ class InstagramReelPlayer(H264VideoPlayer):
             url: str | tuple[str, str] = (
                 (video_url, audio_url) if audio_url else video_url
             )
-        elif feed:
-            url = feed.next_reel_url() or ""
         else:
-            url = ""
+            url = ""  # Feed mode: first URL resolved in run()
 
         super().__init__(
             url=url,
@@ -126,9 +127,50 @@ class InstagramReelPlayer(H264VideoPlayer):
         self._frames_emitted = 0
 
     def run(self) -> None:
-        """Main loop: play reels back-to-back until stopped or feed runs dry."""
+        """Main loop: play reels back-to-back until stopped or feed runs dry.
+
+        In feed mode each reel is extracted via yt-dlp synchronously (safe
+        because this runs in a daemon thread), which gives us proper
+        video+audio DASH URLs — the same pipeline that makes ``/stream``
+        with a single reel URL work.
+        """
+        from ytdlp import _extract_instagram_sync
+
         try:
             while not self._end.is_set():
+                # ── Resolve the next reel ──────────────────────────────────
+                if self._feed:
+                    page_url = self._feed.next_reel_url()
+                    if not page_url:
+                        log.info("[INSTAGRAM] No hay más reels — deteniendo")
+                        break
+
+                    log.info("[INSTAGRAM] Extrayendo reel: %s", page_url[:80])
+                    extracted = _extract_instagram_sync(page_url)
+                    if not extracted:
+                        log.warning("[INSTAGRAM] No se pudo extraer reel, saltando")
+                        if self._end.wait(timeout=1.0):
+                            break
+                        continue
+
+                    video_url = extracted.get("video_url")
+                    audio_url = extracted.get("audio_url")
+                    if video_url and audio_url:
+                        self._url = (video_url, audio_url)
+                    elif video_url:
+                        self._url = video_url
+                    else:
+                        log.warning("[INSTAGRAM] Sin video URL, saltando")
+                        continue
+
+                    self._title = extracted.get("title", "Instagram Reel")
+                    self._frames_emitted = 0
+
+                if not self._url:
+                    log.info("[INSTAGRAM] Sin URL para reproducir — deteniendo")
+                    break
+
+                # ── Stream the current reel ────────────────────────────────
                 self._seeking = False
                 self._stream()
 
@@ -138,15 +180,6 @@ class InstagramReelPlayer(H264VideoPlayer):
                 if not self._feed:
                     log.info("[INSTAGRAM] Single reel ended — deteniendo")
                     break
-
-                next_url = self._feed.next_reel_url()
-                if not next_url:
-                    log.info("[INSTAGRAM] No hay más reels — deteniendo")
-                    break
-
-                log.info("[INSTAGRAM] Siguiente reel: %s", next_url[:80])
-                self._url = next_url
-                self._frames_emitted = 0
 
                 if self._end.wait(timeout=1.0):
                     break
@@ -168,7 +201,7 @@ class InstagramGoLiveStream:
     Mirrors the lifecycle of :class:`GoLiveStream` (from bot.py) but:
       * Uses :class:`InstagramReelPlayer` instead of ``H264VideoPlayer``.
       * Supports two modes: **URL mode** (yt-dlp, no credentials) and
-        **feed mode** (infinite scroll via ``InstagramFeed``).
+        **feed mode** (infinite scroll via :class:`InstagramReelFeed`).
       * Runs in non-live (VOD) mode.
     """
 
@@ -178,7 +211,7 @@ class InstagramGoLiveStream:
         guild_id: int,
         channel_id: int,
         vc,
-        feed: InstagramFeed | None = None,
+        feed: InstagramReelFeed | None = None,
         reel_url: dict | None = None,
     ) -> None:
         self.bot = bot
@@ -219,7 +252,7 @@ class InstagramGoLiveStream:
                 title=r.get("title", "Instagram Reel"),
             )
         else:
-            # Feed mode — requires INSTAGRAM_USER / INSTAGRAM_PASS
+            # Feed mode — yt-dlp flat_playlist, no credentials needed
             self.video_player = InstagramReelPlayer(
                 feed=self.feed,
                 voice_client=proxy_vc,

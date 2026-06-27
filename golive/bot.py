@@ -27,7 +27,7 @@ import config
 import video_compat as vc
 import davey_compat
 from golive_connection import GoLiveConnection
-from instagram_feed import InstagramFeed
+from instagram_feed import InstagramReelFeed
 from instagram_streamer import InstagramGoLiveStream
 
 
@@ -534,7 +534,7 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
 
 # ---------- Instagram relay --------------------------------------------------
 
-_instagram_feed: InstagramFeed | None = None
+_instagram_feed: InstagramReelFeed | None = None
 
 
 async def _relay_instagram(request: web.Request) -> web.Response:
@@ -597,7 +597,7 @@ async def _relay_instagram(request: web.Request) -> web.Response:
         log.warning("[INSTAGRAM] not connected after join (vc=%s)", vc)
         return web.json_response({"error": "not connected"}, status=500)
 
-    # ── URL mode (yt-dlp, no credentials) vs feed mode (instagrapi) ──────
+    # ── URL mode (yt-dlp, no credentials) vs feed mode (yt-dlp flat_playlist) ──────
     if reel_url:
         from ytdlp import _yt_extract_instagram
 
@@ -622,20 +622,15 @@ async def _relay_instagram(request: web.Request) -> web.Response:
             client, guild_id, channel_id, vc, reel_url=extracted
         )
     else:
-        # Feed mode — infinite scroll, requires INSTAGRAM_USER / INSTAGRAM_PASS
+        # Feed mode — yt-dlp flat_playlist, no credentials needed
         global _instagram_feed
         if _instagram_feed is None:
-            _instagram_feed = InstagramFeed()
-        if not _instagram_feed.available:
-            log.info("[INSTAGRAM] logging in...")
-            if not _instagram_feed.login():
-                log.error(
-                    "[INSTAGRAM] login failed — check INSTAGRAM_USER/INSTAGRAM_PASS"
-                )
-                return web.json_response(
-                    {"error": "instagram login failed"}, status=500
-                )
-            log.info("[INSTAGRAM] login OK")
+            source = os.environ.get(
+                "INSTAGRAM_REEL_SOURCE",
+                "https://www.instagram.com/explore/tags/reels/",
+            )
+            _instagram_feed = InstagramReelFeed(source_url=source)
+            log.info("[INSTAGRAM] Feed mode source: %s", source)
 
         stream = InstagramGoLiveStream(
             client, guild_id, channel_id, vc, feed=_instagram_feed

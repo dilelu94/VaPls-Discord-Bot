@@ -89,6 +89,60 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
     return await asyncio.to_thread(_run)
 
 
+def _extract_instagram_sync(url: str) -> dict | None:
+    """Return ``{video_url, audio_url, title}`` for an Instagram reel (sync).
+
+    Instagram delivers audio and video as separate DASH streams, so we
+    return both URLs.  The caller passes them as ``(-i video -i audio)``
+    to FFmpeg.  This is the synchronous version for use in player threads.
+
+    Returns ``None`` if extraction fails.
+    """
+    import yt_dlp
+
+    opts: dict = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "format": "bestvideo+bestaudio/best",
+    }
+    cookies = _get_cookies_path()
+    if cookies:
+        opts["cookiefile"] = cookies
+    ext_args = _get_extractor_args()
+    if ext_args:
+        opts["extractor_args"] = ext_args
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if not info:
+        return None
+
+    title = info.get("title") or "Instagram Reel"
+    video_url = None
+    audio_url = None
+
+    if info.get("requested_formats") and len(info["requested_formats"]) >= 2:
+        req = info["requested_formats"]
+        video_url = req[0].get("url")
+        audio_url = req[1].get("url")
+    elif info.get("url"):
+        video_url = info["url"]
+
+    if not video_url:
+        return None
+
+    if audio_url == video_url:
+        audio_url = None
+
+    return {
+        "video_url": video_url,
+        "audio_url": audio_url,
+        "title": title,
+    }
+
+
 async def _yt_extract_instagram(url: str) -> dict | None:
     """Return ``{video_url, audio_url, title}`` for an Instagram reel.
 
@@ -98,49 +152,48 @@ async def _yt_extract_instagram(url: str) -> dict | None:
 
     Returns ``None`` if extraction fails.
     """
+    return await asyncio.to_thread(_extract_instagram_sync, url)
+
+
+def _instagram_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
+    """Return up to ``limit`` reel page URLs from an Instagram page.
+
+    Uses yt-dlp with ``flat_playlist=True`` to list entries from a profile,
+    hashtag, or explore page.  Returns reel URLs like
+    ``https://www.instagram.com/reel/<shortcode>/``.
+
+    The source ``url`` is configurable via ``INSTAGRAM_REEL_SOURCE`` env var
+    (default ``https://www.instagram.com/explore/tags/reels/``).  Any page
+    that yt-dlp's Instagram extractors understand will work: a user profile
+    (``https://www.instagram.com/username/``), a hashtag
+    (``https://www.instagram.com/explore/tags/tag/``), or the explore page.
+    """
     import yt_dlp
 
-    def _run() -> dict | None:
-        opts: dict = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "format": "bestvideo+bestaudio/best",
-        }
-        cookies = _get_cookies_path()
-        if cookies:
-            opts["cookiefile"] = cookies
-        ext_args = _get_extractor_args()
-        if ext_args:
-            opts["extractor_args"] = ext_args
+    opts: dict = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "playlistend": limit,
+    }
+    cookies = _get_cookies_path()
+    if cookies:
+        opts["cookiefile"] = cookies
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
 
-        if not info:
-            return None
+    if not info or not info.get("entries"):
+        return []
 
-        title = info.get("title") or "Instagram Reel"
-        video_url = None
-        audio_url = None
+    urls = []
+    for entry in info["entries"]:
+        if not entry:
+            continue
+        entry_url = entry.get("url") or entry.get("webpage_url") or ""
+        if entry_url and "instagram.com" in entry_url:
+            urls.append(entry_url)
+        if len(urls) >= limit:
+            break
 
-        if info.get("requested_formats") and len(info["requested_formats"]) >= 2:
-            req = info["requested_formats"]
-            video_url = req[0].get("url")
-            audio_url = req[1].get("url")
-        elif info.get("url"):
-            video_url = info["url"]
-
-        if not video_url:
-            return None
-
-        if audio_url == video_url:
-            audio_url = None
-
-        return {
-            "video_url": video_url,
-            "audio_url": audio_url,
-            "title": title,
-        }
-
-    return await asyncio.to_thread(_run)
+    return urls
