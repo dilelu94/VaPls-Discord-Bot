@@ -604,6 +604,11 @@ async def _relay_instagram(request: web.Request) -> web.Response:
         log.info("[INSTAGRAM] Extracting reel URL via yt-dlp: %s", reel_url[:80])
         extracted = await _yt_extract_instagram(reel_url)
         if not extracted:
+            log.warning("[INSTAGRAM] yt-dlp extraction failed — disconnecting")
+            try:
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
             return web.json_response(
                 {"error": "failed to extract reel URL via yt-dlp"}, status=500
             )
