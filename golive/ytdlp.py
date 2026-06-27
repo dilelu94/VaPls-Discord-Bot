@@ -192,7 +192,7 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
         if "/tags/" in path or "/explore/tags/" in path:
             tag = path.rsplit("/tags/", 1)[-1].split("/")[0]
             log.info("[INSTALOADER] Fetching tag=%s limit=%d", tag, limit)
-            posts = instaloader.Hashtag.from_name(L.context, tag).get_posts()
+            posts = instaloader.Hashtag.from_name(L.context, tag).get_posts_resumable()
         elif path.count("/") == 1 and path.strip("/"):
             username = path.strip("/")
             log.info("[INSTALOADER] Fetching user=%s limit=%d", username, limit)
