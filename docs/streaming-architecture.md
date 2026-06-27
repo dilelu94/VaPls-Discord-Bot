@@ -301,25 +301,26 @@ Los canales se obtienen de [iptv-org](https://github.com/iptv-org/iptv), que man
 
 ---
 
-## 📱 Instagram Reels Streaming (`/instagram`) [PENDIENTE]
+## 📱 Instagram Reels Streaming (`/instagram`)
 
-**Estado: PENDIENTE** — requiere una cuenta de Instagram para el userbot GoLive.
-
-El comando `/instagram` usará la misma infraestructura GoLive que IPTV pero con
-una fuente de video diferente: reels del feed de Instagram en scroll infinito.
+El comando `/instagram` usa la misma infraestructura GoLive que IPTV pero con
+reels de Instagram en scroll infinito. Descubre URLs de reels usando
+**instaloader** y extrae el video+audio con **yt-dlp** (session cookies de
+`cookies.txt`).
 
 ### Diferencias con IPTV
 
-| Aspecto           | IPTV (`/stream`)         | Instagram (`/instagram`)                 |
-| ----------------- | ------------------------ | ---------------------------------------- |
-| Fuente de video   | M3U playlist de iptv-org | Feed de reels via instagrapi             |
-| Tipo de stream    | Live HLS continuo        | VODs cortos (15-90s) en secuencia        |
-| Loop              | No (es continuo)         | Sí, cola infinita                        |
-| Orientación       | Landscape (1920×1080)    | Portrait (1080×1920) con black bars      |
-| Login             | No requiere              | Instagram user/pass + sesión persistente |
-| Dependencia nueva | —                        | `instagrapi`                             |
+| Aspecto           | IPTV (`/stream`)         | Instagram (`/instagram`)                     |
+| ----------------- | ------------------------ | -------------------------------------------- |
+| Fuente de video   | M3U playlist de iptv-org | Feed de reels via instaloader                |
+| Tipo de stream    | Live HLS continuo        | VODs cortos (15-90s) en secuencia            |
+| Loop              | No (es continuo)         | Sí, cola infinita                            |
+| Orientación       | Landscape (1920×1080)    | Portrait (1080×1920) con black bars          |
+| Auth              | No requiere              | Session cookies de `cookies.txt`             |
+| Feed discovery    | —                        | `instaloader` (GraphQL API, scraping)        |
+| Single-reel extr. | —                        | `yt-dlp` (session cookies, DASH video+audio) |
 
-### Pipeline planeado
+### Pipeline
 
 ```
 /instagram
@@ -327,13 +328,18 @@ una fuente de video diferente: reels del feed de Instagram en scroll infinito.
 Main bot POST /instagram { guild_id, channel_id } → GoLive relay
   ↓
 golive/bot.py:
-  GoLiveConnection (screenshare) + InstagramReelPlayer
+  GoLiveConnection (screenshare) + InstagramGoLiveStream
   ↓
-golive/instagram_feed.py:
-  instagrapi.login() → feed.reels() → cola de shortcodes
+golive/instagram_feed.py (InstagramReelFeed):
+  instaloader.Hashtag.from_name().get_posts()
+    → filtra is_video → cola de reel page URLs
+  ↓ (por cada reel)
+golive/ytdlp._extract_instagram_sync(reel_url):
+  yt-dlp con cookiefile=cookies.txt
+    → video_url + audio_url (DASH)
   ↓
-golive/streamer.py (modificado):
-  yt-dlp --get-url → FFmpeg decode → scale + pad (black bars) → H.264
+golive/instagram_streamer.py (InstagramReelPlayer):
+  FFmpeg -i video -i audio → scale + pad (black bars) → H.264 (libopenh264)
   ↓
   NAL parse + DAVE encrypt + RTP → Discord GoLive
   ↓
@@ -342,19 +348,38 @@ golive/streamer.py (modificado):
 
 ### Loop infinito
 
-1. `InstagramFeed` mantiene cola interna de 10+ reels (pre-fetch asíncrono).
-2. Cuando el reel actual termina, `InstagramReelPlayer` detecta EOF de FFmpeg y
-   avanza al siguiente sin cortar el GoLive.
-3. Cuando la cola se vacía, fetchea más del feed automáticamente.
+1. `InstagramReelFeed` mantiene cola interna de 10+ reel page URLs.
+2. Cuando el reel actual termina, `InstagramReelPlayer` detecta EOF del
+   proceso FFmpeg y avanza al siguiente sin cortar el GoLive.
+3. Cuando la cola se vacía, `_refill()` fetchea más reels via instaloader.
 4. El userbot nunca desconecta hasta `/stopstream`.
 
-### Archivos planeados
+### Archivos relevantes
 
-| Archivo                        | Propósito                                                                   |
-| ------------------------------ | --------------------------------------------------------------------------- |
-| `golive/instagram_feed.py`     | Login Instagram (instagrapi), fetch feed, cola de reels, sesión persistente |
-| `golive/instagram_streamer.py` | `InstagramReelPlayer` — loop + orientación vertical                         |
-| `instagramCommand.py`          | Comando `/instagram` + view de control                                      |
+| Archivo                        | Propósito                                                          |
+| ------------------------------ | ------------------------------------------------------------------ |
+| `golive/instagram_feed.py`     | `InstagramReelFeed` — cola de reel URLs via instaloader            |
+| `golive/instagram_streamer.py` | `InstagramReelPlayer` — loop + orientación vertical                |
+| `golive/ytdlp.py`              | `_instaloader_reel_feed_urls()` + `_extract_instagram_sync()`      |
+| `instagramCommand.py`          | Comando `/instagram` + `/stream` para reels individuales           |
+| `golive/requirements.txt`      | `instaloader @ git+https://github.com/instaloader/instaloader.git` |
+
+### Dependencia: instaloader
+
+`instaloader` se instala desde el repo de GitHub directamente para mantenerse
+actualizado automáticamente:
+
+```
+instaloader @ git+https://github.com/instaloader/instaloader.git
+```
+
+Usa las mismas cookies de sesión de `cookies.txt` (sessionid, csrftoken,
+ds_user_id) que yt-dlp para autenticarse contra la API GraphQL de Instagram.
+No requiere username/password — las cookies de la sesión activa son suficientes.
+
+**Solo se usa para feed discovery** (conseguir URLs de reels). La extracción
+del video+audio de cada reel sigue usando **yt-dlp** (que ya funciona con las
+mismas cookies).
 
 ## Alineación con slopsoil
 

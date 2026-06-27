@@ -597,7 +597,7 @@ async def _relay_instagram(request: web.Request) -> web.Response:
         log.warning("[INSTAGRAM] not connected after join (vc=%s)", vc)
         return web.json_response({"error": "not connected"}, status=500)
 
-    # ── URL mode (yt-dlp, no credentials) vs feed mode (yt-dlp flat_playlist) ──────
+    # ── URL mode (yt-dlp, session cookies) vs feed mode (instaloader) ──────────────
     if reel_url:
         from ytdlp import _yt_extract_instagram
 
@@ -622,7 +622,7 @@ async def _relay_instagram(request: web.Request) -> web.Response:
             client, guild_id, channel_id, vc, reel_url=extracted
         )
     else:
-        # Feed mode — yt-dlp flat_playlist, no credentials needed
+        # Feed mode — instaloader (session cookies from cookies.txt)
         global _instagram_feed
         if _instagram_feed is None:
             source = os.environ.get(

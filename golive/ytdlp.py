@@ -155,19 +155,77 @@ async def _yt_extract_instagram(url: str) -> dict | None:
     return await asyncio.to_thread(_extract_instagram_sync, url)
 
 
-def _instagram_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
-    """Return up to ``limit`` reel page URLs from an Instagram page.
+def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
+    """Return up to ``limit`` reel page URLs using instaloader.
 
-    Uses yt-dlp with ``flat_playlist=True`` to list entries from a profile,
-    hashtag, or explore page.  Returns reel URLs like
-    ``https://www.instagram.com/reel/<shortcode>/``.
+    Uses instaloader (scraping Instagram's public GraphQL API) to discover
+    reel URLs from a hashtag page or user profile.  Requires valid session
+    cookies in ``cookies.txt``.
 
-    The source ``url`` is configurable via ``INSTAGRAM_REEL_SOURCE`` env var
-    (default ``https://www.instagram.com/explore/tags/reels/``).  Any page
-    that yt-dlp's Instagram extractors understand will work: a user profile
-    (``https://www.instagram.com/username/``), a hashtag
-    (``https://www.instagram.com/explore/tags/tag/``), or the explore page.
+    Supported URL formats:
+    - ``https://www.instagram.com/explore/tags/<tag>/``
+    - ``https://www.instagram.com/<username>/``
+
+    Falls back to yt-dlp if instaloader is not available or fails.
     """
+    try:
+        import http.cookiejar
+        from urllib.parse import urlparse
+
+        import instaloader
+    except ImportError:
+        log.warning("instaloader not installed, falling back to yt-dlp")
+        return _ytdlp_reel_feed_urls(url, limit)
+
+    try:
+        L = instaloader.Instaloader(quiet=True)
+
+        cookies_path = _get_cookies_path()
+        if cookies_path:
+            cj = http.cookiejar.MozillaCookieJar(cookies_path)
+            cj.load()
+            for c in cj:
+                if c.value and not c.is_expired():
+                    L.context.session.cookies.set(
+                        c.name, c.value, domain=c.domain, path=c.path
+                    )
+
+        parsed = urlparse(url)
+        path = parsed.path.rstrip("/")
+
+        if "/tags/" in path or "/explore/tags/" in path:
+            tag = path.rsplit("/tags/", 1)[-1].split("/")[0]
+            log.info("[INSTALOADER] Fetching tag=%s limit=%d", tag, limit)
+            posts = instaloader.Hashtag.from_name(L.context, tag).get_posts()
+        elif path.count("/") == 1 and path.strip("/"):
+            username = path.strip("/")
+            log.info("[INSTALOADER] Fetching user=%s limit=%d", username, limit)
+            profile = instaloader.Profile.from_username(L.context, username)
+            posts = profile.get_posts()
+        else:
+            raise ValueError(f"Unsupported URL for instaloader: {url}")
+
+        urls = []
+        for post in posts:
+            if post.is_video and len(urls) < limit:
+                urls.append(f"https://www.instagram.com/reel/{post.shortcode}/")
+            if len(urls) >= limit:
+                break
+
+        log.info(
+            "[INSTALOADER] Got %d reel URLs from %s",
+            len(urls), url[:60],
+        )
+        return urls
+    except Exception as e:
+        log.warning(
+            "instaloader feed falló: %s, falling back to yt-dlp", e
+        )
+        return _ytdlp_reel_feed_urls(url, limit)
+
+
+def _ytdlp_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
+    """Fallback: use yt-dlp's flat playlist to discover reel URLs."""
     import yt_dlp
 
     opts: dict = {
@@ -197,3 +255,19 @@ def _instagram_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
             break
 
     return urls
+
+
+def _instagram_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
+    """Return up to ``limit`` reel page URLs from an Instagram page.
+
+    Uses instaloader (preferred) or yt-dlp (fallback) to list entries
+    from a profile, hashtag, or explore page.  Returns reel URLs like
+    ``https://www.instagram.com/reel/<shortcode>/``.
+
+    The source ``url`` is configurable via ``INSTAGRAM_REEL_SOURCE`` env var
+    (default ``https://www.instagram.com/explore/tags/reels/``).  Any page
+    that instaloader understands will work: a user profile
+    (``https://www.instagram.com/username/``) or a hashtag
+    (``https://www.instagram.com/explore/tags/tag/``).
+    """
+    return _instaloader_reel_feed_urls(url, limit)

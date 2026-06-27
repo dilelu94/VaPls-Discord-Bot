@@ -1,9 +1,9 @@
-"""Instagram reels feed fetching using yt-dlp.
+"""Instagram reels feed fetching using instaloader.
 
 Provides InstagramReelFeed — a queue-backed reel URL fetcher that uses
-yt-dlp (flat_playlist) to discover reel page URLs from an Instagram
-page.  No credentials needed; auth is via the shared cookies.txt if
-available.
+instaloader (scraping Instagram's GraphQL API) to discover reel page
+URLs from an Instagram hashtag or user profile.  Auth is via the shared
+cookies.txt session cookies.
 
 The feed returns reel *page* URLs (e.g.
 ``https://www.instagram.com/reel/<shortcode>/``) which are then
@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 
 class InstagramReelFeed:
-    """Queue-backed reel URL feed using yt-dlp playlist extraction.
+    """Queue-backed reel URL feed using instaloader.
 
     Refills from a configurable Instagram source URL (default:
     explore/tags/reels).  Each call to :meth:`next_reel_url` returns a
@@ -50,7 +50,7 @@ class InstagramReelFeed:
         return self._queue.pop(0)
 
     def _refill(self, amount: int = 10) -> None:
-        """Fetch more reel URLs from the Instagram source via yt-dlp."""
+        """Fetch more reel URLs from the Instagram source via instaloader."""
         from ytdlp import _instagram_reel_feed_urls
 
         try:

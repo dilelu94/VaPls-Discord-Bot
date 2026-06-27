@@ -2,13 +2,13 @@
 
 Extends H264VideoPlayer with:
   - Vertical-orientation letterboxing (1080×1920 → 1920×1080 with black bars)
-  - Single-reel URL mode via yt-dlp (no credentials needed)
-  - Infinite-scroll feed mode via InstagramReelFeed (yt-dlp flat_playlist)
+  - Single-reel URL mode via yt-dlp (session cookies from cookies.txt)
+  - Infinite-scroll feed mode via InstagramReelFeed (instaloader)
 
 URL mode (``video_url`` + ``audio_url``) plays one reel.  Feed mode
-discovers reel page URLs via yt-dlp ``flat_playlist``, then extracts
-each reel with yt-dlp for proper video+audio DASH streams — no
-Instagram credentials required.
+discovers reel page URLs via instaloader scraping Instagram's GraphQL
+API using the session cookies, then extracts each reel with yt-dlp for
+proper video+audio DASH streams.
 """
 
 from __future__ import annotations
