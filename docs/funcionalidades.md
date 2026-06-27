@@ -22,16 +22,17 @@ userbot. Los dos se comunican por HTTP en loopback.
 
 ## 1. Comandos slash (main bot, `bot.py`)
 
-| Comando                 | Qué hace                                                                                                                                                                               |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`/play [query]`**     | Reproduce canción/playlist de YouTube (búsqueda o URL). Sin argumento, avisa que falta el query.                                                                                       |
-| **`/soundpad [query]`** | Sin query: abre un panel interactivo de clips locales. Con query: busca el clip más parecido (fuzzy) y lo reproduce directo. **Requiere haber donado una API key de Gemini** (gating). |
-| **`/vapls <pregunta>`** | Pregunta a Gemini **sin memoria** (stateless). Persona "bot del server".                                                                                                               |
-| **`/indio <charla>`**   | Charla con la persona "el Indio" **con memoria** (corto + largo plazo).                                                                                                                |
-| **`/parar`**            | Detiene la reproducción, vacía la cola y desconecta de voz.                                                                                                                            |
-| **`/quit`**             | Desconecta de voz **sin** tocar la cola.                                                                                                                                               |
-| **`/story-test`**       | [Owner] Fuerza una historia del Indio al instante (testing).                                                                                                                           |
-| **`/restart`**          | Devtool: reinicia el proceso del bot (`os.execv`).                                                                                                                                     |
+| Comando                      | Qué hace                                                                                                                                                                               |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`/play [query]`**          | Reproduce canción/playlist de YouTube (búsqueda o URL). Sin argumento, avisa que falta el query.                                                                                       |
+| **`/soundpad [query]`**      | Sin query: abre un panel interactivo de clips locales. Con query: busca el clip más parecido (fuzzy) y lo reproduce directo. **Requiere haber donado una API key de Gemini** (gating). |
+| **`/vapls <pregunta>`**      | Pregunta a Gemini **sin memoria** (stateless). Persona "bot del server".                                                                                                               |
+| **`/indio <charla>`**        | Charla con la persona "el Indio" **con memoria** (corto + largo plazo).                                                                                                                |
+| **`/parar`**                 | Detiene la reproducción, vacía la cola y desconecta de voz.                                                                                                                            |
+| **`/quit`**                  | Desconecta de voz **sin** tocar la cola.                                                                                                                                               |
+| **`/story-test`**            | [Owner] Fuerza una historia del Indio al instante (testing).                                                                                                                           |
+| **`/restart`**               | Devtool: reinicia el proceso del bot (`os.execv`).                                                                                                                                     |
+| **`/instagram`** (Pendiente) | **[PENDIENTE]** Transmite reels de Instagram en Go Live, scroll infinito. Pendiente de crear cuenta de Instagram para el userbot.                                                      |
 
 **Eventos del bot:**
 

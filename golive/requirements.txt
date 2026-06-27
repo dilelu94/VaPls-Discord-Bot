@@ -5,4 +5,5 @@ PyNaCl>=1.5.0
 davey>=0.1.0
 dave.py>=0.1.0
 yt-dlp
+instagrapi>=2.1.0
 

@@ -75,6 +75,14 @@
 | `TRANSFER_BASE_URL`         | ❌       | `http://141.148.84.55`     | External base URL used to build download links posted in Discord. No trailing slash.          |
 | `TRANSFER_SWEEPER_INTERVAL` | ❌       | `600` (10 min)             | Seconds between background sweeper runs. Expired sessions and files are cleaned on each tick. |
 
+## GoLive userbot (golive/.env) — Instagram Reels [PENDIENTE]
+
+| Variable                 | Required | Default                       | Description                                                                     |
+| ------------------------ | -------- | ----------------------------- | ------------------------------------------------------------------------------- |
+| `INSTAGRAM_USER`         | ⚠️       | empty                         | Instagram username para el userbot GoLive. Requerido para `/instagram`.         |
+| `INSTAGRAM_PASS`         | ⚠️       | empty                         | Instagram password.                                                             |
+| `INSTAGRAM_SESSION_FILE` | ❌       | `data/instagram_session.json` | Ruta donde se persiste la sesión de Instagram. Evita re-login en cada reinicio. |
+
 ## Security notes
 
 - Never commit `TOKEN` or `USER_TOKEN`.

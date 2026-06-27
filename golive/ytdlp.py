@@ -87,3 +87,57 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
         return None
 
     return await asyncio.to_thread(_run)
+
+
+async def _yt_extract_instagram(url: str) -> dict | None:
+    """Return ``{video_url, audio_url, title}`` for an Instagram reel.
+
+    Instagram delivers audio and video as separate DASH streams, so we
+    return both URLs.  The caller passes them as ``(-i video -i audio)``
+    to FFmpeg.
+
+    Returns ``None`` if extraction fails.
+    """
+    import yt_dlp
+
+    def _run() -> dict | None:
+        opts: dict = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "format": "bestvideo+bestaudio/best",
+        }
+        cookies = _get_cookies_path()
+        if cookies:
+            opts["cookiefile"] = cookies
+        ext_args = _get_extractor_args()
+        if ext_args:
+            opts["extractor_args"] = ext_args
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        if not info:
+            return None
+
+        title = info.get("title") or "Instagram Reel"
+        video_url = None
+        audio_url = None
+
+        if info.get("requested_formats") and len(info["requested_formats"]) >= 2:
+            req = info["requested_formats"]
+            video_url = req[0].get("url")
+            audio_url = req[1].get("url")
+        elif info.get("url"):
+            video_url = info["url"]
+
+        if not video_url:
+            return None
+
+        return {
+            "video_url": video_url,
+            "audio_url": audio_url,
+            "title": title,
+        }
+
+    return await asyncio.to_thread(_run)

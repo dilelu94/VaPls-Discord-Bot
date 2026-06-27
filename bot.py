@@ -35,6 +35,7 @@ import errorHandler
 import geminiKeys
 import iptv
 import decifrarVoting
+from instagramCommand import start_instagram_reel_stream_logic, start_instagram_stream_logic
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import huggingfaceImage
 import transferCommand
@@ -2238,6 +2239,22 @@ async def stream(
         return
 
     is_url = canal.startswith(("http://", "https://", "rtsp://", "rtmp://"))
+
+    # Instagram Reel detection — use yt-dlp extraction + vertical letterboxing
+    if is_url and re.match(
+        r"https?://(?:www\.)?instagram\.com/(?:reel|reels)/",
+        canal,
+    ):
+        log.info("[STREAM] Instagram reel detected: %s", canal[:80])
+        success, status_msg = await start_instagram_reel_stream_logic(
+            ctx.guild_id, voice_channel, canal,
+        )
+        if redirect_ch:
+            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
+        else:
+            await safe_respond(ctx, status_msg)
+        return
+
     if is_url:
         stream_url = canal
         channel_name = "Stream Directo"
@@ -2343,6 +2360,67 @@ async def stopstream(ctx):
         return
 
     await safe_respond(ctx, "🛑 Stream detenido.")
+
+
+@bot.slash_command(
+    name="instagram",
+    description="Transmití Reels de Instagram en tu canal de voz (Go Live, infinito)",
+)
+async def instagram(ctx):
+    """Slash command: start infinite Instagram Reel streaming.
+
+    Requires the GoLive relay and Instagram credentials (INSTAGRAM_USER /
+    INSTAGRAM_PASS in golive/.env).  Reels play back-to-back in an infinite
+    loop with vertical letterboxing.  Use /stopstream to end.
+
+    Args:
+        ctx: Discord application context.
+
+    Side Effects:
+        Joins voice, POSTs to the GoLive relay, and begins streaming
+        Instagram Reels via GoLive.
+    """
+    will_redirect = (
+        config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
+    )
+    await safe_defer(ctx, ephemeral=will_redirect)
+    redirect_ch = None
+    if will_redirect:
+        try:
+            await ctx.interaction.edit_original_response(
+                content=f"instagram en <#{config.INDIO_PLAY_CHANNEL_ID}>"
+            )
+        except Exception:
+            pass
+        if ctx.guild:
+            ch = ctx.guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
+            if ch is not None and hasattr(ch, "send"):
+                redirect_ch = ch
+
+    _track_command(ctx, "instagram")
+
+    voice_state = getattr(ctx.author, "voice", None)
+    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+    if voice_channel is None:
+        await safe_respond(
+            ctx, "❌ Tenés que estar en un canal de voz para iniciar un stream."
+        )
+        return
+
+    success, status_msg = await start_instagram_stream_logic(
+        ctx.guild_id, voice_channel
+    )
+
+    if success:
+        if redirect_ch:
+            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
+        else:
+            await safe_respond(ctx, status_msg)
+    else:
+        if redirect_ch:
+            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
+        else:
+            await safe_respond(ctx, status_msg)
 
 
 @bot.slash_command(

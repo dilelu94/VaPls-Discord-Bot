@@ -13,6 +13,8 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
 - **Transcripción opcional:** userbot con Vosk para canales con DAVE/E2EE.
 - **/transferir [dias]:** sube archivos de hasta 10 GB via web y comparte el link en Discord. TTL configurable (1-30 días, default 1).
 - **/stream + /stopstream:** transmití canales IPTV en tu canal de voz (Go Live) usando un userbot dedicado.
+- **/stream + /stopstream:** transmití canales IPTV en tu canal de voz (Go Live) usando un userbot dedicado. **También detecta automáticamente URLs de Reels de Instagram** (las extrae con yt-dlp y las reproduce con letterboxing vertical, sin necesidad de credenciales).
+- **/instagram:** transmití Reels de Instagram en tu canal de voz (Go Live), scroll infinito. Requiere `INSTAGRAM_USER` / `INSTAGRAM_PASS` en `golive/.env`.
 - **HTTP API:** status, miembros, cola y reproducción de audio.
 
 ## Requisitos previos
@@ -127,8 +129,9 @@ Bot de voz para Discord con reproducción de audio, soundpad y respuestas con Ge
    - `/parar`: Detiene reproducción y desconecta.
    - `/quit`: Desconecta sin tocar la cola.
    - `/transferir [dias]`: Genera un link para subir archivos (hasta 10 GB, role-gated, TTL configurable 1-30 días).
-   - `/stream <canal>`: Transmití un canal IPTV en tu canal de voz (requiere el userbot GoLive corriendo).
-   - `/stopstream`: Detiene la transmisión IPTV en curso.
+   - `/stream <canal>`: Transmití un canal IPTV en tu canal de voz (requiere el userbot GoLive corriendo). También acepta URLs de Reels de Instagram, las extrae con yt-dlp y las reproduce con letterboxing.
+   - `/stopstream`: Detiene la transmisión en curso.
+   - `/instagram`: Transmite reels de Instagram en scroll infinito. Requiere `INSTAGRAM_USER` / `INSTAGRAM_PASS` en `golive/.env`.
 
 ## Documentación
 

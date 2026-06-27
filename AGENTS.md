@@ -285,7 +285,98 @@ golive: encoder probe OK → libx264
    - _Causa original_: Faltaba configurar `YT_DLP_POT_BASE_URL` en `golive/.env`. YouTube exige PoT en IPs de Oracle.
    - **Fix inicial**: Se agregó `YT_DLP_POT_BASE_URL` y se cambió format a `"bestvideo[height<=1080][fps<=60]+bestaudio/best"` para 1080p60.
    - **Problemas secundarios**: `bestvideo` elegía AV1 (sin decoder en ARM), y devolvía tuple de URLs (video+audio separados) que el streamer no manejaba. Además, `-http_persistent 0` estaba aplicado a URLs YouTube y fallaba con "Option not found" en direct MP4 de googlevideo.com.
-   - **Fix final (a0b0e2e)**: `"format": "best"` (combined H264, single URL, max 720p) y `-http_persistent 0` solo para URLs HTTP que NO sean googlevideo.com (IPTV sí, YouTube no).
+     - **Fix final (a0b0e2e)**: `"format": "best"` (combined H264, single URL, max 720p) y `-http_persistent 0` solo para URLs HTTP que NO sean googlevideo.com (IPTV sí, YouTube no).
+
+## 📱 Instagram Reels Streaming (`/instagram`) [PENDIENTE]
+
+El comando `/instagram` **aún no está implementado**. El diseño está documentado
+acá para cuando se disponga de una cuenta de Instagram para el userbot GoLive.
+
+### Estado
+
+- **Implementación**: PENDIENTE — requiere crear una cuenta de Instagram para el userbot.
+- **Diseño**: completo, documentado a continuación.
+
+### Arquitectura planeada (3 procesos)
+
+```
+Usuario en Discord
+  └── /instagram
+        ↓
+  [main bot — bot.py]
+  1. Crea sesión de streaming con tipo "instagram"
+  2. POST al relay del GoLive con tipo "instagram"
+  3. Espera confirmación
+        ↓
+  [golive/bot.py — proceso separado con user token de Discord]
+  4. Recibe el POST en relay HTTP (127.0.0.1:8082)
+  5. Inicia GoLiveConnection (screenshare en Discord)
+  6. Instancia InstagramFeedPlayer
+        ↓
+  [golive/instagram_feed.py + golive/instagram_streamer.py] (NUEVOS)
+  7. InstagramFeed.login() via instagrapi con sesión persistente
+  8. InstagramFeed.fetch() obtiene feed de reels (timeline / For You)
+  9. Por cada reel: yt-dlp extrae URL directa .mp4
+  10. FFmpeg decode → H.264 → DAVE encrypt → RTP → Discord GoLive
+  11. Avanza al siguiente cuando termina (cola infinita)
+  12. Cuando la cola se vacía → fetch() más reels
+```
+
+### Loop infinito
+
+- `InstagramFeed` pre-fetch asíncrono: mantiene cola de 10+ reels.
+- Cuando el reel actual termina, avanza al siguiente sin cortar el GoLive.
+- Si la cola se vacía, fetchea más del feed automáticamente.
+- El userbot nunca desconecta hasta `/stopstream`.
+
+### Orientación vertical
+
+Los reels son verticales (1080×1920). Se muestran con barras negras laterales
+usando scale + pad en FFmpeg:
+
+```
+scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black
+```
+
+### Archivos planeados
+
+| Archivo                        | Rol                                                                                       |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `instagramCommand.py`          | **Nuevo.** Comando `/instagram` + view de control                                         |
+| `golive/instagram_feed.py`     | **Nuevo.** Login Instagram (instagrapi), fetch feed, cola de reels, ciclo infinito        |
+| `golive/instagram_streamer.py` | **Nuevo.** `InstagramReelPlayer` adapta `H264VideoPlayer` con loop + orientación vertical |
+| `golive/streamer.py`           | **Modificar.** Agregar resolución vertical con `pad` (barras negras)                      |
+| `golive/bot.py`                | **Modificar.** Endpoint `/instagram` en relay + orquestación de `InstagramReelPlayer`     |
+| `golive/ytdlp.py`              | **Modificar.** Asegurar extracción de Instagram Reels con cookies                         |
+| `bot.py`                       | **Modificar.** Registrar `/instagram` slash command                                       |
+| `golive/requirements.txt`      | **Modificar.** Agregar `instagrapi`                                                       |
+
+### Config necesaria (pendiente)
+
+En `golive/.env`:
+
+```env
+INSTAGRAM_USER=cuenta_del_userbot
+INSTAGRAM_PASS=contraseña
+INSTAGRAM_SESSION_FILE=data/instagram_session.json
+```
+
+### Prerequisitos para implementar
+
+1. Crear una cuenta nueva de Instagram para el userbot.
+2. Seguir cuentas que posteen reels seguido para poblar el feed.
+3. Configurar credenciales en `golive/.env`.
+4. Probar que instagrapi funciona desde la IP de Oracle Cloud (riesgo de bloqueo).
+5. Si el login directo falla, alternativa: cookies exportadas de Chrome.
+
+### Riesgos conocidos
+
+| Riesgo                               | Mitigación                                                                          |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| Instagram bloquea IP de Oracle Cloud | Probar en etapa de implementación. Sin fallback a URLs por ahora.                   |
+| `instagrapi` incompatible con ARM64  | Es pure Python + dependencias comunes (Pillow, requests), debería funcionar.        |
+| Instagram pide 2FA/challenge         | `instagrapi` tiene manejadores de challenge; si no alcanza, resolver manual.        |
+| Sesión expira y no se re-loguea      | `INSTAGRAM_SESSION_FILE` persiste en disco; el bot refresca al detectar expiración. |
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

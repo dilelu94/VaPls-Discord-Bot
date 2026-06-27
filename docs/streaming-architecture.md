@@ -301,6 +301,61 @@ Los canales se obtienen de [iptv-org](https://github.com/iptv-org/iptv), que man
 
 ---
 
+## 📱 Instagram Reels Streaming (`/instagram`) [PENDIENTE]
+
+**Estado: PENDIENTE** — requiere una cuenta de Instagram para el userbot GoLive.
+
+El comando `/instagram` usará la misma infraestructura GoLive que IPTV pero con
+una fuente de video diferente: reels del feed de Instagram en scroll infinito.
+
+### Diferencias con IPTV
+
+| Aspecto           | IPTV (`/stream`)         | Instagram (`/instagram`)                 |
+| ----------------- | ------------------------ | ---------------------------------------- |
+| Fuente de video   | M3U playlist de iptv-org | Feed de reels via instagrapi             |
+| Tipo de stream    | Live HLS continuo        | VODs cortos (15-90s) en secuencia        |
+| Loop              | No (es continuo)         | Sí, cola infinita                        |
+| Orientación       | Landscape (1920×1080)    | Portrait (1080×1920) con black bars      |
+| Login             | No requiere              | Instagram user/pass + sesión persistente |
+| Dependencia nueva | —                        | `instagrapi`                             |
+
+### Pipeline planeado
+
+```
+/instagram
+  ↓
+Main bot POST /instagram { guild_id, channel_id } → GoLive relay
+  ↓
+golive/bot.py:
+  GoLiveConnection (screenshare) + InstagramReelPlayer
+  ↓
+golive/instagram_feed.py:
+  instagrapi.login() → feed.reels() → cola de shortcodes
+  ↓
+golive/streamer.py (modificado):
+  yt-dlp --get-url → FFmpeg decode → scale + pad (black bars) → H.264
+  ↓
+  NAL parse + DAVE encrypt + RTP → Discord GoLive
+  ↓
+  Al terminar reel → avanza al siguiente (loop infinito)
+```
+
+### Loop infinito
+
+1. `InstagramFeed` mantiene cola interna de 10+ reels (pre-fetch asíncrono).
+2. Cuando el reel actual termina, `InstagramReelPlayer` detecta EOF de FFmpeg y
+   avanza al siguiente sin cortar el GoLive.
+3. Cuando la cola se vacía, fetchea más del feed automáticamente.
+4. El userbot nunca desconecta hasta `/stopstream`.
+
+### Archivos planeados
+
+| Archivo                        | Propósito                                                                   |
+| ------------------------------ | --------------------------------------------------------------------------- |
+| `golive/instagram_feed.py`     | Login Instagram (instagrapi), fetch feed, cola de reels, sesión persistente |
+| `golive/instagram_streamer.py` | `InstagramReelPlayer` — loop + orientación vertical                         |
+| `instagramCommand.py`          | Comando `/instagram` + view de control                                      |
+
 ## Alineación con slopsoil
 
 El pipeline de streaming está basado en [slopsoil](https://github.com/dev-topsoil/slopsoil/). Las diferencias clave resueltas:
