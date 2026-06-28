@@ -240,6 +240,23 @@ class InstagramGoLiveStream:
         assert self.conn is not None
         proxy_vc = _GoLiveVCProxy(self.conn)
 
+        # Pre-fill the feed queue before starting the player thread so
+        # instaloader GraphQL calls don't compete with the audio FIFO
+        # timeout.  Feed-only; URL mode (single reel) is unaffected.
+        # Timeout at 12s so a rate-limited instaloader doesn't block the
+        # stream start — the persistent cache fills in when instaloader
+        # can't get reels.
+        if self.feed:
+            log.info("[INSTAGRAM] Pre-filling reel queue via instaloader...")
+            try:
+                await asyncio.wait_for(
+                    asyncio.to_thread(self.feed.prefill),
+                    timeout=12.0,
+                )
+            except TimeoutError:
+                log.warning("[INSTAGRAM] Prefill timed out (12s), usando cache")
+            log.info("[INSTAGRAM] Reel queue has %d reels", len(self.feed._queue))
+
         if self.reel_url:
             # URL mode — yt-dlp, no credentials
             r = self.reel_url
