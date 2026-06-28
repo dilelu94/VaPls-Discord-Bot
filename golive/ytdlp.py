@@ -81,7 +81,7 @@ def _get_instagram_cookies_path() -> str | None:
     local = os.path.abspath(os.path.join(os.path.dirname(__file__), "instagram_cookies.txt"))
     if os.path.exists(local):
         return local
-    return _get_cookies_path()
+    return None
 
 
 def _get_extractor_args() -> dict | None:
