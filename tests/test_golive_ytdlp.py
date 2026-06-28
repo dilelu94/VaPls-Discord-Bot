@@ -343,8 +343,11 @@ def _make_fake_cj():
 
 def _make_fake_opener(body: bytes):
     """Return a build_opener()-return mock whose open() yields ``body``."""
+    resp = MagicMock()
+    resp.status = 200
+    resp.read.return_value = body
     opener = MagicMock()
-    opener.open.return_value.__enter__.return_value.read.return_value = body
+    opener.open.return_value.__enter__.return_value = resp
     return opener
 
 
@@ -414,8 +417,11 @@ class TestInstagramApiReelFeedUrls:
             "next_max_id": None,
         }).encode()
 
+        resp = MagicMock()
+        resp.status = 200
+        resp.read.side_effect = [page1, page2]
         opener = MagicMock()
-        opener.open.return_value.__enter__.return_value.read.side_effect = [page1, page2]
+        opener.open.return_value.__enter__.return_value = resp
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
