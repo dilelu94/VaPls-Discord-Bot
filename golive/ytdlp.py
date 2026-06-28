@@ -64,6 +64,16 @@ def _save_reel_cache(shortcodes: list[str]) -> None:
         log.warning("cache save fallo: %s", e)
 
 
+def _cache_reel_urls(urls: list[str]) -> None:
+    try:
+        cached = _reel_cache_shortcodes()
+        new_shortcodes = [u.rstrip("/").rsplit("/", 1)[-1] for u in urls]
+        merged = list(dict.fromkeys(new_shortcodes + cached))[:200]
+        _save_reel_cache(merged)
+    except Exception as e:
+        log.warning("cache merge save fallo: %s", e)
+
+
 def _get_cookies_path() -> str | None:
     parent_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cookies.txt"))
     if os.path.exists(parent_cookies):
@@ -216,27 +226,117 @@ async def _yt_extract_instagram(url: str) -> dict | None:
     return await asyncio.to_thread(_extract_instagram_sync, url)
 
 
+def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
+    """Fetch reel URLs from Instagram's internal timeline API.
+
+    Uses session cookies from ``instagram_cookies.txt`` to authenticate as
+    the logged-in user and retrieves their algorithmic feed directly via
+    Instagram's private Web API (bypassing instaloader's broken login
+    detection).
+
+    Returns up to ``limit`` reel page URLs (e.g.
+    ``https://www.instagram.com/reel/<shortcode>/``) or an empty list on
+    any error (missing cookies, network failure, auth rejection, etc.).
+    """
+    cookies_path = _get_instagram_cookies_path()
+    if not cookies_path:
+        log.warning("[INSTA-API] No instagram_cookies.txt found")
+        return []
+
+    import http.cookiejar
+
+    cj = http.cookiejar.MozillaCookieJar(cookies_path)
+    try:
+        cj.load()
+    except Exception as e:
+        log.warning("[INSTA-API] cookie load fallo: %s", e)
+        return []
+
+    has_sessionid = any(c.name == "sessionid" for c in cj)
+    if not has_sessionid:
+        log.warning("[INSTA-API] No sessionid cookie — can't auth")
+        return []
+
+    import json as _json
+    import urllib.request
+    import urllib.error
+
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(cj)
+    )
+
+    headers = {
+        "User-Agent": _CHROME_150_UA,
+        "X-IG-App-ID": "936619743392459",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://www.instagram.com/",
+        "Origin": "https://www.instagram.com/",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    urls: list[str] = []
+    next_max_id: str | None = None
+
+    try:
+        while len(urls) < limit:
+            params = f"count={min(limit - len(urls) + 10, 50)}"
+            if next_max_id:
+                params += f"&max_id={next_max_id}"
+
+            req = urllib.request.Request(
+                f"https://www.instagram.com/api/v1/feed/timeline/?{params}",
+                headers=headers,
+            )
+            with opener.open(req, timeout=15) as resp:
+                data = _json.loads(resp.read())
+
+            items = data.get("items", [])
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                media = item.get("media_or_ad", item)
+                media_type = media.get("media_type", 0)
+                code = media.get("code") or ""
+                if media_type == 2 and code:
+                    urls.append(f"https://www.instagram.com/reel/{code}/")
+                    if len(urls) >= limit:
+                        break
+
+            next_max_id = data.get("next_max_id")
+            if not next_max_id or not items:
+                break
+    except Exception as e:
+        log.warning("[INSTA-API] fallo: %s", e)
+        return []
+
+    return urls
+
+
 def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
     """Return up to ``limit`` reel page URLs using instaloader.
 
-    Uses instaloader (scraping Instagram's public GraphQL API) to discover
-    reel URLs from a hashtag page or user profile.  Requires valid session
-    cookies in ``cookies.txt``.
+    Strategy 0: Instagram internal timeline API (logged-in home feed via
+    session cookies in ``instagram_cookies.txt``).  This replaces the old
+    instaloader ``get_feed_posts()`` approach, which requires a ``username``
+    attribute that we cannot set without full password login.
 
-    Sets Chrome 150 user-agent to avoid rate-limiting by Instagram.
+    If the API returns nothing (no cookies, rate-limited, etc.), falls
+    through to:
+    1. ``Hashtag.get_posts()`` — tag page with SectionIterator
+    2. ``Hashtag.get_posts_resumable()`` — tag page with GraphQL
+    3. ``Profile.from_username().get_posts()`` — user profile
+    4. ``_ytdlp_reel_feed_urls()`` — yt-dlp flat playlist
 
-    Tries multiple feed sources in order:
-    1. ``get_feed_posts()`` — logged-in home feed (needs valid ``sessionid``
-       in ``instagram_cookies.txt``; cookies are injected directly into the
-       requests session with ``ds_user_id`` set on ``context.user_id`` so
-       instaloader recognises the session as logged-in).
-    2. ``Hashtag.get_posts()`` — tag page with SectionIterator
-    3. ``Hashtag.get_posts_resumable()`` — tag page with GraphQL (current)
-    4. ``Profile.from_username().get_posts()`` — user profile
-
-    Falls back to yt-dlp if instaloader is not available or all sources fail.
     Results are saved to the persistent reel cache on success.
     """
+    # Strategy 0: Instagram internal timeline API (logged-in home feed)
+    all_urls = _instagram_api_reel_feed_urls(limit)
+    if all_urls:
+        log.info("[INSTALOADER] API timeline: %d reels", len(all_urls))
+        _cache_reel_urls(all_urls)
+        return all_urls
+
     try:
         import http.cookiejar
         from urllib.parse import urlparse
@@ -339,14 +439,7 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
         log.warning("instaloader: todas las fuentes fallaron, usando yt-dlp")
         return _ytdlp_reel_feed_urls(url, limit)
 
-    # Save to persistent cache
-    try:
-        cached = _reel_cache_shortcodes()
-        new_shortcodes = [u.rstrip("/").rsplit("/", 1)[-1] for u in all_urls]
-        merged = list(dict.fromkeys(new_shortcodes + cached))[:200]
-        _save_reel_cache(merged)
-    except Exception as e:
-        log.warning("cache save falló: %s", e)
+    _cache_reel_urls(all_urls)
 
     return all_urls
 

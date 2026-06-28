@@ -1,4 +1,6 @@
+import json
 import sys
+import urllib.error
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -325,3 +327,195 @@ def test_format_string_excludes_av1():
     src = inspect.getsource(_yt_extract_url)
     assert "vcodec!*=av01" in src, "Format string must exclude AV1"
     assert "bestvideo" in src, "Format string must use bestvideo"
+
+
+# ── _instagram_api_reel_feed_urls tests ───────────────────────────────
+
+_MOCK_COOKIE = type("MockCookie", (), {"name": "sessionid", "value": "abc123", "domain": ".instagram.com", "path": "/"})()
+
+
+def _make_fake_cj():
+    """Return a MozillaCookieJar-like mock that yields one sessionid cookie."""
+    cj = MagicMock()
+    cj.__iter__.return_value = iter([_MOCK_COOKIE])
+    return cj
+
+
+def _make_fake_opener(body: bytes):
+    """Return a build_opener()-return mock whose open() yields ``body``."""
+    opener = MagicMock()
+    opener.open.return_value.__enter__.return_value.read.return_value = body
+    return opener
+
+
+class TestInstagramApiReelFeedUrls:
+    """_instagram_api_reel_feed_urls — direct Instagram Web API timeline feed."""
+
+    def test_success_returns_reels_filters_photos(self):
+        """Reels (media_type=2) are returned; photos (media_type=1) are skipped."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        body = json.dumps({
+            "items": [
+                {"media_type": 2, "code": "abc123"},
+                {"media_type": 1, "code": "photo1"},
+                {"media_type": 2, "code": "reel456"},
+            ],
+            "next_max_id": None,
+        }).encode()
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == [
+            "https://www.instagram.com/reel/abc123/",
+            "https://www.instagram.com/reel/reel456/",
+        ]
+
+    def test_handles_media_or_ad_wrapper(self):
+        """Some feed items wrap media in 'media_or_ad' — unpack it."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        body = json.dumps({
+            "items": [
+                {"media_or_ad": {"media_type": 2, "code": "wrapped1"}},
+                {"media_or_ad": {"media_type": 1, "code": "adphoto"}},
+                {"media_type": 2, "code": "plain1"},
+            ],
+            "next_max_id": None,
+        }).encode()
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == [
+            "https://www.instagram.com/reel/wrapped1/",
+            "https://www.instagram.com/reel/plain1/",
+        ]
+
+    def test_paginates_via_next_max_id(self):
+        """When next_max_id is set, continues fetching until limit reached."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        page1 = json.dumps({
+            "items": [{"media_type": 2, "code": f"page1_{i}"} for i in range(3)],
+            "next_max_id": "abc123",
+        }).encode()
+        page2 = json.dumps({
+            "items": [{"media_type": 2, "code": f"page2_{i}"} for i in range(3)],
+            "next_max_id": None,
+        }).encode()
+
+        opener = MagicMock()
+        opener.open.return_value.__enter__.return_value.read.side_effect = [page1, page2]
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=opener),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=5)
+
+        assert len(result) == 5
+        assert result[0] == "https://www.instagram.com/reel/page1_0/"
+        assert result[4] == "https://www.instagram.com/reel/page2_1/"
+
+    def test_empty_items_returns_empty(self):
+        """API returns no items → empty list."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        body = json.dumps({"items": [], "next_max_id": None}).encode()
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == []
+
+    def test_no_cookies_file_returns_empty(self):
+        """Missing instagram_cookies.txt → empty list."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        with patch("golive.ytdlp._get_instagram_cookies_path", return_value=None):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == []
+
+    def test_no_sessionid_returns_empty(self):
+        """Cookie jar without sessionid → empty list."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        cj = MagicMock()
+        bad = MagicMock()
+        bad.name = "csrftoken"
+        bad.value = "xyz"
+        cj.__iter__.return_value = iter([bad])
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=cj),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == []
+
+    def test_http_error_returns_empty(self):
+        """HTTP error during request → empty list."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        opener = MagicMock()
+        opener.open.side_effect = urllib.error.URLError("mock error")
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=opener),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == []
+
+    def test_malformed_json_returns_empty(self):
+        """Non-JSON response → empty list."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=_make_fake_opener(b"not json")),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == []
+
+    def test_empty_video_code_skipped(self):
+        """Item with media_type=2 but empty code → skipped."""
+        from golive.ytdlp import _instagram_api_reel_feed_urls
+
+        body = json.dumps({
+            "items": [
+                {"media_type": 2, "code": ""},
+                {"media_type": 2, "code": "valid1"},
+            ],
+            "next_max_id": None,
+        }).encode()
+
+        with (
+            patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
+            patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
+            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+        ):
+            result = _instagram_api_reel_feed_urls(limit=10)
+
+        assert result == ["https://www.instagram.com/reel/valid1/"]
