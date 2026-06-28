@@ -265,23 +265,12 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
         urllib.request.HTTPCookieProcessor(cj)
     )
 
-    csrftoken = ""
-    for c in cj:
-        if c.name == "csrftoken" and c.value:
-            csrftoken = c.value
-            break
-
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/135.0.0.0 Safari/537.36"
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "Version/17.0 Mobile/15E148 Safari/604.1"
         ),
-        "X-IG-App-ID": "936619743392459",
-        "X-Requested-With": "XMLHttpRequest",
-        "X-CSRFToken": csrftoken,
-        "Referer": "https://www.instagram.com/",
-        "Origin": "https://www.instagram.com/",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
     }
@@ -296,7 +285,7 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
                 params += f"&max_id={next_max_id}"
 
             req = urllib.request.Request(
-                f"https://www.instagram.com/api/v1/feed/timeline/?{params}",
+                f"https://i.instagram.com/api/v1/feed/timeline/?{params}",
                 headers=headers,
             )
             with opener.open(req, timeout=15) as resp:
