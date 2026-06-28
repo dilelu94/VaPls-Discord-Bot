@@ -74,6 +74,16 @@ def _get_cookies_path() -> str | None:
     return None
 
 
+def _get_instagram_cookies_path() -> str | None:
+    parent = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "instagram_cookies.txt"))
+    if os.path.exists(parent):
+        return parent
+    local = os.path.abspath(os.path.join(os.path.dirname(__file__), "instagram_cookies.txt"))
+    if os.path.exists(local):
+        return local
+    return _get_cookies_path()
+
+
 def _get_extractor_args() -> dict | None:
     pot_url = os.environ.get("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416").strip()
     if pot_url:
@@ -154,7 +164,7 @@ def _extract_instagram_sync(url: str) -> dict | None:
         "noplaylist": True,
         "format": "bestvideo+bestaudio/best",
     }
-    cookies = _get_cookies_path()
+    cookies = _get_instagram_cookies_path()
     if cookies:
         opts["cookiefile"] = cookies
     ext_args = _get_extractor_args()
@@ -234,7 +244,7 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
         try:
             L = instaloader.Instaloader(quiet=True)
             L.context.user_agent = _CHROME_150_UA
-            cookies_path = _get_cookies_path()
+            cookies_path = _get_instagram_cookies_path()
             if cookies_path:
                 cj = http.cookiejar.MozillaCookieJar(cookies_path)
                 cj.load()
@@ -337,7 +347,7 @@ def _ytdlp_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
         "extract_flat": True,
         "playlistend": limit,
     }
-    cookies = _get_cookies_path()
+    cookies = _get_instagram_cookies_path()
     if cookies:
         opts["cookiefile"] = cookies
 
