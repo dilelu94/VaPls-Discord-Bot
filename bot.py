@@ -2242,7 +2242,7 @@ async def stream(
 
     # Instagram Reel detection — use yt-dlp extraction + vertical letterboxing
     if is_url and re.match(
-        r"https?://(?:www\.)?instagram\.com/(?:reel|reels)/",
+        r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/",
         canal,
     ):
         log.info("[STREAM] Instagram reel detected: %s", canal[:80])

@@ -4,9 +4,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # Local modules not installed on CI — fake them so golive.bot imports
-for _mod in ("video_compat", "davey_compat", "golive_connection", "instagram_feed", "instagram_streamer"):
+for _mod in ("video_compat", "davey_compat", "golive_connection", "instagram_feed", "instagram_streamer", "streamer", "ytdlp"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
+# discord.voice_state is an internal discord.py sub-module not present in all versions.
+# Must also set it as an attr on the real discord module because bot.py does
+# ``discord.voice_state.davey = davey_compat`` at import time.
+import discord as _discord
+_vs = MagicMock()
+sys.modules["discord.voice_state"] = _vs
+_discord.voice_state = _vs
+# golive/bot.py imports the root config.py but expects golive/config.py attrs
+import config as _cfg
+_cfg.LOG_LEVEL = "INFO"
 
 # ── Helpers ───────────────────────────────────────────────────────────
 # yt_dlp is not installed on CI.  We inject a fake module into
@@ -225,11 +235,8 @@ def mock_golive_infra(monkeypatch):
     conn = AsyncMock()
     conn.ssrc = 1000
     monkeypatch.setattr("golive.bot.GoLiveConnection", lambda *a, **k: conn)
-    monkeypatch.setattr("golive.bot.H264VideoPlayer", MagicMock())
-    monkeypatch.setattr("golive.bot._GoLiveVCProxy", MagicMock())
-    monkeypatch.setattr("golive.bot.GoLiveAudioSender", MagicMock())
-    monkeypatch.setattr("golive.bot._stream_fps", lambda: 30)
     monkeypatch.setattr("asyncio.to_thread", lambda fn, *a: MagicMock())
+    monkeypatch.setattr("golive.bot.GoLiveStream._start_players", AsyncMock())
     return conn
 
 
@@ -246,7 +253,7 @@ async def test_start_dash_tuple(mock_golive_infra):
     """DASH tuple sets target_url to (vid, aud) and is_live False."""
     stream = _make_stream()
     extracted = ((_VID_URL, _AUD_URL), "Test Vid", False)
-    with patch("golive.bot._yt_extract_url", AsyncMock(return_value=extracted)):
+    with patch("ytdlp._yt_extract_url", AsyncMock(return_value=extracted)):
         await stream.start()
     assert stream.target_url == (_VID_URL, _AUD_URL)
     assert stream.title == "Test Vid"
@@ -258,7 +265,7 @@ async def test_start_single_url(mock_golive_infra):
     """Single URL sets target_url to str and is_live True."""
     stream = _make_stream()
     extracted = ("https://direct.example/stream.m3u8", "Live Stream", True)
-    with patch("golive.bot._yt_extract_url", AsyncMock(return_value=extracted)):
+    with patch("ytdlp._yt_extract_url", AsyncMock(return_value=extracted)):
         await stream.start()
     assert stream.target_url == "https://direct.example/stream.m3u8"
     assert stream.title == "Live Stream"
@@ -269,7 +276,7 @@ async def test_start_single_url(mock_golive_infra):
 async def test_start_extraction_none(mock_golive_infra):
     """Extraction returns None → RuntimeError."""
     stream = _make_stream()
-    with patch("golive.bot._yt_extract_url", AsyncMock(return_value=None)):
+    with patch("ytdlp._yt_extract_url", AsyncMock(return_value=None)):
         with pytest.raises(RuntimeError, match="Failed to extract stream URL"):
             await stream.start()
 
@@ -278,7 +285,7 @@ async def test_start_extraction_none(mock_golive_infra):
 async def test_start_extraction_exception(mock_golive_infra):
     """Extraction raises → RuntimeError."""
     stream = _make_stream()
-    with patch("golive.bot._yt_extract_url",
+    with patch("ytdlp._yt_extract_url",
                AsyncMock(side_effect=Exception("network error"))):
         with pytest.raises(RuntimeError, match="Failed to extract stream URL"):
             await stream.start()
@@ -289,7 +296,7 @@ async def test_start_direct_hls_skips_ytdlp(mock_golive_infra):
     """.m3u8 URL → skips yt-dlp entirely."""
     stream = _make_stream(url="https://cdn.example/stream.m3u8")
     spy = MagicMock()
-    with patch("golive.bot._yt_extract_url", spy):
+    with patch("ytdlp._yt_extract_url", spy):
         await stream.start()
     spy.assert_not_called()
 
@@ -299,7 +306,7 @@ async def test_start_direct_mpd_skips_ytdlp(mock_golive_infra):
     """.mpd URL → skips yt-dlp entirely."""
     stream = _make_stream(url="https://cdn.example/stream.mpd")
     spy = MagicMock()
-    with patch("golive.bot._yt_extract_url", spy):
+    with patch("ytdlp._yt_extract_url", spy):
         await stream.start()
     spy.assert_not_called()
 
