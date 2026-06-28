@@ -14,6 +14,9 @@ import discord as _discord
 _vs = MagicMock()
 sys.modules["discord.voice_state"] = _vs
 _discord.voice_state = _vs
+# Prevent module-level discord.Client(chunk_guilds_at_startup=False) from needing
+# an event loop at import time (fails on Python 3.10, handled gracefully on 3.14+).
+_discord.Client = MagicMock()
 # golive/bot.py imports the root config.py but expects golive/config.py attrs
 import config as _cfg
 _cfg.LOG_LEVEL = "INFO"
