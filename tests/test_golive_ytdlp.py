@@ -341,14 +341,14 @@ def _make_fake_cj():
     return cj
 
 
-def _make_fake_opener(body: bytes):
-    """Return a build_opener()-return mock whose open() yields ``body``."""
+def _make_fake_session(data: dict):
+    """Return a requests.Session-like mock whose get().json() returns ``data``."""
     resp = MagicMock()
-    resp.status = 200
-    resp.read.return_value = body
-    opener = MagicMock()
-    opener.open.return_value.__enter__.return_value = resp
-    return opener
+    resp.status_code = 200
+    resp.json.return_value = data
+    session = MagicMock()
+    session.get.return_value = resp
+    return session
 
 
 class TestInstagramApiReelFeedUrls:
@@ -358,19 +358,19 @@ class TestInstagramApiReelFeedUrls:
         """Reels (media_type=2) are returned; photos (media_type=1) are skipped."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        body = json.dumps({
+        data = {
             "items": [
                 {"media_type": 2, "code": "abc123"},
                 {"media_type": 1, "code": "photo1"},
                 {"media_type": 2, "code": "reel456"},
             ],
             "next_max_id": None,
-        }).encode()
+        }
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+            patch("requests.Session", return_value=_make_fake_session(data)),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 
@@ -383,19 +383,19 @@ class TestInstagramApiReelFeedUrls:
         """Some feed items wrap media in 'media_or_ad' — unpack it."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        body = json.dumps({
+        data = {
             "items": [
                 {"media_or_ad": {"media_type": 2, "code": "wrapped1"}},
                 {"media_or_ad": {"media_type": 1, "code": "adphoto"}},
                 {"media_type": 2, "code": "plain1"},
             ],
             "next_max_id": None,
-        }).encode()
+        }
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+            patch("requests.Session", return_value=_make_fake_session(data)),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 
@@ -408,25 +408,25 @@ class TestInstagramApiReelFeedUrls:
         """When next_max_id is set, continues fetching until limit reached."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        page1 = json.dumps({
+        page1 = {
             "items": [{"media_type": 2, "code": f"page1_{i}"} for i in range(3)],
             "next_max_id": "abc123",
-        }).encode()
-        page2 = json.dumps({
+        }
+        page2 = {
             "items": [{"media_type": 2, "code": f"page2_{i}"} for i in range(3)],
             "next_max_id": None,
-        }).encode()
+        }
 
         resp = MagicMock()
-        resp.status = 200
-        resp.read.side_effect = [page1, page2]
-        opener = MagicMock()
-        opener.open.return_value.__enter__.return_value = resp
+        resp.status_code = 200
+        resp.json.side_effect = [page1, page2]
+        session = MagicMock()
+        session.get.return_value = resp
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=opener),
+            patch("requests.Session", return_value=session),
         ):
             result = _instagram_api_reel_feed_urls(limit=5)
 
@@ -438,12 +438,12 @@ class TestInstagramApiReelFeedUrls:
         """API returns no items → empty list."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        body = json.dumps({"items": [], "next_max_id": None}).encode()
+        data = {"items": [], "next_max_id": None}
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+            patch("requests.Session", return_value=_make_fake_session(data)),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 
@@ -496,10 +496,16 @@ class TestInstagramApiReelFeedUrls:
         """Non-JSON response → empty list."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.side_effect = ValueError("bad json")
+        session = MagicMock()
+        session.get.return_value = resp
+
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=_make_fake_opener(b"not json")),
+            patch("requests.Session", return_value=session),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 
@@ -509,18 +515,18 @@ class TestInstagramApiReelFeedUrls:
         """Item with media_type=2 but empty code → skipped."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        body = json.dumps({
+        body = {
             "items": [
                 {"media_type": 2, "code": ""},
                 {"media_type": 2, "code": "valid1"},
             ],
             "next_max_id": None,
-        }).encode()
+        }
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=_make_fake_opener(body)),
+            patch("requests.Session", return_value=_make_fake_session(body)),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 

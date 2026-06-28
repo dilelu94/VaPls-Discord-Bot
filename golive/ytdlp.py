@@ -244,6 +244,7 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
         return []
 
     import http.cookiejar
+    import requests as _requests
 
     cj = http.cookiejar.MozillaCookieJar(cookies_path)
     try:
@@ -257,44 +258,52 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
         log.warning("[INSTA-API] No sessionid cookie — can't auth")
         return []
 
-    import json as _json
-    import urllib.request
-    import urllib.error
+    csrftoken = ""
+    for c in cj:
+        if c.name == "csrftoken" and c.value:
+            csrftoken = c.value
+            break
 
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPCookieProcessor(cj)
-    )
-
-    headers = {
+    session = _requests.Session()
+    for c in cj:
+        session.cookies.set(c.name, c.value, domain=c.domain, path=c.path)
+    session.headers.update({
         "User-Agent": (
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-            "Version/17.0 Mobile/15E148 Safari/604.1"
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/135.0.0.0 Safari/537.36"
         ),
+        "X-IG-App-ID": "936619743392459",
+        "X-Requested-With": "XMLHttpRequest",
+        "X-CSRFToken": csrftoken,
+        "Referer": "https://www.instagram.com/",
+        "Origin": "https://www.instagram.com/",
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-    }
+    })
 
     urls: list[str] = []
     next_max_id: str | None = None
 
     try:
         while len(urls) < limit:
-            params = f"count={min(limit - len(urls) + 10, 50)}"
+            params = {"count": min(limit - len(urls) + 10, 50)}
             if next_max_id:
-                params += f"&max_id={next_max_id}"
+                params["max_id"] = next_max_id
 
-            req = urllib.request.Request(
-                f"https://i.instagram.com/api/v1/feed/timeline/?{params}",
-                headers=headers,
+            resp = session.get(
+                "https://www.instagram.com/api/v1/feed/timeline/",
+                params=params,
+                timeout=15,
             )
-            with opener.open(req, timeout=15) as resp:
-                status = resp.status
-                if status != 200:
-                    log.warning("[INSTA-API] HTTP %d en timeline", status)
-                    return []
-                data = _json.loads(resp.read())
+            if resp.status_code != 200:
+                log.warning(
+                    "[INSTA-API] HTTP %d en timeline: %s",
+                    resp.status_code, resp.text[:300],
+                )
+                return []
 
+            data = resp.json()
             items = data.get("items", [])
             for item in items:
                 if not isinstance(item, dict):
