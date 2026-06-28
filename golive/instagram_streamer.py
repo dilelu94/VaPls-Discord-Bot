@@ -253,7 +253,7 @@ class InstagramGoLiveStream:
                     asyncio.to_thread(self.feed.prefill),
                     timeout=12.0,
                 )
-            except TimeoutError:
+            except (TimeoutError, asyncio.TimeoutError):
                 log.warning("[INSTAGRAM] Prefill timed out (12s), usando cache")
             log.info("[INSTAGRAM] Reel queue has %d reels", len(self.feed._queue))
 
