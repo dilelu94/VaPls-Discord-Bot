@@ -627,7 +627,7 @@ async def _relay_instagram(request: web.Request) -> web.Response:
         if _instagram_feed is None:
             source = os.environ.get(
                 "INSTAGRAM_REEL_SOURCE",
-                "https://www.instagram.com/explore/tags/reels/",
+                "https://www.instagram.com/",
             )
             _instagram_feed = InstagramReelFeed(source_url=source)
             log.info("[INSTAGRAM] Feed mode source: %s", source)

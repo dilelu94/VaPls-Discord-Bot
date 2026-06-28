@@ -2,8 +2,8 @@
 
 Provides InstagramReelFeed — a queue-backed reel URL fetcher that uses
 instaloader (scraping Instagram's GraphQL API) to discover reel page
-URLs from an Instagram hashtag or user profile.  Auth is via the shared
-cookies.txt session cookies.
+URLs from the logged-in user's home feed.  Auth is via
+``instagram_cookies.txt`` session cookies.
 
 The feed returns reel *page* URLs (e.g.
 ``https://www.instagram.com/reel/<shortcode>/``) which are then
@@ -27,9 +27,9 @@ log = logging.getLogger(__name__)
 class InstagramReelFeed:
     """Queue-backed reel URL feed using instaloader + persistent cache.
 
-    Refills from a configurable Instagram source URL (default:
-    explore/tags/reels).  Uses instaloader (preferred with Chrome 150 UA)
-    or yt-dlp fallback.
+    Refills from a configurable Instagram source URL (default: home feed).
+    Uses instaloader's ``get_feed_posts()`` (with Chrome 150 UA) or yt-dlp
+    fallback.
 
     A persistent cache (``data/reel_cache.json``) ensures reels keep
     playing even when all online sources fail.
@@ -40,7 +40,7 @@ class InstagramReelFeed:
             source_url
             or os.environ.get(
                 "INSTAGRAM_REEL_SOURCE",
-                "https://www.instagram.com/explore/tags/reels/",
+                "https://www.instagram.com/",
             )
         )
         self._queue: list[str] = []

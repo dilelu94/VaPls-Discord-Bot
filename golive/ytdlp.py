@@ -171,8 +171,11 @@ def _extract_instagram_sync(url: str) -> dict | None:
     if ext_args:
         opts["extractor_args"] = ext_args
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError):
+        return None
 
     if not info:
         return None
@@ -223,7 +226,10 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
     Sets Chrome 150 user-agent to avoid rate-limiting by Instagram.
 
     Tries multiple feed sources in order:
-    1. ``get_feed_posts()`` — logged-in home feed (different endpoint)
+    1. ``get_feed_posts()`` — logged-in home feed (needs valid ``sessionid``
+       in ``instagram_cookies.txt``; cookies are injected directly into the
+       requests session with ``ds_user_id`` set on ``context.user_id`` so
+       instaloader recognises the session as logged-in).
     2. ``Hashtag.get_posts()`` — tag page with SectionIterator
     3. ``Hashtag.get_posts_resumable()`` — tag page with GraphQL (current)
     4. ``Profile.from_username().get_posts()`` — user profile
@@ -248,7 +254,15 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
             if cookies_path:
                 cj = http.cookiejar.MozillaCookieJar(cookies_path)
                 cj.load()
-                L.context.update_cookies(cj)
+                for c in cj:
+                    domain = c.domain.lstrip(".")
+                    L.context._session.cookies.set(
+                        c.name, c.value,
+                        domain=domain,
+                        path=c.path,
+                    )
+                    if c.name == "ds_user_id" and c.value:
+                        L.context.user_id = int(c.value)
             return L
         except Exception as e:
             log.warning("instaloader init falló: %s", e)
