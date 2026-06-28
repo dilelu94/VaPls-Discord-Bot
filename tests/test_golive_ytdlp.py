@@ -7,13 +7,16 @@ import pytest
 for _mod in ("video_compat", "davey_compat", "golive_connection", "instagram_feed", "instagram_streamer", "streamer", "ytdlp"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
-# discord.voice_state is an internal discord.py sub-module not present in all versions.
-# Must also set it as an attr on the real discord module because bot.py does
-# ``discord.voice_state.davey = davey_compat`` at import time.
+# discord.voice is a py-cord package that checks for PyNaCl at import time.
+# Mock the whole package so golive/bot.py's ``import discord.voice_state``
+# never triggers the real check (fails on Python 3.10 CI, no-op on 3.14+).
 import discord as _discord
 _vs = MagicMock()
+_vp = MagicMock()
 sys.modules["discord.voice_state"] = _vs
+sys.modules["discord.voice"] = _vp
 _discord.voice_state = _vs
+_discord.voice = _vp
 # Prevent module-level discord.Client(chunk_guilds_at_startup=False) from needing
 # an event loop at import time (fails on Python 3.10, handled gracefully on 3.14+).
 _discord.Client = MagicMock()
