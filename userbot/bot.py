@@ -4003,9 +4003,99 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
             is_premium=is_premium,
             display_name=display_name,
         )
-        return web.json_response({"ok": True, "delta": delta})
+        # Award pet evolution points based on activity type
+        pet_pts = 0
+        if activity_type == "message":
+            pet_pts = 0.2
+        elif activity_type == "voice_vad":
+            pet_pts = 0.1
+        if pet_pts:
+            adb.earn_pet_points(user_id, guild_id, pet_pts)
+        return web.json_response({"ok": True, "delta": delta, "pet_points": pet_pts})
     except Exception as e:
         log.exception("[ACTIVITY] log_activity failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_pet_points(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        user_id = int(request.match_info["user_id"])
+        guild_id = int(request.query.get("guild_id", 0))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "invalid params"}, status=400)
+    try:
+        info = adb.get_pet_points(user_id, guild_id)
+        return web.json_response(info)
+    except Exception as e:
+        log.exception("[PET] get_pet_points failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_pet_points_reserve(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        user_id = int(data["user_id"])
+        guild_id = int(data["guild_id"])
+        amount = float(data["amount"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    try:
+        ok = adb.reserve_pet_points(user_id, guild_id, amount)
+        if not ok:
+            return web.json_response({"error": "insufficient points"}, status=409)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        log.exception("[PET] reserve failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_pet_points_release(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        user_id = int(data["user_id"])
+        guild_id = int(data["guild_id"])
+        amount = float(data["amount"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    try:
+        adb.release_pet_points(user_id, guild_id, amount)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        log.exception("[PET] release failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_pet_points_spend(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        user_id = int(data["user_id"])
+        guild_id = int(data["guild_id"])
+        amount = float(data["amount"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    try:
+        ok = adb.spend_pet_points(user_id, guild_id, amount)
+        if not ok:
+            return web.json_response({"error": "insufficient points"}, status=409)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        log.exception("[PET] spend failed")
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -4373,6 +4463,10 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_get("/activity/leaderboard", _relay_activity_leaderboard)
     app.router.add_get("/activity/last-voice", _relay_last_voice)
     app.router.add_get("/activity/voice-summary", _relay_voice_summary)
+    app.router.add_get("/pet-points/{user_id}", _relay_pet_points)
+    app.router.add_post("/pet-points/reserve", _relay_pet_points_reserve)
+    app.router.add_post("/pet-points/release", _relay_pet_points_release)
+    app.router.add_post("/pet-points/spend", _relay_pet_points_spend)
     app.router.add_get("/admin", _relay_admin_page)
     app.router.add_get("/admin/api/data", _relay_admin_data)
     app.router.add_post("/admin/api/weights", _relay_admin_weights)

@@ -72,6 +72,11 @@ INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 INDIO_IMAGES_DIR = os.getenv("INDIO_IMAGES_DIR", "indio_images")
 INDIO_IMAGE_GUILD_ID = int(os.getenv("INDIO_IMAGE_GUILD_ID", "0"))
 
+# Ruta al archivo JSON con datos persistidos de mascotas (/mascota).
+PETS_PATH = os.getenv("PETS_PATH", "data/pets.json")
+PET_GENERATION_COST = int(os.getenv("PET_GENERATION_COST", "300"))
+PET_EVOLUTION_COST = int(os.getenv("PET_EVOLUTION_COST", "300"))
+
 # Ruta al archivo JSON con datos estáticos de usuarios (traits, anécdotas, etc.).
 # Default: data/users.json. Si no existe, se usa el fallback hardcodeado en users.py.
 USERS_PATH = os.getenv("USERS_PATH", "data/users.json")

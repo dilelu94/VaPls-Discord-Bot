@@ -156,6 +156,7 @@ def _schema() -> None:
     """)
     _migrate_v1()
     _migrate_v2()
+    _migrate_v3()
 
 
 def _migrate_v1() -> None:
@@ -183,6 +184,108 @@ def _migrate_v2() -> None:
             "INSERT OR REPLACE INTO config (key, value) VALUES (?, '0')", (k,)
         )
     _conn.commit()
+
+
+def _migrate_v3() -> None:
+    _conn.execute("""
+        CREATE TABLE IF NOT EXISTS pet_points (
+            user_id INTEGER NOT NULL,
+            guild_id INTEGER NOT NULL,
+            total_earned REAL NOT NULL DEFAULT 0,
+            spent REAL NOT NULL DEFAULT 0,
+            reserved REAL NOT NULL DEFAULT 0,
+            updated_at REAL NOT NULL,
+            PRIMARY KEY (user_id, guild_id)
+        )
+    """)
+    _conn.commit()
+
+
+# ---- Pet evolution points --------------------------------------------------
+
+
+def earn_pet_points(user_id: int, guild_id: int, amount: float) -> None:
+    if _conn is None:
+        return
+    now = _now()
+    _conn.execute(
+        """INSERT INTO pet_points (user_id, guild_id, total_earned, spent, reserved, updated_at)
+           VALUES (?, ?, ?, 0, 0, ?)
+           ON CONFLICT(user_id, guild_id) DO UPDATE SET
+               total_earned = total_earned + ?,
+               updated_at = ?""",
+        (user_id, guild_id, amount, now, amount, now),
+    )
+    _conn.commit()
+
+
+def get_pet_points(user_id: int, guild_id: int) -> dict:
+    if _conn is None:
+        return {"total_earned": 0, "spent": 0, "reserved": 0, "available": 0}
+    cur = _conn.execute(
+        "SELECT total_earned, spent, reserved FROM pet_points WHERE user_id=? AND guild_id=?",
+        (user_id, guild_id),
+    )
+    row = cur.fetchone()
+    if row is None:
+        # Seed: users with MMR > 1500 get 500 free points
+        cur2 = _conn.execute(
+            "SELECT rating FROM user_mmr WHERE user_id=? AND guild_id=?",
+            (user_id, guild_id),
+        )
+        mmr = cur2.fetchone()
+        seed = 500 if mmr and mmr["rating"] > 1500 else 0
+        if seed:
+            now = _now()
+            _conn.execute(
+                "INSERT INTO pet_points (user_id, guild_id, total_earned, spent, reserved, updated_at) VALUES (?, ?, ?, 0, 0, ?)",
+                (user_id, guild_id, seed, now),
+            )
+            _conn.commit()
+        return {"total_earned": seed, "spent": 0, "reserved": 0, "available": seed}
+    te = row["total_earned"]
+    sp = row["spent"]
+    rs = row["reserved"]
+    return {"total_earned": te, "spent": sp, "reserved": rs, "available": te - sp - rs}
+
+
+def reserve_pet_points(user_id: int, guild_id: int, amount: float) -> bool:
+    if _conn is None:
+        return False
+    info = get_pet_points(user_id, guild_id)
+    if info["available"] < amount:
+        return False
+    _conn.execute(
+        "UPDATE pet_points SET reserved = reserved + ?, updated_at = ? WHERE user_id=? AND guild_id=?",
+        (amount, _now(), user_id, guild_id),
+    )
+    _conn.commit()
+    return True
+
+
+def release_pet_points(user_id: int, guild_id: int, amount: float) -> bool:
+    if _conn is None:
+        return False
+    _conn.execute(
+        "UPDATE pet_points SET reserved = MAX(0, reserved - ?), updated_at = ? WHERE user_id=? AND guild_id=?",
+        (amount, _now(), user_id, guild_id),
+    )
+    _conn.commit()
+    return True
+
+
+def spend_pet_points(user_id: int, guild_id: int, amount: float) -> bool:
+    if _conn is None:
+        return False
+    info = get_pet_points(user_id, guild_id)
+    if info["available"] < amount:
+        return False
+    _conn.execute(
+        "UPDATE pet_points SET spent = spent + ?, updated_at = ? WHERE user_id=? AND guild_id=?",
+        (amount, _now(), user_id, guild_id),
+    )
+    _conn.commit()
+    return True
 
 
 def get_config(key: str) -> str:

@@ -41,6 +41,7 @@ import huggingfaceImage
 import transferCommand
 from transferCommand import manager as transferManager
 import storyManager
+import petGenerator
 # import geminiImage
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
@@ -179,6 +180,44 @@ async def _log_activity(
                     )
     except Exception as e:
         log.warning(f"[MMR] log_activity failed: {e}")
+
+
+async def _fetch_pet_points(user_id: int, guild_id: int) -> dict:
+    if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
+        return {"available": 0, "reserved": 0, "total_earned": 0, "spent": 0}
+    url = urljoin(config.INDIO_RELAY_URL, f"/pet-points/{user_id}")
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as sess:
+            async with sess.get(
+                url,
+                params={"guild_id": guild_id},
+                headers={"X-API-Secret": config.INDIO_RELAY_SECRET},
+            ) as resp:
+                if resp.status >= 400:
+                    return {"available": 0, "reserved": 0, "total_earned": 0, "spent": 0}
+                return await resp.json()
+    except Exception:
+        return {"available": 0, "reserved": 0, "total_earned": 0, "spent": 0}
+
+
+async def _post_pet_points(endpoint: str, user_id: int, guild_id: int, amount: float) -> bool:
+    if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
+        return False
+    url = urljoin(config.INDIO_RELAY_URL, endpoint)
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=5)
+        ) as sess:
+            async with sess.post(
+                url,
+                json={"user_id": user_id, "guild_id": guild_id, "amount": amount},
+                headers={"X-API-Secret": config.INDIO_RELAY_SECRET},
+            ) as resp:
+                return resp.status < 400
+    except Exception:
+        return False
 
 
 async def _fetch_activity(endpoint: str, params: dict) -> dict | None:
@@ -2950,6 +2989,149 @@ async def spacewar(ctx):
     _track_command(ctx, "spacewar")
 
     await safe_respond(ctx, SPACEWAR_GUIDE_TEXT, ephemeral=True)
+
+
+@bot.slash_command(
+    name="mascota",
+    description="Gestioná tu mascota procedural — ver, evolucionar, revertir, historial",
+)
+async def mascota(
+    ctx,
+    accion: discord.Option(
+        str,
+        "Qué querés hacer",
+        choices=[
+            ("👀 Ver mi mascota", "ver"),
+            ("⬆️ Evolucionar (300 pts)", "evolucionar"),
+            ("⬇️ Revertir evolución", "revertir"),
+            ("📜 Historial evolutivo", "historial"),
+        ],
+        default="ver",
+    ) = "ver",
+):
+    """Slash command: manage your pet — view, evolve, revert, or show history.
+
+    Args:
+        ctx: Discord application context.
+        accion: Action to perform.
+
+    Side Effects:
+        Creates/evolves/reverts pet data in pets.json and manages pet points
+        via the userbot relay. Syncs with the activity database.
+
+    Async:
+        This function is a coroutine and must be awaited.
+    """
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "mascota", {"accion": accion})
+    uid = str(ctx.author.id)
+    guild_id = ctx.guild.id if ctx.guild else 0
+
+    if accion == "ver":
+        pet = petGenerator.get_or_create_pet(uid)
+        pts = await _fetch_pet_points(ctx.author.id, guild_id)
+        formatted = petGenerator.format_name(pet["name"], pet["rarity"])
+        evo = pet.get("evolution_level", 0)
+        evo_tag = f" [+{evo}]" if evo else ""
+        msg = (
+            f"```\n{pet['ascii']}\n```\n"
+            f"**{formatted}**{evo_tag}\n"
+            f"*{pet['rarity'].capitalize()}*\n"
+            f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  "
+            f"MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}\n\n"
+            f"⭐ Puntos: {pts['available']:.0f} "
+            f"(ganados {pts['total_earned']:.0f} · reservados {pts['reserved']:.0f})"
+        )
+        await safe_respond(ctx, msg, ephemeral=True)
+        return
+
+    if accion == "evolucionar":
+        pet = petGenerator.get_or_create_pet(uid)
+        if pet.get("evolution_level", 0) == 0 and pet.get("original_seed", pet["seed"]) == pet["seed"]:
+            # First evolution costs 300 from available
+            ok = await _post_pet_points("/pet-points/spend", ctx.author.id, guild_id, config.PET_GENERATION_COST)
+            if not ok:
+                pts = await _fetch_pet_points(ctx.author.id, guild_id)
+                await safe_respond(
+                    ctx,
+                    f"❌ Necesitás **{config.PET_GENERATION_COST}** puntos para generar una mascota. "
+                    f"Tenés **{pts['available']:.0f}**. Seguí participando en el server.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            ok = await _post_pet_points("/pet-points/reserve", ctx.author.id, guild_id, config.PET_EVOLUTION_COST)
+            if not ok:
+                pts = await _fetch_pet_points(ctx.author.id, guild_id)
+                await safe_respond(
+                    ctx,
+                    f"❌ Necesitás **{config.PET_EVOLUTION_COST}** puntos para evolucionar. "
+                    f"Tenés **{pts['available']:.0f}**. Seguí participando en el server.",
+                    ephemeral=True,
+                )
+                return
+        new_pet = petGenerator.evolve_pet(pet)
+        petGenerator.save_pet(uid, new_pet)
+        formatted = petGenerator.format_name(new_pet["name"], new_pet["rarity"])
+        msg = (
+            f"⬆️ **Evolucionó!**\n"
+            f"```\n{new_pet['ascii']}\n```\n"
+            f"**{formatted}** [+{new_pet.get('evolution_level', 0)}]\n"
+            f"*{new_pet['rarity'].capitalize()}*\n"
+            f"ATK {new_pet['stats']['atk']}  DEF {new_pet['stats']['def']}  "
+            f"MAG {new_pet['stats']['mag']}  SPD {new_pet['stats']['spd']}"
+        )
+        await safe_respond(ctx, msg, ephemeral=True)
+        return
+
+    if accion == "revertir":
+        pet = petGenerator.get_pet(uid)
+        if pet is None:
+            await safe_respond(ctx, "❌ No tenés mascota todavía. Usá `/mascota` para crear una.", ephemeral=True)
+            return
+        evo_level = pet.get("evolution_level", 0)
+        if evo_level <= 0:
+            await safe_respond(ctx, "❌ Tu mascota está en su forma base, no podés revertir más.", ephemeral=True)
+            return
+        if evo_level == 1 and pet.get("original_seed", pet["seed"]) == pet["seed"]:
+            pass
+        else:
+            await _post_pet_points("/pet-points/release", ctx.author.id, guild_id, config.PET_EVOLUTION_COST)
+        old = petGenerator.revert_pet(pet)
+        if old is None:
+            await safe_respond(ctx, "❌ No podés revertir más.", ephemeral=True)
+            return
+        petGenerator.save_pet(uid, old)
+        formatted = petGenerator.format_name(old["name"], old["rarity"])
+        msg = (
+            f"⬇️ **Revertido a forma anterior**\n"
+            f"```\n{old['ascii']}\n```\n"
+            f"**{formatted}** [+{old.get('evolution_level', 0)}]\n"
+            f"*{old['rarity'].capitalize()}*"
+        )
+        await safe_respond(ctx, msg, ephemeral=True)
+        return
+
+    if accion == "historial":
+        pet = petGenerator.get_pet(uid)
+        if pet is None:
+            await safe_respond(ctx, "❌ No tenés mascota todavía. Usá `/mascota` para crear una.", ephemeral=True)
+            return
+        original_seed = pet.get("original_seed", pet["seed"])
+        evo_level = pet.get("evolution_level", 0)
+        chain = petGenerator.rebuild_evolution_chain(original_seed, evo_level)
+        lines = ["📜 **Historial evolutivo**\n"]
+        for entry in chain:
+            lvl = entry["level"]
+            marker = "⬅️ **Actual**" if lvl == evo_level else f"`Nvl {lvl}`"
+            lines.append(
+                f"{marker} — {entry['rarity'].capitalize()} "
+                f"`{entry['name']}` "
+                f"[ATK {entry['stats']['atk']} DEF {entry['stats']['def']} "
+                f"MAG {entry['stats']['mag']} SPD {entry['stats']['spd']}]"
+            )
+        await safe_respond(ctx, "\n".join(lines), ephemeral=True)
+        return
 
 
 @bot.slash_command(

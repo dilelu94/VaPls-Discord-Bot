@@ -26,6 +26,7 @@ import analytics
 import config
 import geminiCommand
 import geminiKeys
+import petGenerator
 from playCommand import guildPlayers
 from users import USERS
 import storyManager
@@ -1760,6 +1761,13 @@ def makeApp(bot: discord.Bot) -> web.Application:
         history = transferCommand.manager.get_history(limit=200)
         return web.json_response({"history": history})
 
+    async def petEndpoint(request: web.Request) -> web.Response:
+        user_id = request.match_info["user_id"]
+        pet = petGenerator.get_pet(user_id)
+        if pet is None:
+            return web.json_response({"error": "not found"}, status=404)
+        return web.json_response(pet)
+
     app.router.add_get("/upload/{token}", uploadPage)
     app.router.add_post("/upload/{token}/init", uploadInit)
     app.router.add_post("/upload/{token}/chunk/{idx}", uploadChunk)
@@ -1777,6 +1785,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/admin", adminPage)
     app.router.add_get("/members", members)
     app.router.add_get("/user/{user_id}", user)
+    app.router.add_get("/pet/{user_id}", petEndpoint)
     app.router.add_post("/message", sendMessage)
     app.router.add_post("/play-audio", playAudio)
     app.router.add_get("/queue", queue)

@@ -38,6 +38,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "stream": "text",
     "stopstream": "text",
     "instagram": "text",
+    "mascota": "text",
     "restart": "text",
 }
 
