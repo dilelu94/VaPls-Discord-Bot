@@ -385,6 +385,7 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
                     )
                     if c.name == "ds_user_id" and c.value:
                         L.context.user_id = int(c.value)
+                        L.context.username = str(c.value)
             return L
         except Exception as e:
             log.warning("instaloader init falló: %s", e)
