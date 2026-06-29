@@ -369,3 +369,54 @@ The preset is **in-memory only** — it resets to the default (4) on userbot res
 
 - `400` if `preset` is missing, not an integer, or outside 1–4.
 - `503` if `RELAY_SECRET` is not configured.
+
+---
+
+### POST `/instagram` (GoLive relay)
+
+Relay endpoint to start an Instagram Reels GoLive stream. Served by
+`golive/bot.py` (not the main API server).
+
+**Headers**
+
+```
+X-API-Secret: <RELAY_SECRET>
+```
+
+**Request body**
+
+```json
+{
+  "guild_id": 451575911704428554,
+  "channel_id": 1089025651786404030,
+  "url": "https://www.instagram.com/reel/XXXXX/"
+}
+```
+
+| Field        | Required | Description                                          |
+| ------------ | -------- | ---------------------------------------------------- |
+| `guild_id`   | yes      | Discord guild ID                                     |
+| `channel_id` | yes      | Discord voice channel ID                             |
+| `url`        | no       | Single reel URL. Omit for infinite-scroll feed mode. |
+
+**Response (success, `200`)**
+
+```json
+{
+  "started": true,
+  "guild_id": 451575911704428554,
+  "channel_name": "General",
+  "video_ssrc": 21810
+}
+```
+
+**Errors**
+
+- `503` if `RELAY_SECRET` is empty or client not ready.
+- `401` if `X-API-Secret` header is wrong.
+- `400` if body is malformed, missing fields, or channel is not a voice channel.
+- `404` if guild or channel not found.
+- `403` if guild is not in the allowed list.
+- `500` if voice join fails, yt-dlp extraction fails, or stream start fails.
+
+**See also:** [Instagram streaming docs](instagram.md).
