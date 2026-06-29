@@ -6,10 +6,13 @@ Port of petGenerator.js.  Same seed always produces the same creature.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 
 import config
+
+log = logging.getLogger("petGenerator")
 
 # ── Seeded RNG (mulberry32, JS‑compatible) ──────────────────────────────────
 
@@ -242,6 +245,7 @@ def get_or_create_pet(user_id: str) -> dict:
     pet["created_at"] = time.time()
     pets[user_id] = pet
     _save_pets(pets)
+    log.info("Created pet for user=%s seed=%s rarity=%s", user_id, seed, pet["rarity"])
     return pet
 
 
@@ -279,6 +283,11 @@ def evolve_pet(pet: dict) -> dict:
             cand["evolution_level"] = level
             cand["user_id"] = pet.get("user_id", "")
             cand["created_at"] = pet.get("created_at", time.time())
+            log.info(
+                "Evolved pet uid=%s lvl=%s->%s seed=%s rarity=%s->%s",
+                pet.get("user_id", "?"), current_level, level,
+                original_seed, pet.get("rarity", "?"), cand["rarity"],
+            )
             return cand
         level += 1
 
@@ -298,6 +307,10 @@ def revert_pet(pet: dict) -> dict | None:
     cand["evolution_level"] = new_level
     cand["user_id"] = pet.get("user_id", "")
     cand["created_at"] = pet.get("created_at", time.time())
+    log.info(
+        "Reverted pet uid=%s lvl=%s->%s seed=%s",
+        pet.get("user_id", "?"), current_level, new_level, original_seed,
+    )
     return cand
 
 

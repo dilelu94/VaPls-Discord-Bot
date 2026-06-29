@@ -27,8 +27,7 @@ import config
 import video_compat as vc
 import davey_compat
 from golive_connection import GoLiveConnection
-from instagram_feed import InstagramReelFeed
-from instagram_streamer import InstagramGoLiveStream
+
 
 
 # Must patch before any voice connections (before client.start())
@@ -532,131 +531,6 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 
-# ---------- Instagram relay --------------------------------------------------
-
-_instagram_feed: InstagramReelFeed | None = None
-
-
-async def _relay_instagram(request: web.Request) -> web.Response:
-    log.info("[INSTAGRAM] request from %s", request.remote)
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-        channel_id = int(data["channel_id"])
-        reel_url = str(data.get("url", "")).strip() or None
-    except Exception as e:
-        log.warning("[INSTAGRAM] invalid body: %s", e)
-        return web.json_response({"error": "invalid body"}, status=400)
-
-    if not client.is_ready():
-        log.info("[INSTAGRAM] client not ready, waiting up to 30s...")
-        for _ in range(30):
-            if client.is_ready():
-                break
-            await asyncio.sleep(1)
-        if not client.is_ready():
-            log.warning("[INSTAGRAM] client still not ready after 30s")
-            return web.json_response({"error": "client not ready"}, status=503)
-
-    existing = _active_streams.pop(guild_id, None)
-    if existing:
-        log.info("[INSTAGRAM] stopping existing stream for guild=%s", guild_id)
-        await existing.stop()
-
-    guild = client.get_guild(guild_id)
-    if guild is None:
-        log.warning("[INSTAGRAM] guild not found: %s", guild_id)
-        return web.json_response({"error": "guild not found"}, status=404)
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.VoiceChannel):
-        try:
-            channel = await client.fetch_channel(channel_id)
-        except Exception as e:
-            log.warning("[INSTAGRAM] channel fetch failed: %s", e)
-            return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not isinstance(channel, discord.VoiceChannel):
-        log.warning("[INSTAGRAM] channel=%s is not voice", channel_id)
-        return web.json_response({"error": "not a voice channel"}, status=400)
-    if not _guild_allowed(guild.id):
-        log.warning("[INSTAGRAM] guild=%s not allowed", guild_id)
-        return web.json_response({"error": "guild not allowed"}, status=403)
-
-    log.info("[INSTAGRAM] joining channel=%s", channel_id)
-    try:
-        await _join_channel(channel)
-    except Exception as e:
-        log.exception("[INSTAGRAM] join failed")
-        return web.json_response({"error": f"join failed: {e}"}, status=500)
-
-    vc = _vc_for_guild(guild)
-    if vc is None or not vc.is_connected():
-        log.warning("[INSTAGRAM] not connected after join (vc=%s)", vc)
-        return web.json_response({"error": "not connected"}, status=500)
-
-    # ── URL mode (aiograpi) vs feed mode (aiograpi) ───────────────────────────────
-    if reel_url:
-        from instagram_client import InstagramClient
-
-        log.info("[INSTAGRAM] Extracting reel URL via aiograpi: %s", reel_url[:80])
-        cl = await InstagramClient.get()
-        info = await cl.reel_info(reel_url)
-        if not info:
-            log.warning("[INSTAGRAM] aiograpi extraction failed — disconnecting")
-            try:
-                await vc.disconnect(force=True)
-            except Exception:
-                pass
-            return web.json_response(
-                {"error": "failed to extract reel URL via aiograpi"}, status=500
-            )
-        extracted = {
-            "video_url": info["video_url"],
-            "audio_url": None,
-            "title": info["title"],
-        }
-        log.info(
-            "[INSTAGRAM] Extracted: %s (video=%s..)",
-            extracted.get("title", "?"),
-            (extracted.get("video_url") or "")[:60],
-        )
-        stream = InstagramGoLiveStream(
-            client, guild_id, channel_id, vc, reel_url=extracted
-        )
-    else:
-        # Feed mode — aiograpi (session cookies from cookies.txt)
-        global _instagram_feed
-        if _instagram_feed is None:
-            _instagram_feed = InstagramReelFeed()
-            log.info("[INSTAGRAM] Feed mode: aiograpi")
-
-        stream = InstagramGoLiveStream(
-            client, guild_id, channel_id, vc, feed=_instagram_feed
-        )
-
-    log.info("[INSTAGRAM] creating InstagramGoLiveStream")
-    try:
-        await stream.start()
-    except Exception as e:
-        log.exception("[INSTAGRAM] stream start failed")
-        await stream.stop()
-        return web.json_response({"error": str(e)}, status=500)
-
-    _active_streams[guild_id] = stream
-    log.info("[INSTAGRAM] started guild=%s channel=%s", guild_id, channel.name)
-    return web.json_response(
-        {
-            "started": True,
-            "guild_id": guild_id,
-            "channel_name": channel.name,
-            "video_ssrc": stream.video_ssrc,
-        }
-    )
-
-
 # ---------- Events ----------------------------------------------------------
 
 
@@ -676,7 +550,6 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/stream", _relay_stream)
     app.router.add_post("/stopstream", _relay_stopstream)
     app.router.add_post("/stream/control", _relay_stream_control)
-    app.router.add_post("/instagram", _relay_instagram)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

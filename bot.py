@@ -2991,6 +2991,53 @@ async def spacewar(ctx):
     await safe_respond(ctx, SPACEWAR_GUIDE_TEXT, ephemeral=True)
 
 
+def _build_pet_msg(pet, formatted, evo_tag, pts=None):
+    lines = [
+        f"```\n{pet['ascii']}\n```",
+        f"**{formatted}**{evo_tag}",
+        f"*{pet['rarity'].capitalize()}*",
+        f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}",
+    ]
+    if pts is not None:
+        lines.append(f"\n⭐ Puntos: {pts['available']:.0f} (ganados {pts['total_earned']:.0f} · reservados {pts['reserved']:.0f})")
+    return "\n".join(lines)
+
+
+class MascotaView(discord.ui.View):
+    def __init__(self, pet, formatted, evo_tag, pts, channel, uid):
+        super().__init__(timeout=300)
+        self.pet = pet
+        self.formatted = formatted
+        self.evo_tag = evo_tag
+        self.pts = pts
+        self.channel = channel
+        self.uid = uid
+
+    async def _send_to_channel(self, interaction):
+        msg = _build_pet_msg(self.pet, self.formatted, self.evo_tag)
+        await self.channel.send(f"📢 **{interaction.user.display_name}** muestra su mascota:\n{msg}")
+
+    @discord.ui.button(label="👁 Mostrar", style=discord.ButtonStyle.primary)
+    async def mostrar(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await self._send_to_channel(interaction)
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("✅ Mascota publicada en el canal.", ephemeral=True)
+
+    @discord.ui.button(label="✖ Cerrar", style=discord.ButtonStyle.danger)
+    async def cerrar(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.edit_message(content="✖ Menú cerrado.", view=None, delete_after=1)
+        self.stop()
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(view=self)
+        except Exception:
+            pass
+
+
 @bot.slash_command(
     name="mascota",
     description="Gestioná tu mascota procedural — ver, evolucionar, revertir, historial",
@@ -3004,23 +3051,11 @@ async def mascota(
         default="ver",
     ) = "ver",
 ):
-    """Slash command: manage your pet — view, evolve, revert, or show history.
-
-    Args:
-        ctx: Discord application context.
-        accion: Action to perform.
-
-    Side Effects:
-        Creates/evolves/reverts pet data in pets.json and manages pet points
-        via the userbot relay. Syncs with the activity database.
-
-    Async:
-        This function is a coroutine and must be awaited.
-    """
     await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "mascota", {"accion": accion})
     uid = str(ctx.author.id)
     guild_id = ctx.guild.id if ctx.guild else 0
+    channel = ctx.channel if ctx.guild else None
 
     if accion == "ver":
         pet = petGenerator.get_or_create_pet(uid)
@@ -3028,22 +3063,16 @@ async def mascota(
         formatted = petGenerator.format_name(pet["name"], pet["rarity"])
         evo = pet.get("evolution_level", 0)
         evo_tag = f" [+{evo}]" if evo else ""
-        msg = (
-            f"```\n{pet['ascii']}\n```\n"
-            f"**{formatted}**{evo_tag}\n"
-            f"*{pet['rarity'].capitalize()}*\n"
-            f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  "
-            f"MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}\n\n"
-            f"⭐ Puntos: {pts['available']:.0f} "
-            f"(ganados {pts['total_earned']:.0f} · reservados {pts['reserved']:.0f})"
-        )
-        await safe_respond(ctx, msg, ephemeral=True)
+        view = MascotaView(pet, formatted, evo_tag, pts, channel, uid)
+        msg = _build_pet_msg(pet, formatted, evo_tag, pts)
+        log.info("MASCOTA ver uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
+        r = await safe_respond(ctx, msg, ephemeral=True, view=view)
+        view.message = r
         return
 
     if accion == "evolucionar":
         pet = petGenerator.get_or_create_pet(uid)
         if pet.get("evolution_level", 0) == 0 and pet.get("original_seed", pet["seed"]) == pet["seed"]:
-            # First evolution costs 300 from available
             ok = await _post_pet_points("/pet-points/spend", ctx.author.id, guild_id, config.PET_GENERATION_COST)
             if not ok:
                 pts = await _fetch_pet_points(ctx.author.id, guild_id)
@@ -3068,15 +3097,12 @@ async def mascota(
         new_pet = petGenerator.evolve_pet(pet)
         petGenerator.save_pet(uid, new_pet)
         formatted = petGenerator.format_name(new_pet["name"], new_pet["rarity"])
-        msg = (
-            f"⬆️ **Evolucionó!**\n"
-            f"```\n{new_pet['ascii']}\n```\n"
-            f"**{formatted}** [+{new_pet.get('evolution_level', 0)}]\n"
-            f"*{new_pet['rarity'].capitalize()}*\n"
-            f"ATK {new_pet['stats']['atk']}  DEF {new_pet['stats']['def']}  "
-            f"MAG {new_pet['stats']['mag']}  SPD {new_pet['stats']['spd']}"
-        )
-        await safe_respond(ctx, msg, ephemeral=True)
+        evo_tag = f" [+{new_pet.get('evolution_level', 0)}]"
+        view = MascotaView(new_pet, formatted, evo_tag, None, channel, uid)
+        msg = f"⬆️ **Evolucionó!**\n{_build_pet_msg(new_pet, formatted, evo_tag)}"
+        log.info("MASCOTA evolucionar uid=%s lvl=%s rarity=%s", uid, new_pet.get("evolution_level", 0), new_pet["rarity"])
+        r = await safe_respond(ctx, msg, ephemeral=True, view=view)
+        view.message = r
         return
 
     if accion == "revertir":
@@ -3098,13 +3124,12 @@ async def mascota(
             return
         petGenerator.save_pet(uid, old)
         formatted = petGenerator.format_name(old["name"], old["rarity"])
-        msg = (
-            f"⬇️ **Revertido a forma anterior**\n"
-            f"```\n{old['ascii']}\n```\n"
-            f"**{formatted}** [+{old.get('evolution_level', 0)}]\n"
-            f"*{old['rarity'].capitalize()}*"
-        )
-        await safe_respond(ctx, msg, ephemeral=True)
+        evo_tag = f" [+{old.get('evolution_level', 0)}]"
+        view = MascotaView(old, formatted, evo_tag, None, channel, uid)
+        msg = f"⬇️ **Revertido a forma anterior**\n{_build_pet_msg(old, formatted, evo_tag)}"
+        log.info("MASCOTA revertir uid=%s lvl=%s rarity=%s", uid, old.get("evolution_level", 0), old["rarity"])
+        r = await safe_respond(ctx, msg, ephemeral=True, view=view)
+        view.message = r
         return
 
     if accion == "historial":
