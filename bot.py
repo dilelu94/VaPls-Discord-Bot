@@ -3039,14 +3039,14 @@ class MascotaView(discord.ui.View):
 
 @bot.slash_command(
     name="mascota",
-    description="Gestiona tu Mascota - ver, evolucionar, historial",
+    description="Gestiona tu Mascota - ver, generar, evolucionar, historial",
 )
 async def mascota(
     ctx,
     accion: discord.Option(
         str,
-        "ver (default) | evolucionar | historial",
-        choices=["ver", "evolucionar", "historial"],
+        "ver (default) | generar | evolucionar | historial",
+        choices=["ver", "generar", "evolucionar", "historial"],
         default="ver",
     ) = "ver",
 ):
@@ -3057,42 +3057,51 @@ async def mascota(
     channel = ctx.channel if ctx.guild else None
 
     if accion == "ver":
-        pet = petGenerator.get_or_create_pet(uid)
+        pet = petGenerator.get_pet(uid)
+        if pet is None:
+            await safe_respond(ctx, "❌ No tenés mascota. Usá `/mascota generar` para crear una.", ephemeral=True)
+            return
         pts = await _fetch_pet_points(ctx.author.id, guild_id)
         formatted = petGenerator.format_name(pet["name"], pet["rarity"])
         evo = pet.get("evolution_level", 0)
         evo_tag = f" [+{evo}]" if evo else ""
         view = MascotaView(pet, formatted, evo_tag, pts, channel, uid)
         msg = _build_pet_msg(pet, formatted, evo_tag, pts)
-        log.info("MASCOTA mostrar uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
+        log.info("MASCOTA ver uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
+        r = await safe_respond(ctx, msg, ephemeral=True, view=view)
+        view.message = r
+        return
+
+    if accion == "generar":
+        pet = petGenerator.get_pet(uid)
+        if pet is not None:
+            await safe_respond(ctx, "❌ Ya tenés una mascota. Usá `/mascota ver` para verla.", ephemeral=True)
+            return
+        pet = petGenerator.get_or_create_pet(uid)
+        pts = await _fetch_pet_points(ctx.author.id, guild_id)
+        formatted = petGenerator.format_name(pet["name"], pet["rarity"])
+        view = MascotaView(pet, formatted, "", pts, channel, uid)
+        msg = f"✨ **Mascota generada!**\n{_build_pet_msg(pet, formatted, '', pts)}"
+        log.info("MASCOTA generar uid=%s rarity=%s pts=%.0f", uid, pet["rarity"], pts["available"])
         r = await safe_respond(ctx, msg, ephemeral=True, view=view)
         view.message = r
         return
 
     if accion == "evolucionar":
-        pet = petGenerator.get_or_create_pet(uid)
-        if pet.get("evolution_level", 0) == 0 and pet.get("original_seed", pet["seed"]) == pet["seed"]:
-            ok = await _post_pet_points("/pet-points/spend", ctx.author.id, guild_id, config.PET_GENERATION_COST)
-            if not ok:
-                pts = await _fetch_pet_points(ctx.author.id, guild_id)
-                await safe_respond(
-                    ctx,
-                    f"❌ Necesitás **{config.PET_GENERATION_COST}** puntos para generar una mascota. "
-                    f"Tenés **{pts['available']:.0f}**. Seguí participando en el server.",
-                    ephemeral=True,
-                )
-                return
-        else:
-            ok = await _post_pet_points("/pet-points/reserve", ctx.author.id, guild_id, config.PET_EVOLUTION_COST)
-            if not ok:
-                pts = await _fetch_pet_points(ctx.author.id, guild_id)
-                await safe_respond(
-                    ctx,
-                    f"❌ Necesitás **{config.PET_EVOLUTION_COST}** puntos para evolucionar. "
-                    f"Tenés **{pts['available']:.0f}**. Seguí participando en el server.",
-                    ephemeral=True,
-                )
-                return
+        pet = petGenerator.get_pet(uid)
+        if pet is None:
+            await safe_respond(ctx, "❌ No tenés mascota. Usá `/mascota generar` para crear una.", ephemeral=True)
+            return
+        ok = await _post_pet_points("/pet-points/spend", ctx.author.id, guild_id, config.PET_EVOLUTION_COST)
+        if not ok:
+            pts = await _fetch_pet_points(ctx.author.id, guild_id)
+            await safe_respond(
+                ctx,
+                f"❌ Necesitás **{config.PET_EVOLUTION_COST}** puntos para evolucionar. "
+                f"Tenés **{pts['available']:.0f}**. Seguí participando en el server.",
+                ephemeral=True,
+            )
+            return
         new_pet = petGenerator.evolve_pet(pet)
         petGenerator.save_pet(uid, new_pet)
         formatted = petGenerator.format_name(new_pet["name"], new_pet["rarity"])

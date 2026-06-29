@@ -13,7 +13,7 @@ aleatorias, y pueden evolucionar a formas más poderosas.
 ## Comando
 
 ```
-/mascota [accion: ver | evolucionar | historial]
+/mascota [accion: ver | generar | evolucionar | historial]
 ```
 
 Por defecto (sin argumento) muestra la mascota del usuario.
@@ -22,8 +22,9 @@ Por defecto (sin argumento) muestra la mascota del usuario.
 
 | Acción          | Descripción                                                           |
 | --------------- | --------------------------------------------------------------------- |
-| **ver**         | Muestra tu mascota actual. Si no tenés una, se crea automáticamente.  |
-| **evolucionar** | Evoluciona tu mascota a una forma más rara (si es posible).           |
+| **ver**         | Muestra tu mascota actual.                                            |
+| **generar**     | Crea una mascota nueva si no tenés una.                               |
+| **evolucionar** | Evoluciona tu mascota a una forma más rara (cuesta 300 puntos).       |
 | **historial**   | Muestra el historial completo de todas las evoluciones de tu mascota. |
 
 ### Botones
@@ -50,12 +51,12 @@ Los puntos se acumulan automáticamente por actividad en Discord:
 | Mensaje   | 0.2               |
 | Voz (VAD) | 0.1               |
 
-Evolucionar una mascota cuesta **300 puntos** (la primera evolución es gratis, costo 0).
+Evolucionar una mascota cuesta **300 puntos**. Generar una mascota es gratis.
 
 ### Seed inicial
 
-Todos los usuarios reciben **200 puntos gratis** la primera vez que consultan
-su mascota (sin condición de MMR).
+Todos los usuarios reciben **200 puntos gratis** al generar su primera
+mascota (sin condición de MMR).
 
 ### Estructura de puntos
 
@@ -68,14 +69,9 @@ Los puntos se manejan en el userbot (`userbot/activity_db.py`, tabla
 
 ## Evolución
 
-### Primera evolución
+### Costo
 
-La primera evolución **gasta** 0 puntos (generación gratis). Es el paso que
-"crea" la mascota sobre la que se evoluciona.
-
-### Evoluciones siguientes
-
-Las evoluciones posteriores **cuestan** 300 puntos (se descuentan del total).
+Evolucionar cuesta **300 puntos** (se descuentan del total).
 
 ### Algoritmo
 
