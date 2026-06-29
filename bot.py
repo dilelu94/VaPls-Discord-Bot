@@ -3040,16 +3040,16 @@ class MascotaView(discord.ui.View):
 
 @bot.slash_command(
     name="mascota",
-    description="Gestioná tu mascota procedural — ver, evolucionar, revertir, historial",
+    description="Gestiona tu Mascota - mostrar, evolucionar, revertir, historial",
 )
 async def mascota(
     ctx,
     accion: discord.Option(
         str,
-        "ver (default) | evolucionar | revertir | historial",
-        choices=["ver", "evolucionar", "revertir", "historial"],
-        default="ver",
-    ) = "ver",
+        "mostrar (default) | evolucionar | revertir | historial",
+        choices=["mostrar", "evolucionar", "revertir", "historial"],
+        default="mostrar",
+    ) = "mostrar",
 ):
     await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "mascota", {"accion": accion})
@@ -3057,7 +3057,7 @@ async def mascota(
     guild_id = ctx.guild.id if ctx.guild else 0
     channel = ctx.channel if ctx.guild else None
 
-    if accion == "ver":
+    if accion == "mostrar":
         pet = petGenerator.get_or_create_pet(uid)
         pts = await _fetch_pet_points(ctx.author.id, guild_id)
         formatted = petGenerator.format_name(pet["name"], pet["rarity"])
@@ -3065,7 +3065,7 @@ async def mascota(
         evo_tag = f" [+{evo}]" if evo else ""
         view = MascotaView(pet, formatted, evo_tag, pts, channel, uid)
         msg = _build_pet_msg(pet, formatted, evo_tag, pts)
-        log.info("MASCOTA ver uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
+        log.info("MASCOTA mostrar uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
         r = await safe_respond(ctx, msg, ephemeral=True, view=view)
         view.message = r
         return
