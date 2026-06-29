@@ -241,16 +241,16 @@ async def _yt_extract_instagram(url: str) -> dict | None:
 
 
 def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
-    """Fetch reel URLs from Instagram's internal timeline API.
+    """Fetch reel URLs from Instagram's Reels tab feed API.
 
     Uses session cookies from ``instagram_cookies.txt`` to authenticate as
-    the logged-in user and retrieves their algorithmic feed directly via
-    Instagram's private Web API (bypassing instaloader's broken login
-    detection).
+    the logged-in user and retrieves their Reels tab feed (the same reels
+    you see on the Reels tab in the Instagram app or web) directly via
+    Instagram's private Web API (``clips/discover/``).
 
     Returns up to ``limit`` reel page URLs (e.g.
     ``https://www.instagram.com/reel/<shortcode>/``) or an empty list on
-    any error (missing cookies, network failure, auth rejection, etc.).
+    any error (missing cookies, network failure, rate-limit, auth rejection).
     """
     cookies_path = _get_instagram_cookies_path()
     if not cookies_path:
@@ -259,6 +259,7 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
 
     import http.cookiejar
     import requests as _requests
+    import time
 
     cj = http.cookiejar.MozillaCookieJar(cookies_path)
     try:
@@ -292,32 +293,43 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
     })
 
     urls: list[str] = []
-    next_max_id: str | None = None
+    max_id: str | None = None
+    retries = 0
 
     try:
         while len(urls) < limit:
-            params = {"count": min(limit - len(urls) + 10, 50)}
-            if next_max_id:
-                params["max_id"] = next_max_id
+            data_dict: dict[str, str] = {}
+            if max_id:
+                data_dict["max_id"] = max_id
 
-            resp = session.get(
-                "https://www.instagram.com/api/v1/feed/timeline/",
-                params=params,
+            resp = session.post(
+                "https://www.instagram.com/api/v1/clips/discover/",
+                data=data_dict,
                 timeout=15,
             )
+            if resp.status_code == 429:
+                retries += 1
+                if retries > 3:
+                    log.warning("[INSTA-API] rate-limit agotado tras %d reintos", retries)
+                    break
+                wait = 10 * retries
+                log.warning("[INSTA-API] rate-limit (429), esperando %ds...", wait)
+                time.sleep(wait)
+                continue
+
             if resp.status_code != 200:
                 log.warning(
-                    "[INSTA-API] HTTP %d en timeline: %s",
+                    "[INSTA-API] HTTP %d en clips/discover: %s",
                     resp.status_code, resp.text[:300],
                 )
-                return []
+                break
 
             data = resp.json()
             items = data.get("items", [])
             for item in items:
                 if not isinstance(item, dict):
                     continue
-                media = item.get("media_or_ad", item)
+                media = item.get("media", item)
                 media_type = media.get("media_type", 0)
                 code = media.get("code") or ""
                 if media_type == 2 and code:
@@ -325,8 +337,9 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
                     if len(urls) >= limit:
                         break
 
-            next_max_id = data.get("next_max_id")
-            if not next_max_id or not items:
+            paging = data.get("paging_info") or {}
+            max_id = paging.get("max_id") or None
+            if not max_id or not items:
                 break
     except Exception as e:
         log.warning("[INSTA-API] fallo: %s", e)
@@ -338,7 +351,7 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
 def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
     """Return up to ``limit`` reel page URLs using instaloader.
 
-    Strategy 0: Instagram internal timeline API (logged-in home feed via
+    Strategy 0: Instagram Reels tab feed API (clips/discover/ via
     session cookies in ``instagram_cookies.txt``).  This replaces the old
     instaloader ``get_feed_posts()`` approach, which requires a ``username``
     attribute that we cannot set without full password login.
@@ -352,10 +365,10 @@ def _instaloader_reel_feed_urls(url: str, limit: int = 20) -> list[str]:
 
     Results are saved to the persistent reel cache on success.
     """
-    # Strategy 0: Instagram internal timeline API (logged-in home feed)
+    # Strategy 0: Instagram Reels tab feed API (clips/discover/)
     all_urls = _instagram_api_reel_feed_urls(limit)
     if all_urls:
-        log.info("[INSTALOADER] API timeline: %d reels", len(all_urls))
+        log.info("[INSTALOADER] API clips/discover: %d reels", len(all_urls))
         _cache_reel_urls(all_urls)
         return all_urls
 
