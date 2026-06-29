@@ -341,17 +341,17 @@ def _make_fake_cj():
 
 
 def _make_fake_session(data: dict):
-    """Return a requests.Session-like mock whose get().json() returns ``data``."""
+    """Return a requests.Session-like mock whose post().json() returns ``data``."""
     resp = MagicMock()
     resp.status_code = 200
     resp.json.return_value = data
     session = MagicMock()
-    session.get.return_value = resp
+    session.post.return_value = resp
     return session
 
 
 class TestInstagramApiReelFeedUrls:
-    """_instagram_api_reel_feed_urls — direct Instagram Web API timeline feed."""
+    """_instagram_api_reel_feed_urls — Instagram Reels tab feed API (clips/discover/)."""
 
     def test_success_returns_reels_filters_photos(self):
         """Reels (media_type=2) are returned; photos (media_type=1) are skipped."""
@@ -359,11 +359,11 @@ class TestInstagramApiReelFeedUrls:
 
         data = {
             "items": [
-                {"media_type": 2, "code": "abc123"},
-                {"media_type": 1, "code": "photo1"},
-                {"media_type": 2, "code": "reel456"},
+                {"media": {"media_type": 2, "code": "abc123"}},
+                {"media": {"media_type": 1, "code": "photo1"}},
+                {"media": {"media_type": 2, "code": "reel456"}},
             ],
-            "next_max_id": None,
+            "paging_info": {},
         }
 
         with (
@@ -378,17 +378,17 @@ class TestInstagramApiReelFeedUrls:
             "https://www.instagram.com/reel/reel456/",
         ]
 
-    def test_handles_media_or_ad_wrapper(self):
-        """Some feed items wrap media in 'media_or_ad' — unpack it."""
+    def test_handles_media_wrapper(self):
+        """Items wrap media in 'media' key — unpack it."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
         data = {
             "items": [
-                {"media_or_ad": {"media_type": 2, "code": "wrapped1"}},
-                {"media_or_ad": {"media_type": 1, "code": "adphoto"}},
+                {"media": {"media_type": 2, "code": "wrapped1"}},
+                {"media": {"media_type": 1, "code": "adphoto"}},
                 {"media_type": 2, "code": "plain1"},
             ],
-            "next_max_id": None,
+            "paging_info": {},
         }
 
         with (
@@ -409,18 +409,18 @@ class TestInstagramApiReelFeedUrls:
 
         page1 = {
             "items": [{"media_type": 2, "code": f"page1_{i}"} for i in range(3)],
-            "next_max_id": "abc123",
+            "paging_info": {"max_id": "abc123"},
         }
         page2 = {
             "items": [{"media_type": 2, "code": f"page2_{i}"} for i in range(3)],
-            "next_max_id": None,
+            "paging_info": {},
         }
 
         resp = MagicMock()
         resp.status_code = 200
         resp.json.side_effect = [page1, page2]
         session = MagicMock()
-        session.get.return_value = resp
+        session.post.return_value = resp
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
@@ -437,7 +437,7 @@ class TestInstagramApiReelFeedUrls:
         """API returns no items → empty list."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        data = {"items": [], "next_max_id": None}
+        data = {"items": [], "paging_info": {}}
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
@@ -467,7 +467,7 @@ class TestInstagramApiReelFeedUrls:
         tok.value = "xyz"
         cj.__iter__.return_value = iter([tok])
 
-        data = {"items": [{"media_type": 2, "code": "nossid"}], "next_max_id": None}
+        data = {"items": [{"media_type": 2, "code": "nossid"}], "paging_info": {}}
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
@@ -485,7 +485,7 @@ class TestInstagramApiReelFeedUrls:
         resp = MagicMock()
         resp.status_code = 403
         session = MagicMock()
-        session.get.return_value = resp
+        session.post.return_value = resp
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
@@ -504,7 +504,7 @@ class TestInstagramApiReelFeedUrls:
         resp.status_code = 200
         resp.json.side_effect = ValueError("bad json")
         session = MagicMock()
-        session.get.return_value = resp
+        session.post.return_value = resp
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
@@ -524,7 +524,7 @@ class TestInstagramApiReelFeedUrls:
                 {"media_type": 2, "code": ""},
                 {"media_type": 2, "code": "valid1"},
             ],
-            "next_max_id": None,
+            "paging_info": {},
         }
 
         with (
