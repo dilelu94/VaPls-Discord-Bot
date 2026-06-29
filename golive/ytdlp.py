@@ -253,11 +253,6 @@ def _instagram_api_reel_feed_urls(limit: int = 20) -> list[str]:
         log.warning("[INSTA-API] cookie load fallo: %s", e)
         return []
 
-    has_sessionid = any(c.name == "sessionid" for c in cj)
-    if not has_sessionid:
-        log.warning("[INSTA-API] No sessionid cookie — can't auth")
-        return []
-
     csrftoken = ""
     for c in cj:
         if c.name == "csrftoken" and c.value:

@@ -1,6 +1,5 @@
 import json
 import sys
-import urllib.error
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -458,35 +457,40 @@ class TestInstagramApiReelFeedUrls:
 
         assert result == []
 
-    def test_no_sessionid_returns_empty(self):
-        """Cookie jar without sessionid → empty list."""
+    def test_works_without_sessionid(self):
+        """Proceeds with API call even without sessionid cookie."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
         cj = MagicMock()
-        bad = MagicMock()
-        bad.name = "csrftoken"
-        bad.value = "xyz"
-        cj.__iter__.return_value = iter([bad])
+        tok = MagicMock()
+        tok.name = "csrftoken"
+        tok.value = "xyz"
+        cj.__iter__.return_value = iter([tok])
+
+        data = {"items": [{"media_type": 2, "code": "nossid"}], "next_max_id": None}
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=cj),
+            patch("requests.Session", return_value=_make_fake_session(data)),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 
-        assert result == []
+        assert result == ["https://www.instagram.com/reel/nossid/"]
 
     def test_http_error_returns_empty(self):
         """HTTP error during request → empty list."""
         from golive.ytdlp import _instagram_api_reel_feed_urls
 
-        opener = MagicMock()
-        opener.open.side_effect = urllib.error.URLError("mock error")
+        resp = MagicMock()
+        resp.status_code = 403
+        session = MagicMock()
+        session.get.return_value = resp
 
         with (
             patch("golive.ytdlp._get_instagram_cookies_path", return_value="/f/cookies.txt"),
             patch("http.cookiejar.MozillaCookieJar", return_value=_make_fake_cj()),
-            patch("urllib.request.build_opener", return_value=opener),
+            patch("requests.Session", return_value=session),
         ):
             result = _instagram_api_reel_feed_urls(limit=10)
 
