@@ -85,19 +85,27 @@ def _get_cookies_path() -> str | None:
 
 
 def _get_instagram_cookies_path() -> str | None:
-    parent = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "instagram_cookies.txt"))
-    if os.path.exists(parent):
-        return parent
-    local = os.path.abspath(os.path.join(os.path.dirname(__file__), "instagram_cookies.txt"))
-    if os.path.exists(local):
-        return local
-    parent_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cookies.txt"))
-    if os.path.exists(parent_cookies):
-        return parent_cookies
-    local_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "cookies.txt"))
-    if os.path.exists(local_cookies):
-        return local_cookies
-    return None
+    candidates = [
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "instagram_cookies.txt")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "instagram_cookies.txt")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cookies.txt")),
+        os.path.abspath(os.path.join(os.path.dirname(__file__), "cookies.txt")),
+    ]
+    import http.cookiejar
+    first: str | None = None
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        if first is None:
+            first = path
+        try:
+            cj = http.cookiejar.MozillaCookieJar(path)
+            cj.load()
+            if any(c.name == "sessionid" for c in cj):
+                return path
+        except Exception:
+            continue
+    return first
 
 
 def _get_extractor_args() -> dict | None:
