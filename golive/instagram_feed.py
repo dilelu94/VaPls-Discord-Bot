@@ -1,16 +1,15 @@
-"""Instagram reels feed fetching using instaloader.
+"""Instagram reels feed fetching using aiograpi.
 
 Provides InstagramReelFeed — a queue-backed reel URL fetcher that uses
-instaloader (scraping Instagram's GraphQL API) to discover reel page
-URLs from the logged-in user's home feed.  Auth is via
-``instagram_cookies.txt`` session cookies.
+aiograpi (async Instagram private API) to discover reel page URLs and
+direct video URLs from the logged-in user's Reels tab feed.  Auth is
+via ``instagram_cookies.txt`` session cookies, persisted to
+``instagram_session.json``.
 
-The feed returns reel *page* URLs (e.g.
-``https://www.instagram.com/reel/<shortcode>/``) which are then
-extracted by yt-dlp for video+audio DASH URLs in InstagramReelPlayer.
-
-A persistent cache (``data/reel_cache.json``) keeps reels flowing even
-when instaloader is rate-limited or yt-dlp's feed extractors fail.
+The feed returns dicts with ``page_url`` and ``video_url`` so the player
+can stream directly without yt-dlp extraction.  A persistent cache
+(``data/reel_cache.json``) keeps reels flowing when the API is
+rate-limited.
 """
 
 from __future__ import annotations
@@ -18,36 +17,28 @@ from __future__ import annotations
 import logging
 import os
 import random
-import time
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
 
 class InstagramReelFeed:
-    """Queue-backed reel URL feed using instaloader + persistent cache.
+    """Queue-backed reel feed using aiograpi + persistent cache.
 
-    Refills from a configurable Instagram source URL (default: home feed).
-    Uses instaloader's ``get_feed_posts()`` (with Chrome 150 UA) or yt-dlp
-    fallback.
+    Refills from the authenticated user's Reels tab feed via
+    ``InstagramClient.discover()``.  The queue stores dicts with
+    ``page_url``, ``video_url``, ``shortcode``, and ``title`` so the
+    player can stream directly without yt-dlp.
 
-    A persistent cache (``data/reel_cache.json``) ensures reels keep
-    playing even when all online sources fail.
+    A persistent cache (``data/reel_cache.json``) of shortcodes ensures
+    reels keep playing when all online sources fail.
     """
 
-    def __init__(self, source_url: str | None = None) -> None:
-        self._source: str = (
-            source_url
-            or os.environ.get(
-                "INSTAGRAM_REEL_SOURCE",
-                "https://www.instagram.com/",
-            )
-        )
-        self._queue: list[str] = []
+    def __init__(self) -> None:
+        self._queue: list[dict] = []
         self._cache_loaded = False
         self._cache_idx = 0
         self._cache_shuffled: list[str] = []
-        self._last_refill = 0.0
 
         cache_path = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "..", "data", "reel_cache.json")
@@ -59,23 +50,66 @@ class InstagramReelFeed:
     def available(self) -> bool:
         return True
 
-    def prefill(self, amount: int = 10) -> None:
-        """Pre-fill the reel queue synchronously.
+    @property
+    def size(self) -> int:
+        return len(self._queue)
 
-        Safe to call from ``asyncio.to_thread`` before starting the player
-        thread so instaloader's latency doesn't compete with the audio FIFO
-        timeout.
+    async def async_prefill(self, amount: int = 10) -> None:
+        """Pre-fill the reel queue asynchronously via aiograpi.
+
+        Call from the async event loop before starting the player thread
+        so API latency doesn't compete with the audio FIFO timeout.
         """
-        if not self._queue:
-            self._refill(amount)
+        from instagram_client import InstagramClient
+
+        try:
+            cl = await InstagramClient.get()
+            reels = await cl.discover(amount=amount)
+        except Exception as e:
+            log.error("Instagram async_prefill falló: %s", e)
+            return
+
+        if not reels:
+            log.warning("Instagram async_prefill: no se encontraron reels")
+            return
+
+        self._queue.extend(reels)
+        log.info(
+            "Instagram feed: %d reels obtenidos via aiograpi (cola=%d)",
+            len(reels), len(self._queue),
+        )
+        self._cache_reels(reels)
 
     def next_reel_url(self) -> Optional[str]:
-        """Return the next reel page URL, refilling the queue if needed."""
-        if not self._queue:
-            self._refill()
-        if not self._queue:
-            return self._from_cache()
-        return self._queue.pop(0)
+        """Return the next reel page URL (sync, for player thread).
+
+        Reads from the in-memory queue or falls back to persistent cache.
+        Returns ``None`` if all sources are exhausted.
+        """
+        if self._queue:
+            return self._queue[0]["page_url"]
+        return self._from_cache()
+
+    def next_reel(self) -> Optional[dict]:
+        """Return the next reel info dict (sync, for player thread).
+
+        Returns ``{page_url, video_url, shortcode, title}`` or ``None``
+        if all sources are exhausted.  The caller uses ``video_url``
+        directly if present, falling back to yt-dlp extraction otherwise.
+        """
+        if self._queue:
+            return self._queue.pop(0)
+        cached = self._from_cache()
+        if cached:
+            return {"page_url": cached, "video_url": None, "shortcode": None, "title": "Instagram Reel (cache)"}
+        return None
+
+    @staticmethod
+    def _cache_reels(reels: list[dict]) -> None:
+        from ytdlp import _cache_reel_urls
+        urls = [r["page_url"] for r in reels if r.get("page_url")]
+        if urls:
+            _cache_reel_urls(urls)
 
     def _from_cache(self) -> Optional[str]:
         from ytdlp import _reel_cache_shortcodes
@@ -100,29 +134,3 @@ class InstagramReelFeed:
         url = f"https://www.instagram.com/reel/{sc}/"
         log.info("Instagram feed: sirviendo de cache %s (idx=%d)", sc, self._cache_idx)
         return url
-
-    def _refill(self, amount: int = 10) -> None:
-        """Fetch more reel URLs from the Instagram source via instaloader."""
-        now = time.monotonic()
-        if now - self._last_refill < 60:
-            log.info("Instagram refill: skip (last attempt %ds ago)", int(now - self._last_refill))
-            return
-        self._last_refill = now
-
-        from ytdlp import _instagram_reel_feed_urls
-
-        try:
-            urls = _instagram_reel_feed_urls(self._source, limit=amount)
-        except Exception as e:
-            log.error("Instagram feed refill falló: %s", e)
-            return
-
-        if not urls:
-            log.warning("Instagram feed: no se encontraron reels en %s", self._source)
-            return
-
-        self._queue.extend(urls)
-        log.info(
-            "Instagram feed: %d reels obtenidos de %s (cola=%d)",
-            len(urls), self._source, len(self._queue),
-        )

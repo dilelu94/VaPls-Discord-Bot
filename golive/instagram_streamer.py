@@ -2,13 +2,12 @@
 
 Extends H264VideoPlayer with:
   - Vertical-orientation letterboxing (1080×1920 → 1920×1080 with black bars)
-  - Single-reel URL mode via yt-dlp (session cookies from cookies.txt)
-  - Infinite-scroll feed mode via InstagramReelFeed (instaloader)
+  - Single-reel URL mode via aiograpi (direct ``video_url``, no DASH split)
+  - Infinite-scroll feed mode via InstagramReelFeed (aiograpi)
 
-URL mode (``video_url`` + ``audio_url``) plays one reel.  Feed mode
-discovers reel page URLs via instaloader scraping Instagram's GraphQL
-API using the session cookies, then extracts each reel with yt-dlp for
-proper video+audio DASH streams.
+URL mode (``video_url``) plays one reel via a single muxed URL.  Feed
+mode discovers reel ``video_url``s directly from aiograpi (no yt-dlp
+extraction needed).
 """
 
 from __future__ import annotations
@@ -81,18 +80,16 @@ class InstagramReelPlayer(H264VideoPlayer):
 
     Two modes:
 
-    1. **Feed mode** (pass ``feed``): infinite scroll — discovers reel page
-       URLs via yt-dlp ``flat_playlist``, then extracts each reel's
-       video+audio DASH streams before playing.  No credentials needed.
+    1. **Feed mode** (pass ``feed``): infinite scroll — discovers reel
+       URLs via aiograpi and streams each reel back-to-back using the
+       ``video_url`` directly (single muxed URL, no DASH split).
 
-    2. **URL mode** (pass ``video_url`` + optionally ``audio_url``): plays a
-       single reel extracted via yt-dlp, then stops.  No credentials needed.
-       ``audio_url`` is required for DASH streams (video/audio separate);
-       if ``None`` the player falls back to a single-input pipeline.
+    2. **URL mode** (pass ``video_url``): plays a single reel extracted
+       via aiograpi, then stops.  No separate ``audio_url`` needed —
+       aiograpi returns a muxed H.264+AAC URL.
 
     Both modes apply vertical letterboxing (9:16 → 16:9 with black bars).
-    The player runs in a daemon thread — the first reel's extraction happens
-    inside :meth:`run` so it never blocks the async event loop.
+    The player runs in a daemon thread.
     """
 
     def __init__(
@@ -102,16 +99,13 @@ class InstagramReelPlayer(H264VideoPlayer):
         fps: float = 30.0,
         audio: bool = True,
         video_url: str | None = None,
-        audio_url: str | None = None,
         title: str = "Instagram Reel",
     ) -> None:
         self._feed = feed
         self._title = title
 
         if video_url:
-            url: str | tuple[str, str] = (
-                (video_url, audio_url) if audio_url else video_url
-            )
+            url: str = video_url
         else:
             url = ""  # Feed mode: first URL resolved in run()
 
@@ -129,10 +123,10 @@ class InstagramReelPlayer(H264VideoPlayer):
     def run(self) -> None:
         """Main loop: play reels back-to-back until stopped or feed runs dry.
 
-        In feed mode each reel is extracted via yt-dlp synchronously (safe
-        because this runs in a daemon thread), which gives us proper
-        video+audio DASH URLs — the same pipeline that makes ``/stream``
-        with a single reel URL work.
+        In feed mode each reel's ``video_url`` comes directly from
+        aiograpi (already pre-filled in the queue by async_prefill), so
+        no yt-dlp extraction is needed during playback.  Cache fallback
+        entries without a ``video_url`` fall through to yt-dlp.
         """
         from ytdlp import _extract_instagram_sync
 
@@ -140,30 +134,37 @@ class InstagramReelPlayer(H264VideoPlayer):
             while not self._end.is_set():
                 # ── Resolve the next reel ──────────────────────────────────
                 if self._feed:
-                    page_url = self._feed.next_reel_url()
-                    if not page_url:
+                    item = self._feed.next_reel()
+                    if not item:
                         log.info("[INSTAGRAM] No hay más reels — deteniendo")
                         break
 
-                    log.info("[INSTAGRAM] Extrayendo reel: %s", page_url[:80])
-                    extracted = _extract_instagram_sync(page_url)
-                    if not extracted:
-                        log.warning("[INSTAGRAM] No se pudo extraer reel, saltando")
-                        if self._end.wait(timeout=1.0):
-                            break
-                        continue
-
-                    video_url = extracted.get("video_url")
-                    audio_url = extracted.get("audio_url")
-                    if video_url and audio_url:
-                        self._url = (video_url, audio_url)
-                    elif video_url:
+                    video_url = item.get("video_url")
+                    if video_url:
                         self._url = video_url
+                        self._title = item.get("title", "Instagram Reel")
                     else:
-                        log.warning("[INSTAGRAM] Sin video URL, saltando")
-                        continue
+                        # Cache fallback — extract via yt-dlp
+                        page_url = item.get("page_url", "")
+                        if not page_url:
+                            continue
+                        log.info("[INSTAGRAM] Extrayendo reel de cache: %s", page_url[:80])
+                        extracted = _extract_instagram_sync(page_url)
+                        if not extracted:
+                            log.warning("[INSTAGRAM] No se pudo extraer reel, saltando")
+                            if self._end.wait(timeout=1.0):
+                                break
+                            continue
+                        v = extracted.get("video_url")
+                        a = extracted.get("audio_url")
+                        if v and a:
+                            self._url = (v, a)
+                        elif v:
+                            self._url = v
+                        else:
+                            continue
+                        self._title = extracted.get("title", "Instagram Reel")
 
-                    self._title = extracted.get("title", "Instagram Reel")
                     self._frames_emitted = 0
 
                 if not self._url:
@@ -227,6 +228,7 @@ class InstagramGoLiveStream:
         self.is_live = False
         self._stopped = False
         self._inactivity_task: Optional[asyncio.Task] = None
+        self._refill_task: Optional[asyncio.Task] = None
 
     async def start(self) -> None:
         log.info("[INSTAGRAM] Estableciendo conexión GoLive...")
@@ -241,35 +243,35 @@ class InstagramGoLiveStream:
         proxy_vc = _GoLiveVCProxy(self.conn)
 
         # Pre-fill the feed queue before starting the player thread so
-        # instaloader GraphQL calls don't compete with the audio FIFO
-        # timeout.  Feed-only; URL mode (single reel) is unaffected.
-        # Timeout at 12s so a rate-limited instaloader doesn't block the
-        # stream start — the persistent cache fills in when instaloader
-        # can't get reels.
+        # aiograpi API calls don't compete with the audio FIFO timeout.
+        # Timeout at 15s so a rate-limited session doesn't block the
+        # stream start — the persistent cache fills in when we can't
+        # get reels.
         if self.feed:
-            log.info("[INSTAGRAM] Pre-filling reel queue via instaloader...")
+            log.info("[INSTAGRAM] Pre-filling reel queue via aiograpi...")
             try:
                 await asyncio.wait_for(
-                    asyncio.to_thread(self.feed.prefill),
-                    timeout=12.0,
+                    self.feed.async_prefill(10),
+                    timeout=15.0,
                 )
             except (TimeoutError, asyncio.TimeoutError):
-                log.warning("[INSTAGRAM] Prefill timed out (12s), usando cache")
-            log.info("[INSTAGRAM] Reel queue has %d reels", len(self.feed._queue))
+                log.warning("[INSTAGRAM] Prefill timed out (15s), usando cache")
+            log.info("[INSTAGRAM] Reel queue has %d reels", self.feed.size)
+            # Start background refill: +10 every 60s up to max 30
+            self._refill_task = asyncio.create_task(self._refill_loop())
 
         if self.reel_url:
-            # URL mode — yt-dlp, no credentials
+            # URL mode — aiograpi extraction (single muxed URL)
             r = self.reel_url
             self.video_player = InstagramReelPlayer(
                 voice_client=proxy_vc,
                 fps=_stream_fps(),
                 audio=True,
                 video_url=r.get("video_url"),
-                audio_url=r.get("audio_url"),
                 title=r.get("title", "Instagram Reel"),
             )
         else:
-            # Feed mode — yt-dlp flat_playlist, no credentials needed
+            # Feed mode — aiograpi feed discovery
             self.video_player = InstagramReelPlayer(
                 feed=self.feed,
                 voice_client=proxy_vc,
@@ -297,6 +299,25 @@ class InstagramGoLiveStream:
         )
         self.audio_sender.start()
         log.info("[INSTAGRAM] Audio sender iniciado")
+
+    async def _refill_loop(self) -> None:
+        """Background refill: +10 reels every 60s until queue ≥ 30."""
+        try:
+            while not self._stopped:
+                await asyncio.sleep(60)
+                if self._stopped or not self.feed:
+                    break
+                if self.feed.size >= 30:
+                    log.info("[INSTAGRAM] Refill: cola llena (%d), deteniendo refill", self.feed.size)
+                    break
+                need = min(10, 30 - self.feed.size)
+                log.info("[INSTAGRAM] Refill: cola=%d, pidiendo %d más", self.feed.size, need)
+                try:
+                    await self.feed.async_prefill(need)
+                except Exception as e:
+                    log.warning("[INSTAGRAM] Refill falló: %s", e)
+        except asyncio.CancelledError:
+            pass
 
     async def _stop_players(self) -> None:
         if self.video_player:
@@ -367,6 +388,9 @@ class InstagramGoLiveStream:
         if self._stopped:
             return
         self._stopped = True
+        if self._refill_task:
+            self._refill_task.cancel()
+            self._refill_task = None
         if self._inactivity_task:
             self._inactivity_task.cancel()
             self._inactivity_task = None

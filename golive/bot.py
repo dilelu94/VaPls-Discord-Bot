@@ -597,40 +597,41 @@ async def _relay_instagram(request: web.Request) -> web.Response:
         log.warning("[INSTAGRAM] not connected after join (vc=%s)", vc)
         return web.json_response({"error": "not connected"}, status=500)
 
-    # ── URL mode (yt-dlp, session cookies) vs feed mode (instaloader) ──────────────
+    # ── URL mode (aiograpi) vs feed mode (aiograpi) ───────────────────────────────
     if reel_url:
-        from ytdlp import _yt_extract_instagram
+        from instagram_client import InstagramClient
 
-        log.info("[INSTAGRAM] Extracting reel URL via yt-dlp: %s", reel_url[:80])
-        extracted = await _yt_extract_instagram(reel_url)
-        if not extracted:
-            log.warning("[INSTAGRAM] yt-dlp extraction failed — disconnecting")
+        log.info("[INSTAGRAM] Extracting reel URL via aiograpi: %s", reel_url[:80])
+        cl = await InstagramClient.get()
+        info = await cl.reel_info(reel_url)
+        if not info:
+            log.warning("[INSTAGRAM] aiograpi extraction failed — disconnecting")
             try:
                 await vc.disconnect(force=True)
             except Exception:
                 pass
             return web.json_response(
-                {"error": "failed to extract reel URL via yt-dlp"}, status=500
+                {"error": "failed to extract reel URL via aiograpi"}, status=500
             )
+        extracted = {
+            "video_url": info["video_url"],
+            "audio_url": None,
+            "title": info["title"],
+        }
         log.info(
-            "[INSTAGRAM] Extracted: %s (video=%s.. audio=%s)",
+            "[INSTAGRAM] Extracted: %s (video=%s..)",
             extracted.get("title", "?"),
             (extracted.get("video_url") or "")[:60],
-            "yes" if extracted.get("audio_url") else "no",
         )
         stream = InstagramGoLiveStream(
             client, guild_id, channel_id, vc, reel_url=extracted
         )
     else:
-        # Feed mode — instaloader (session cookies from cookies.txt)
+        # Feed mode — aiograpi (session cookies from cookies.txt)
         global _instagram_feed
         if _instagram_feed is None:
-            source = os.environ.get(
-                "INSTAGRAM_REEL_SOURCE",
-                "https://www.instagram.com/",
-            )
-            _instagram_feed = InstagramReelFeed(source_url=source)
-            log.info("[INSTAGRAM] Feed mode source: %s", source)
+            _instagram_feed = InstagramReelFeed()
+            log.info("[INSTAGRAM] Feed mode: aiograpi")
 
         stream = InstagramGoLiveStream(
             client, guild_id, channel_id, vc, feed=_instagram_feed

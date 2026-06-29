@@ -7,4 +7,5 @@ dave.py>=0.1.0
 requests>=2.32
 yt-dlp
 instaloader @ git+https://github.com/instaloader/instaloader.git
+aiograpi>=1.10
 

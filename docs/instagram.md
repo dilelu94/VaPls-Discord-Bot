@@ -5,10 +5,10 @@ channel via GoLive (screen-share video + audio).
 
 ## Modes
 
-| Mode     | Trigger                                            | Behavior                                                                                                               |
-| -------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| **URL**  | `{"url": "https://www.instagram.com/reel/XXXXX/"}` | Extracts that single reel via yt-dlp, plays it once, then stops.                                                       |
-| **Feed** | `{}` (no `url`)                                    | Infinite scroll — discovers reel page URLs from the Reels tab feed API, extracts each with yt-dlp, plays back-to-back. |
+| Mode     | Trigger                                            | Behavior                                                                                              |
+| -------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| **URL**  | `{"url": "https://www.instagram.com/reel/XXXXX/"}` | Extracts that single reel via aiograpi, plays it once, then stops.                                    |
+| **Feed** | `{}` (no `url`)                                    | Infinite scroll — discovers reel video URLs from the Reels tab feed via aiograpi, plays back-to-back. |
 
 ## Endpoint
 
@@ -38,52 +38,86 @@ Content-Type: application/json
 ## Feed discovery pipeline
 
 ```
-aiograpi / requests          yt-dlp                  FFmpeg
-┌──────────────┐    reel URL    ┌──────────────┐    video+audio    ┌──────────┐
-│  clips/discover/  ─────────→  │  yt-dlp      ─────────────────→  │  player  │
-│  (Reels tab API)  │            │  extract     │                    │          │
-└──────────────┘            └──────────────┘                    └──────────┘
-                              ↓ fallback
-                         ┌──────────────┐
-                         │  cache       │
-                         │  reel_cache  │
-                         │  .json       │
-                         └──────────────┘
+aiograpi                     FFmpeg
+┌──────────────┐  video_url  ┌──────────┐
+│  cl.reels()  │ ──────────→ │  player  │
+│              │             │          │
+│  (Reels tab  │             └──────────┘
+│   feed API)  │                 ↑
+└──────────────┘            ┌──────────────┐
+                            │  cache       │
+                            │  reel_cache  │
+                            │  .json       │
+                            └──────────────┘
 ```
 
-1. The bot calls `POST /api/v1/clips/discover/` on Instagram's internal API
-   (authenticated via `instagram_cookies.txt` session cookies).
-2. Each item with `media_type == 2` (video) is treated as a reel; its `code`
-   becomes a `https://www.instagram.com/reel/<code>/` URL.
-3. Pagination uses `paging_info.max_id` from the API response.
-4. On 429 (rate-limit), retries with backoff (10s, 20s, 30s) up to 3 times.
-5. If the API fails entirely, falls back through instaloader strategies, then
-   yt-dlp flat-playlist, and finally a persistent local cache.
+1. `InstagramClient.get().discover(amount)` calls `cl.reels(amount)` on
+   Instagram's private mobile API (authenticated via `instagram_cookies.txt`).
+2. Each returned `Media` object with `media_type == 2` (video) provides a
+   direct `video_url` — a muxed H.264+AAC stream, no DASH splitting needed.
+3. Reel info (`shortcode`, `page_url`, `video_url`, `title`) is stored
+   in an in-memory queue.
+4. **Refill strategy**: 10 reels fetched at stream start, then +10 every 60s
+   until the queue reaches 30 reels. The player reads from the queue
+   synchronously in a daemon thread.
+5. If the queue runs dry, falls back to a persistent local cache
+   (`data/reel_cache.json` — shortcodes only, re-extracted via yt-dlp).
 
 ## Authentication
 
-The bot authenticates to Instagram via Netscape-style cookies in
-`instagram_cookies.txt` (looked up from the golive dir or parent dir).
+The bot authenticates to Instagram via `aiograpi`, which uses Instagram's
+private mobile API (not the rate-limited web API).
 
-The cookie file **must** contain a valid `sessionid` cookie for a logged-in
-Instagram account.
+**Session persistence:**
+
+On first run, `InstagramClient` reads the `sessionid` cookie from
+`instagram_cookies.txt` (Netscape format) and calls
+`cl.login_by_sessionid(sid)`. The resulting device fingerprint + cookies
+are saved to `instagram_session.json` and reused on subsequent runs via
+`cl.load_settings()`.
 
 ```bash
-# Inspect current session user
+# Inspect current session file
 python3 -c "
-import http.cookiejar
-cj = http.cookiejar.MozillaCookieJar('instagram_cookies.txt')
-cj.load()
-for c in cj:
-    if c.name == 'ds_user_id': print('User ID:', c.value)
+import json
+s = json.load(open('golive/instagram_session.json'))
+print('User ID:', s.get('ds_user_id'))
+print('Cookies:', len(s.get('cookies', {})))
 "
 ```
 
-## Configuration
+The cookie file **must** contain a valid `sessionid` cookie for a logged-in
+Instagram account. Export from browser:
 
-| Env var                 | Default                      | Description                                                                                                                                                             |
-| ----------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `INSTAGRAM_REEL_SOURCE` | `https://www.instagram.com/` | Feed source URL for instaloader/yt-dlp fallback. Can be a profile (`https://www.instagram.com/username/`) or a hashtag (`https://www.instagram.com/explore/tags/tag/`). |
+1. Go to instagram.com and log in
+2. Open DevTools → Application → Cookies → `instagram.com`
+3. Copy the `sessionid` value, then create/update `instagram_cookies.txt`:
+   ```
+   # Netscape HTTP Cookie File
+   .instagram.com	TRUE	/	FALSE	0	sessionid	<your_sessionid_here>
+   ```
+
+## Authentication troubleshooting
+
+| Symptom                      | Likely cause                                                                        |
+| ---------------------------- | ----------------------------------------------------------------------------------- |
+| `sessionid login failed`     | The browser/web `sessionid` was rejected by Instagram's mobile API. See note below. |
+| `login_required` from server | Session expired. Re-export `sessionid` from browser or use username/password login. |
+
+If `login_by_sessionid()` consistently fails, Instagram may be rejecting
+browser/web `sessionid` tokens for the private mobile API. The aiograpi
+docs recommend a one-time password login, then reuse the saved session:
+
+```python
+from aiograpi import Client
+
+cl = Client()
+await cl.login("username", "password")
+cl.dump_settings("instagram_session.json")
+```
+
+Set `IG_USERNAME` / `IG_PASSWORD` env vars and trigger a URL-mode request
+to perform the initial login (or run the snippet above manually).
 
 ## Cache
 
@@ -98,22 +132,31 @@ randomly each time it's used.
 }
 ```
 
+## Configuration
+
+| Env var         | Default | Description                                                                                      |
+| --------------- | ------- | ------------------------------------------------------------------------------------------------ |
+| _(none needed)_ | —       | Auth is handled by `instagram_cookies.txt` + `instagram_session.json`. No env vars are required. |
+
 ## Troubleshooting
 
-| Symptom                                         | Likely cause                                                                                                                                                              |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[INSTA-API] rate-limit (429)`                  | Instagram is throttling the session. Wait a few minutes and retry. Avoid rapid repeated calls.                                                                            |
-| `[INSTA-API] HTTP 4xx/5xx`                      | Session expired or network issue. Refresh cookies.                                                                                                                        |
-| yt-dlp: `login required`                        | Instagram cookies are expired. Re-export from browser: go to instagram.com, open DevTools → Application → Cookies → export as Netscape format to `instagram_cookies.txt`. |
-| `[INSTAGRAM] No se pudo extraer reel, saltando` | The reel is unavailable (deleted, private, or region-locked). Skipped automatically.                                                                                      |
-| Feed returns 0 reels repeatedly                 | The authenticated account may have no reels or the session may be brand-new without algorithmic data. Try using URL mode with a specific reel link.                       |
+| Symptom                                         | Likely cause                                                                                              |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `[INSTA-CLIENT] reels() failed`                 | aiograpi API call failed — session may be expired or rate-limited. Refresh cookies.                       |
+| `[INSTA-CLIENT] Not ready, can't discover`      | Client couldn't log in. Check cookies file exists with valid `sessionid`.                                 |
+| `aiograpi not installed`                        | Run `pip install aiograpi` on the server.                                                                 |
+| yt-dlp: `login required` (cache fallback)       | Instagram cookies are expired for yt-dlp. Only affects cache fallback — feed mode uses aiograpi directly. |
+| `[INSTAGRAM] No se pudo extraer reel, saltando` | The reel is unavailable (deleted, private, or region-locked). Skipped automatically.                      |
+| Feed returns 0 reels repeatedly                 | The authenticated account has no reels or the session is new. Try URL mode with a specific reel link.     |
 
 ## Files
 
-| File                           | Role                                                                                                                      |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
-| `golive/bot.py`                | HTTP relay endpoint for `/instagram`                                                                                      |
-| `golive/instagram_feed.py`     | `InstagramReelFeed` — queue-backed reel URL fetcher                                                                       |
-| `golive/instagram_streamer.py` | `InstagramReelPlayer` + `InstagramGoLiveStream` — playback and GoLive lifecycle                                           |
-| `golive/ytdlp.py`              | `_instagram_api_reel_feed_urls()` — Reels tab feed via `clips/discover/`; `_extract_instagram_sync()` — yt-dlp extraction |
-| `data/reel_cache.json`         | Persistent shortcode cache (≤200 entries)                                                                                 |
+| File                            | Role                                                                                                         |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `golive/instagram_client.py`    | `InstagramClient` — async wrapper around `aiograpi.Client`, session management, `reels()` and `media_info()` |
+| `golive/instagram_feed.py`      | `InstagramReelFeed` — queue-backed reel URL fetcher using `InstagramClient.discover()`                       |
+| `golive/instagram_streamer.py`  | `InstagramReelPlayer` + `InstagramGoLiveStream` — playback and GoLive lifecycle                              |
+| `golive/bot.py`                 | HTTP relay endpoint for `/instagram`                                                                         |
+| `golive/ytdlp.py`               | Contains `_extract_instagram_sync()` — only used as cache fallback when aiograpi `video_url` is unavailable  |
+| `golive/instagram_session.json` | Persisted aiograpi session (device fingerprint + cookies) — auto-generated on first successful login         |
+| `data/reel_cache.json`          | Persistent shortcode cache (≤200 entries)                                                                    |
