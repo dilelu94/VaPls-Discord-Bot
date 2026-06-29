@@ -2,7 +2,7 @@
 
 ## Overview
 
-El comando `/mascota` permite a cada usuario generar, evolucionar y mostrar una
+El comando `/mascota` permite a cada usuario tener una
 **mascota procedural ASCII** única y determinista. Cada mascota se genera a
 partir del ID de Discord del usuario, garantizando que siempre se obtenga la
 misma criatura.
@@ -82,6 +82,11 @@ Evolucionar cuesta **300 puntos** (se descuentan del total).
 3. Se incrementa `level` hasta que la suma de rareza de las partes de la nueva
    mascota sea **mayor** que la actual.
 4. La evolución es **determinista**: mismo usuario + mismo nivel = misma mascota.
+
+## Persistencia
+
+Las mascotas se guardan en `data/pets.json` (JSON plano), separado de la
+base de datos SQLite del userbot donde están MMR, pet_points, etc.
 
 ## Renderizado de imágenes
 
