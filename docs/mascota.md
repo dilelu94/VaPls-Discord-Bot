@@ -13,23 +13,22 @@ aleatorias, y pueden evolucionar a formas más poderosas.
 ## Comando
 
 ```
-/mascota [accion: ver | evolucionar | revertir | historial]
+/mascota [accion: ver | evolucionar | historial]
 ```
 
 Por defecto (sin argumento) muestra la mascota del usuario.
 
 ### Acciones
 
-| Acción          | Descripción                                                             |
-| --------------- | ----------------------------------------------------------------------- |
-| **ver**         | Muestra tu mascota actual. Si no tenés una, se crea automáticamente.    |
-| **evolucionar** | Evoluciona tu mascota a una forma más rara (si es posible).             |
-| **revertir**    | Revierte la mascota a su forma anterior (libera los puntos reservados). |
-| **historial**   | Muestra el historial completo de todas las evoluciones de tu mascota.   |
+| Acción          | Descripción                                                           |
+| --------------- | --------------------------------------------------------------------- |
+| **ver**         | Muestra tu mascota actual. Si no tenés una, se crea automáticamente.  |
+| **evolucionar** | Evoluciona tu mascota a una forma más rara (si es posible).           |
+| **historial**   | Muestra el historial completo de todas las evoluciones de tu mascota. |
 
 ### Botones
 
-Al usar `/mascota` (ver, evolucionar o revertir) aparece un mensaje efímero
+Al usar `/mascota` aparece un mensaje efímero
 (solo visible para vos) con dos botones:
 
 | Botón          | Comportamiento                                                                    |
@@ -42,8 +41,6 @@ deshabilitan.
 
 ## Sistema de Puntos
 
-Evolucionar una mascota cuesta **300 puntos de mascota** (pet points).
-
 ### Cómo ganar puntos
 
 Los puntos se acumulan automáticamente por actividad en Discord:
@@ -53,12 +50,12 @@ Los puntos se acumulan automáticamente por actividad en Discord:
 | Mensaje   | 0.2               |
 | Voz (VAD) | 0.1               |
 
-(aprox. ~500 puntos = más de 1 semana de actividad moderada)
+Evolucionar una mascota cuesta **300 puntos** (la primera evolución es gratis, costo 0).
 
 ### Seed inicial
 
-Usuarios con **MMR > 1500** reciben **500 puntos gratis** la primera vez que
-consultan su mascota.
+Todos los usuarios reciben **200 puntos gratis** la primera vez que consultan
+su mascota (sin condición de MMR).
 
 ### Estructura de puntos
 
@@ -66,21 +63,19 @@ Los puntos se manejan en el userbot (`userbot/activity_db.py`, tabla
 `pet_points`):
 
 - `total_earned`: Puntos ganados en total.
-- `spent`: Puntos gastados permanentemente (solo la primera evolución).
-- `reserved`: Puntos reservados para evoluciones (se liberan al revertir).
-- `available` = `total_earned - spent - reserved`.
+- `spent`: Puntos gastados permanentemente.
+- `available` = `total_earned - spent`.
 
 ## Evolución
 
 ### Primera evolución
 
-La primera evolución **gasta** 300 puntos permanentemente (es el costo de
-"generar" la mascota sobre la que se evoluciona).
+La primera evolución **gasta** 0 puntos (generación gratis). Es el paso que
+"crea" la mascota sobre la que se evoluciona.
 
 ### Evoluciones siguientes
 
-Las evoluciones posteriores **reservan** 300 puntos. Al revertir, los puntos
-vuelven a estar disponibles.
+Las evoluciones posteriores **cuestan** 300 puntos (se descuentan del total).
 
 ### Algoritmo
 
@@ -90,11 +85,6 @@ vuelven a estar disponibles.
 3. Se incrementa `level` hasta que la suma de rareza de las partes de la nueva
    mascota sea **mayor** que la actual.
 4. La evolución es **determinista**: mismo usuario + mismo nivel = misma mascota.
-
-### Reversibilidad
-
-- La reversión libera los 300 puntos reservados.
-- La primera forma (nivel 0, seed original) no se puede revertir más.
 
 ## Renderizado de imágenes
 

@@ -74,7 +74,7 @@ INDIO_IMAGE_GUILD_ID = int(os.getenv("INDIO_IMAGE_GUILD_ID", "0"))
 
 # Ruta al archivo JSON con datos persistidos de mascotas (/mascota).
 PETS_PATH = os.getenv("PETS_PATH", "data/pets.json")
-PET_GENERATION_COST = int(os.getenv("PET_GENERATION_COST", "300"))
+PET_GENERATION_COST = int(os.getenv("PET_GENERATION_COST", "0"))
 PET_EVOLUTION_COST = int(os.getenv("PET_EVOLUTION_COST", "300"))
 
 # Ruta al archivo JSON con datos estáticos de usuarios (traits, anécdotas, etc.).

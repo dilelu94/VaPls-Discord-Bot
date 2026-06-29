@@ -228,20 +228,13 @@ def get_pet_points(user_id: int, guild_id: int) -> dict:
     )
     row = cur.fetchone()
     if row is None:
-        # Seed: users with MMR > 1500 get 500 free points
-        cur2 = _conn.execute(
-            "SELECT rating FROM user_mmr WHERE user_id=? AND guild_id=?",
-            (user_id, guild_id),
+        seed = 200
+        now = _now()
+        _conn.execute(
+            "INSERT INTO pet_points (user_id, guild_id, total_earned, spent, reserved, updated_at) VALUES (?, ?, ?, 0, 0, ?)",
+            (user_id, guild_id, seed, now),
         )
-        mmr = cur2.fetchone()
-        seed = 500 if mmr and mmr["rating"] > 1500 else 0
-        if seed:
-            now = _now()
-            _conn.execute(
-                "INSERT INTO pet_points (user_id, guild_id, total_earned, spent, reserved, updated_at) VALUES (?, ?, ?, 0, 0, ?)",
-                (user_id, guild_id, seed, now),
-            )
-            _conn.commit()
+        _conn.commit()
         return {"total_earned": seed, "spent": 0, "reserved": 0, "available": seed}
     te = row["total_earned"]
     sp = row["spent"]

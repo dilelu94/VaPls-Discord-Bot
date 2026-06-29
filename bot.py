@@ -3022,7 +3022,6 @@ class MascotaView(discord.ui.View):
         await self._send_to_channel(interaction)
         button.disabled = True
         await interaction.response.edit_message(view=self)
-        await interaction.followup.send("✅ Mascota publicada en el canal.", ephemeral=True)
 
     @discord.ui.button(label="✖ Cerrar", style=discord.ButtonStyle.danger)
     async def cerrar(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -3040,16 +3039,16 @@ class MascotaView(discord.ui.View):
 
 @bot.slash_command(
     name="mascota",
-    description="Gestiona tu Mascota - mostrar, evolucionar, revertir, historial",
+    description="Gestiona tu Mascota - ver, evolucionar, historial",
 )
 async def mascota(
     ctx,
     accion: discord.Option(
         str,
-        "mostrar (default) | evolucionar | revertir | historial",
-        choices=["mostrar", "evolucionar", "revertir", "historial"],
-        default="mostrar",
-    ) = "mostrar",
+        "ver (default) | evolucionar | historial",
+        choices=["ver", "evolucionar", "historial"],
+        default="ver",
+    ) = "ver",
 ):
     await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "mascota", {"accion": accion})
@@ -3057,7 +3056,7 @@ async def mascota(
     guild_id = ctx.guild.id if ctx.guild else 0
     channel = ctx.channel if ctx.guild else None
 
-    if accion == "mostrar":
+    if accion == "ver":
         pet = petGenerator.get_or_create_pet(uid)
         pts = await _fetch_pet_points(ctx.author.id, guild_id)
         formatted = petGenerator.format_name(pet["name"], pet["rarity"])
@@ -3101,33 +3100,6 @@ async def mascota(
         view = MascotaView(new_pet, formatted, evo_tag, None, channel, uid)
         msg = f"⬆️ **Evolucionó!**\n{_build_pet_msg(new_pet, formatted, evo_tag)}"
         log.info("MASCOTA evolucionar uid=%s lvl=%s rarity=%s", uid, new_pet.get("evolution_level", 0), new_pet["rarity"])
-        r = await safe_respond(ctx, msg, ephemeral=True, view=view)
-        view.message = r
-        return
-
-    if accion == "revertir":
-        pet = petGenerator.get_pet(uid)
-        if pet is None:
-            await safe_respond(ctx, "❌ No tenés mascota todavía. Usá `/mascota` para crear una.", ephemeral=True)
-            return
-        evo_level = pet.get("evolution_level", 0)
-        if evo_level <= 0:
-            await safe_respond(ctx, "❌ Tu mascota está en su forma base, no podés revertir más.", ephemeral=True)
-            return
-        if evo_level == 1 and pet.get("original_seed", pet["seed"]) == pet["seed"]:
-            pass
-        else:
-            await _post_pet_points("/pet-points/release", ctx.author.id, guild_id, config.PET_EVOLUTION_COST)
-        old = petGenerator.revert_pet(pet)
-        if old is None:
-            await safe_respond(ctx, "❌ No podés revertir más.", ephemeral=True)
-            return
-        petGenerator.save_pet(uid, old)
-        formatted = petGenerator.format_name(old["name"], old["rarity"])
-        evo_tag = f" [+{old.get('evolution_level', 0)}]"
-        view = MascotaView(old, formatted, evo_tag, None, channel, uid)
-        msg = f"⬇️ **Revertido a forma anterior**\n{_build_pet_msg(old, formatted, evo_tag)}"
-        log.info("MASCOTA revertir uid=%s lvl=%s rarity=%s", uid, old.get("evolution_level", 0), old["rarity"])
         r = await safe_respond(ctx, msg, ephemeral=True, view=view)
         view.message = r
         return
