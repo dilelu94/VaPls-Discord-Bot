@@ -91,6 +91,12 @@ def _get_instagram_cookies_path() -> str | None:
     local = os.path.abspath(os.path.join(os.path.dirname(__file__), "instagram_cookies.txt"))
     if os.path.exists(local):
         return local
+    parent_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "cookies.txt"))
+    if os.path.exists(parent_cookies):
+        return parent_cookies
+    local_cookies = os.path.abspath(os.path.join(os.path.dirname(__file__), "cookies.txt"))
+    if os.path.exists(local_cookies):
+        return local_cookies
     return None
 
 
