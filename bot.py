@@ -2999,13 +2999,8 @@ async def mascota(
     ctx,
     accion: discord.Option(
         str,
-        "Qué querés hacer",
-        choices=[
-            ("👀 Ver mi mascota", "ver"),
-            ("⬆️ Evolucionar (300 pts)", "evolucionar"),
-            ("⬇️ Revertir evolución", "revertir"),
-            ("📜 Historial evolutivo", "historial"),
-        ],
+        "ver (default) | evolucionar | revertir | historial",
+        choices=["ver", "evolucionar", "revertir", "historial"],
         default="ver",
     ) = "ver",
 ):
