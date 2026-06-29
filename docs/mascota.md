@@ -13,29 +13,29 @@ aleatorias, y pueden evolucionar a formas más poderosas.
 ## Comando
 
 ```
-/mascota [accion: ver | generar | evolucionar | historial]
+/mascota [accion: ver | mostrar]
 ```
 
 Por defecto (sin argumento) muestra la mascota del usuario.
 
 ### Acciones
 
-| Acción          | Descripción                                                           |
-| --------------- | --------------------------------------------------------------------- |
-| **ver**         | Muestra tu mascota actual.                                            |
-| **generar**     | Crea una mascota nueva si no tenés una.                               |
-| **evolucionar** | Evoluciona tu mascota a una forma más rara (cuesta 300 puntos).       |
-| **historial**   | Muestra el historial completo de todas las evoluciones de tu mascota. |
+| Acción      | Descripción                                                           |
+| ----------- | --------------------------------------------------------------------- |
+| **ver**     | Muestra/créa tu mascota con botones para evolucionar, historial, etc. |
+| **mostrar** | Publica tu mascota directamente en el canal.                          |
 
 ### Botones
 
-Al usar `/mascota` aparece un mensaje efímero
-(solo visible para vos) con dos botones:
+Al usar `/mascota` (acción `ver` por defecto) aparece un mensaje efímero
+(solo visible para vos) con estos botones:
 
-| Botón          | Comportamiento                                                                    |
-| -------------- | --------------------------------------------------------------------------------- |
-| **👁 Mostrar** | Publica la mascota en el canal visible para todos. Se desactiva después de usado. |
-| **✖ Cerrar**  | Cierra el mensaje.                                                                |
+| Botón              | Comportamiento                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| **👁 Mostrar**     | Publica la mascota en el canal visible para todos. Se desactiva después de usado.   |
+| **⬆ Evolucionar** | Evoluciona la mascota (cuesta 300 puntos). Actualiza el mensaje con la nueva forma. |
+| **📜 Historial**   | Muestra el historial completo de evoluciones en un mensaje efímero aparte.          |
+| **✖ Cerrar**      | Cierra el mensaje.                                                                  |
 
 El mensaje expira automáticamente a los **5 minutos** y los botones se
 deshabilitan.
@@ -51,12 +51,13 @@ Los puntos se acumulan automáticamente por actividad en Discord:
 | Mensaje   | 0.2               |
 | Voz (VAD) | 0.1               |
 
-Evolucionar una mascota cuesta **300 puntos**. Generar una mascota es gratis.
+Evolucionar una mascota cuesta **300 puntos**. La mascota se créa automáticamente
+la primera vez que usás `/mascota`.
 
 ### Seed inicial
 
-Todos los usuarios reciben **200 puntos gratis** al generar su primera
-mascota (sin condición de MMR).
+Todos los usuarios reciben **200 puntos gratis** al crear su primera
+mascota.
 
 ### Estructura de puntos
 
@@ -120,7 +121,7 @@ El CLI recibe el JSON del pet por stdin y escribe el buffer de imagen a stdout.
 
 Todas las acciones del sistema de mascotas se registran con `log.info()`:
 
-- `petGenerator`: creación, evolución y reversión de mascotas.
+- `petGenerator`: creación y evolución de mascotas.
 - `bot.py`: cada invocación de `/mascota` (acción, usuario, rareza, nivel).
 - Logs visibles en `journalctl -u discord-bot -f` o en `bot.log`.
 
