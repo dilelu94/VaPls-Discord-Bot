@@ -49,6 +49,7 @@ DEFAULT_CFG = {
     "system_deviation": "350",
     "decay_per_day": "10",
     "decay_rating_per_day": "1",
+    "pet_point_decay_per_day": "10",
     "spam_window_seconds": "10",
     "spam_max_events": "5",
     "premium_multiplier": "0.85",
@@ -456,6 +457,16 @@ def log_activity(
         elif new_r < 1500:
             new_r = min(1500, new_r + decay_r * days_idle)
         delta = new_r - r
+
+        pet_decay_rate = _get_cfg_float("pet_point_decay_per_day") or 10
+        if pet_decay_rate > 0:
+            decay = int(days_idle * pet_decay_rate)
+            if decay > 0:
+                _conn.execute(
+                    """UPDATE pet_points SET total_earned = MAX(0, total_earned - ?), updated_at = ?
+                       WHERE user_id=? AND guild_id=?""",
+                    (decay, now, user_id, guild_id),
+                )
 
     # Persist
     _conn.execute(
