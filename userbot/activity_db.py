@@ -158,6 +158,7 @@ def _schema() -> None:
     _migrate_v1()
     _migrate_v2()
     _migrate_v3()
+    _migrate_v4()
 
 
 def _migrate_v1() -> None:
@@ -199,6 +200,11 @@ def _migrate_v3() -> None:
             PRIMARY KEY (user_id, guild_id)
         )
     """)
+    _conn.commit()
+
+
+def _migrate_v4() -> None:
+    _conn.execute("UPDATE pet_points SET total_earned = 200 WHERE total_earned = 500")
     _conn.commit()
 
 

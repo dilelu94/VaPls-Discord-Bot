@@ -2999,7 +2999,7 @@ def _build_pet_msg(pet, formatted, evo_tag, pts=None):
         f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}",
     ]
     if pts is not None:
-        lines.append(f"\n⭐ Puntos: {pts['available']:.0f} (ganados {pts['total_earned']:.0f} · reservados {pts['reserved']:.0f})")
+        lines.append(f"\n⭐ Puntos: {pts['available']:.0f} (usados: {pts['spent'] + pts['reserved']:.0f})")
     return "\n".join(lines)
 
 
@@ -3013,17 +3013,22 @@ class MascotaView(discord.ui.View):
         self.channel = channel
         self.uid = uid
         self.ctx = ctx
+        self.revertir.disabled = pet.get("evolution_level", 0) == 0
 
     async def _send_to_channel(self, interaction):
         msg = _build_pet_msg(self.pet, self.formatted, self.evo_tag)
         await self.channel.send(f"📢 **{interaction.user.display_name}** muestra su mascota:\n{msg}")
 
+    async def _gid(self):
+        return self.channel.guild.id if self.channel else 0
+
     async def _refresh(self, interaction, pet, formatted, evo_tag, msg):
         self.pet = pet
         self.formatted = formatted
         self.evo_tag = evo_tag
-        pts = await _fetch_pet_points(int(self.uid), self.channel.guild.id if self.channel else 0)
+        pts = await _fetch_pet_points(int(self.uid), await self._gid())
         self.pts = pts
+        self.revertir.disabled = pet.get("evolution_level", 0) == 0
         full = f"{msg}\n{_build_pet_msg(pet, formatted, evo_tag, pts)}"
         await interaction.response.edit_message(content=full, view=self)
 
@@ -3041,9 +3046,9 @@ class MascotaView(discord.ui.View):
         if interaction.user.id != int(self.uid):
             await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
             return
-        ok = await _post_pet_points("/pet-points/spend", int(self.uid), self.channel.guild.id if self.channel else 0, config.PET_EVOLUTION_COST)
+        ok = await _post_pet_points("/pet-points/reserve", int(self.uid), await self._gid(), config.PET_EVOLUTION_COST)
         if not ok:
-            pts = await _fetch_pet_points(int(self.uid), self.channel.guild.id if self.channel else 0)
+            pts = await _fetch_pet_points(int(self.uid), await self._gid())
             await interaction.response.send_message(
                 f"❌ Necesitás **{config.PET_EVOLUTION_COST}** puntos para evolucionar. Tenés **{pts['available']:.0f}**.",
                 ephemeral=True,
@@ -3055,6 +3060,25 @@ class MascotaView(discord.ui.View):
         formatted = petGenerator.format_name(new_pet["name"], new_pet["rarity"])
         log.info("MASCOTA evolucionar uid=%s lvl=%s rarity=%s", self.uid, new_pet.get("evolution_level", 0), new_pet["rarity"])
         await self._refresh(interaction, new_pet, formatted, evo_tag, "⬆️ **Evolucionó!**")
+
+    @discord.ui.button(label="⬇ Revertir", style=discord.ButtonStyle.secondary)
+    async def revertir(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != int(self.uid):
+            await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
+            return
+        if self.pet.get("evolution_level", 0) <= 0:
+            await interaction.response.send_message("❌ Ya está en su forma base.", ephemeral=True)
+            return
+        await _post_pet_points("/pet-points/release", int(self.uid), await self._gid(), config.PET_EVOLUTION_COST)
+        old = petGenerator.revert_pet(self.pet)
+        if old is None:
+            await interaction.response.send_message("❌ No se puede revertir más.", ephemeral=True)
+            return
+        petGenerator.save_pet(self.uid, old)
+        evo_tag = f" [+{old.get('evolution_level', 0)}]" if old.get("evolution_level", 0) else ""
+        formatted = petGenerator.format_name(old["name"], old["rarity"])
+        log.info("MASCOTA revertir uid=%s lvl=%s rarity=%s", self.uid, old.get("evolution_level", 0), old["rarity"])
+        await self._refresh(interaction, old, formatted, evo_tag, "⬇️ **Revertido!**")
 
     @discord.ui.button(label="📜 Historial", style=discord.ButtonStyle.secondary)
     async def historial(self, button: discord.ui.Button, interaction: discord.Interaction):
