@@ -1560,6 +1560,7 @@ async def quit(ctx):
             pass
 
 
+
 @bot.slash_command(
     name="entraindio", description="Hace que el indio entre a tu canal de voz"
 )
@@ -3020,7 +3021,6 @@ async def _render_pet(pet: dict, gif: bool = False) -> discord.File | None:
 
 def _build_pet_msg(pet, formatted, evo_tag, pts=None):
     lines = [
-        f"```\n{pet['ascii']}\n```",
         f"**{formatted}**{evo_tag}",
         f"*{pet['rarity'].capitalize()}*",
         f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}",
@@ -3177,6 +3177,9 @@ class MascotaView(discord.ui.View):
         except Exception:
             pass
 
+    async def on_error(self, error, item, interaction):
+        log.error("MascotaView on_error item=%s err=%s", item.custom_id if item else "?", error)
+
 
 @bot.slash_command(
     name="mascota",
@@ -3191,7 +3194,6 @@ async def mascota(
         default="ver",
     ) = "ver",
 ):
-    await safe_defer(ctx, ephemeral=True)
     _track_command(ctx, "mascota", {"accion": accion})
     uid = str(ctx.author.id)
     guild_id = ctx.guild.id if ctx.guild else 0
@@ -3200,7 +3202,7 @@ async def mascota(
     if accion == "mostrar":
         pet = petGenerator.get_pet(uid)
         if pet is None:
-            await safe_respond(ctx, "❌ No tenés mascota. Usá `/mascota` para crear una.", ephemeral=True)
+            await ctx.respond( "❌ No tenés mascota. Usá `/mascota` para crear una.", ephemeral=True)
             return
         formatted = petGenerator.format_name(pet["name"], pet["rarity"])
         evo = pet.get("evolution_level", 0)
@@ -3211,7 +3213,7 @@ async def mascota(
         if file:
             kwargs["file"] = file
         await channel.send(**kwargs)
-        await safe_respond(ctx, "✅ Mascota publicada en el canal.", ephemeral=True)
+        await ctx.respond("✅ Mascota publicada en el canal.", ephemeral=True)
         return
 
     pet = petGenerator.get_or_create_pet(uid)
@@ -3222,7 +3224,7 @@ async def mascota(
     view = MascotaView(pet, formatted, evo_tag, pts, channel, uid, ctx)
     msg = _build_pet_msg(pet, formatted, evo_tag, pts)
     log.info("MASCOTA ver uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
-    r = await safe_respond(ctx, msg, ephemeral=True, view=view)
+    r = await ctx.respond(msg, ephemeral=True, view=view)
     view.message = r
 
 
