@@ -170,8 +170,6 @@ def generate_pet(seed: int) -> dict:
     ascii_art = body["template"](ear["s"][0], ear["s"][1], eyes["s"], mouth["s"])
     if legs["s"]:
         ascii_art += "\n  " + legs["s"] + "   "
-    if acc["s"]:
-        ascii_art += "\n  " + acc["s"]
 
     name = (
         PREFIXES[int(next(rng) * len(PREFIXES))]
@@ -201,6 +199,7 @@ def generate_pet(seed: int) -> dict:
             "mag": int(next(rng) * 99) + 1,
             "spd": int(next(rng) * 99) + 1,
         },
+        "acc_s": acc["s"],
     }
 
 
@@ -301,8 +300,6 @@ def _render_ascii(parts: dict) -> str:
     ascii_art = body["template"](ear["s"][0], ear["s"][1], eyes["s"], mouth["s"])
     if legs["s"]:
         ascii_art += "\n  " + legs["s"] + "   "
-    if acc["s"]:
-        ascii_art += "\n  " + acc["s"]
     return ascii_art
 
 
@@ -339,6 +336,8 @@ def generate_pet_at_level(original_seed: int, target_level: int) -> dict:
             pet["parts"][p_key] = {"name": new_part["name"], "r": new_part["r"]}
             if p_key == "eyes":
                 pet["parts"]["eyes"]["s"] = new_part["s"]
+            elif p_key == "acc":
+                pet["acc_s"] = new_part["s"]
                 
         pet["stats"]["atk"] += int(next(rng) * 5) + 1
         pet["stats"]["def"] += int(next(rng) * 5) + 1

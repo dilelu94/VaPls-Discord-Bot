@@ -28,7 +28,7 @@ function measureLines(lines) {
   return Math.max(...lines.map((l) => c.measureText(l).width));
 }
 
-function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, yOffset = 0) {
+function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, accStr, yOffset = 0) {
   ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, W, H);
 
@@ -43,12 +43,20 @@ function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, yOffset = 0) 
   }
 
   ctx.textAlign = "center";
+  let currentY = PAD_Y + FONT_SIZE;
+
+  if (accStr) {
+    ctx.font = FONT_FACE;
+    ctx.fillStyle = theme.text;
+    ctx.fillText(accStr, W / 2, currentY);
+    currentY += LINE_H;
+  }
 
   ctx.font = NAME_FONT;
   ctx.fillStyle = theme.accent;
-  ctx.fillText(formattedName, W / 2, PAD_Y + FONT_SIZE);
+  ctx.fillText(formattedName, W / 2, currentY);
 
-  const sepY = PAD_Y + FONT_SIZE + 14;
+  const sepY = currentY + 14;
   ctx.strokeStyle = theme.accent + "55";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -65,39 +73,52 @@ function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, yOffset = 0) 
   });
 }
 
+function calculateSize(pet, formattedName, frames) {
+  let maxLines = 0;
+  let maxW = 0;
+
+  const allTextBase = [...pet.ascii.split("\n"), formattedName];
+  if (pet.acc_s) allTextBase.push(pet.acc_s);
+
+  if (frames) {
+    for (const frame of frames) {
+      const lines = frame.ascii.split("\n");
+      if (lines.length > maxLines) maxLines = lines.length;
+
+      const frameText = [...lines, formattedName];
+      if (pet.acc_s) frameText.push(pet.acc_s);
+      const w = Math.ceil(measureLines(frameText)) + PAD_X * 2;
+      if (w > maxW) maxW = w;
+    }
+  } else {
+    const lines = pet.ascii.split("\n");
+    maxLines = lines.length;
+    maxW = Math.ceil(measureLines(allTextBase)) + PAD_X * 2;
+  }
+
+  let baseHeight = PAD_Y * 2 + FONT_SIZE + 14 + LINE_H;
+  if (pet.acc_s) baseHeight += LINE_H;
+
+  const maxH = baseHeight + (maxLines - 1) * LINE_H;
+  return { W: maxW, H: maxH };
+}
+
 function renderPetImage(pet, formattedName) {
   const theme = THEME[pet.rarity] ?? THEME["común"];
   const lines = pet.ascii.split("\n");
-  const allText = [...lines, "", formattedName];
 
-  const maxWidth = measureLines(allText);
-  const W = Math.ceil(maxWidth) + PAD_X * 2;
-  const H = allText.length * LINE_H + PAD_Y * 2 + 20;
+  const { W, H } = calculateSize(pet, formattedName);
 
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext("2d");
-  drawFrame(ctx, W, H, theme, lines, formattedName, pet.rarity);
+  drawFrame(ctx, W, H, theme, lines, formattedName, pet.rarity, pet.acc_s);
 
   return canvas.toBuffer("image/png");
 }
 
-function _maxFrameSize(frames, formattedName) {
-  let maxW = 0,
-    maxH = 0;
-  for (const frame of frames) {
-    const lines = frame.ascii.split("\n");
-    const all = [...lines, "", formattedName];
-    const w = Math.ceil(measureLines(all)) + PAD_X * 2;
-    const h = all.length * LINE_H + PAD_Y * 2 + 20;
-    if (w > maxW) maxW = w;
-    if (h > maxH) maxH = h;
-  }
-  return { W: maxW, H: maxH };
-}
-
 async function renderPetGif(pet, formattedName, frames) {
   const theme = THEME[pet.rarity] ?? THEME["común"];
-  const { W, H } = _maxFrameSize(frames, formattedName);
+  const { W, H } = calculateSize(pet, formattedName, frames);
 
   const encoder = new GIFEncoder(W, H);
   const stream = encoder.createReadStream();
@@ -117,7 +138,7 @@ async function renderPetGif(pet, formattedName, frames) {
       const canvas = createCanvas(W, H);
       const ctx = canvas.getContext("2d");
       const fLines = frame.ascii.split("\n");
-      drawFrame(ctx, W, H, theme, fLines, formattedName, pet.rarity, frame.yOffset || 0);
+      drawFrame(ctx, W, H, theme, fLines, formattedName, pet.rarity, pet.acc_s, frame.yOffset || 0);
       encoder.setDelay(frame.delayMs);
       encoder.addFrame(ctx);
     }
