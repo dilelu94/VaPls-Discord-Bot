@@ -3103,7 +3103,8 @@ class MascotaView(discord.ui.View):
             file = await _render_pet(pet)
             kwargs = {"content": full, "view": self}
             if file:
-                kwargs["attachments"] = [file]
+                kwargs["file"] = file
+                kwargs["attachments"] = []
             await interaction.edit_original_response(**kwargs)
         except Exception as e:
             log.warning("_update_mascota_message edit failed: %s", e)
