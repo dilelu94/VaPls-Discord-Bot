@@ -799,6 +799,8 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 2. **GIF no se generaba** (`petGenerator.py:185`): `asciiAnimator.js` destructure `pet.parts.eyes.s` para los caracteres de ojos en la animación de parpadeo, pero el generador de mascotas solo guardaba `{name: ..., r: ...}` en `parts[eyes]`, omitiendo la clave `s`. **Fix**: agregar `s: eyes[s]` al dict de ojos. El GIF ahora se renderiza correctamente (25761 bytes, rc=0).
 
+3. **Backfill para mascotas existentes** (`petGenerator.py:273`): mascotas guardadas antes del fix no tienen `eyes.s` en sus parts. Se agregó `_backfill_missing_eye_character()` que rellena `eyes.s` desde `PARTS["eyes"]` al cargar la mascota. Se invoca desde `get_or_create_pet()` y `get_pet()`.
+
 ### 2026-06-13 — Sistema de historias: prompt sin nombres forzados + memoria del Indio + aprobación vía DM del owner
 
 34. **Prompt sin lista de nombres**: `_STORY_PROMPT` ya no dice "uno de los pibes (Viny, Fox...)". Gemini describe lo que realmente ve en la imagen. Si reconoce un famoso lo identifica; si no, hace un chiste sobre la situación sin inventar identidades.

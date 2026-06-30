@@ -3056,7 +3056,7 @@ class MascotaView(discord.ui.View):
     async def _gid(self):
         return self.channel.guild.id if self.channel else 0
 
-    async def _refresh(self, interaction, pet, formatted, evo_tag, msg):
+    async def _update_mascota_message(self, interaction, pet, formatted, evo_tag, msg):
         self.pet = pet
         self.formatted = formatted
         self.evo_tag = evo_tag
@@ -3067,7 +3067,7 @@ class MascotaView(discord.ui.View):
         try:
             await interaction.edit_original_response(content=full, view=self)
         except Exception as e:
-            log.warning("_refresh edit failed: %s", e)
+            log.warning("_update_mascota_message edit failed: %s", e)
 
     @discord.ui.button(label="👁 Mostrar", style=discord.ButtonStyle.primary)
     async def mostrar(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -3080,7 +3080,7 @@ class MascotaView(discord.ui.View):
             await self._send_to_channel(interaction)
         except Exception as e:
             log.warning("mostrar send failed: %s", e)
-        await self._refresh(interaction, self.pet, self.formatted, self.evo_tag, "")
+        await self._update_mascota_message(interaction, self.pet, self.formatted, self.evo_tag, "")
 
     @discord.ui.button(label="🎞 GIF", style=discord.ButtonStyle.primary)
     async def gif_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -3093,7 +3093,7 @@ class MascotaView(discord.ui.View):
         except Exception as e:
             log.warning("gif_btn send failed: %s", e)
         try:
-            await self._refresh(interaction, self.pet, self.formatted, self.evo_tag, "✅ GIF publicado en el canal.")
+            await self._update_mascota_message(interaction, self.pet, self.formatted, self.evo_tag, "✅ GIF publicado en el canal.")
         except Exception as e:
             log.warning("gif_btn refresh failed: %s", e)
 
@@ -3119,7 +3119,7 @@ class MascotaView(discord.ui.View):
         evo_tag = f" [+{new_pet.get('evolution_level', 0)}]"
         formatted = petGenerator.format_name(new_pet["name"], new_pet["rarity"])
         log.info("MASCOTA evolucionar uid=%s lvl=%s rarity=%s", self.uid, new_pet.get("evolution_level", 0), new_pet["rarity"])
-        await self._refresh(interaction, new_pet, formatted, evo_tag, "⬆️ **Evolucionó!**")
+        await self._update_mascota_message(interaction, new_pet, formatted, evo_tag, "⬆️ **Evolucionó!**")
 
     @discord.ui.button(label="⬇ Revertir", style=discord.ButtonStyle.secondary)
     async def revertir(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -3139,7 +3139,7 @@ class MascotaView(discord.ui.View):
         evo_tag = f" [+{old.get('evolution_level', 0)}]" if old.get("evolution_level", 0) else ""
         formatted = petGenerator.format_name(old["name"], old["rarity"])
         log.info("MASCOTA revertir uid=%s lvl=%s rarity=%s", self.uid, old.get("evolution_level", 0), old["rarity"])
-        await self._refresh(interaction, old, formatted, evo_tag, "⬇️ **Revertido!**")
+        await self._update_mascota_message(interaction, old, formatted, evo_tag, "⬇️ **Revertido!**")
 
     @discord.ui.button(label="📜 Historial", style=discord.ButtonStyle.secondary)
     async def historial(self, button: discord.ui.Button, interaction: discord.Interaction):

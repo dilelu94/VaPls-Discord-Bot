@@ -236,6 +236,7 @@ def save_pet(user_id: str, pet: dict) -> None:
 def get_or_create_pet(user_id: str) -> dict:
     pets = _load_pets()
     if user_id in pets:
+        _backfill_missing_eye_character(pets[user_id]["parts"])
         return pets[user_id]
     seed = str_to_seed(user_id)
     pet = generate_pet(seed)
@@ -251,7 +252,10 @@ def get_or_create_pet(user_id: str) -> dict:
 
 def get_pet(user_id: str) -> dict | None:
     pets = _load_pets()
-    return pets.get(user_id)
+    pet = pets.get(user_id)
+    if pet:
+        _backfill_missing_eye_character(pet["parts"])
+    return pet
 
 
 def _rarity_sum(parts: dict) -> int:
@@ -264,6 +268,16 @@ def _rarity_sum(parts: dict) -> int:
         + parts["acc"]["r"]
     )
 
+
+
+def _backfill_missing_eye_character(parts: dict) -> None:
+    if "s" in parts.get("eyes", {}):
+        return
+    for eye_entry in PARTS["eyes"]:
+        if eye_entry["name"] == parts["eyes"]["name"]:
+            parts["eyes"]["s"] = eye_entry["s"]
+            return
+    log.warning("Could not backfill eyes.s for name=%s", parts.get("eyes", {}).get("name"))
 
 def derive_evolution_seed(original_seed: int, level: int) -> int:
     return (original_seed * 6364136223 + level) & 0xFFFFFFFF
