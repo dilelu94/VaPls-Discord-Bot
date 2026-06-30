@@ -3157,6 +3157,21 @@ class MascotaView(discord.ui.View):
             )
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
+    @discord.ui.button(label="❔ Info", style=discord.ButtonStyle.secondary)
+    async def info(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != int(self.uid):
+            await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
+            return
+        
+        info_text = (
+            "ℹ️ **Guía de Mascotas**\n\n"
+            "🌟 **Puntos**: Ganás puntos de mascota de forma pasiva por usar comandos, mandar mensajes (0.2) o hablar por los canales de voz (0.1).\n"
+            "🎀 **Accesorios**: Se generan por semilla. Tienen rareza propia y pueden cambiar por uno mejor o desaparecer temporalmente si el sistema así lo decide en cada nivel.\n"
+            "⬆️ **Evolucionar**: Cuesta 300 puntos. Es una evolución conservativa: mantiene el cuerpo original intacto pero escoge una parte al azar (cuerpo, ojos, etc.) para aumentar su rareza al siguiente nivel de forma permanente (y sube los stats).\n"
+            "⬇️ **Revertir**: Anula tu última evolución, devolviéndote los 300 puntos para poder intentarlo luego si no te gustó o preferís la forma anterior."
+        )
+        await interaction.response.send_message(info_text, ephemeral=True)
+
     @discord.ui.button(label="✖ Cerrar", style=discord.ButtonStyle.danger)
     async def cerrar(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != int(self.uid):
