@@ -44,7 +44,7 @@ function generateFrames(pet) {
     pushFrame(expanded.join("\n"), 600);
 
     if (lines.length > 2) {
-      const contracted = [...lines];
+      const contracted = [...expanded];
       contracted.splice(mid, 1);
       pushFrame(contracted.join("\n"), 600);
     }
@@ -52,8 +52,8 @@ function generateFrames(pet) {
   }
 
   // ── float: up → down → normal ────────────────────────────────────────────
-  pushFrame(["", ...lines].join("\n"), 400);
-  pushFrame([...lines, ""].join("\n"), 400);
+  frames.push({ ascii: base, delayMs: 300, yOffset: -10 });
+  frames.push({ ascii: base, delayMs: 300, yOffset: 10 });
   pushFrame(base, 1000);
 
   // ── particles for legendary/epic ─────────────────────────────────────────

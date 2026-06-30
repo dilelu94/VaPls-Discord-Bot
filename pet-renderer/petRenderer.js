@@ -28,7 +28,7 @@ function measureLines(lines) {
   return Math.max(...lines.map((l) => c.measureText(l).width));
 }
 
-function drawFrame(ctx, W, H, theme, lines, formattedName, rarity) {
+function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, yOffset = 0) {
   ctx.fillStyle = theme.bg;
   ctx.fillRect(0, 0, W, H);
 
@@ -47,7 +47,7 @@ function drawFrame(ctx, W, H, theme, lines, formattedName, rarity) {
   ctx.textAlign = "center";
 
   lines.forEach((line, i) => {
-    ctx.fillText(line, W / 2, PAD_Y + i * LINE_H + FONT_SIZE);
+    ctx.fillText(line, W / 2, PAD_Y + i * LINE_H + FONT_SIZE + yOffset);
   });
 
   const sepY = PAD_Y + lines.length * LINE_H + 6;
@@ -115,7 +115,7 @@ async function renderPetGif(pet, formattedName, frames) {
       const canvas = createCanvas(W, H);
       const ctx = canvas.getContext("2d");
       const fLines = frame.ascii.split("\n");
-      drawFrame(ctx, W, H, theme, fLines, formattedName, pet.rarity);
+      drawFrame(ctx, W, H, theme, fLines, formattedName, pet.rarity, frame.yOffset || 0);
       encoder.setDelay(frame.delayMs);
       encoder.addFrame(ctx);
     }
