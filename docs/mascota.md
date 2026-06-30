@@ -23,7 +23,7 @@ Por defecto (sin argumento) muestra la mascota del usuario.
 | Acción      | Descripción                                                           |
 | ----------- | --------------------------------------------------------------------- |
 | **ver**     | Muestra/créa tu mascota con botones para evolucionar, historial, etc. |
-| **mostrar** | Publica tu mascota directamente en el canal.                          |
+| **mostrar** | Publica tu mascota directamente en el canal (con imagen PNG).         |
 
 ### Botones
 
@@ -32,12 +32,14 @@ Al usar `/mascota` (acción `ver` por defecto) aparece un mensaje efímero
 
 | Botón              | Comportamiento                                                                      |
 | ------------------ | ----------------------------------------------------------------------------------- |
-| **👁 Mostrar**     | Publica la mascota en el canal visible para todos. Se desactiva después de usado.   |
+| **👁 Mostrar**     | Publica la mascota en el canal visible para todos (incluye PNG). Se desactiva.      |
+| **🎞 GIF**        | Publica un GIF animado de la mascota en el canal.                                   |
 | **⬆ Evolucionar** | Evoluciona la mascota (cuesta 300 puntos). Actualiza el mensaje con la nueva forma. |
+| **⬇ Revertir**    | Revierte la mascota a su forma anterior (recupera los 300 puntos).                  |
 | **📜 Historial**   | Muestra el historial completo de evoluciones en un mensaje efímero aparte.          |
 | **✖ Cerrar**      | Cierra el mensaje.                                                                  |
 
-El mensaje expira automáticamente a los **5 minutos** y los botones se
+El mensaje expira automáticamente a los **60 segundos** y los botones se
 deshabilitan.
 
 ## Sistema de Puntos
@@ -59,6 +61,12 @@ la primera vez que usás `/mascota`.
 Todos los usuarios reciben **200 puntos gratis** al crear su primera
 mascota.
 
+### Decaimiento por inactividad
+
+Si un usuario no tiene actividad en `last_activity_at` por más de 24 horas,
+pierde 10 puntos de mascota por día de inactividad en adelante. El
+decaimiento se calcula al momento de earn contra `last_activity_at`.
+
 ### Estructura de puntos
 
 Los puntos se manejan en el userbot (`userbot/activity_db.py`, tabla
@@ -66,13 +74,15 @@ Los puntos se manejan en el userbot (`userbot/activity_db.py`, tabla
 
 - `total_earned`: Puntos ganados en total.
 - `spent`: Puntos gastados permanentemente.
-- `available` = `total_earned - spent`.
+- `reserved`: Puntos reservados (por evolución en curso).
+- `available` = `total_earned - spent - reserved`.
 
 ## Evolución
 
 ### Costo
 
-Evolucionar cuesta **300 puntos** (se descuentan del total).
+Evolucionar cuesta **300 puntos** (se reservan, no se gastan).
+Revertir libera la reserva.
 
 ### Algoritmo
 
@@ -90,8 +100,8 @@ base de datos SQLite del userbot donde están MMR, pet_points, etc.
 
 ## Renderizado de imágenes
 
-El bot puede generar imágenes PNG del ASCII de la mascota usando un renderizador
-JavaScript con node-canvas:
+El bot puede generar imágenes PNG y GIF del ASCII de la mascota usando un
+renderizador JavaScript con node-canvas:
 
 ### Dependencias
 
@@ -105,7 +115,7 @@ bot.py (Python)
   └─ subprocess → node pet-renderer/render-cli.js [--gif]
                     ├─ petRenderer.js   (canvas → PNG/GIF)
                     └─ asciiAnimator.js (frames animados)
-  └─ Discord AttachmentBuilder → canal
+  └─ Discord File → canal
 ```
 
 El CLI recibe el JSON del pet por stdin y escribe el buffer de imagen a stdout.

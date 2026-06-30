@@ -3007,7 +3007,7 @@ async def _render_pet(pet: dict, gif: bool = False) -> discord.File | None:
             stderr=asyncio.subprocess.PIPE,
         )
         raw = json.dumps(pet)
-        stdout, stderr = await proc.communicate(raw.encode(), timeout=15)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(raw.encode()), timeout=15)
         if proc.returncode != 0:
             log.warning("pet render failed: %s", stderr.decode()[:200])
             return None
@@ -3032,7 +3032,7 @@ def _build_pet_msg(pet, formatted, evo_tag, pts=None):
 
 class MascotaView(discord.ui.View):
     def __init__(self, pet, formatted, evo_tag, pts, channel, uid, ctx):
-        super().__init__(timeout=300)
+        super().__init__(timeout=60)
         self.pet = pet
         self.formatted = formatted
         self.evo_tag = evo_tag
@@ -3048,7 +3048,10 @@ class MascotaView(discord.ui.View):
         kwargs = {"content": f"📢 **{interaction.user.display_name}** muestra su mascota:\n{msg}"}
         if file:
             kwargs["file"] = file
-        await self.channel.send(**kwargs)
+        try:
+            await self.channel.send(**kwargs)
+        except Exception as e:
+            log.warning("_send_to_channel failed: %s", e)
 
     async def _gid(self):
         return self.channel.guild.id if self.channel else 0
@@ -3063,17 +3066,20 @@ class MascotaView(discord.ui.View):
         full = f"{msg}\n{_build_pet_msg(pet, formatted, evo_tag, pts)}"
         try:
             await interaction.edit_original_response(content=full, view=self)
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("_refresh edit failed: %s", e)
 
     @discord.ui.button(label="👁 Mostrar", style=discord.ButtonStyle.primary)
     async def mostrar(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != int(self.uid):
             await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
             return
-        await interaction.response.defer()
-        await self._send_to_channel(interaction)
         button.disabled = True
+        await interaction.response.edit_message(view=self)
+        try:
+            await self._send_to_channel(interaction)
+        except Exception as e:
+            log.warning("mostrar send failed: %s", e)
         await self._refresh(interaction, self.pet, self.formatted, self.evo_tag, "")
 
     @discord.ui.button(label="🎞 GIF", style=discord.ButtonStyle.primary)
@@ -3082,25 +3088,31 @@ class MascotaView(discord.ui.View):
             await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
             return
         await interaction.response.defer()
-        await self._send_to_channel(interaction, gif=True)
         try:
-            await interaction.followup.send("✅ GIF publicado en el canal.", ephemeral=True)
-        except Exception:
-            pass
+            await self._send_to_channel(interaction, gif=True)
+        except Exception as e:
+            log.warning("gif_btn send failed: %s", e)
+        try:
+            await self._refresh(interaction, self.pet, self.formatted, self.evo_tag, "✅ GIF publicado en el canal.")
+        except Exception as e:
+            log.warning("gif_btn refresh failed: %s", e)
 
     @discord.ui.button(label="⬆ Evolucionar", style=discord.ButtonStyle.success)
     async def evolucionar(self, button: discord.ui.Button, interaction: discord.Interaction):
         if interaction.user.id != int(self.uid):
             await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
             return
-        await interaction.response.defer()
-        ok = await _post_pet_points("/pet-points/reserve", int(self.uid), await self._gid(), config.PET_EVOLUTION_COST)
-        if not ok:
-            pts = await _fetch_pet_points(int(self.uid), await self._gid())
-            await interaction.followup.send(
+        pts = await _fetch_pet_points(int(self.uid), await self._gid())
+        if pts["available"] < config.PET_EVOLUTION_COST:
+            await interaction.response.send_message(
                 f"❌ Necesitás **{config.PET_EVOLUTION_COST}** puntos para evolucionar. Tenés **{pts['available']:.0f}**.",
                 ephemeral=True,
             )
+            return
+        await interaction.response.defer()
+        ok = await _post_pet_points("/pet-points/reserve", int(self.uid), await self._gid(), config.PET_EVOLUTION_COST)
+        if not ok:
+            await interaction.edit_original_response(content="❌ Error al reservar puntos.", view=self)
             return
         new_pet = petGenerator.evolve_pet(self.pet)
         petGenerator.save_pet(self.uid, new_pet)
@@ -3117,12 +3129,12 @@ class MascotaView(discord.ui.View):
         if self.pet.get("evolution_level", 0) <= 0:
             await interaction.response.send_message("❌ Ya está en su forma base.", ephemeral=True)
             return
-        await interaction.response.defer()
-        await _post_pet_points("/pet-points/release", int(self.uid), await self._gid(), config.PET_EVOLUTION_COST)
         old = petGenerator.revert_pet(self.pet)
         if old is None:
-            await interaction.followup.send("❌ No se puede revertir más.", ephemeral=True)
+            await interaction.response.send_message("❌ No se puede revertir más.", ephemeral=True)
             return
+        await interaction.response.defer()
+        await _post_pet_points("/pet-points/release", int(self.uid), await self._gid(), config.PET_EVOLUTION_COST)
         petGenerator.save_pet(self.uid, old)
         evo_tag = f" [+{old.get('evolution_level', 0)}]" if old.get("evolution_level", 0) else ""
         formatted = petGenerator.format_name(old["name"], old["rarity"])
@@ -3161,12 +3173,9 @@ class MascotaView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         try:
-            await self.message.delete()
+            await self.message.edit(content="⏰ Menú expirado.", view=None, delete_after=1)
         except Exception:
-            try:
-                await self.message.edit(content="⏰ Menú expirado.", view=self)
-            except Exception:
-                pass
+            pass
 
 
 @bot.slash_command(
