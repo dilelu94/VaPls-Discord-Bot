@@ -77,6 +77,8 @@ PETS_PATH = os.getenv("PETS_PATH", "data/pets.json")
 PET_GENERATION_COST = int(os.getenv("PET_GENERATION_COST", "0"))
 PET_EVOLUTION_COST = int(os.getenv("PET_EVOLUTION_COST", "300"))
 
+PETS_RENDERER = os.getenv("PETS_RENDERER", "pet-renderer/render-cli.js")
+
 # Ruta al archivo JSON con datos estáticos de usuarios (traits, anécdotas, etc.).
 # Default: data/users.json. Si no existe, se usa el fallback hardcodeado en users.py.
 USERS_PATH = os.getenv("USERS_PATH", "data/users.json")

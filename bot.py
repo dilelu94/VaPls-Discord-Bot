@@ -7,6 +7,8 @@ HTTP API server. Voice receive/transcription is delegated to the userbot in
 
 import sys
 import os
+import json
+import io
 import logging
 import asyncio
 import re
@@ -2991,6 +2993,31 @@ async def spacewar(ctx):
     await safe_respond(ctx, SPACEWAR_GUIDE_TEXT, ephemeral=True)
 
 
+async def _render_pet(pet: dict, gif: bool = False) -> discord.File | None:
+    if not os.path.isfile(config.PETS_RENDERER):
+        return None
+    args = ["node", config.PETS_RENDERER]
+    if gif:
+        args.append("--gif")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        raw = json.dumps(pet)
+        stdout, stderr = await proc.communicate(raw.encode(), timeout=15)
+        if proc.returncode != 0:
+            log.warning("pet render failed: %s", stderr.decode()[:200])
+            return None
+        ext = "gif" if gif else "png"
+        return discord.File(io.BytesIO(stdout), f"mascota.{ext}")
+    except Exception as e:
+        log.warning("pet render error: %s", e)
+        return None
+
+
 def _build_pet_msg(pet, formatted, evo_tag, pts=None):
     lines = [
         f"```\n{pet['ascii']}\n```",
@@ -3015,9 +3042,13 @@ class MascotaView(discord.ui.View):
         self.ctx = ctx
         self.revertir.disabled = pet.get("evolution_level", 0) == 0
 
-    async def _send_to_channel(self, interaction):
+    async def _send_to_channel(self, interaction, gif=False):
         msg = _build_pet_msg(self.pet, self.formatted, self.evo_tag)
-        await self.channel.send(f"📢 **{interaction.user.display_name}** muestra su mascota:\n{msg}")
+        file = await _render_pet(self.pet, gif=gif)
+        kwargs = {"content": f"📢 **{interaction.user.display_name}** muestra su mascota:\n{msg}"}
+        if file:
+            kwargs["file"] = file
+        await self.channel.send(**kwargs)
 
     async def _gid(self):
         return self.channel.guild.id if self.channel else 0
@@ -3040,6 +3071,14 @@ class MascotaView(discord.ui.View):
         await self._send_to_channel(interaction)
         button.disabled = True
         await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label="🎞 GIF", style=discord.ButtonStyle.primary)
+    async def gif_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != int(self.uid):
+            await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
+            return
+        await self._send_to_channel(interaction, gif=True)
+        await interaction.response.send_message("✅ GIF publicado en el canal.", ephemeral=True)
 
     @discord.ui.button(label="⬆ Evolucionar", style=discord.ButtonStyle.success)
     async def evolucionar(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -3145,7 +3184,11 @@ async def mascota(
         evo = pet.get("evolution_level", 0)
         evo_tag = f" [+{evo}]" if evo else ""
         msg = _build_pet_msg(pet, formatted, evo_tag)
-        await channel.send(f"📢 **{ctx.author.display_name}** muestra su mascota:\n{msg}")
+        file = await _render_pet(pet)
+        kwargs = {"content": f"📢 **{ctx.author.display_name}** muestra su mascota:\n{msg}"}
+        if file:
+            kwargs["file"] = file
+        await channel.send(**kwargs)
         await safe_respond(ctx, "✅ Mascota publicada en el canal.", ephemeral=True)
         return
 
