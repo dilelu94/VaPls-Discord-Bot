@@ -42,15 +42,13 @@ function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, yOffset = 0) 
     }
   }
 
-  ctx.font = FONT_FACE;
-  ctx.fillStyle = theme.text;
   ctx.textAlign = "center";
 
-  lines.forEach((line, i) => {
-    ctx.fillText(line, W / 2, PAD_Y + i * LINE_H + FONT_SIZE + yOffset);
-  });
+  ctx.font = NAME_FONT;
+  ctx.fillStyle = theme.accent;
+  ctx.fillText(formattedName, W / 2, PAD_Y + FONT_SIZE);
 
-  const sepY = PAD_Y + lines.length * LINE_H + 6;
+  const sepY = PAD_Y + FONT_SIZE + 14;
   ctx.strokeStyle = theme.accent + "55";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -58,9 +56,13 @@ function drawFrame(ctx, W, H, theme, lines, formattedName, rarity, yOffset = 0) 
   ctx.lineTo(W - PAD_X, sepY);
   ctx.stroke();
 
-  ctx.font = NAME_FONT;
-  ctx.fillStyle = theme.accent;
-  ctx.fillText(formattedName, W / 2, sepY + LINE_H);
+  ctx.font = FONT_FACE;
+  ctx.fillStyle = theme.text;
+  const petStartY = sepY + LINE_H;
+
+  lines.forEach((line, i) => {
+    ctx.fillText(line, W / 2, petStartY + i * LINE_H + yOffset);
+  });
 }
 
 function renderPetImage(pet, formattedName) {
