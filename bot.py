@@ -3035,6 +3035,36 @@ def _build_pet_msg(pet, formatted, evo_tag, pts=None):
     return "\n".join(lines)
 
 
+class InfoView(discord.ui.View):
+    def __init__(self, mascota_view):
+        super().__init__(timeout=60)
+        self.mascota_view = mascota_view
+
+    @discord.ui.button(label="⬅️ Volver", style=discord.ButtonStyle.secondary)
+    async def volver(self, button: discord.ui.Button, interaction: discord.Interaction):
+        if interaction.user.id != int(self.mascota_view.uid):
+            await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        await self.mascota_view._update_mascota_message(
+            interaction,
+            self.mascota_view.pet,
+            self.mascota_view.formatted,
+            self.mascota_view.evo_tag,
+            "👀 **Volviste a la vista de tu mascota**"
+        )
+        self.stop()
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        try:
+            await self.message.edit(content="⏰ Menú expirado.", view=None, delete_after=1)
+        except Exception:
+            pass
+
+
 class MascotaView(discord.ui.View):
     def __init__(self, pet, formatted, evo_tag, pts, channel, uid, ctx):
         super().__init__(timeout=60)
@@ -3170,7 +3200,8 @@ class MascotaView(discord.ui.View):
             "⬆️ **Evolucionar**: Cuesta 300 puntos. Es una evolución conservativa: mantiene el cuerpo original intacto pero escoge una parte al azar (cuerpo, ojos, etc.) para aumentar su rareza al siguiente nivel de forma permanente (y sube los stats).\n"
             "⬇️ **Revertir**: Anula tu última evolución, devolviéndote los 300 puntos para poder intentarlo luego si no te gustó o preferís la forma anterior."
         )
-        await interaction.response.send_message(info_text, ephemeral=True)
+        info_view = InfoView(self)
+        await interaction.response.edit_message(content=info_text, view=info_view, attachments=[])
 
     @discord.ui.button(label="✖ Cerrar", style=discord.ButtonStyle.danger)
     async def cerrar(self, button: discord.ui.Button, interaction: discord.Interaction):
