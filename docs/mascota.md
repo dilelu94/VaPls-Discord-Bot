@@ -23,17 +23,16 @@ Por defecto (sin argumento) muestra la mascota del usuario.
 | Acción      | Descripción                                                           |
 | ----------- | --------------------------------------------------------------------- |
 | **ver**     | Muestra/créa tu mascota con botones para evolucionar, historial, etc. |
-| **mostrar** | Publica tu mascota directamente en el canal (con imagen PNG).         |
+| **mostrar** | Publica tu mascota directamente en el canal (con imagen animada GIF). |
 
 ### Botones
 
 Al usar `/mascota` (acción `ver` por defecto) aparece un mensaje efímero
-(solo visible para vos) con estos botones:
+(solo visible para vos) que incluye la imagen de tu mascota y estos botones:
 
 | Botón              | Comportamiento                                                                      |
 | ------------------ | ----------------------------------------------------------------------------------- |
-| **👁 Mostrar**     | Publica la mascota en el canal visible para todos (incluye PNG). Se desactiva.      |
-| **🎞 GIF**        | Publica un GIF animado de la mascota en el canal.                                   |
+| **👁 Mostrar**     | Publica el GIF animado de la mascota en el canal visible para todos. Se desactiva.  |
 | **⬆ Evolucionar** | Evoluciona la mascota (cuesta 300 puntos). Actualiza el mensaje con la nueva forma. |
 | **⬇ Revertir**    | Revierte la mascota a su forma anterior (recupera los 300 puntos).                  |
 | **📜 Historial**   | Muestra el historial completo de evoluciones en un mensaje efímero aparte.          |
@@ -87,11 +86,10 @@ Revertir libera la reserva.
 ### Algoritmo
 
 1. Se parte de la `seed` original (derivada del ID de Discord).
-2. Para cada nivel de evolución, se genera una nueva seed:
+2. Para cada nivel de evolución, se genera una nueva semilla derivada:
    `new_seed = (original_seed * 6364136223 + level) & 0xFFFFFFFF`
-3. Se incrementa `level` hasta que la suma de rareza de las partes de la nueva
-   mascota sea **mayor** que la actual.
-4. La evolución es **determinista**: mismo usuario + mismo nivel = misma mascota.
+3. La evolución es **conservativa**: el cuerpo y estructura general de la mascota se mantienen. Solo se selecciona **una parte al azar** (cabeza, base, ojos, etc.) y se la reemplaza por otra del mismo tipo pero de rareza estrictamente superior. Además, aumentan un poco los stats base linealmente.
+4. La evolución es **determinista**: mismo usuario + mismo nivel = misma evolución exacta.
 
 ## Persistencia
 
@@ -100,8 +98,7 @@ base de datos SQLite del userbot donde están MMR, pet_points, etc.
 
 ## Renderizado de imágenes
 
-El bot puede generar imágenes PNG y GIF del ASCII de la mascota usando un
-renderizador JavaScript con node-canvas:
+El bot genera imágenes animadas (GIF) o estáticas (PNG) a partir del texto ASCII de la mascota usando un renderizador JavaScript con `node-canvas`. El **accesorio** se renderiza de forma estática por encima del nombre, mientras que el cuerpo base se centra y se anima automáticamente (respiración, parpadeo, flotación).
 
 ### Dependencias
 
