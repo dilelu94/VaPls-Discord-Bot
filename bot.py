@@ -3073,7 +3073,7 @@ class MascotaView(discord.ui.View):
             file = await _render_pet(pet)
             kwargs = {"content": full, "view": self}
             if file:
-                kwargs["file"] = file
+                kwargs["attachments"] = [file]
             await interaction.edit_original_response(**kwargs)
         except Exception as e:
             log.warning("_update_mascota_message edit failed: %s", e)
@@ -3086,25 +3086,10 @@ class MascotaView(discord.ui.View):
         button.disabled = True
         await interaction.response.edit_message(view=self)
         try:
-            await self._send_to_channel(interaction)
-        except Exception as e:
-            log.warning("mostrar send failed: %s", e)
-        await self._update_mascota_message(interaction, self.pet, self.formatted, self.evo_tag, "")
-
-    @discord.ui.button(label="🎞 GIF", style=discord.ButtonStyle.primary)
-    async def gif_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
-        if interaction.user.id != int(self.uid):
-            await interaction.response.send_message("❌ No es tu mascota.", ephemeral=True)
-            return
-        await interaction.response.defer()
-        try:
             await self._send_to_channel(interaction, gif=True)
         except Exception as e:
-            log.warning("gif_btn send failed: %s", e)
-        try:
-            await self._update_mascota_message(interaction, self.pet, self.formatted, self.evo_tag, "✅ GIF publicado en el canal.")
-        except Exception as e:
-            log.warning("gif_btn refresh failed: %s", e)
+            log.warning("mostrar send failed: %s", e)
+        await self._update_mascota_message(interaction, self.pet, self.formatted, self.evo_tag, "✅ Publicado en el canal.")
 
     @discord.ui.button(label="⬆ Evolucionar", style=discord.ButtonStyle.success)
     async def evolucionar(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -3219,7 +3204,7 @@ async def mascota(
         evo = pet.get("evolution_level", 0)
         evo_tag = f" [+{evo}]" if evo else ""
         msg = _build_pet_msg(pet, formatted, evo_tag)
-        file = await _render_pet(pet)
+        file = await _render_pet(pet, gif=True)
         kwargs = {"content": f"📢 **{ctx.author.display_name}** muestra su mascota:\n{msg}"}
         if file:
             kwargs["file"] = file
