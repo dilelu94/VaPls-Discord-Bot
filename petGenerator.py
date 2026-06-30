@@ -182,7 +182,7 @@ def generate_pet(seed: int) -> dict:
 
     parts = {
         "ear": {"name": ear["name"], "r": ear["r"]},
-        "eyes": {"name": eyes["name"], "r": eyes["r"]},
+        "eyes": {"name": eyes["name"], "r": eyes["r"], "s": eyes["s"]},
         "mouth": {"name": mouth["name"], "r": mouth["r"]},
         "body": {"name": body["name"], "r": body["r"]},
         "legs": {"name": legs["name"], "r": legs["r"]},

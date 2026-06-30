@@ -793,6 +793,12 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 1. **`_detect_encoder()` por probe real** (`golive/streamer.py`): reemplazado el chequeo de `ffmpeg -encoders` por un encode de 1 frame real a null por cada candidato. Soluciona que `h264_nvenc` se usara en el server ARM (sin CUDA) causando que FFmpeg fallara en rc=1 inmediatamente y el stream nunca emitiera frames.
 2. **Timeout inicial de 15s en `_send_loop`** (`golive/streamer.py`): streams HLS con múltiples renditions tardan 4-8s en probe antes del primer frame. El timeout original de 2s hacía que el loop detectara un "proceso muerto" y abortara. El primer `read()` ahora espera 15s (`first_read=True`); los siguientes mantienen 2s.
 
+### 2026-06-29 — Botones de Mascota: fix view dispatch + fix GIF animado
+
+1. **Botones sin logs ni respuesta** (`bot.py`): los botones de `/mascota ver` (Mostrar, GIF, Evolucionar, etc.) mostraban This interaction failed sin ningún log. La causa era el patrón `safe_defer()` + `followup.send(ephemeral=True, view=view)`: py-cord almacena el View en el `ViewStore` sin `message_id` cuando `followup.send()` se llama con `wait=False` (default), y aunque `ViewStore.dispatch()` tiene un fallback a `message_id=None`, la interacción del botón no encontraba el view. **Fix**: reemplazar el defer + followup por `ctx.respond(msg, ephemeral=True, view=view)` directo, que registra el view a través de `InteractionResponse.send_message()` y además asigna `view.message` via `original_response()`. Las entradas en el log (`on_error`, `log.warning`) ahora se ven correctamente.
+
+2. **GIF no se generaba** (`petGenerator.py:185`): `asciiAnimator.js` destructure `pet.parts.eyes.s` para los caracteres de ojos en la animación de parpadeo, pero el generador de mascotas solo guardaba `{name: ..., r: ...}` en `parts[eyes]`, omitiendo la clave `s`. **Fix**: agregar `s: eyes[s]` al dict de ojos. El GIF ahora se renderiza correctamente (25761 bytes, rc=0).
+
 ### 2026-06-13 — Sistema de historias: prompt sin nombres forzados + memoria del Indio + aprobación vía DM del owner
 
 34. **Prompt sin lista de nombres**: `_STORY_PROMPT` ya no dice "uno de los pibes (Viny, Fox...)". Gemini describe lo que realmente ve en la imagen. Si reconoce un famoso lo identifica; si no, hace un chiste sobre la situación sin inventar identidades.
