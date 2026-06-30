@@ -3020,11 +3020,16 @@ async def _render_pet(pet: dict, gif: bool = False) -> discord.File | None:
 
 
 def _build_pet_msg(pet, formatted, evo_tag, pts=None):
-    lines = [
-        f"**{formatted}**{evo_tag}",
-        f"*{pet['rarity'].capitalize()}*",
-        f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}",
-    ]
+    lines = [f"**{formatted}**{evo_tag}"]
+    
+    rarity_line = f"*{pet['rarity'].capitalize()}*"
+    acc_name = pet.get("parts", {}).get("acc", {}).get("name")
+    if acc_name:
+        rarity_line += f" — Accesorio: {acc_name.capitalize()}"
+    lines.append(rarity_line)
+    
+    lines.append(f"ATK {pet['stats']['atk']}  DEF {pet['stats']['def']}  MAG {pet['stats']['mag']}  SPD {pet['stats']['spd']}")
+    
     if pts is not None:
         lines.append(f"\n⭐ Puntos: {pts['available']:.0f} (usados: {pts['spent'] + pts['reserved']:.0f})")
     return "\n".join(lines)
@@ -3065,7 +3070,11 @@ class MascotaView(discord.ui.View):
         self.revertir.disabled = pet.get("evolution_level", 0) == 0
         full = f"{msg}\n{_build_pet_msg(pet, formatted, evo_tag, pts)}"
         try:
-            await interaction.edit_original_response(content=full, view=self)
+            file = await _render_pet(pet)
+            kwargs = {"content": full, "view": self}
+            if file:
+                kwargs["file"] = file
+            await interaction.edit_original_response(**kwargs)
         except Exception as e:
             log.warning("_update_mascota_message edit failed: %s", e)
 
@@ -3153,8 +3162,10 @@ class MascotaView(discord.ui.View):
         for entry in chain:
             lvl = entry["level"]
             marker = "⬅️ **Actual**" if lvl == evo_level else f"`Nvl {lvl}`"
+            acc_name = entry.get("parts", {}).get("acc", {}).get("name")
+            acc_str = f" (+{acc_name.capitalize()})" if acc_name else ""
             lines.append(
-                f"{marker} — {entry['rarity'].capitalize()} "
+                f"{marker} — {entry['rarity'].capitalize()}{acc_str} "
                 f"`{entry['name']}` "
                 f"[ATK {entry['stats']['atk']} DEF {entry['stats']['def']} "
                 f"MAG {entry['stats']['mag']} SPD {entry['stats']['spd']}]"
@@ -3224,7 +3235,12 @@ async def mascota(
     view = MascotaView(pet, formatted, evo_tag, pts, channel, uid, ctx)
     msg = _build_pet_msg(pet, formatted, evo_tag, pts)
     log.info("MASCOTA ver uid=%s rarity=%s evo=%s pts=%.0f", uid, pet["rarity"], evo, pts["available"])
-    r = await ctx.respond(msg, ephemeral=True, view=view)
+    
+    file = await _render_pet(pet)
+    kwargs = {"content": msg, "ephemeral": True, "view": view}
+    if file:
+        kwargs["file"] = file
+    r = await ctx.respond(**kwargs)
     view.message = r
 
 
