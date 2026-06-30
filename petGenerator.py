@@ -235,7 +235,7 @@ def save_pet(user_id: str, pet: dict) -> None:
 def get_or_create_pet(user_id: str) -> dict:
     pets = _load_pets()
     if user_id in pets:
-        _backfill_missing_eye_character(pets[user_id]["parts"])
+        _migrate_pet_data(pets[user_id])
         return pets[user_id]
     seed = str_to_seed(user_id)
     pet = generate_pet(seed)
@@ -253,7 +253,7 @@ def get_pet(user_id: str) -> dict | None:
     pets = _load_pets()
     pet = pets.get(user_id)
     if pet:
-        _backfill_missing_eye_character(pet["parts"])
+        _migrate_pet_data(pet)
     return pet
 
 
@@ -277,6 +277,19 @@ def _backfill_missing_eye_character(parts: dict) -> None:
             parts["eyes"]["s"] = eye_entry["s"]
             return
     log.warning("Could not backfill eyes.s for name=%s", parts.get("eyes", {}).get("name"))
+
+
+def _migrate_pet_data(pet: dict) -> None:
+    _backfill_missing_eye_character(pet["parts"])
+    if "acc_s" not in pet:
+        acc_name = pet.get("parts", {}).get("acc", {}).get("name")
+        if acc_name:
+            acc_part = _get_part_by_name("accessory", acc_name)
+            pet["acc_s"] = acc_part["s"]
+        else:
+            pet["acc_s"] = ""
+        pet["ascii"] = _render_ascii(pet["parts"])
+
 
 def derive_evolution_seed(original_seed: int, level: int) -> int:
     return (original_seed * 6364136223 + level) & 0xFFFFFFFF
