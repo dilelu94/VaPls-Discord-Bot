@@ -283,27 +283,91 @@ def derive_evolution_seed(original_seed: int, level: int) -> int:
     return (original_seed * 6364136223 + level) & 0xFFFFFFFF
 
 
+def _get_part_by_name(category: str, name: str) -> dict:
+    for p in PARTS[category]:
+        if p["name"] == name:
+            return p
+    return PARTS[category][0]
+
+
+def _render_ascii(parts: dict) -> str:
+    ear = _get_part_by_name("ears", parts["ear"]["name"])
+    eyes = _get_part_by_name("eyes", parts["eyes"]["name"])
+    mouth = _get_part_by_name("mouth", parts["mouth"]["name"])
+    body = _get_part_by_name("body", parts["body"]["name"])
+    legs = _get_part_by_name("legs", parts["legs"]["name"])
+    acc = _get_part_by_name("accessory", parts["acc"]["name"])
+    
+    ascii_art = body["template"](ear["s"][0], ear["s"][1], eyes["s"], mouth["s"])
+    if legs["s"]:
+        ascii_art += "\n  " + legs["s"] + "   "
+    if acc["s"]:
+        ascii_art += "\n  " + acc["s"]
+    return ascii_art
+
+
+def generate_pet_at_level(original_seed: int, target_level: int) -> dict:
+    pet = generate_pet(original_seed)
+    pet["original_seed"] = original_seed
+    pet["evolution_level"] = 0
+    
+    for lvl in range(1, target_level + 1):
+        evo_seed = derive_evolution_seed(original_seed, lvl)
+        rng = mulberry32(evo_seed)
+        
+        part_keys_map = {
+            "ear": "ears",
+            "eyes": "eyes",
+            "mouth": "mouth",
+            "body": "body",
+            "legs": "legs",
+            "acc": "accessory"
+        }
+        
+        upgradeable = []
+        for p_key, p_name in part_keys_map.items():
+            current_r = pet["parts"][p_key]["r"]
+            better_parts = [p for p in PARTS[p_name] if p["r"] > current_r]
+            if better_parts:
+                upgradeable.append((p_key, p_name, better_parts))
+        
+        if upgradeable:
+            chosen = upgradeable[int(next(rng) * len(upgradeable))]
+            p_key, p_name, better_parts = chosen
+            new_part = better_parts[int(next(rng) * len(better_parts))]
+            
+            pet["parts"][p_key] = {"name": new_part["name"], "r": new_part["r"]}
+            if p_key == "eyes":
+                pet["parts"]["eyes"]["s"] = new_part["s"]
+                
+        pet["stats"]["atk"] += int(next(rng) * 5) + 1
+        pet["stats"]["def"] += int(next(rng) * 5) + 1
+        pet["stats"]["mag"] += int(next(rng) * 5) + 1
+        pet["stats"]["spd"] += int(next(rng) * 5) + 1
+
+    pet["evolution_level"] = target_level
+    if target_level > 0:
+        pet["ascii"] = _render_ascii(pet["parts"])
+        pet["rarity"] = calc_rarity(pet["parts"])
+    
+    return pet
+
+
 def evolve_pet(pet: dict) -> dict:
     original_seed = pet.get("original_seed", pet["seed"])
     current_level = pet.get("evolution_level", 0)
-    current_sum = _rarity_sum(pet["parts"])
-    level = current_level + 1
-    while True:
-        cand_seed = derive_evolution_seed(original_seed, level)
-        cand = generate_pet(cand_seed)
-        cand_sum = _rarity_sum(cand["parts"])
-        if cand_sum > current_sum:
-            cand["original_seed"] = original_seed
-            cand["evolution_level"] = level
-            cand["user_id"] = pet.get("user_id", "")
-            cand["created_at"] = pet.get("created_at", time.time())
-            log.info(
-                "Evolved pet uid=%s lvl=%s->%s seed=%s rarity=%s->%s",
-                pet.get("user_id", "?"), current_level, level,
-                original_seed, pet.get("rarity", "?"), cand["rarity"],
-            )
-            return cand
-        level += 1
+    new_level = current_level + 1
+    
+    cand = generate_pet_at_level(original_seed, new_level)
+    cand["user_id"] = pet.get("user_id", "")
+    cand["created_at"] = pet.get("created_at", time.time())
+    
+    log.info(
+        "Evolved pet uid=%s lvl=%s->%s seed=%s rarity=%s->%s",
+        cand["user_id"], current_level, new_level,
+        original_seed, pet.get("rarity", "?"), cand["rarity"],
+    )
+    return cand
 
 
 def revert_pet(pet: dict) -> dict | None:
@@ -312,18 +376,13 @@ def revert_pet(pet: dict) -> dict | None:
         return None
     new_level = current_level - 1
     original_seed = pet.get("original_seed", pet["seed"])
-    if new_level == 0:
-        cand = generate_pet(original_seed)
-    else:
-        cand_seed = derive_evolution_seed(original_seed, new_level)
-        cand = generate_pet(cand_seed)
-    cand["original_seed"] = original_seed
-    cand["evolution_level"] = new_level
+    
+    cand = generate_pet_at_level(original_seed, new_level)
     cand["user_id"] = pet.get("user_id", "")
     cand["created_at"] = pet.get("created_at", time.time())
     log.info(
         "Reverted pet uid=%s lvl=%s->%s seed=%s",
-        pet.get("user_id", "?"), current_level, new_level, original_seed,
+        cand["user_id"], current_level, new_level, original_seed,
     )
     return cand
 
@@ -331,11 +390,7 @@ def revert_pet(pet: dict) -> dict | None:
 def rebuild_evolution_chain(original_seed: int, up_to_level: int) -> list[dict]:
     chain = []
     for level in range(up_to_level + 1):
-        if level == 0:
-            pet = generate_pet(original_seed)
-        else:
-            s = derive_evolution_seed(original_seed, level)
-            pet = generate_pet(s)
+        pet = generate_pet_at_level(original_seed, level)
         chain.append({
             "level": level,
             "seed": pet["seed"],
