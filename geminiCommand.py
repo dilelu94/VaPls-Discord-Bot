@@ -438,19 +438,19 @@ AVISO_ROTACION_GEMINI = "⏳ Aguantame, estoy cambiando de key…"
 # When history grows past the threshold we kick off a compression task that
 # distills the oldest turns into the long-term notes. HARD_CAP is the safety
 # slice that bounds RAM if compression keeps failing.
-_HISTORY_COMPRESS_THRESHOLD = 30  # ~15 mensajes user + 15 model
-_HISTORY_KEEP_AFTER_COMPRESS = 14  # se queda con los ~7 más recientes user+model
+_HISTORY_COMPRESS_THRESHOLD = 20  # ~10 mensajes user + 10 model
+_HISTORY_KEEP_AFTER_COMPRESS = 20  # se queda con los ~10 más recientes user+model
 _HISTORY_HARD_CAP = 50
 
 # Long-term memory bounds.
-_LT_STRING_MAX_CHARS = 300     # cada string individual
-_LT_MAX_USERS = 30             # máx usuarios almacenados
-_RENDER_MAX_CHARS = 96000      # tope del JSON renderizado al prompt del Indio
-_LT_TRAITS_PER_USER = 50
-_LT_QUESTIONS_PER_USER = 30
-_LT_ANECDOTES_PER_USER = 50
-_LT_GROUP_EVENTS = 50
-_LT_JOKES = 50
+_LT_STRING_MAX_CHARS = 500     # cada string individual
+_LT_MAX_USERS = 50             # máx usuarios almacenados
+_RENDER_MAX_CHARS = 128000      # tope del JSON renderizado al prompt del Indio
+_LT_TRAITS_PER_USER = 100
+_LT_QUESTIONS_PER_USER = 50
+_LT_ANECDOTES_PER_USER = 100
+_LT_GROUP_EVENTS = 100
+_LT_JOKES = 100
 
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
@@ -2132,17 +2132,10 @@ exacta:
   "chistes_internos": ["chistes recurrentes o referencias del grupo"]
 }
 
-FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
-- Saludos, despedidas o frases sociales vacías ("hola", "buenas", "como \
-  andan", "chau", "buenas noches", "nos vemos", "gracias", "de nada").
-- Mensajes de solo emojis, stickers, o reacciones.
-- URLs, links, o referencias a contenido externo sin contexto del grupo.
-- Órdenes o comandos directos al bot ("indio poné música", "pasá tal \
-  canción", "/play x", "tirá el audio de...").
-- Información técnica, configuraciones, o discusiones sobre el \
-  funcionamiento del bot/server.
-- Hechos que no involucren a miembros del grupo (charla sobre terceros, \
-  política, actualidad sin relación al grupo).
+FILTRADO SUAVE — evitar guardar:
+- Saludos sueltos, despedidas o frases sociales vacías ("hola", "chau", \
+  "gracias", "de nada") que no aporten contexto.
+- Mensajes de solo emojis, stickers, o reacciones sin contenido adjunto.
 - Repeticiones de información ya presente en la memoria actual.
 
 REGLAS DE CALIDAD:
@@ -2177,17 +2170,11 @@ adicional ni bloques markdown, con esta estructura exacta:
   "anecdotas": ["momentos del grupo que lo involucran"]
 }
 
-FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
-- Saludos, despedidas o frases sociales vacías ("hola", "buenas", "como \
-  andan", "chau", "gracias", "de nada").
-- Mensajes de solo emojis, stickers, o reacciones.
-- URLs, links, o referencias a contenido externo sin contexto del grupo.
-- Órdenes o comandos directos al bot ("indio poné música", "/play x").
-- Información técnica, configuraciones, o discusiones sobre el \
-  funcionamiento del bot/server.
-- Hechos que no involucren a este usuario.
+FILTRADO SUAVE — evitar guardar:
+- Saludos sueltos, despedidas o frases sociales vacías ("hola", "chau", \
+  "gracias") que no aporten contexto.
+- Mensajes de solo emojis, stickers, o reacciones sin contenido adjunto.
 - Repeticiones de información ya presente en la ficha actual.
-- Música, pedidos de play, soundpad o DJ mode.
 
 REGLAS DE CALIDAD:
 - Solo incluí información sobre el usuario de la ficha, no de otros.
@@ -2210,11 +2197,9 @@ markdown, con esta estructura exacta:
   "chistes_internos": ["chistes recurrentes o referencias del grupo"]
 }
 
-FILTRADO ESTRICTO — NO guardar bajo ningún concepto:
-- Saludos, despedidas o frases sociales vacías.
-- Mensajes de solo emojis, stickers.
-- URLs, comandos, información técnica del bot.
-- Hechos que no involucren a miembros del grupo.
+FILTRADO SUAVE — evitar guardar:
+- Saludos sueltos o despedidas que no aporten contexto.
+- Mensajes de solo emojis o stickers sin contenido adjunto.
 - Repeticiones de información ya presente en la memoria actual.
 
 REGLAS:
@@ -2449,8 +2434,6 @@ def _turns_to_text(turns: list[dict]) -> str:
             continue
         if "[voz]" in text:
             continue
-        if _is_trivial(text):
-            continue
         speaker = "indio" if role == "model" else "grupo"
         lines.append(f"{speaker}: {text}")
     return "\n".join(lines)
@@ -2468,8 +2451,6 @@ def _group_turns_by_speaker(turns: list[dict]) -> dict[str, list[str]]:
         if not text:
             continue
         if "[voz]" in text:
-            continue
-        if _is_trivial(text):
             continue
         if role == "model":
             groups.setdefault("__indio__", []).append(f"indio: {text}")
