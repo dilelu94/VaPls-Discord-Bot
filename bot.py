@@ -506,6 +506,13 @@ async def on_ready():
         except Exception:
             log.exception("israel alerts listener startup failed")
 
+    # Start stream health checker (cleans up _active_sources when VOD ends).
+    try:
+        asyncio.create_task(_stream_health_checker())
+        log.info("stream health checker started")
+    except Exception:
+        log.exception("stream health checker startup failed")
+
 
 # ---- Voice state tracking for MMR -----------------------------------------
 # Per-guild per-user voice sessions with mute/deafen breakdown.
@@ -531,6 +538,12 @@ _WATCH_DAILY_MAX = 600.0  # 10 minutes
 _stream_today: dict[int, dict[int, int]] = {}
 _stream_date: str = ""
 _STREAM_DAILY_MAX = 5  # max stream starts per day that earn points
+
+# Per-guild stream source tracking for quack→pause on YouTube VODs.
+_active_sources: dict[int, dict] = {}
+_paused_streams: set[int] = set()
+_last_quack_time: dict[int, float] = {}
+_QUACK_COOLDOWN = 2.0
 
 
 def _has_others(channel) -> bool:
@@ -1676,6 +1689,43 @@ async def _send_stream_control(guild_id: int, action: str, timestamp: float = 0.
         return False
 
 
+async def _stream_health_checker():
+    while True:
+        await asyncio.sleep(30)
+        for guild_id in list(_active_sources.keys()):
+            alive = await _send_stream_control(guild_id, "status")
+            if not alive:
+                _active_sources.pop(guild_id, None)
+                _paused_streams.discard(guild_id)
+
+
+@bot.event
+async def on_voice_channel_effect_send(event):
+    if not event.sound or event.sound.name.lower() != "quack":
+        return
+    if event.guild is None:
+        return
+    gid = event.guild.id
+    src = _active_sources.get(gid)
+    if not src or src.get("type") != "youtube":
+        return
+
+    now = time.time()
+    last = _last_quack_time.get(gid, 0.0)
+    if now - last < _QUACK_COOLDOWN:
+        return
+    _last_quack_time[gid] = now
+
+    action = "resume" if gid in _paused_streams else "pause"
+    ok = await _send_stream_control(gid, action)
+    if ok:
+        if action == "pause":
+            _paused_streams.add(gid)
+        else:
+            _paused_streams.discard(gid)
+        log.info("[QUACK] %s stream in guild=%s", action, gid)
+
+
 class StreamSeekModal(discord.ui.Modal):
     def __init__(self, guild_id: int):
         super().__init__(title="Saltar a un momento exacto")
@@ -2300,7 +2350,9 @@ async def stream(
     if is_url:
         stream_url = canal
         channel_name = "Stream Directo"
+        source_type = "youtube" if re.search(r'youtube\.com|youtu\.be', canal, re.I) else "url"
     else:
+        source_type = "iptv"
         results = await iptv.search(canal, limit=5)
         if not results:
             await safe_respond(
@@ -2337,6 +2389,8 @@ async def stream(
     )
 
     if success:
+        _active_sources[ctx.guild_id] = {"type": source_type, "url": stream_url}
+        _paused_streams.discard(ctx.guild_id)
         view = StreamControlView(ctx.guild_id) if not is_live else None
         if redirect_ch:
             msg = await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}", view=view)
@@ -2386,6 +2440,8 @@ async def stopstream(ctx):
             async with sess.post(url, json=payload, headers=headers) as resp:
                 body = await resp.text()
                 if resp.status == 404:
+                    _active_sources.pop(ctx.guild_id, None)
+                    _paused_streams.discard(ctx.guild_id)
                     await safe_respond(
                         ctx, "❌ No hay ningún stream activo en este servidor."
                     )
@@ -2401,6 +2457,8 @@ async def stopstream(ctx):
         await safe_respond(ctx, f"⚠️ Error deteniendo stream: {e}")
         return
 
+    _active_sources.pop(ctx.guild_id, None)
+    _paused_streams.discard(ctx.guild_id)
     await safe_respond(ctx, "🛑 Stream detenido.")
 
 
