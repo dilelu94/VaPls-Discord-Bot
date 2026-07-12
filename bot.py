@@ -519,6 +519,7 @@ async def on_ready():
 # AFK channel (451581345022476294) is excluded from tracking.
 _AFK_CHANNEL_ID = 451581345022476294
 _voice_sessions: dict[int, dict[int, dict]] = {}
+_macro_voice_sessions: dict[int, dict[int, dict]] = {}
 # guild_id -> user_id -> {
 #     "join_time": float,      # when user joined the channel
 #     "channel_id": int,       # current channel
@@ -597,6 +598,22 @@ def _voice_state_str(v):
 def _start_voice_session(guild_id: int, user_id: int, channel, voice_state) -> None:
     now = time.time()
     s = _voice_state_str(voice_state)
+    
+    guild_macro = _macro_voice_sessions.setdefault(guild_id, {})
+    macro = guild_macro.get(user_id)
+    if macro and macro.get("disconnect_time") and (now - macro["disconnect_time"] < 900):
+        join_time = macro["join_time"]
+        disconnected_time = macro.get("disconnected_time", 0.0) + (now - macro["disconnect_time"])
+    else:
+        join_time = now
+        disconnected_time = 0.0
+        
+    guild_macro[user_id] = {
+        "join_time": join_time,
+        "disconnect_time": None,
+        "disconnected_time": disconnected_time
+    }
+
     _voice_sessions.setdefault(guild_id, {})[user_id] = {
         "join_time": now,
         "channel_id": channel.id,
@@ -613,6 +630,11 @@ def _finalize_voice_session(guild_id: int, user_id: int) -> None:
     if guild_sessions is None:
         return
     sess = guild_sessions.pop(user_id, None)
+    
+    guild_macro = _macro_voice_sessions.get(guild_id, {})
+    if user_id in guild_macro:
+        guild_macro[user_id]["disconnect_time"] = time.time()
+
     if sess is None:
         return
     now = time.time()
@@ -2799,24 +2821,50 @@ async def estadisticas(
             inline=False,
         )
 
+    # Current session calculation
+    guild_macro = _macro_voice_sessions.get(ctx.guild.id, {})
+    macro = guild_macro.get(uid)
+    current_session_text = ""
+    
+    if macro:
+        now_ts = time.time()
+        is_connected = macro.get("disconnect_time") is None
+        join_ts = int(macro["join_time"])
+        if is_connected:
+            duration = now_ts - macro["join_time"] - macro.get("disconnected_time", 0.0)
+            hours = duration / 3600
+            current_session_text = f"Conectado desde <t:{join_ts}:t> (lleva **{hours:.1f}h**)"
+        else:
+            disc_elapsed = now_ts - macro["disconnect_time"]
+            if disc_elapsed < 900:
+                duration = macro["disconnect_time"] - macro["join_time"] - macro.get("disconnected_time", 0.0)
+                hours = duration / 3600
+                current_session_text = f"Desconectado hace {int(disc_elapsed//60)} min. Sesión iniciada a las <t:{join_ts}:t> (llevaba **{hours:.1f}h**)"
+
     # Voice stats
     if voice_data and voice_data.get("summary"):
         s = voice_data["summary"]
         conn_h = s["total_connected"] / 3600
         muted_h = s["total_muted"] / 3600
+        val = (
+            f"🕐 **{conn_h:.1f}h** en canales de voz\n"
+            f"🔇 **{muted_h:.1f}h** muteado\n"
+            f"📞 **{s['sessions']}** sesiones"
+        )
+        if current_session_text:
+            val += f"\n\n🟢 **Sesión actual:** {current_session_text}"
         embed.add_field(
             name="🎙️ Voz (última semana)",
-            value=(
-                f"🕐 **{conn_h:.1f}h** en canales de voz\n"
-                f"🔇 **{muted_h:.1f}h** muteado\n"
-                f"📞 **{s['sessions']}** sesiones"
-            ),
+            value=val,
             inline=False,
         )
     else:
+        val = "Sin actividad de voz registrada"
+        if current_session_text:
+            val += f"\n\n🟢 **Sesión actual:** {current_session_text}"
         embed.add_field(
             name="🎙️ Voz (última semana)",
-            value="Sin actividad de voz registrada",
+            value=val,
             inline=False,
         )
 
