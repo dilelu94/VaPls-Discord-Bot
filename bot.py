@@ -3013,23 +3013,26 @@ async def help_cmd(ctx):
         color=0x5865F2,
     )
     embed.add_field(
-        name="🎵 Música y voz",
+        name="🎵 Música",
         value=(
-            "**/play** `query` — busca o pega una URL de YouTube y la "
-            "reproduce. Con varios resultados muestra menú.\n"
-            "**/soundpad** `[query]` — abre el panel de clips locales, o "
-            "reproduce el que más se parezca a `query`.\n"
-            "**/entraindio** — hace que el indio (userbot) entre a tu canal "
-            "de voz para escuchar y responder al wake-word.\n"
-            "**/stream** `canal` — transmití un canal de IPTV en tu canal "
-            "de voz (Go Live, usa libopenh264).\n"
-            "**/stopstream** — detiene la transmisión de IPTV en curso.\n"
-            "**/sensibilidad** `1|2|3|4` — ajusta la sensibilidad del wake-word "
-            "(1=máxima, 2=solo 'che indio', 3=pool grande+que/eh indio, "
-            "4=como 2 + Whisper confirma 'indio' (default)).\n"
-            "**/parar** — corta la reproducción, limpia la cola y se "
-            "desconecta.\n"
-            "**/quit** — sale del canal de voz sin tocar la cola."
+            "**/play** `query` — busca o pega una URL de YouTube.\n"
+            "**/queue** — muestra la cola de reproducción.\n"
+            "**/dj** — abre el menú del modo DJ.\n"
+            "**/soundpad** `[query]` — panel de clips locales.\n"
+            "**/parar** — corta la reproducción y limpia la cola.\n"
+            "**/quit** — sale del canal de voz sin limpiar la cola."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎙️ Voz y Go Live",
+        value=(
+            "**/entraindio** — hace que el indio (userbot) entre a escuchar.\n"
+            "**/sensibilidad** `1|2|3|4` — ajusta la sensibilidad del wake-word.\n"
+            "**/huh** — activa/desactiva el sonido de confirmación del indio.\n"
+            "**/stream** `canal` — transmití IPTV por Go Live.\n"
+            "**/stopstream** — detiene el stream de IPTV.\n"
+            "**/instagram** — transmití Reels de Instagram por Go Live."
         ),
         inline=False,
     )
@@ -3037,24 +3040,27 @@ async def help_cmd(ctx):
         name="🤖 Gemini",
         value=(
             "**/vapls** `pregunta` — respuesta puntual, sin memoria.\n"
-            "**/indio** `charla` — persona con memoria corta por guild y "
-            "memoria larga destilada (rasgos, anécdotas, chistes internos). "
-            "También responde por voz cuando lo nombrás en un canal donde "
-            "está el userbot.\n"
-            "**/generarimagen** `prompt` — genera una imagen con Hugging Face "
-            "(gratis, requiere token)."
+            "**/indio** `charla` — persona con memoria corta y larga destilada. "
+            "También responde por voz al decir 'indio'.\n"
+            "**/generarimagen** `prompt` — genera una imagen con Hugging Face."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 Estadísticas",
+        value=(
+            "**/estadisticas** `[usuario]` — resumen de voz, sesión actual y MMR.\n"
+            "**/ranking** — ranking MMR de actividad en el servidor.\n"
+            "**/actividad** — estadísticas detalladas de MMR (solo owner)."
         ),
         inline=False,
     )
     embed.add_field(
         name="💡 Otros",
         value=(
-            "**/sugerencias** `idea` — mandá una sugerencia o feature; se "
-            "agrupa con ideas parecidas.\n"
-            "**/sugerencias-ver** — mirá qué sugerencias ya existen, ordenadas "
-            "por las más pedidas.\n"
-            "**/transferir** — generá un link para compartir archivos de hasta "
-            "10 GB (solo @Main Characters).\n"
+            "**/sugerencias** `idea` — mandá una sugerencia o feature.\n"
+            "**/sugerencias-ver** — mirá las sugerencias más pedidas.\n"
+            "**/transferir** — link para subir archivos de 10 GB (solo @Main Characters).\n"
             "**/help** — esto."
         ),
         inline=False,
