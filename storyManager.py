@@ -123,13 +123,31 @@ async def _recover_pending_reviews(bot, channel_id: int) -> None:
     if not data:
         return
 
+    approvals: dict = data.get("approvals", {})
+    restored_approvals = 0
+    for key, ctx in approvals.items():
+        oid = int(key)
+        _pending_owner_approvals[oid] = ctx
+        restored_approvals += 1
+
     ch = bot.get_channel(channel_id)
     if ch is None:
         try:
             ch = await bot.fetch_channel(channel_id)
         except Exception:
+            # We still log the restored approvals before returning
+            if restored_approvals:
+                logger.info(
+                    "[STORY] recovered 0 pending reviews + 0 awaiting-first-msg + %d owner-approvals",
+                    restored_approvals,
+                )
             return
     if not hasattr(ch, "fetch_message"):
+        if restored_approvals:
+            logger.info(
+                "[STORY] recovered 0 pending reviews + 0 awaiting-first-msg + %d owner-approvals",
+                restored_approvals,
+            )
         return
 
     reviews: dict = data.get("reviews", {})
@@ -164,18 +182,12 @@ async def _recover_pending_reviews(bot, channel_id: int) -> None:
             continue
         _awaiting_first_msg[gid] = review
 
-    approvals: dict = data.get("approvals", {})
-    for key, ctx in approvals.items():
-        oid = int(key)
-        _pending_owner_approvals[oid] = ctx
-        restored += 1
-
-    if restored:
+    if restored or awaiting or restored_approvals:
         logger.info(
             "[STORY] recovered %d pending reviews + %d awaiting-first-msg + %d owner-approvals",
             restored,
             len(awaiting),
-            len(approvals),
+            restored_approvals,
         )
     # Stale file is intentionally NOT deleted — next flush overwrites it.
 

@@ -22,7 +22,6 @@ COMMAND_FLAGS: dict[str, str] = {
     "generarimagen": "text",
     # "banana": "text",
     "sugerencias": "text",
-    "sugerencias-ver": "text",
     "quit": "text",
     "entraindio": "text",
     "sensibilidad": "text",

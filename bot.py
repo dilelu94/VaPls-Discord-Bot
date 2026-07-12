@@ -24,7 +24,6 @@ from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
 from suggestionsCommand import (
     sugerenciasLogic,
-    sugerenciasVerLogic,
     migrate_existing_suggestions,
     sync_closed_issues,
 )
@@ -1496,32 +1495,6 @@ async def sugerencias(
         log.warning("sugerencias defer failed: %s", e)
     _track_command(ctx, "sugerencias", {"idea_length": len(idea or "")})
     await sugerenciasLogic(ctx, idea)
-
-
-@bot.slash_command(
-    name="sugerencias-ver",
-    description="Mirá qué sugerencias ya existen, ordenadas por las más pedidas",
-)
-async def sugerencias_ver(ctx):
-    """Slash command: list existing suggestion groups ranked by demand.
-
-    Args:
-        ctx: Discord application context.
-
-    Side Effects:
-        Reads the persisted suggestions and replies ephemerally with the
-        ranked listing.
-
-    Async:
-        This function is a coroutine and must be awaited.
-    """
-    try:
-        if not ctx.response.is_done():
-            await ctx.defer(ephemeral=True)
-    except Exception as e:
-        log.warning("sugerencias-ver defer failed: %s", e)
-    _track_command(ctx, "sugerencias-ver", {})
-    await sugerenciasVerLogic(ctx)
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
