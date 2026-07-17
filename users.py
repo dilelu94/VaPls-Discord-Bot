@@ -151,10 +151,14 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/aughhhhhhhhhh.mp3",
-                "weight": 99
+                "weight": 98
             },
             {
                 "path": "Audios/Albin y las Ardillas/albin backshoots 2.m4a",
+                "weight": 1
+            },
+            {
+                "path": "Audios/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
                 "weight": 1
             }
         ],
