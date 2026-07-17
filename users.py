@@ -193,6 +193,10 @@ _FALLBACK_USERS: dict[int, dict] = {
             {
                 "path": "Seba/mr-krabs-money_z55UHab.mp3",
                 "weight": 10
+            },
+            {
+                "path": "Audios/mr-krabs-money-short.mp3",
+                "weight": 495
             }
         ],
         "traits": [

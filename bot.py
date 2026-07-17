@@ -13,10 +13,11 @@ import logging
 import asyncio
 import re
 import time
+import datetime
 from urllib.parse import urljoin
 import aiohttp
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 
 from playCommand import playLogic, openDjMenu
 from pararCommand import pararLogic
@@ -492,6 +493,14 @@ async def on_ready():
         log.info("story watcher started")
     except Exception:
         log.exception("story watcher startup failed")
+
+    # Start scheduled daily stream
+    try:
+        if not scheduled_daily_stream.is_running():
+            scheduled_daily_stream.start()
+        log.info("scheduled daily stream task started")
+    except Exception:
+        log.exception("scheduled daily stream task startup failed")
 
     # Start Israel alerts listener.
     global _alert_listener
@@ -3526,6 +3535,65 @@ async def restart(
             [sys.executable, "/home/ubuntu/vapls-discord-bot/bot.py"],
         )
 
+
+# --- Scheduled Daily Stream ---
+@tasks.loop(time=datetime.time(hour=0, minute=0, tzinfo=datetime.timezone(datetime.timedelta(hours=-3))))
+async def scheduled_daily_stream():
+    if not config.SCHEDULED_STREAM_ENABLED:
+        return
+
+    log.info("[SCHEDULED STREAM] Running daily stream task.")
+
+    target_guild = None
+    for g in bot.guilds:
+        if g.get_channel(config.SCHEDULED_STREAM_FALLBACK_CHANNEL_ID):
+            target_guild = g
+            break
+    if not target_guild:
+        target_guild = bot.guilds[0] if bot.guilds else None
+    
+    if not target_guild:
+        log.warning("[SCHEDULED STREAM] No guilds found to stream in.")
+        return
+
+    best_vc = None
+    max_members = -1
+
+    for vc in target_guild.voice_channels:
+        if vc.id == 451581345022476294:  # _AFK_CHANNEL_ID
+            continue
+        
+        humans = sum(1 for m in vc.members if not m.bot)
+        if humans > max_members:
+            max_members = humans
+            best_vc = vc
+
+    if max_members <= 0:  # All are empty
+        fallback = target_guild.get_channel(config.SCHEDULED_STREAM_FALLBACK_CHANNEL_ID)
+        if fallback and isinstance(fallback, discord.VoiceChannel):
+            best_vc = fallback
+        else:
+            best_vc = target_guild.voice_channels[0] if target_guild.voice_channels else None
+
+    if not best_vc:
+        log.warning("[SCHEDULED STREAM] No voice channel found.")
+        return
+
+    log.info(f"[SCHEDULED STREAM] Selected channel {best_vc.name} ({best_vc.id}) with {max_members} humans.")
+
+    # Execute stream silently (no text channel announcement as per user request)
+    success, status_msg, is_live = await start_iptv_stream_logic(
+        target_guild.id, best_vc, config.SCHEDULED_STREAM_URL, "Stream Programado"
+    )
+
+    if success:
+        log.info(f"[SCHEDULED STREAM] Success: {status_msg}")
+    else:
+        log.warning(f"[SCHEDULED STREAM] Failed: {status_msg}")
+
+@scheduled_daily_stream.before_loop
+async def before_scheduled_stream():
+    await bot.wait_until_ready()
 
 if __name__ == "__main__":
     try:

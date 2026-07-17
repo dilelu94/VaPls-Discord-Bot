@@ -246,3 +246,8 @@ AUTODJ_MENU_CHANNEL_ID = int(os.getenv("AUTODJ_MENU_CHANNEL_ID", "45160709743260
 # alerts to the configured channel. Requires a channel ID to post to.
 ISRAEL_ALERTS_ENABLED = os.getenv("ISRAEL_ALERTS_ENABLED", "false").lower() == "true"
 ISRAEL_ALERTS_CHANNEL_ID = int(os.getenv("ISRAEL_ALERTS_CHANNEL_ID", "0"))
+
+# --- Scheduled Daily Stream ------------------------------------------------
+SCHEDULED_STREAM_ENABLED = os.getenv("SCHEDULED_STREAM_ENABLED", "true").lower() == "true"
+SCHEDULED_STREAM_URL = os.getenv("SCHEDULED_STREAM_URL", "https://www.youtube.com/watch?v=0Bjsv6Ft9nk")
+SCHEDULED_STREAM_FALLBACK_CHANNEL_ID = int(os.getenv("SCHEDULED_STREAM_FALLBACK_CHANNEL_ID", "809945936822403092"))
