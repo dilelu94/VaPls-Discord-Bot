@@ -206,6 +206,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     428444575963807745: {
         "name": "Tobi",
+        "greeting": [
+            {
+                "path": "Audios/vine-boom.mp3",
+                "weight": 99
+            },
+            {
+                "path": "Audios/debi tirar mas fotos 0.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Tobias",
