@@ -148,7 +148,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     471420397049479180: {
         "name": "Fide",
-        "greeting": "Audios/aughhhhhhhhhh.mp3",
+        "greeting": [
+            {
+                "path": "Audios/aughhhhhhhhhh.mp3",
+                "weight": 99
+            },
+            {
+                "path": "Audios/Albin y las Ardillas/albin backshoots 2.m4a",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Fidel",
