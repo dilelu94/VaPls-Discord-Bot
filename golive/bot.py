@@ -115,6 +115,7 @@ class GoLiveStream:
             fps=_stream_fps(),
             live=self.is_live,
             audio=True,
+            original_url=self.url,
         )
         self.video_player.start()
         log.info("[STREAM] Video player started for '%s'", self.title)

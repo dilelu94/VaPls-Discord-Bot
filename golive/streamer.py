@@ -767,13 +767,16 @@ class H264VideoPlayer(threading.Thread):
         live: bool | None = True,
         audio: bool = True,
         probe_size: int = 2_000_000,
+        original_url: str | None = None,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
+        self._original_url = original_url
         self._vc = voice_client
         self._fps = fps
         self._end = threading.Event()
         self._proc: subprocess.Popen | None = None
+        self._yt_proc: subprocess.Popen | None = None
 
         self._live = live
         self._audio = audio
@@ -824,6 +827,9 @@ class H264VideoPlayer(threading.Thread):
         proc = self._proc
         if proc is not None and proc.poll() is None:
             self._kill_proc(proc)
+        yt_proc = self._yt_proc
+        if yt_proc is not None and yt_proc.poll() is None:
+            self._kill_proc(yt_proc)
 
     def stop(self) -> None:
         self._end.set()
@@ -831,6 +837,9 @@ class H264VideoPlayer(threading.Thread):
         proc = self._proc
         if proc is not None and proc.poll() is None:
             proc.terminate()
+        yt_proc = self._yt_proc
+        if yt_proc is not None and yt_proc.poll() is None:
+            yt_proc.terminate()
 
     def is_source_active(self) -> bool:
         """True while the player may still produce output, including the brief
@@ -883,6 +892,8 @@ class H264VideoPlayer(threading.Thread):
         finally:
             if self._proc is not None:
                 self._kill_proc(self._proc)
+            if self._yt_proc is not None:
+                self._kill_proc(self._yt_proc)
             self._cleanup_fifo()
         log.info("H264VideoPlayer stopped")
 
@@ -915,8 +926,13 @@ class H264VideoPlayer(threading.Thread):
         if self._start_time > 0:
             pre_input.extend(["-ss", str(self._start_time)])
         
+        is_youtube = self._original_url and ("youtube.com" in self._original_url or "youtu.be" in self._original_url)
         input_args = []
-        if isinstance(self._url, (tuple, list)):
+        if is_youtube:
+            input_args += ["-i", "pipe:0"]
+            is_url = True
+            audio_map_idx = 0
+        elif isinstance(self._url, (tuple, list)):
             for u in self._url:
                 if u.startswith(("http://", "https://")) and "googlevideo.com" not in u and "cdninstagram.com" not in u:
                     input_args += ["-http_persistent", "0"]
@@ -935,10 +951,10 @@ class H264VideoPlayer(threading.Thread):
         # real-time, so -re would only stall them.
         rate_args: list[str] = [] if (self._live or is_url) else ["-re"]
         fflags = "+discardcorrupt"
-        # -reconnect flags are HTTP-only; FFmpeg rejects them for local files.
+        # -reconnect flags are HTTP-only; FFmpeg rejects them for local files or pipes.
         reconnect_args = (
             ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
-            if is_url
+            if (is_url and not is_youtube)
             else []
         )
         video_out_args = [
@@ -1134,16 +1150,50 @@ class H264VideoPlayer(threading.Thread):
             "FFmpeg encoder=%s command: %s",
             self._enc.name if self._enc else "?", " ".join(_safe_cmd),
         )
-        self._proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-        )
+        is_youtube = self._original_url and ("youtube.com" in self._original_url or "youtu.be" in self._original_url)
+        if is_youtube:
+            import sys
+            from ytdlp import _get_cookies_path
+            cookies_path = _get_cookies_path()
+            yt_dlp_cmd = [
+                sys.executable, "-m", "yt_dlp",
+                "--cookies", cookies_path or "",
+                "--extractor-args", "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
+                "-f", "best[ext=mp4]/best",
+                "-o", "-",
+                self._original_url
+            ]
+            if not cookies_path:
+                yt_dlp_cmd.remove("--cookies")
+                yt_dlp_cmd.remove("")
+            
+            log.info("Starting yt-dlp pipe for YouTube: %s", " ".join(yt_dlp_cmd))
+            self._yt_proc = subprocess.Popen(
+                yt_dlp_cmd,
+                stdout=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
+            )
+            
+            self._proc = subprocess.Popen(
+                cmd,
+                stdin=self._yt_proc.stdout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
+        else:
+            self._proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+            )
         # If stop() was called before Popen completed, terminate immediately.
         if self._end.is_set():
             self._kill_proc(self._proc)
+            if self._yt_proc is not None:
+                self._kill_proc(self._yt_proc)
             return
         threading.Thread(
             target=self._drain_stderr, daemon=True, name="ffmpeg-stderr"
