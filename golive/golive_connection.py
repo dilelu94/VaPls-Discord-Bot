@@ -344,7 +344,9 @@ class GoLiveConnection:
 
     @property
     def healthy(self) -> bool:
-        return self._ws_healthy and bool(self.ws) and not self.ws.is_closed()
+        if not self._ws_healthy or not self.ws or not getattr(self.ws, "ws", None):
+            return False
+        return not self.ws.ws.closed
 
     def send_packet(self, packet: bytes) -> None:
         """Send a raw RTP packet to the go-live stream server."""
