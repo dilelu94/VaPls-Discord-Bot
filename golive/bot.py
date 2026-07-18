@@ -525,11 +525,18 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
         except ValueError:
             return web.json_response({"error": "invalid timestamp"}, status=400)
     elif action == "status":
-        pass  # Just returns success below if stream exists
-    else:
-        return web.json_response({"error": "invalid action"}, status=400)
-
-    return web.json_response({"success": True})
+        if stream:
+            return web.json_response({
+                "exists": True,
+                "stopped": stream._stopped,
+                "is_live": stream.is_live,
+                "video_player": str(stream.video_player),
+                "video_player_alive": stream.video_player.is_alive() if stream.video_player else None,
+                "audio_sender": str(stream.audio_sender),
+                "audio_sender_alive": stream.audio_sender.is_alive() if stream.audio_sender else None,
+                "conn_healthy": stream.conn.healthy if stream.conn else None,
+            })
+        return web.json_response({"exists": False})
 
 
 # ---------- Events ----------------------------------------------------------
