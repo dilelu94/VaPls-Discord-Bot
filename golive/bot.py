@@ -270,17 +270,16 @@ class GoLiveStream:
         # Drain window: let any in-flight nacl/opus encrypt calls complete
         # before closing the UDP socket, to avoid heap corruption from
         # concurrent C-level crypto operations.
-        await asyncio.sleep(0.05)
         if self.conn:
             try:
-                await self.conn.disconnect()
+                await asyncio.wait_for(self.conn.disconnect(), timeout=5.0)
             except Exception:
                 pass
 
         # Disconnect from voice channel
         if self.vc and self.vc.is_connected():
             try:
-                await self.vc.disconnect(force=True)
+                await asyncio.wait_for(self.vc.disconnect(force=True), timeout=3.0)
             except Exception:
                 pass
 

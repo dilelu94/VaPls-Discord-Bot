@@ -359,11 +359,14 @@ class GoLiveConnection:
         """Stop the go-live stream and release all resources."""
         if self._stream_key:
             try:
-                await self._bot.ws.send_as_json(
-                    {
-                        "op": _OP_STREAM_DELETE,
-                        "d": {"stream_key": self._stream_key},
-                    }
+                await asyncio.wait_for(
+                    self._bot.ws.send_as_json(
+                        {
+                            "op": _OP_STREAM_DELETE,
+                            "d": {"stream_key": self._stream_key},
+                        }
+                    ),
+                    timeout=2.0,
                 )
                 log.info("Sent STREAM_DELETE for %s", self._stream_key)
             except Exception:
@@ -372,13 +375,13 @@ class GoLiveConnection:
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
             try:
-                await self._poll_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self._poll_task, timeout=2.0)
+            except (asyncio.CancelledError, Exception):
                 pass
 
         try:
             if self.ws:
-                await self.ws.close()
+                await asyncio.wait_for(self.ws.close(), timeout=2.0)
         except Exception:
             pass
 
