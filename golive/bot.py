@@ -277,11 +277,21 @@ class GoLiveStream:
                 pass
 
         # Disconnect from voice channel
-        if self.vc and self.vc.is_connected():
+        if self.vc:
             try:
-                await asyncio.wait_for(self.vc.disconnect(force=True), timeout=3.0)
-            except Exception:
-                pass
+                if hasattr(self.vc, "_connection") and self.vc.is_connected():
+                    log.info("[STREAM] Disconnecting voice client...")
+                    await asyncio.wait_for(
+                        self.vc._connection.disconnect(force=True, wait=False),
+                        timeout=5.0
+                    )
+                    self.vc.cleanup()
+                    log.info("[STREAM] VoiceClient disconnected and cleaned up")
+                elif self.vc.is_connected():
+                    await asyncio.wait_for(self.vc.disconnect(force=True), timeout=5.0)
+                    log.info("[STREAM] VoiceClient disconnected gracefully")
+            except Exception as e:
+                log.warning("[STREAM] VoiceClient disconnect failed: %s", e)
 
         guild = client.get_guild(self.guild_id)
         if guild:
