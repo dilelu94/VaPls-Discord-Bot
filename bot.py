@@ -1667,9 +1667,20 @@ async def start_iptv_stream_logic(
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:
                 if resp.status >= 400:
-                    body = await resp.text()
-                    log.warning("stream relay HTTP %s: %s", resp.status, body[:200])
-                    return False, f"⚠️ No pude iniciar el stream (HTTP {resp.status}).", True
+                    err_msg = ""
+                    try:
+                        data = await resp.json()
+                        err_msg = data.get("error", "")
+                    except Exception:
+                        try:
+                            body_text = await resp.text()
+                            err_msg = body_text[:100]
+                        except Exception:
+                            pass
+                    
+                    log.warning("stream relay HTTP %s: %s", resp.status, err_msg)
+                    err_suffix = f": {err_msg}" if err_msg else ""
+                    return False, f"⚠️ No pude iniciar el stream (HTTP {resp.status}){err_suffix}.", True
                 data = await resp.json()
                 is_live = data.get("is_live", True)
     except Exception as e:

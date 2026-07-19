@@ -86,7 +86,7 @@ class GoLiveStream:
                     res = await _yt_extract_url(target_url)
                 except Exception as e:
                     log.warning("[STREAM] yt-dlp extraction failed: %s", e)
-                    res = None
+                    raise RuntimeError(f"Failed to extract stream URL via yt-dlp: {e}")
 
                 if res:
                     target_url, title, self.is_live = res
