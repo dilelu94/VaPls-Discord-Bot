@@ -550,12 +550,88 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
         return web.json_response({"exists": False})
 
 
+# ---------- Idle Watchdog ---------------------------------------------------
+_idle_watchdogs: dict[int, asyncio.Task] = {}
+
+
+async def _idle_watcher(guild_id: int):
+    log.info("[WATCHDOG] Started idle watchdog for guild=%s", guild_id)
+    idle_since = time.monotonic()
+    try:
+        while True:
+            await asyncio.sleep(2)
+
+            # Check if there is an active stream in this guild
+            has_stream = guild_id in _active_streams
+
+            # Find the voice client
+            vc = None
+            for v in client.voice_clients:
+                if v.guild.id == guild_id:
+                    vc = v
+                    break
+
+            if vc is None or not vc.is_connected():
+                log.info("[WATCHDOG] Voice client not connected anymore, stopping watchdog for guild=%s", guild_id)
+                break
+
+            if has_stream:
+                # Active streaming, reset idle timer
+                idle_since = time.monotonic()
+            else:
+                elapsed = time.monotonic() - idle_since
+                # Use a default timeout of 60 seconds
+                timeout = 60.0
+                if elapsed >= timeout:
+                    log.info("[WATCHDOG] Guild=%s idle for %.0fs, disconnecting voice client...", guild_id, elapsed)
+                    try:
+                        if hasattr(vc, "_connection"):
+                            await asyncio.wait_for(
+                                vc._connection.disconnect(force=True, wait=False),
+                                timeout=5.0
+                            )
+                            vc.cleanup()
+                        else:
+                            await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
+                    except Exception as e:
+                        log.warning("[WATCHDOG] Disconnect failed: %s", e)
+                    break
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _idle_watchdogs.pop(guild_id, None)
+
+
+def _start_idle_watchdog(guild_id: int):
+    _stop_idle_watchdog(guild_id)
+    _idle_watchdogs[guild_id] = asyncio.create_task(_idle_watcher(guild_id))
+
+
+def _stop_idle_watchdog(guild_id: int):
+    task = _idle_watchdogs.pop(guild_id, None)
+    if task and not task.done():
+        task.cancel()
+        log.info("[WATCHDOG] Stopped idle watchdog for guild=%s", guild_id)
+
+
 # ---------- Events ----------------------------------------------------------
 
 
 @client.event
 async def on_ready():
     log.info("GoLive online as %s (id=%s)", client.user, client.user.id)
+
+
+@client.event
+async def on_voice_state_update(member, before, after):
+    if member.id == client.user.id:
+        if after.channel is not None:
+            # Joined voice
+            _start_idle_watchdog(after.channel.guild.id)
+        else:
+            # Left voice
+            if before.channel is not None:
+                _stop_idle_watchdog(before.channel.guild.id)
 
 
 # ---------- Main ------------------------------------------------------------
