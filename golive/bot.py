@@ -161,6 +161,7 @@ class GoLiveStream:
 
     async def _inactivity_loop(self):
         """Monitors player health and reconnects if live, or auto-stops."""
+        disconnect_voice = True
         try:
             while not self._stopped:
                 await asyncio.sleep(2)
@@ -200,13 +201,14 @@ class GoLiveStream:
                             break
                     else:
                         log.info("[STREAM] Video player ended naturally — auto-stopping")
+                        disconnect_voice = False
                         break
         except asyncio.CancelledError:
             return
 
         if not self._stopped:
             _active_streams.pop(self.guild_id, None)
-            await self.stop()
+            await self.stop(disconnect_voice=disconnect_voice)
 
     async def _restart_connection(self) -> bool:
         """Re-establish the GoLive connection from scratch after a WS/UDP drop.
@@ -253,7 +255,7 @@ class GoLiveStream:
         if self.video_player:
             self.video_player.seek(target_sec)
 
-    async def stop(self):
+    async def stop(self, disconnect_voice: bool = True):
         if self._stopped:
             return
         self._stopped = True
@@ -277,7 +279,7 @@ class GoLiveStream:
                 pass
 
         # Disconnect from voice channel
-        if self.vc:
+        if disconnect_voice and self.vc:
             try:
                 if hasattr(self.vc, "_connection") and self.vc.is_connected():
                     log.info("[STREAM] Disconnecting voice client...")
