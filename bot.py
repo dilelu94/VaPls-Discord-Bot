@@ -3544,20 +3544,20 @@ async def sacudir(
 
     await ctx.followup.send(f"🌪️ Sacudiendo a {usuario.mention} {veces} veces...")
 
+    current_target = target_channel
+    other_target = empty_channel
     for _ in range(veces):
         try:
-            await usuario.move_to(target_channel)
+            await usuario.move_to(current_target)
             await asyncio.sleep(0.5)
-            await usuario.move_to(empty_channel)
-            await asyncio.sleep(0.5)
+            current_target, other_target = other_target, current_target
         except Exception as e:
             log.warning("Error sacudiendo: %s", e)
             break
 
     # Return to original channel
     try:
-        if usuario.voice and usuario.voice.channel:
-            await usuario.move_to(original_channel)
+        await usuario.move_to(original_channel)
     except Exception:
         pass
 
