@@ -209,7 +209,10 @@ Hacé un chiste corto sobre esta imagen, como si se lo contaras al grupo de \
 amigos. Una joda entre amigos, no una descripción. No digas "esta imagen" \
 o "en esta foto" — hablalo como si fuera algo que pasó o una situación \
 que todos conocen. Sin insultos, sin malas palabras. \
-Chiste respetuoso, como una joda entre amigos que se tienen cariño.
+Chiste respetuoso, como una joda entre amigos que se tienen cariño. \
+NUNCA repitas recurrentemente los mismos chistes internos o anécdotas \
+(ej. piononos, robos de quesos, la programación de Viny, etc.). \
+Inventá chistes frescos basados en la imagen, no te apoyes siempre en la memoria estática.
 
 Max 2-3 oraciones. Español rioplatense, con voseo, informal, de barrio. \
 Sin comillas, sin formato, solo el chiste."""
