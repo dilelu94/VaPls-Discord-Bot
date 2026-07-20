@@ -3506,6 +3506,8 @@ async def restart(
         )
 
 
+_sacudir_cooldowns: dict[int, float] = {}
+
 @bot.slash_command(
     name="sacudir",
     description="Mueve a un usuario entre un canal específico y uno vacío varias veces"
@@ -3516,6 +3518,13 @@ async def sacudir(
     veces: discord.Option(int, description="Cantidad de veces", default=5, min_value=1, max_value=20)
 ):
     """Slash command: shakes a user between channel 451581345022476294 and an empty channel."""
+    now = time.time()
+    last_shaken = _sacudir_cooldowns.get(usuario.id, 0)
+    if now - last_shaken < 300:
+        remaining = int(300 - (now - last_shaken))
+        await ctx.respond(f"⏳ {usuario.mention} fue sacudido hace poco. Esperá {remaining} segundos.", ephemeral=True)
+        return
+
     if veces > 5:
         if getattr(ctx.author, "top_role", None) and getattr(usuario, "top_role", None):
             if ctx.author.top_role <= usuario.top_role:
@@ -3524,6 +3533,8 @@ async def sacudir(
 
     await safe_defer(ctx)
     _track_command(ctx, "sacudir", {"veces": veces})
+    
+    _sacudir_cooldowns[usuario.id] = now
 
     if not usuario.voice or not usuario.voice.channel:
         await ctx.followup.send("❌ El usuario debe estar conectado a un canal de voz.")
