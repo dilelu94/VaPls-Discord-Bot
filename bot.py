@@ -3513,9 +3513,15 @@ async def restart(
 async def sacudir(
     ctx,
     usuario: discord.Option(discord.Member, description="Usuario a sacudir"),
-    veces: discord.Option(int, description="Cantidad de veces", default=10, min_value=1, max_value=20)
+    veces: discord.Option(int, description="Cantidad de veces", default=5, min_value=1, max_value=20)
 ):
     """Slash command: shakes a user between channel 451581345022476294 and an empty channel."""
+    if veces > 5:
+        if getattr(ctx.author, "top_role", None) and getattr(usuario, "top_role", None):
+            if ctx.author.top_role <= usuario.top_role:
+                await ctx.respond(f"❌ Necesitás tener un rango mayor al de {usuario.mention} para sacudirlo más de 5 veces.", ephemeral=True)
+                return
+
     await safe_defer(ctx)
     _track_command(ctx, "sacudir", {"veces": veces})
 
