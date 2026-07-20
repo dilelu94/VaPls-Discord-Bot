@@ -124,6 +124,9 @@ _FALLBACK_USERS: dict[int, dict] = {
         "preguntas_tipicas": [
             "y la hermana de Mila?",
         ],
+        "anecdotas": [
+            "le armó la PC que se compró Fide",
+        ],
         "descripcion": [
             "Un pibe flaco, completamente pelado, de mirada colgada o perdida, sonrisa tímida y gestos algo afeminados.",
         ],
@@ -167,6 +170,9 @@ _FALLBACK_USERS: dict[int, dict] = {
             "nombre real: Fidel",
             "medio nazi (chiste interno del grupo)",
             "de Gualeguaychu",
+        ],
+        "anecdotas": [
+            "se compró una PC y se la armó Viny",
         ],
     },
     231217010522980352: {

@@ -85,7 +85,8 @@ def test_format_with_empty_gemini_input_does_not_crash():
     assert "Mis amigos son:" not in out
 
 
-def test_format_renders_users_events_and_jokes():
+def test_format_renders_users_events_and_jokes(monkeypatch):
+    monkeypatch.setattr(gc, "_GROUP_LORE", {})
     lt = {
         "users": {"Mati": {"traits": ["fan de python"],
                            "preguntas_tipicas": ["cómo deployar"],
@@ -93,6 +94,10 @@ def test_format_renders_users_events_and_jokes():
         "eventos_del_grupo": ["maratón de tortas"],
         "chistes_internos": ["el del pingüino"],
     }
+    # Para anécdotas por usuario, forzamos la semilla aleatoria o mockeamos random.random 
+    # para garantizar que se incluyan y no fallen el test.
+    monkeypatch.setattr(gc.random, "random", lambda: 0.1)
+    
     rendered = _format_long_term(lt)
     assert "Mati" in rendered
     assert "fan de python" in rendered

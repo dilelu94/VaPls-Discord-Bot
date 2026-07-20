@@ -116,7 +116,15 @@ cada vez que te hablan — eso es robótico y queda raro. Usá esa info como \
 trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
 hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
 lo pide naturalmente. Variá entre distintas anécdotas de cada persona — no \
-siempre el mismo chiste para el mismo amigo. \
+siempre el mismo chiste para el mismo amigo. NUNCA repitas recurrentemente \
+los mismos chistes internos o anécdotas (ej. piononos, robos, programación) \
+a menos que te saquen el tema directamente. Inventá respuestas frescas. \
+\
+Sos muy buena persona y querés mucho a tus amigos. Tratalos con cariño. Si \
+bien conocés sus defectos (ej: si alguien no trabaja o tiene un pasado \
+dudoso, como Viny), no los uses para atacarlos constantemente ni seas rudo \
+con ellos. Podés hacerles un chiste muy de vez en cuando, pero tu tono \
+general debe ser amable y de apoyo ("aguante"). \
 
 REGLAS ESTRICTAS para tools de música/sonido: NO uses NINGUNA tool a menos \
 que el usuario te esté dando una orden DIRECTA de reproducción. Preguntas, \
@@ -2073,13 +2081,13 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
                 chunk.append(f"   fotos/aspecto: {'; '.join(fotos)}")
             # Randomly sample preguntas_tipicas: sometimes 0, sometimes 1
             if qs:
-                if random.random() < 0.5:
+                if random.random() < 0.2:
                     chunk.append(f"   suele preguntar sobre: {'; '.join(random.sample(qs, 1))}")
             # Randomly sample anecdotas: sometimes 0, sometimes 1
             if anec:
                 filtered = [a for a in anec if _strip_accents_lower(a) not in group_anec]
                 pick = filtered or anec
-                if pick and random.random() < 0.5:
+                if pick and random.random() < 0.2:
                     chosen = [random.choice(pick)]
                     chunk.append(f"   anécdotas: {'; '.join(chosen)}")
             if len(chunk) > 1:
@@ -2096,8 +2104,10 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
         if e not in events:
             events.append(e)
     if events:
+        sample_size = min(len(events), 2)
+        sampled_events = random.sample(events, sample_size)
         sections.append(
-            "Cosas que pasaron en el grupo:\n" + "\n".join(f"- {e}" for e in events)
+            "Cosas que pasaron en el grupo:\n" + "\n".join(f"- {e}" for e in sampled_events)
         )
 
     static_jokes = [str(x) for x in (_GROUP_LORE.get("chistes_internos") or []) if x]
@@ -2107,8 +2117,10 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
         if j not in jokes:
             jokes.append(j)
     if jokes:
+        sample_size = min(len(jokes), 2)
+        sampled_jokes = random.sample(jokes, sample_size)
         sections.append(
-            "Chistes internos del grupo:\n" + "\n".join(f"- {j}" for j in jokes)
+            "Chistes internos del grupo:\n" + "\n".join(f"- {j}" for j in sampled_jokes)
         )
     return "\n\n".join(sections)
 
@@ -2174,10 +2186,12 @@ FILTRADO SUAVE — evitar guardar:
 - Saludos sueltos, despedidas o frases sociales vacías ("hola", "chau", \
   "gracias") que no aporten contexto.
 - Mensajes de solo emojis, stickers, o reacciones sin contenido adjunto.
-- Repeticiones de información ya presente en la ficha actual.
 
 REGLAS DE CALIDAD:
 - Solo incluí información sobre el usuario de la ficha, no de otros.
+- Sé SÚPER EXHAUSTIVO: extraé todo tipo de dato nuevo, anécdota, gusto, \
+  opinión y chiste que este usuario haya mencionado o protagonizado. No asumas \
+  que los detalles son irrelevantes, guardá todo lo nuevo y jugoso.
 - Cada string ≤300 caracteres. Priorizá calidad sobre cantidad.
 - No hay límite de cantidad de rasgos, preguntas o anécdotas — guardá \
   todo lo relevante.
@@ -2200,9 +2214,11 @@ markdown, con esta estructura exacta:
 FILTRADO SUAVE — evitar guardar:
 - Saludos sueltos o despedidas que no aporten contexto.
 - Mensajes de solo emojis o stickers sin contenido adjunto.
-- Repeticiones de información ya presente en la memoria actual.
 
 REGLAS:
+- Sé SÚPER EXHAUSTIVO: extraé todo evento, debate, chiste, o meme nuevo \
+  que surja en la conversación grupal. Guardá todo detalle que le dé sabor \
+  a la memoria del grupo.
 - Cada string ≤300 caracteres. Priorizá calidad sobre cantidad.
 - No hay límite de cantidad de eventos o chistes — guardá todo lo \
   relevante.
