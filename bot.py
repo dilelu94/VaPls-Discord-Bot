@@ -19,7 +19,7 @@ import aiohttp
 import discord
 from discord.ext import commands, tasks
 
-from playCommand import playLogic, openDjMenu
+from playCommand import playLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
@@ -1173,46 +1173,6 @@ async def redirect_cmd(ctx, target_id: int | None) -> bool:
         await safe_defer(ctx)
     return will
 
-
-@bot.slash_command(
-    name="dj", description="Abre el menú del modo DJ en el canal de música"
-)
-async def dj(ctx):
-    """Slash command: activate Auto-DJ and post its control panel here.
-
-    Activating in one step — /dj turns the mode on directly (no extra click)
-    and posts the panel (veto / play-now / stop) in the channel where it was
-    run. Refuses with a hint when nothing has played yet (cold start).
-
-    Args:
-        ctx: Discord application context.
-
-    Async:
-        This function is a coroutine and must be awaited.
-    """
-    if await redirect_cmd(ctx, config.INDIO_PLAY_CHANNEL_ID):
-        return
-    _track_command(ctx, "dj")
-    if ctx.guild is None:
-        await ctx.followup.send(
-            "❌ Este comando solo funciona en un servidor.", ephemeral=True
-        )
-        return
-    channel_id = getattr(ctx, "channel_id", None) or getattr(
-        getattr(ctx, "channel", None), "id", None
-    )
-    ok, msg = await openDjMenu(ctx.bot, ctx.guild.id, channel_id)
-    if ok:
-        try:
-            await ctx.followup.send("🎧 Modo DJ activado.", ephemeral=True)
-        except Exception:
-            pass
-    elif msg == "cold-start":
-        await ctx.followup.send(
-            "🎧 Poné un tema primero (con /play) y después corré /dj.", ephemeral=True
-        )
-    else:
-        await ctx.followup.send(f"❌ No pude activar el modo DJ: {msg}", ephemeral=True)
 
 
 @bot.slash_command(name="parar")
@@ -3010,7 +2970,6 @@ async def help_cmd(ctx):
         value=(
             "**/play** `query` — busca o pega una URL de YouTube.\n"
             "**/queue** — muestra la cola de reproducción.\n"
-            "**/dj** — abre el menú del modo DJ.\n"
             "**/soundpad** `[query]` — panel de clips locales.\n"
             "**/parar** — corta la reproducción y limpia la cola.\n"
             "**/quit** — sale del canal de voz sin limpiar la cola."
@@ -3545,6 +3504,62 @@ async def restart(
             sys.executable,
             [sys.executable, "/home/ubuntu/vapls-discord-bot/bot.py"],
         )
+
+
+@bot.slash_command(
+    name="sacudir",
+    description="Mueve a un usuario entre un canal específico y uno vacío varias veces"
+)
+async def sacudir(
+    ctx,
+    usuario: discord.Option(discord.Member, description="Usuario a sacudir"),
+    veces: discord.Option(int, description="Cantidad de veces", default=10, min_value=1, max_value=20)
+):
+    """Slash command: shakes a user between channel 451581345022476294 and an empty channel."""
+    await safe_defer(ctx)
+    _track_command(ctx, "sacudir", {"veces": veces})
+
+    if not usuario.voice or not usuario.voice.channel:
+        await ctx.followup.send("❌ El usuario debe estar conectado a un canal de voz.")
+        return
+
+    original_channel = usuario.voice.channel
+    target_channel_id = 451581345022476294
+    target_channel = ctx.guild.get_channel(target_channel_id)
+    
+    if not target_channel or not isinstance(target_channel, discord.VoiceChannel):
+        await ctx.followup.send("❌ No se encontró el canal de destino (451581345022476294).")
+        return
+
+    # Find an empty voice channel
+    empty_channel = None
+    for vc in ctx.guild.voice_channels:
+        if vc.id != target_channel_id and len(vc.members) == 0:
+            empty_channel = vc
+            break
+            
+    if not empty_channel:
+        await ctx.followup.send("❌ No hay canales de voz vacíos disponibles.")
+        return
+
+    await ctx.followup.send(f"🌪️ Sacudiendo a {usuario.mention} {veces} veces...")
+
+    for _ in range(veces):
+        try:
+            await usuario.move_to(target_channel)
+            await asyncio.sleep(0.5)
+            await usuario.move_to(empty_channel)
+            await asyncio.sleep(0.5)
+        except Exception as e:
+            log.warning("Error sacudiendo: %s", e)
+            break
+
+    # Return to original channel
+    try:
+        if usuario.voice and usuario.voice.channel:
+            await usuario.move_to(original_channel)
+    except Exception:
+        pass
 
 
 # --- Scheduled Daily Stream ---

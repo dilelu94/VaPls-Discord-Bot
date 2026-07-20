@@ -2,7 +2,7 @@
 
 Each slash command gets a flag that determines where its output goes and how it
 behaves:
-  - ``music``:  Commands that produce music (/soundpad, /dj, /play).
+  - ``music``:  Commands that produce music (/soundpad, /play).
                 Invocation is deleted from the source channel and the command
                 executes in ``INDIO_PLAY_CHANNEL_ID``.
   - ``text``:   Normal text commands. Responses go to ``INDIO_REPLY_CHANNEL_ID``.
@@ -12,7 +12,7 @@ behaves:
 """
 
 COMMAND_FLAGS: dict[str, str] = {
-    "dj": "music",
+    "sacudir": "text",
     "play": "music",
     "soundpad": "music",
     "vapls": "text",
