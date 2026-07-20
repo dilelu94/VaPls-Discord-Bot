@@ -3013,6 +3013,7 @@ async def help_cmd(ctx):
             "**/sugerencias** `idea` — mandá una sugerencia o feature.\n"
             "**/sugerencias-ver** — mirá las sugerencias más pedidas.\n"
             "**/transferir** — link para subir archivos de 10 GB (solo @Main Characters).\n"
+            "**/sacudir** `@usuario` `[veces]` — mueve a un usuario a un canal vacío.\n"
             "**/help** — esto."
         ),
         inline=False,
