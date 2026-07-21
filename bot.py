@@ -2628,19 +2628,33 @@ async def ranking(ctx):
 
 
 @bot.slash_command(
-    name="historia",
+    name="historial",
     description="Muestra el historial reciente de conexiones y desconexiones de voz",
 )
-async def historia(ctx):
+async def historial(
+    ctx,
+    usuario: discord.Option(discord.Member, "Filtrar por usuario", required=False) = None,
+    canal: discord.Option(discord.VoiceChannel, "Filtrar por canal de voz", required=False) = None,
+):
     """Slash command: show recent voice session activity."""
     await safe_defer(ctx, ephemeral=True)
-    _track_command(ctx, "historia")
+    _track_command(ctx, "historial")
     if ctx.guild is None:
         await safe_respond(ctx, "❌ Este comando solo funciona en un servidor.", ephemeral=True)
         return
 
+    target_channel = canal
+    target_user = usuario
+
+    if target_channel is None and target_user is None:
+        if ctx.author.voice and ctx.author.voice.channel:
+            target_channel = ctx.author.voice.channel
+        else:
+            await safe_respond(ctx, "❌ No estás en un canal de voz. Especificá un usuario o canal.", ephemeral=True)
+            return
+
     data = await _fetch_activity(
-        "/activity", {"guild_id": ctx.guild.id, "limit": "100"}
+        "/activity", {"guild_id": ctx.guild.id, "limit": "1000"}
     )
     if data is None:
         await safe_respond(ctx, "❌ No pude obtener el historial (relay no disponible).", ephemeral=True)
@@ -2659,19 +2673,28 @@ async def historia(ctx):
     now = time.time()
     for uid, macro in guild_macro.items():
         if macro.get("disconnect_time") is None:
+            if target_user and uid != target_user.id:
+                continue
+
             member = ctx.guild.get_member(uid)
             name = member.display_name if member else f"Usuario {uid}"
             
             channel_name = "Canal desconocido"
+            current_channel_id = None
             if member and member.voice and member.voice.channel:
                 channel_name = member.voice.channel.name
+                current_channel_id = member.voice.channel.id
             else:
                 guild_sessions = _voice_sessions.get(ctx.guild.id, {})
                 sess = guild_sessions.get(uid)
                 if sess and "channel_id" in sess:
+                    current_channel_id = sess["channel_id"]
                     ch = ctx.guild.get_channel(sess["channel_id"])
                     if ch:
                         channel_name = ch.name
+
+            if target_channel and current_channel_id != target_channel.id:
+                continue
 
             join_ts = int(macro["join_time"])
             duration = now - macro["join_time"] - macro.get("disconnected_time", 0.0)
@@ -2700,16 +2723,23 @@ async def historia(ctx):
 
     recent_lines = []
     for act in voice_activities:
+        uid = act["user_id"]
+        if target_user and uid != target_user.id:
+            continue
+            
+        metadata = act.get("metadata", {})
+        channel_id = metadata.get("channel_id")
+        if target_channel and channel_id != target_channel.id:
+            continue
+            
         if len(recent_lines) >= 15:
             break
         if act.get("duration_secs", 0) < 5:
             continue
-        uid = act["user_id"]
+            
         member = ctx.guild.get_member(uid)
         name = member.display_name if member else f"Usuario {uid}"
         
-        metadata = act.get("metadata", {})
-        channel_id = metadata.get("channel_id")
         channel_name = "Canal desconocido"
         if channel_id:
             ch = ctx.guild.get_channel(channel_id)

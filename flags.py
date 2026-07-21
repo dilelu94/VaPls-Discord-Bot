@@ -28,7 +28,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "huh": "text",
     "help": "text",
     "ranking": "text",
-    "historia": "text",
+    "historial": "text",
     "actividad": "text",
     "estadisticas": "text",
     "transferir": "text",
