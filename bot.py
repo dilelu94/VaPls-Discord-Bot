@@ -2705,7 +2705,8 @@ async def historial(
             dur_str = f"{int(duration)}s"
             
         created_ts = act.get("created_at", 0)
-        recent_lines.append(f"- 🔴 **{name}** ({dur_str}) hasta <t:{int(created_ts)}:t>")
+        join_ts = int(created_ts - duration)
+        recent_lines.append(f"- 🔴 **{name}** desde <t:{join_ts}:t> hasta <t:{int(created_ts)}:t> ({dur_str})")
 
     title = "Últimas desconexiones"
     if target_channel:
