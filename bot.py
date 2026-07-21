@@ -2668,58 +2668,6 @@ async def historial(
         color=0xE94560,
     )
 
-    guild_macro = _macro_voice_sessions.get(ctx.guild.id, {})
-    connected_lines = []
-    now = time.time()
-    for uid, macro in guild_macro.items():
-        if macro.get("disconnect_time") is None:
-            if target_user and uid != target_user.id:
-                continue
-
-            member = ctx.guild.get_member(uid)
-            name = member.display_name if member else f"Usuario {uid}"
-            
-            channel_name = "Canal desconocido"
-            current_channel_id = None
-            if member and member.voice and member.voice.channel:
-                channel_name = member.voice.channel.name
-                current_channel_id = member.voice.channel.id
-            else:
-                guild_sessions = _voice_sessions.get(ctx.guild.id, {})
-                sess = guild_sessions.get(uid)
-                if sess and "channel_id" in sess:
-                    current_channel_id = sess["channel_id"]
-                    ch = ctx.guild.get_channel(sess["channel_id"])
-                    if ch:
-                        channel_name = ch.name
-
-            if target_channel and current_channel_id != target_channel.id:
-                continue
-
-            join_ts = int(macro["join_time"])
-            duration = now - macro["join_time"] - macro.get("disconnected_time", 0.0)
-            
-            if duration >= 3600:
-                dur_str = f"{duration/3600:.1f}h"
-            elif duration >= 60:
-                dur_str = f"{int(duration/60)}m"
-            else:
-                dur_str = f"{int(duration)}s"
-                
-            connected_lines.append(f"🟢 **{name}** en {channel_name} (desde <t:{join_ts}:t>, lleva {dur_str})")
-
-    if connected_lines:
-        embed.add_field(
-            name="Conectados ahora",
-            value="\\n".join(connected_lines),
-            inline=False,
-        )
-    else:
-        embed.add_field(
-            name="Conectados ahora",
-            value="Nadie conectado actualmente.",
-            inline=False,
-        )
 
     recent_lines = []
     for act in voice_activities:
@@ -2757,18 +2705,24 @@ async def historial(
             dur_str = f"{int(duration)}s"
             
         created_ts = act.get("created_at", 0)
-        recent_lines.append(f"🔴 **{name}** estuvo en {channel_name} ({dur_str}) hasta <t:{int(created_ts)}:t>")
+        recent_lines.append(f"- 🔴 **{name}** ({dur_str}) hasta <t:{int(created_ts)}:t>")
+
+    title = "Últimas desconexiones"
+    if target_channel:
+        title += f" en {target_channel.name}"
+    elif target_user:
+        title += f" de {target_user.display_name}"
 
     if recent_lines:
         embed.add_field(
-            name="Últimas desconexiones",
-            value="\\n".join(recent_lines),
+            name=title,
+            value="\n".join(recent_lines),
             inline=False,
         )
     else:
         embed.add_field(
-            name="Últimas desconexiones",
-            value="No hay historial reciente.",
+            name=title,
+            value="No hay historial reciente para los filtros aplicados.",
             inline=False,
         )
 
