@@ -524,8 +524,11 @@ async def on_ready():
 
 # ---- Voice state tracking for MMR -----------------------------------------
 # Per-guild per-user voice sessions with mute/deafen breakdown.
-# AFK channel (451581345022476294) is excluded from tracking.
-_AFK_CHANNEL_ID = 451581345022476294
+# AFK channels are excluded from tracking.
+
+def _is_afk_channel(channel) -> bool:
+    return channel is not None and channel.guild.afk_channel is not None and channel.id == channel.guild.afk_channel.id
+
 _voice_sessions: dict[int, dict[int, dict]] = {}
 _macro_voice_sessions: dict[int, dict[int, dict]] = {}
 # guild_id -> user_id -> {
@@ -741,7 +744,7 @@ async def on_voice_state_update(member, before, after):
     n = member.display_name
     # ---- Voice session tracking (AFK channel excluded) ----
     if before.channel is None and after.channel is not None:
-        if after.channel.id != _AFK_CHANNEL_ID:
+        if not _is_afk_channel(after.channel):
             _start_voice_session(guild_id, member.id, after.channel, after)
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
@@ -764,9 +767,9 @@ async def on_voice_state_update(member, before, after):
         and after.channel is not None
         and before.channel.id != after.channel.id
     ):
-        if before.channel.id != _AFK_CHANNEL_ID:
+        if not _is_afk_channel(before.channel):
             _finalize_voice_session(guild_id, member.id)
-        if after.channel.id != _AFK_CHANNEL_ID:
+        if not _is_afk_channel(after.channel):
             _start_voice_session(guild_id, member.id, after.channel, after)
         _finalize_watch(member.id, guild_id)
         if _streamers_in(after.channel):
@@ -2696,7 +2699,11 @@ async def historia(ctx):
         )
 
     recent_lines = []
-    for act in voice_activities[:15]:
+    for act in voice_activities:
+        if len(recent_lines) >= 15:
+            break
+        if act.get("duration_secs", 0) < 5:
+            continue
         uid = act["user_id"]
         member = ctx.guild.get_member(uid)
         name = member.display_name if member else f"Usuario {uid}"
@@ -3725,7 +3732,7 @@ async def scheduled_daily_stream():
     max_members = -1
 
     for vc in target_guild.voice_channels:
-        if vc.id == 451581345022476294:  # _AFK_CHANNEL_ID
+        if _is_afk_channel(vc):
             continue
         
         humans = sum(1 for m in vc.members if not m.bot)
