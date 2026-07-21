@@ -645,12 +645,20 @@ def get_recent_activity(guild_id: int, limit: int = 50) -> list[dict]:
     cur = _conn.execute(
         """SELECT id, user_id, activity_type, channel_type,
                   duration_secs, quality_score, value, rating_delta,
-                  created_at
+                  metadata, created_at
            FROM activity_log WHERE guild_id=?
            ORDER BY created_at DESC LIMIT ?""",
         (guild_id, limit),
     )
-    return [dict(row) for row in cur.fetchall()]
+    results = []
+    for row in cur.fetchall():
+        d = dict(row)
+        try:
+            d["metadata"] = json.loads(d["metadata"])
+        except (json.JSONDecodeError, TypeError):
+            d["metadata"] = {}
+        results.append(d)
+    return results
 
 
 def get_all_data() -> dict:

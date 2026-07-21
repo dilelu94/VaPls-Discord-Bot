@@ -2625,6 +2625,127 @@ async def ranking(ctx):
 
 
 @bot.slash_command(
+    name="historia",
+    description="Muestra el historial reciente de conexiones y desconexiones de voz",
+)
+async def historia(ctx):
+    """Slash command: show recent voice session activity."""
+    await safe_defer(ctx, ephemeral=True)
+    _track_command(ctx, "historia")
+    if ctx.guild is None:
+        await safe_respond(ctx, "❌ Este comando solo funciona en un servidor.", ephemeral=True)
+        return
+
+    data = await _fetch_activity(
+        "/activity", {"guild_id": ctx.guild.id, "limit": "100"}
+    )
+    if data is None:
+        await safe_respond(ctx, "❌ No pude obtener el historial (relay no disponible).", ephemeral=True)
+        return
+
+    activities = data.get("activities", [])
+    voice_activities = [a for a in activities if a.get("activity_type") == "voice_session"]
+
+    embed = discord.Embed(
+        title="🎙️ Historial de Voz",
+        color=0xE94560,
+    )
+
+    guild_macro = _macro_voice_sessions.get(ctx.guild.id, {})
+    connected_lines = []
+    now = time.time()
+    for uid, macro in guild_macro.items():
+        if macro.get("disconnect_time") is None:
+            member = ctx.guild.get_member(uid)
+            name = member.display_name if member else f"Usuario {uid}"
+            
+            channel_name = "Canal desconocido"
+            if member and member.voice and member.voice.channel:
+                channel_name = member.voice.channel.name
+            else:
+                guild_sessions = _voice_sessions.get(ctx.guild.id, {})
+                sess = guild_sessions.get(uid)
+                if sess and "channel_id" in sess:
+                    ch = ctx.guild.get_channel(sess["channel_id"])
+                    if ch:
+                        channel_name = ch.name
+
+            join_ts = int(macro["join_time"])
+            duration = now - macro["join_time"] - macro.get("disconnected_time", 0.0)
+            
+            if duration >= 3600:
+                dur_str = f"{duration/3600:.1f}h"
+            elif duration >= 60:
+                dur_str = f"{int(duration/60)}m"
+            else:
+                dur_str = f"{int(duration)}s"
+                
+            connected_lines.append(f"🟢 **{name}** en {channel_name} (desde <t:{join_ts}:t>, lleva {dur_str})")
+
+    if connected_lines:
+        embed.add_field(
+            name="Conectados ahora",
+            value="\\n".join(connected_lines),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Conectados ahora",
+            value="Nadie conectado actualmente.",
+            inline=False,
+        )
+
+    recent_lines = []
+    for act in voice_activities[:15]:
+        uid = act["user_id"]
+        member = ctx.guild.get_member(uid)
+        name = member.display_name if member else f"Usuario {uid}"
+        
+        metadata = act.get("metadata", {})
+        channel_id = metadata.get("channel_id")
+        channel_name = "Canal desconocido"
+        if channel_id:
+            ch = ctx.guild.get_channel(channel_id)
+            if ch:
+                channel_name = ch.name
+            else:
+                channel_name = f"Canal {channel_id}"
+                
+        duration = act.get("duration_secs", 0)
+        if duration >= 3600:
+            dur_str = f"{duration/3600:.1f}h"
+        elif duration >= 60:
+            dur_str = f"{int(duration/60)}m"
+        else:
+            dur_str = f"{int(duration)}s"
+            
+        created_ts = act.get("created_at", 0)
+        recent_lines.append(f"🔴 **{name}** estuvo en {channel_name} ({dur_str}) hasta <t:{int(created_ts)}:t>")
+
+    if recent_lines:
+        embed.add_field(
+            name="Últimas desconexiones",
+            value="\\n".join(recent_lines),
+            inline=False,
+        )
+    else:
+        embed.add_field(
+            name="Últimas desconexiones",
+            value="No hay historial reciente.",
+            inline=False,
+        )
+
+    try:
+        if not ctx.response.is_done():
+            await ctx.respond(embed=embed, ephemeral=True)
+        else:
+            await ctx.followup.send(embed=embed, ephemeral=True)
+    except Exception:
+        await safe_respond(ctx, "No pude mostrar el historial.", ephemeral=True)
+
+
+
+@bot.slash_command(
     name="actividad",
     description="Muestra tus estadísticas de actividad (solo owner)",
 )
