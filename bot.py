@@ -2676,7 +2676,9 @@ async def historial(
             continue
             
         metadata = act.get("metadata", {})
-        channel_id = metadata.get("channel_id")
+        raw_channel_id = metadata.get("channel_id")
+        channel_id = int(raw_channel_id) if raw_channel_id else None
+        
         if target_channel and channel_id != target_channel.id:
             continue
             
