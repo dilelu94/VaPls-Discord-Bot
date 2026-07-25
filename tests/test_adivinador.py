@@ -1,7 +1,7 @@
-"""Behavioral tests for the redesigned DM-based Headbanz / adivinador command.
+"""Behavioral tests for the text-only DM-based Headbanz / adivinador command.
 
 Fakes Discord gateways, DMs, the GoLive HTTP relay, and the database MMR logging.
-Verifies strict DM-only interactions and single public victory channel announcement.
+Verifies strict DM-only text interactions ("si"/"no" challenge, DM guessing) and single public victory channel announcement.
 """
 
 import asyncio
@@ -17,10 +17,11 @@ from adivinadorCommand import (
     start_headbanz_game,
     ensure_font_downloaded,
     generate_headbanz_image,
-    HeadbanzChallengeView,
     handle_dm_guess,
+    _pending_challenges,
     _active_games,
 )
+from tests.conftest import sent_text
 
 
 @pytest.fixture(autouse=True)
@@ -34,12 +35,11 @@ def mock_pillow_and_font(monkeypatch):
 
     monkeypatch.setattr(adivinadorCommand, "ensure_font_downloaded", mock_download)
     monkeypatch.setattr(adivinadorCommand, "generate_headbanz_image", mock_generate)
+    _pending_challenges.clear()
     _active_games.clear()
     yield
+    _pending_challenges.clear()
     _active_games.clear()
-
-
-from tests.conftest import sent_text
 
 
 async def test_adivinador_voice_validation_requester_outside(ctx_factory):
@@ -66,14 +66,19 @@ async def test_adivinador_challenge_dm_sent_ephemerally(ctx_factory, monkeypatch
     assert opponent.send.call_count == 1
     _, kwargs = opponent.send.call_args
     assert "Desafío de Headbanz" in kwargs["embed"].title
-    assert isinstance(kwargs["view"], HeadbanzChallengeView)
+    assert "¿Te la bancás o no te da?" in kwargs["embed"].description
 
     # 2. Requester received ephemeral confirmation
     assert "Desafío enviado a" in sent_text(ctx)
 
+    # 3. Pending challenge recorded
+    assert 2 in _pending_challenges
 
-async def test_adivinador_challenge_reject_flow(monkeypatch):
-    p1 = MagicMock(spec=discord.Member)
+
+async def test_adivinador_challenge_reject_by_text_dm(ctx_factory, monkeypatch):
+    ctx = ctx_factory(in_voice=True, voice_channel_id=99)
+
+    p1 = ctx.author
     p1.display_name = "Player 1"
     p1.name = "player1"
     p1.id = 1
@@ -83,26 +88,33 @@ async def test_adivinador_challenge_reject_flow(monkeypatch):
     p2.display_name = "Player 2"
     p2.name = "player2"
     p2.id = 2
+    p2.send = AsyncMock()
 
-    view = HeadbanzChallengeView(guild_id=100, text_channel_id=42, player1=p1, player2=p2)
+    await start_headbanz_game(ctx, p1, p2)
+    assert 2 in _pending_challenges
 
-    interaction = MagicMock(spec=discord.Interaction)
-    interaction.response = MagicMock()
-    interaction.response.defer = AsyncMock()
-    interaction.edit_original_response = AsyncMock()
+    # Player 2 sends DM "no"
+    msg_reject = MagicMock(spec=discord.Message)
+    msg_reject.author = p2
+    msg_reject.guild = None
+    msg_reject.content = "no"
+    msg_reject.channel = MagicMock()
+    msg_reject.channel.send = AsyncMock()
 
-    # Trigger rejection ("No me da 🐔")
-    await view.on_reject(interaction)
+    handled = await handle_dm_guess(msg_reject)
+    assert handled is True
 
-    # 1. Player 2 DM edited with rejection
-    assert interaction.edit_original_response.call_count == 1
-    _, kwargs = interaction.edit_original_response.call_args
-    assert "Rechazaste el desafío" in kwargs["content"]
+    # Player 2 receives DM confirmation
+    assert msg_reject.channel.send.call_count == 1
+    assert "Rechazaste el desafío" in msg_reject.channel.send.call_args[0][0]
 
-    # 2. Player 1 notified by DM
+    # Player 1 notified by DM
     assert p1.send.call_count == 1
-    p1_dm_text = p1.send.call_args[0][0]
-    assert "no se la bancó y rechazó" in p1_dm_text
+    assert "no se la bancó y rechazó" in p1.send.call_args[0][0]
+
+    # Challenge cleared and NO active game
+    assert 2 not in _pending_challenges
+    assert 1 not in _active_games
 
 
 async def test_adivinador_challenge_accept_and_guess_flow(ctx_factory, monkeypatch, tmp_path):
@@ -179,48 +191,52 @@ async def test_adivinador_challenge_accept_and_guess_flow(ctx_factory, monkeypat
     p2.voice.channel.id = 99
     p2.send = AsyncMock()
 
-    view = HeadbanzChallengeView(guild_id=ctx.guild.id, text_channel_id=ctx.channel_id, player1=p1, player2=p2)
+    await start_headbanz_game(ctx, p1, p2)
+    assert 2 in _pending_challenges
 
-    interaction = MagicMock(spec=discord.Interaction)
-    interaction.response = MagicMock()
-    interaction.response.defer = AsyncMock()
-    interaction.edit_original_response = AsyncMock()
+    # 1. Player 2 sends DM "si" to accept
+    msg_accept = MagicMock(spec=discord.Message)
+    msg_accept.author = p2
+    msg_accept.guild = None
+    msg_accept.content = "si"
+    msg_accept.channel = MagicMock()
+    msg_accept.channel.send = AsyncMock()
 
-    # 1. Player 2 accepts challenge ("¡Me la banco! ⚔️")
-    await view.on_accept(interaction)
+    handled = await handle_dm_guess(msg_accept)
+    assert handled is True
 
     # Verify DMs sent with crossed characters
     assert p1.send.call_count == 2  # Accept notice + Crossed card DM
-    assert p2.send.call_count == 1  # Crossed card DM
+    assert p2.send.call_count == 2  # Challenge DM + Crossed card DM
 
     # Verify game session created
     assert 1 in _active_games
     assert 2 in _active_games
-    session = _active_games[1]
+    session = _active_games[2]
 
     # Verify NO public channel message sent during setup
-    assert ctx.followup.send.call_count == 0
+    assert ctx.followup.send.call_count == 1  # Ephemeral setup notice only
 
-    # 2. Player 1 sends INCORRECT DM guess
+    # 2. Player 2 sends INCORRECT DM guess
     msg_incorrect = MagicMock(spec=discord.Message)
-    msg_incorrect.author = p1
+    msg_incorrect.author = p2
     msg_incorrect.guild = None
     msg_incorrect.content = "Naruto"
     msg_incorrect.channel = MagicMock()
     msg_incorrect.channel.send = AsyncMock()
 
-    handled = await handle_dm_guess(msg_incorrect)
-    assert handled is True
+    handled_inc = await handle_dm_guess(msg_incorrect)
+    assert handled_inc is True
     assert msg_incorrect.channel.send.call_count == 1
     assert "no es tu personaje" in msg_incorrect.channel.send.call_args[0][0]
 
     # Active session still exists
-    assert 1 in _active_games
+    assert 2 in _active_games
 
-    # 3. Player 1 sends CORRECT DM guess for their assigned character (session.char1['name'])
-    correct_char_name = session.char1["name"]
+    # 3. Player 2 sends CORRECT DM guess for assigned character (session.char2['name'])
+    correct_char_name = session.char2["name"]
     msg_correct = MagicMock(spec=discord.Message)
-    msg_correct.author = p1
+    msg_correct.author = p2
     msg_correct.guild = None
     msg_correct.content = correct_char_name
     msg_correct.channel = MagicMock()
@@ -234,23 +250,24 @@ async def test_adivinador_challenge_accept_and_guess_flow(ctx_factory, monkeypat
     handled_correct = await handle_dm_guess(msg_correct)
     assert handled_correct is True
 
-    # Verify winner DM sent to guesser
+    # Verify winner DM sent to guesser (Player 2)
     assert msg_correct.channel.send.call_count == 1
     assert "¡CORRECTO!" in msg_correct.channel.send.call_args[0][0]
 
     # VERIFY SINGLE PUBLIC ANNOUNCEMENT IN SERVER TEXT CHANNEL
     assert text_channel_mock.send.call_count == 1
     pub_msg = text_channel_mock.send.call_args[0][0]
+    assert "Player 2" in pub_msg
     assert "le ganó a" in pub_msg
     assert "/adivinador" in pub_msg
 
-    # Verify MMR logged: P1 (winner) gets 1.0, P2 gets 0.0
+    # Verify MMR logged: P2 (winner) gets 1.0, P1 gets 0.0
     assert len(mmr_logs) == 2
-    assert mmr_logs[0]["user_id"] == 1
+    assert mmr_logs[0]["user_id"] == 2
     assert mmr_logs[0]["activity_type"] == "game_win"
     assert mmr_logs[0]["quality_score"] == 1.0
 
-    assert mmr_logs[1]["user_id"] == 2
+    assert mmr_logs[1]["user_id"] == 1
     assert mmr_logs[1]["activity_type"] == "game_lose"
     assert mmr_logs[1]["quality_score"] == 0.0
 

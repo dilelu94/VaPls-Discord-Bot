@@ -1,8 +1,9 @@
 """Slash command and game logic for Headbanz/Adivinador.
 
 Handles dynamic character selection, PIL canvas compositing, font caching,
-DM challenge workflow ("¿Te la bancás o no te da?"), DM guessing, GoLive streaming,
-and MMR tracking on game completion with a single public winner announcement.
+text-only DM challenge workflow ("si" / "no"), text-only DM guessing,
+GoLive streaming, and MMR tracking with a single public winner announcement.
+No UI buttons or public text messages during challenge setup.
 """
 
 import asyncio
@@ -296,6 +297,23 @@ async def stop_golive_stream(guild_id: int) -> bool:
         return False
 
 
+class HeadbanzChallenge:
+    """Represents an active pending challenge sent via DM."""
+
+    def __init__(
+        self,
+        guild_id: int,
+        text_channel_id: int,
+        player1: discord.Member | discord.User,
+        player2: discord.Member | discord.User,
+    ) -> None:
+        self.guild_id = guild_id
+        self.text_channel_id = text_channel_id
+        self.player1 = player1  # Challenger
+        self.player2 = player2  # Challenged
+        self.created_at = time.time()
+
+
 class HeadbanzSession:
     """Represents an active Headbanz game session between two players."""
 
@@ -319,6 +337,7 @@ class HeadbanzSession:
         self.created_at = time.time()
 
 
+_pending_challenges: dict[int, HeadbanzChallenge] = {}  # player2.id -> HeadbanzChallenge
 _active_games: dict[int, HeadbanzSession] = {}  # user_id -> session
 
 
@@ -329,9 +348,178 @@ def _normalize(text: str) -> str:
     return "".join(c for c in s if c.isalnum())
 
 
-async def handle_dm_guess(message: discord.Message) -> bool:
-    """Handle incoming DMs to the bot to check if the user is guessing their Headbanz character."""
+async def _handle_challenge_dm_response(message: discord.Message, challenge: HeadbanzChallenge) -> bool:
+    """Handle text DM response ('si' or 'no') to a pending Headbanz challenge."""
     user_id = message.author.id
+    content = (message.content or "").strip()
+    norm = _normalize(content)
+
+    ACCEPT_WORDS = ("si", "me la banco", "acepto", "banco", "dale", "obvio", "ok", "yes")
+    REJECT_WORDS = ("no", "no me da", "rechazo", "cancelar", "paso", "cagon")
+
+    is_accept = norm in ACCEPT_WORDS or any(w in norm for w in ("melabanco", "acepto", "banco"))
+    is_reject = norm in REJECT_WORDS or any(w in norm for w in ("nomeda", "rechazo", "cancelar"))
+
+    p1 = challenge.player1
+    p2 = challenge.player2
+    p1_name = getattr(p1, "display_name", p1.name)
+    p2_name = getattr(p2, "display_name", p2.name)
+
+    if is_reject:
+        _pending_challenges.pop(user_id, None)
+        try:
+            await message.channel.send(f"🐔 **Rechazaste el desafío de {p1_name}.**")
+        except Exception:
+            pass
+        try:
+            await p1.send(f"🐔 **{p2_name} no se la bancó y rechazó tu desafío de Headbanz.**")
+        except Exception:
+            pass
+        return True
+
+    if is_accept:
+        # Check voice state validation
+        p1_voice = getattr(p1, "voice", None)
+        p2_voice = getattr(p2, "voice", None)
+
+        if not p1_voice or not p1_voice.channel:
+            await message.channel.send(
+                f"❌ La partida no pudo iniciar porque **{p1_name}** ya no está en un canal de voz."
+            )
+            _pending_challenges.pop(user_id, None)
+            return True
+
+        if not p2_voice or not p2_voice.channel or p2_voice.channel.id != p1_voice.channel.id:
+            await message.channel.send(
+                f"❌ Tenés que estar en el mismo canal de voz que **{p1_name}** para iniciar el juego."
+            )
+            return True
+
+        # Remove challenge from pending
+        _pending_challenges.pop(user_id, None)
+
+        # Load characters
+        if not os.path.exists(CHARS_FILE):
+            await message.channel.send(f"❌ No se encontró la base de datos de personajes en {CHARS_FILE}")
+            return True
+
+        try:
+            with open(CHARS_FILE, "r", encoding="utf-8") as f:
+                characters = json.load(f)
+        except Exception as e:
+            await message.channel.send(f"❌ Error leyendo personajes: {e}")
+            return True
+
+        if len(characters) < 2:
+            await message.channel.send("❌ La base de datos debe contener al menos 2 personajes.")
+            return True
+
+        char1, char2 = random.sample(characters, 2)
+        image_path = f"/tmp/headbanz_{challenge.guild_id}.png"
+
+        try:
+            await generate_headbanz_image(
+                p1_name,
+                char1["name"],
+                char1["source"],
+                char1["image_url"],
+                p2_name,
+                char2["name"],
+                char2["source"],
+                char2["image_url"],
+                image_path,
+            )
+        except Exception as e:
+            log.exception("[HEADBANZ] Canvas generation failed")
+            await message.channel.send(f"❌ Error generando la composición visual: {e}")
+            return True
+
+        # Send crossed DMs
+        dm_p1 = await send_character_dm(p1, p2_name, char2["name"], char2["source"], char2["image_url"])
+        dm_p2 = await send_character_dm(p2, p1_name, char1["name"], char1["source"], char1["image_url"])
+
+        if not dm_p1 or not dm_p2:
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+            await message.channel.send("❌ Uno de los jugadores tiene los DMs cerrados. No se pudo iniciar.")
+            return True
+
+        # Call GoLive relay
+        if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+            await message.channel.send("❌ El relay GoLive no está configurado.")
+            return True
+
+        url = urljoin(config.GOLIVE_RELAY_URL, "/headbanz")
+        headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
+        payload = {
+            "guild_id": challenge.guild_id,
+            "channel_id": p1_voice.channel.id,
+            "image_path": image_path,
+        }
+
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
+            ) as sess:
+                async with sess.post(url, json=payload, headers=headers) as resp:
+                    if resp.status >= 400:
+                        try:
+                            os.remove(image_path)
+                        except Exception:
+                            pass
+                        await message.channel.send(f"❌ El relay GoLive no pudo iniciar el stream (HTTP {resp.status}).")
+                        return True
+        except Exception as e:
+            try:
+                os.remove(image_path)
+            except Exception:
+                pass
+            await message.channel.send(f"❌ Error al conectar con el relay GoLive: {e}")
+            return True
+
+        # Register active game session
+        session = HeadbanzSession(
+            challenge.guild_id,
+            challenge.text_channel_id,
+            p1,
+            p2,
+            char1,
+            char2,
+            image_path,
+        )
+        _active_games[p1.id] = session
+        _active_games[p2.id] = session
+
+        await message.channel.send("⚔️ **¡Aceptaste el desafío! El juego comenzó. Revisá tus DMs.**")
+        try:
+            await p1.send(
+                f"⚔️ **{p2_name} aceptó tu desafío.** El juego comenzó y la carta del rival se está transmitiendo por GoLive. ¡Revisá tus DMs para adivinar!"
+            )
+        except Exception:
+            pass
+        return True
+
+    # Neither accept nor reject
+    await message.channel.send("❓ Respondé a este DM con **'si'** para aceptar el desafío o **'no'** para rechazarlo.")
+    return True
+
+
+async def handle_dm_guess(message: discord.Message) -> bool:
+    """Handle incoming DMs to the bot for pending challenge responses and active game guesses."""
+    user_id = message.author.id
+
+    # 1. Check pending challenge response first
+    challenge = _pending_challenges.get(user_id)
+    if challenge:
+        return await _handle_challenge_dm_response(message, challenge)
+
+    # 2. Check active game guess
     session = _active_games.get(user_id)
     if not session:
         return False
@@ -431,238 +619,12 @@ async def handle_dm_guess(message: discord.Message) -> bool:
         return True
 
 
-class HeadbanzChallengeView(discord.ui.View):
-    """DM Challenge View sent to the challenged user with '¿Te la bancás o no te da?' choices."""
-
-    def __init__(
-        self,
-        guild_id: int,
-        text_channel_id: int,
-        player1: discord.Member | discord.User,
-        player2: discord.Member | discord.User,
-    ) -> None:
-        super().__init__(timeout=600)
-        self.guild_id = guild_id
-        self.text_channel_id = text_channel_id
-        self.player1 = player1
-        self.player2 = player2
-
-        self.btn_accept = discord.ui.Button(
-            label="¡Me la banco! ⚔️",
-            style=discord.ButtonStyle.success,
-            custom_id="hb_accept",
-        )
-        self.btn_reject = discord.ui.Button(
-            label="No me da 🐔",
-            style=discord.ButtonStyle.danger,
-            custom_id="hb_reject",
-        )
-
-        self.btn_accept.callback = self.on_accept
-        self.btn_reject.callback = self.on_reject
-
-        self.add_item(self.btn_accept)
-        self.add_item(self.btn_reject)
-
-    async def on_accept(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        self.disable_all_items()
-
-        # Check voice state validation
-        p1_voice = getattr(self.player1, "voice", None)
-        p2_voice = getattr(self.player2, "voice", None)
-
-        if not p1_voice or not p1_voice.channel:
-            await interaction.edit_original_response(
-                content=f"❌ La partida no pudo iniciar porque **{getattr(self.player1, 'display_name', self.player1.name)}** ya no está en un canal de voz.",
-                view=None,
-            )
-            return
-
-        if not p2_voice or not p2_voice.channel or p2_voice.channel.id != p1_voice.channel.id:
-            await interaction.edit_original_response(
-                content=f"❌ Tenés que estar en el mismo canal de voz que **{getattr(self.player1, 'display_name', self.player1.name)}** para iniciar el juego.",
-                view=None,
-            )
-            return
-
-        # Load characters
-        if not os.path.exists(CHARS_FILE):
-            await interaction.edit_original_response(
-                content=f"❌ No se encontró la base de datos de personajes en {CHARS_FILE}",
-                view=None,
-            )
-            return
-
-        try:
-            with open(CHARS_FILE, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-        except Exception as e:
-            await interaction.edit_original_response(
-                content=f"❌ Error leyendo personajes: {e}",
-                view=None,
-            )
-            return
-
-        if len(characters) < 2:
-            await interaction.edit_original_response(
-                content="❌ La base de datos debe contener al menos 2 personajes.",
-                view=None,
-            )
-            return
-
-        char1, char2 = random.sample(characters, 2)
-        image_path = f"/tmp/headbanz_{self.guild_id}.png"
-
-        # Generate Pillow canvas
-        p1_name = getattr(self.player1, "display_name", self.player1.name)
-        p2_name = getattr(self.player2, "display_name", self.player2.name)
-
-        try:
-            await generate_headbanz_image(
-                p1_name,
-                char1["name"],
-                char1["source"],
-                char1["image_url"],
-                p2_name,
-                char2["name"],
-                char2["source"],
-                char2["image_url"],
-                image_path,
-            )
-        except Exception as e:
-            log.exception("[HEADBANZ] Canvas generation failed")
-            await interaction.edit_original_response(
-                content=f"❌ Error generando la composición visual: {e}",
-                view=None,
-            )
-            return
-
-        # Send crossed DMs
-        dm_p1 = await send_character_dm(
-            self.player1, p2_name, char2["name"], char2["source"], char2["image_url"]
-        )
-        dm_p2 = await send_character_dm(
-            self.player2, p1_name, char1["name"], char1["source"], char1["image_url"]
-        )
-
-        if not dm_p1 or not dm_p2:
-            try:
-                os.remove(image_path)
-            except Exception:
-                pass
-            await interaction.edit_original_response(
-                content="❌ Uno de los jugadores tiene los DMs cerrados. No se pudo iniciar.",
-                view=None,
-            )
-            return
-
-        # Call GoLive relay
-        if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-            try:
-                os.remove(image_path)
-            except Exception:
-                pass
-            await interaction.edit_original_response(
-                content="❌ El relay GoLive no está configurado.",
-                view=None,
-            )
-            return
-
-        url = urljoin(config.GOLIVE_RELAY_URL, "/headbanz")
-        headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
-        payload = {
-            "guild_id": self.guild_id,
-            "channel_id": p1_voice.channel.id,
-            "image_path": image_path,
-        }
-
-        try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
-            ) as sess:
-                async with sess.post(url, json=payload, headers=headers) as resp:
-                    if resp.status >= 400:
-                        try:
-                            os.remove(image_path)
-                        except Exception:
-                            pass
-                        await interaction.edit_original_response(
-                            content=f"❌ El relay GoLive no pudo iniciar el stream (HTTP {resp.status}).",
-                            view=None,
-                        )
-                        return
-        except Exception as e:
-            try:
-                os.remove(image_path)
-            except Exception:
-                pass
-            await interaction.edit_original_response(
-                content=f"❌ Error al conectar con el relay GoLive: {e}",
-                view=None,
-            )
-            return
-
-        # Register active game session
-        session = HeadbanzSession(
-            self.guild_id,
-            self.text_channel_id,
-            self.player1,
-            self.player2,
-            char1,
-            char2,
-            image_path,
-        )
-        _active_games[self.player1.id] = session
-        _active_games[self.player2.id] = session
-
-        await interaction.edit_original_response(
-            content="⚔️ **¡Aceptaste el desafío! El juego comenzó. Revisa las instrucciones en tus DMs.**",
-            view=None,
-        )
-
-        try:
-            await self.player1.send(
-                f"⚔️ **{p2_name} aceptó tu desafío.** El juego comenzó y la carta del rival se está transmitiendo por GoLive. ¡Revisá tus DMs para adivinar!"
-            )
-        except Exception:
-            pass
-
-        self.stop()
-
-    async def on_reject(self, interaction: discord.Interaction) -> None:
-        await interaction.response.defer()
-        self.disable_all_items()
-
-        p1_name = getattr(self.player1, "display_name", self.player1.name)
-        p2_name = getattr(self.player2, "display_name", self.player2.name)
-
-        await interaction.edit_original_response(
-            content=f"🐔 **Rechazaste el desafío de {p1_name}.**",
-            view=None,
-        )
-
-        try:
-            await self.player1.send(
-                f"🐔 **{p2_name} no se la bancó y rechazó tu desafío de Headbanz.**"
-            )
-        except Exception:
-            pass
-
-        self.stop()
-
-    def disable_all_items(self) -> None:
-        for item in self.children:
-            if isinstance(item, discord.ui.Button):
-                item.disabled = True
-
-
 async def start_headbanz_game(
     ctx,
     player1: discord.Member,
     player2: discord.Member,
 ) -> None:
-    """Core logic: send challenge DM to player2 with '¿Te la bancás o no te da?' buttons."""
+    """Core logic: send text DM challenge to player2 asking '¿Te la bancás o no te da?'."""
     guild_id = ctx.guild.id if ctx.guild else None
     if guild_id is None:
         await respond(
@@ -680,6 +642,14 @@ async def start_headbanz_game(
         )
         return
 
+    if player2.id in _pending_challenges:
+        await respond(
+            ctx,
+            f"❌ **{getattr(player2, 'display_name', player2.name)}** ya tiene un desafío pendiente.",
+            ephemeral=True,
+        )
+        return
+
     p1_voice = getattr(player1, "voice", None)
     if not p1_voice or not p1_voice.channel:
         await respond(
@@ -693,21 +663,26 @@ async def start_headbanz_game(
     p2_name = getattr(player2, "display_name", player2.name)
     guild_name = getattr(ctx.guild, "name", "el servidor")
 
-    view = HeadbanzChallengeView(guild_id, ctx.channel_id, player1, player2)
+    # Save pending challenge
+    challenge = HeadbanzChallenge(guild_id, ctx.channel_id, player1, player2)
+    _pending_challenges[player2.id] = challenge
+
     embed = discord.Embed(
         title="🎮 ¡Desafío de Headbanz / Adivinador!",
         description=(
             f"**{p1_name}** te desafió a jugar a Headbanz en **{guild_name}**.\n\n"
             f"El juego consiste en adivinar tu personaje secreto haciendo preguntas en el canal de voz mientras el bot transmite la carta del rival en GoLive.\n\n"
-            f"**¿Te la bancás o no te da?**"
+            f"**¿Te la bancás o no te da?**\n\n"
+            f"👉 **Respondé a este mensaje por DM** con **'si'** para aceptar o **'no'** para rechazar."
         ),
         color=0xE94560,
     )
 
     try:
-        await player2.send(embed=embed, view=view)
+        await player2.send(embed=embed)
     except Exception as e:
         log.warning("[HEADBANZ] Failed to send challenge DM to %s: %s", p2_name, e)
+        _pending_challenges.pop(player2.id, None)
         await respond(
             ctx,
             f"❌ No se pudo enviar el desafío a **{p2_name}** porque tiene los DMs cerrados.",
