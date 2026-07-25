@@ -2,8 +2,8 @@
 
 Handles dynamic character selection, PIL canvas compositing, font caching,
 text-only DM challenge workflow ("si" / "no"), text-only DM guessing,
-GoLive streaming, and MMR tracking with a single public winner announcement.
-No UI buttons or public text messages during challenge setup.
+GoLive streaming, MMR tracking with a single public winner announcement,
+and full AI opponent support for the Indio userbot using Gemini.
 """
 
 import asyncio
@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 FONT_DIR = "data/fonts"
 FONT_PATH = os.path.join(FONT_DIR, "Outfit-Bold.ttf")
 CHARS_FILE = "data/adivinador_characters.json"
+INDIO_USER_ID = getattr(config, "USERBOT_USER_ID", 0) or 519594605520486428
 
 
 async def ensure_font_downloaded() -> None:
@@ -254,6 +255,9 @@ async def send_character_dm(
     char_img_url: str,
 ) -> bool:
     """Send a DM to the player detailing their opponent's character card and instructions to guess."""
+    if getattr(user, "id", None) == INDIO_USER_ID:
+        return True  # Internal virtual DM for Indio AI
+
     embed = discord.Embed(
         title="🎮 ¡Empezó Headbanz / Adivinador!",
         description=(
@@ -326,6 +330,7 @@ class HeadbanzSession:
         char1: dict,
         char2: dict,
         image_path: str,
+        is_vs_indio: bool = False,
     ) -> None:
         self.guild_id = guild_id
         self.text_channel_id = text_channel_id
@@ -334,6 +339,8 @@ class HeadbanzSession:
         self.char1 = char1
         self.char2 = char2
         self.image_path = image_path
+        self.is_vs_indio = is_vs_indio
+        self.indio_clues: list[str] = []
         self.created_at = time.time()
 
 
@@ -347,6 +354,144 @@ def _normalize(text: str) -> str:
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     return "".join(c for c in s if c.isalnum())
 
+
+# --- INDIO AI INTEGRATION --------------------------------------------------
+
+async def _indio_answer_human_question(session: HeadbanzSession, question: str) -> str:
+    """Use Gemini to answer the human's question about their assigned secret character."""
+    import geminiClient
+
+    human_name = getattr(session.player1, "display_name", session.player1.name)
+    target_char = session.char1["name"]
+    target_source = session.char1["source"]
+
+    prompt = (
+        f"Sos el Indio, la IA del servidor de Discord. Estás jugando a Headbanz (Adivinador) contra {human_name}.\n"
+        f"El personaje secreto que {human_name} tiene que adivinar es: '{target_char}' (de '{target_source}').\n"
+        f"{human_name} te hizo esta pregunta: '{question}'.\n"
+        f"Respondé la pregunta de forma honesta (diciendo Sí o No claramente, o dando un dato preciso sobre '{target_char}'), "
+        f"con el tono característico del Indio (español argentino, picante, informal, rioplatense). "
+        f"Sé breve (máximo 2 oraciones). ¡NO reveles el nombre exacto del personaje!"
+    )
+    try:
+        reply = await geminiClient.generate(prompt=prompt)
+        if reply and reply.text:
+            return reply.text.strip()
+    except Exception as e:
+        log.warning("[HEADBANZ] Gemini generate answer failed: %s", e)
+    return "Sí che, dale para adelante."
+
+
+async def _run_indio_ai_turn(session: HeadbanzSession) -> None:
+    """Indio's AI turn: analyze accumulated clues, ask a smart Yes/No question, or make a victory GUESS."""
+    import geminiClient
+
+    if session.player1.id not in _active_games:
+        return
+
+    human = session.player1
+    human_name = getattr(human, "display_name", human.name)
+    clues_summary = ", ".join(session.indio_clues) if session.indio_clues else "Ninguna pista todavía"
+
+    prompt = (
+        f"Sos el Indio jugando a Headbanz (Adivinador) contra {human_name}.\n"
+        f"Tenés que adivinar tu propio personaje secreto (que no sabés cuál es).\n"
+        f"Hasta ahora acumulaste estas respuestas/pistas sobre tu personaje: [{clues_summary}].\n\n"
+        f"Opciones:\n"
+        f"1. Si ya tenés más del 90% de certeza sobre tu personaje, escribí ÚNICAMENTE: GUESS: <NombreExactoDelPersonaje>\n"
+        f"2. Si todavía no sabés, hacé UNA sola pregunta inteligente de Sí/No para achicar las opciones (ej. '¿Mi personaje es un superhéroe?'). "
+        f"Escribí únicamente la pregunta con el tono del Indio (argentino, informal, lunfardo breve)."
+    )
+
+    try:
+        reply = await geminiClient.generate(prompt=prompt)
+        if reply and reply.text:
+            text = reply.text.strip()
+            if text.startswith("GUESS:") or "GUESS:" in text:
+                guess = text.split("GUESS:")[-1].strip().split("\n")[0].strip()
+                log.info("[HEADBANZ] Indio AI guesses: %s", guess)
+                await _resolve_victory(session, winner=session.player2, loser=session.player1, target_char=session.char2)
+            else:
+                try:
+                    await human.send(f"🎙️ **El Indio te pregunta por DM:** {text}")
+                except Exception:
+                    pass
+    except Exception as e:
+        log.warning("[HEADBANZ] Indio AI turn failed: %s", e)
+
+
+async def _resolve_victory(
+    session: HeadbanzSession,
+    winner: discord.Member | discord.User,
+    loser: discord.Member | discord.User,
+    target_char: dict,
+) -> None:
+    """Execute standard victory resolution: DMs, single public text channel announcement, MMR logging, and cleanup."""
+    _active_games.pop(session.player1.id, None)
+    _active_games.pop(session.player2.id, None)
+
+    winner_name = getattr(winner, "display_name", winner.name)
+    loser_name = getattr(loser, "display_name", loser.name)
+
+    # DM confirmations
+    try:
+        if winner.id != INDIO_USER_ID:
+            await winner.send(
+                f"🎉 **¡CORRECTO!** Adivinaste a tu personaje (**{target_char['name']}**) y ganaste la partida."
+            )
+    except Exception:
+        pass
+
+    try:
+        if loser.id != INDIO_USER_ID:
+            await loser.send(
+                f"💀 **{winner_name}** adivinó a su personaje (**{target_char['name']}**) y ganó la partida."
+            )
+    except Exception:
+        pass
+
+    # THE ONLY PUBLIC MESSAGE IN THE SERVER CHANNEL (identical template for all players, including Indio)
+    try:
+        from bot import bot
+
+        text_channel = bot.get_channel(session.text_channel_id)
+        if not text_channel:
+            text_channel = await bot.fetch_channel(session.text_channel_id)
+        if text_channel:
+            await text_channel.send(
+                f"🏆 **{winner_name}** le ganó a **{loser_name}** en `/adivinador`."
+            )
+    except Exception as e:
+        log.warning("[HEADBANZ] Failed to send public victory announcement: %s", e)
+
+    # Log Glicko-1 MMR updates
+    from bot import _log_activity
+
+    await _log_activity(
+        winner.id,
+        session.guild_id,
+        "game_win",
+        quality_score=1.0,
+        display_name=winner_name,
+    )
+    await _log_activity(
+        loser.id,
+        session.guild_id,
+        "game_lose",
+        quality_score=0.0,
+        display_name=loser_name,
+    )
+
+    # Stop GoLive stream and cleanup
+    await stop_golive_stream(session.guild_id)
+    try:
+        if os.path.exists(session.image_path):
+            os.remove(session.image_path)
+    except Exception:
+        pass
+
+
+# --- GAME WORKFLOW AND INTERCEPTION ----------------------------------------
 
 async def _handle_challenge_dm_response(message: discord.Message, challenge: HeadbanzChallenge) -> bool:
     """Handle text DM response ('si' or 'no') to a pending Headbanz challenge."""
@@ -378,135 +523,157 @@ async def _handle_challenge_dm_response(message: discord.Message, challenge: Hea
         return True
 
     if is_accept:
-        # Check voice state validation
-        p1_voice = getattr(p1, "voice", None)
-        p2_voice = getattr(p2, "voice", None)
+        return await start_active_game_session(challenge)
 
-        if not p1_voice or not p1_voice.channel:
-            await message.channel.send(
-                f"❌ La partida no pudo iniciar porque **{p1_name}** ya no está en un canal de voz."
-            )
-            _pending_challenges.pop(user_id, None)
-            return True
+    # Neither accept nor reject
+    await message.channel.send("❓ Respondé a este DM con **'si'** para aceptar el desafío o **'no'** para rechazarlo.")
+    return True
 
+
+async def start_active_game_session(challenge: HeadbanzChallenge) -> bool:
+    """Start the active Headbanz game session between two players."""
+    p1 = challenge.player1
+    p2 = challenge.player2
+    p1_name = getattr(p1, "display_name", p1.name)
+    p2_name = getattr(p2, "display_name", p2.name)
+
+    # Voice validation
+    p1_voice = getattr(p1, "voice", None)
+    p2_voice = getattr(p2, "voice", None)
+
+    if not p1_voice or not p1_voice.channel:
+        try:
+            if p2.id != INDIO_USER_ID:
+                await p2.send(f"❌ La partida no pudo iniciar porque **{p1_name}** ya no está en un canal de voz.")
+        except Exception:
+            pass
+        _pending_challenges.pop(p2.id, None)
+        return True
+
+    is_vs_indio = (p2.id == INDIO_USER_ID)
+
+    if not is_vs_indio:
         if not p2_voice or not p2_voice.channel or p2_voice.channel.id != p1_voice.channel.id:
-            await message.channel.send(
-                f"❌ Tenés que estar en el mismo canal de voz que **{p1_name}** para iniciar el juego."
-            )
-            return True
-
-        # Remove challenge from pending
-        _pending_challenges.pop(user_id, None)
-
-        # Load characters
-        if not os.path.exists(CHARS_FILE):
-            await message.channel.send(f"❌ No se encontró la base de datos de personajes en {CHARS_FILE}")
-            return True
-
-        try:
-            with open(CHARS_FILE, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-        except Exception as e:
-            await message.channel.send(f"❌ Error leyendo personajes: {e}")
-            return True
-
-        if len(characters) < 2:
-            await message.channel.send("❌ La base de datos debe contener al menos 2 personajes.")
-            return True
-
-        char1, char2 = random.sample(characters, 2)
-        image_path = f"/tmp/headbanz_{challenge.guild_id}.png"
-
-        try:
-            await generate_headbanz_image(
-                p1_name,
-                char1["name"],
-                char1["source"],
-                char1["image_url"],
-                p2_name,
-                char2["name"],
-                char2["source"],
-                char2["image_url"],
-                image_path,
-            )
-        except Exception as e:
-            log.exception("[HEADBANZ] Canvas generation failed")
-            await message.channel.send(f"❌ Error generando la composición visual: {e}")
-            return True
-
-        # Send crossed DMs
-        dm_p1 = await send_character_dm(p1, p2_name, char2["name"], char2["source"], char2["image_url"])
-        dm_p2 = await send_character_dm(p2, p1_name, char1["name"], char1["source"], char1["image_url"])
-
-        if not dm_p1 or not dm_p2:
             try:
-                os.remove(image_path)
+                await p2.send(f"❌ Tenés que estar en el mismo canal de voz que **{p1_name}** para iniciar el juego.")
             except Exception:
                 pass
-            await message.channel.send("❌ Uno de los jugadores tiene los DMs cerrados. No se pudo iniciar.")
             return True
 
-        # Call GoLive relay
-        if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-            try:
-                os.remove(image_path)
-            except Exception:
-                pass
-            await message.channel.send("❌ El relay GoLive no está configurado.")
-            return True
+    _pending_challenges.pop(p2.id, None)
 
-        url = urljoin(config.GOLIVE_RELAY_URL, "/headbanz")
-        headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
-        payload = {
-            "guild_id": challenge.guild_id,
-            "channel_id": p1_voice.channel.id,
-            "image_path": image_path,
-        }
+    # Load characters
+    if not os.path.exists(CHARS_FILE):
+        log.error("[HEADBANZ] Characters file missing: %s", CHARS_FILE)
+        return True
 
-        try:
-            async with aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
-            ) as sess:
-                async with sess.post(url, json=payload, headers=headers) as resp:
-                    if resp.status >= 400:
-                        try:
-                            os.remove(image_path)
-                        except Exception:
-                            pass
-                        await message.channel.send(f"❌ El relay GoLive no pudo iniciar el stream (HTTP {resp.status}).")
-                        return True
-        except Exception as e:
-            try:
-                os.remove(image_path)
-            except Exception:
-                pass
-            await message.channel.send(f"❌ Error al conectar con el relay GoLive: {e}")
-            return True
+    try:
+        with open(CHARS_FILE, "r", encoding="utf-8") as f:
+            characters = json.load(f)
+    except Exception as e:
+        log.exception("[HEADBANZ] Error loading characters: %s", e)
+        return True
 
-        # Register active game session
-        session = HeadbanzSession(
-            challenge.guild_id,
-            challenge.text_channel_id,
-            p1,
-            p2,
-            char1,
-            char2,
+    if len(characters) < 2:
+        return True
+
+    char1, char2 = random.sample(characters, 2)
+    image_path = f"/tmp/headbanz_{challenge.guild_id}.png"
+
+    try:
+        await generate_headbanz_image(
+            p1_name,
+            char1["name"],
+            char1["source"],
+            char1["image_url"],
+            p2_name,
+            char2["name"],
+            char2["source"],
+            char2["image_url"],
             image_path,
         )
-        _active_games[p1.id] = session
-        _active_games[p2.id] = session
+    except Exception as e:
+        log.exception("[HEADBANZ] Canvas generation failed")
+        return True
 
-        await message.channel.send("⚔️ **¡Aceptaste el desafío! El juego comenzó. Revisá tus DMs.**")
+    # Send crossed DMs
+    dm_p1 = await send_character_dm(p1, p2_name, char2["name"], char2["source"], char2["image_url"])
+    dm_p2 = await send_character_dm(p2, p1_name, char1["name"], char1["source"], char1["image_url"])
+
+    if not dm_p1 or not dm_p2:
+        try:
+            os.remove(image_path)
+        except Exception:
+            pass
+        return True
+
+    # Call GoLive relay
+    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+        try:
+            os.remove(image_path)
+        except Exception:
+            pass
+        return True
+
+    url = urljoin(config.GOLIVE_RELAY_URL, "/headbanz")
+    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
+    payload = {
+        "guild_id": challenge.guild_id,
+        "channel_id": p1_voice.channel.id,
+        "image_path": image_path,
+    }
+
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
+        ) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    try:
+                        os.remove(image_path)
+                    except Exception:
+                        pass
+                    return True
+    except Exception as e:
+        try:
+            os.remove(image_path)
+        except Exception:
+            pass
+        return True
+
+    # Register active session
+    session = HeadbanzSession(
+        challenge.guild_id,
+        challenge.text_channel_id,
+        p1,
+        p2,
+        char1,
+        char2,
+        image_path,
+        is_vs_indio=is_vs_indio,
+    )
+    _active_games[p1.id] = session
+    _active_games[p2.id] = session
+
+    if is_vs_indio:
+        try:
+            await p1.send(
+                f"⚔️ **¡El Indio aceptó tu desafío!** El juego comenzó y la carta del rival se está transmitiendo por GoLive en tu canal de voz. ¡Revisá tus DMs para adivinar!"
+            )
+        except Exception:
+            pass
+        asyncio.create_task(_run_indio_ai_turn(session))
+    else:
+        try:
+            await p2.send("⚔️ **¡Aceptaste el desafío! El juego comenzó. Revisá tus DMs.**")
+        except Exception:
+            pass
         try:
             await p1.send(
                 f"⚔️ **{p2_name} aceptó tu desafío.** El juego comenzó y la carta del rival se está transmitiendo por GoLive. ¡Revisá tus DMs para adivinar!"
             )
         except Exception:
             pass
-        return True
-
-    # Neither accept nor reject
-    await message.channel.send("❓ Respondé a este DM con **'si'** para aceptar el desafío o **'no'** para rechazarlo.")
     return True
 
 
@@ -546,70 +713,26 @@ async def handle_dm_guess(message: discord.Message) -> bool:
     )
 
     if is_correct:
-        # Clear active session mapping
-        _active_games.pop(session.player1.id, None)
-        _active_games.pop(session.player2.id, None)
-
-        guesser_name = getattr(guesser, "display_name", guesser.name)
-        opponent_name = getattr(opponent, "display_name", opponent.name)
-
-        # DM confirmations
-        try:
-            await message.channel.send(
-                f"🎉 **¡CORRECTO!** Adivinaste a tu personaje (**{target_char['name']}**) y ganaste la partida."
-            )
-        except Exception:
-            pass
-
-        try:
-            await opponent.send(
-                f"💀 **{guesser_name}** adivinó a su personaje (**{target_char['name']}**) y ganó la partida."
-            )
-        except Exception:
-            pass
-
-        # THE ONLY PUBLIC MESSAGE IN THE SERVER CHANNEL
-        try:
-            from bot import bot
-
-            text_channel = bot.get_channel(session.text_channel_id)
-            if not text_channel:
-                text_channel = await bot.fetch_channel(session.text_channel_id)
-            if text_channel:
-                await text_channel.send(
-                    f"🏆 **{guesser_name}** le ganó a **{opponent_name}** en `/adivinador`."
-                )
-        except Exception as e:
-            log.warning("[HEADBANZ] Failed to send public victory announcement: %s", e)
-
-        # Log Glicko-1 MMR updates
-        from bot import _log_activity
-
-        await _log_activity(
-            guesser.id,
-            session.guild_id,
-            "game_win",
-            quality_score=1.0,
-            display_name=guesser_name,
-        )
-        await _log_activity(
-            opponent.id,
-            session.guild_id,
-            "game_lose",
-            quality_score=0.0,
-            display_name=opponent_name,
-        )
-
-        # Stop GoLive stream and cleanup
-        await stop_golive_stream(session.guild_id)
-        try:
-            if os.path.exists(session.image_path):
-                os.remove(session.image_path)
-        except Exception:
-            pass
+        await _resolve_victory(session, winner=guesser, loser=opponent, target_char=target_char)
         return True
     else:
-        # Incorrect guess
+        # If playing vs Indio, process AI interaction
+        if session.is_vs_indio and user_id == session.player1.id:
+            # Human sent an answer or question to Indio
+            session.indio_clues.append(content)
+            
+            # Indio answers human question as AI
+            answer = await _indio_answer_human_question(session, content)
+            try:
+                await message.channel.send(f"🤖 **Indio:** {answer}")
+            except Exception:
+                pass
+
+            # Trigger next turn for Indio
+            asyncio.create_task(_run_indio_ai_turn(session))
+            return True
+
+        # Regular incorrect guess response
         try:
             await message.channel.send(
                 f"❌ **{content}** no es tu personaje. ¡Seguí probando!"
@@ -624,7 +747,7 @@ async def start_headbanz_game(
     player1: discord.Member,
     player2: discord.Member,
 ) -> None:
-    """Core logic: send text DM challenge to player2 asking '¿Te la bancás o no te da?'."""
+    """Core logic: send text DM challenge or auto-accept if challenged user is Indio AI."""
     guild_id = ctx.guild.id if ctx.guild else None
     if guild_id is None:
         await respond(
@@ -665,6 +788,17 @@ async def start_headbanz_game(
 
     # Save pending challenge
     challenge = HeadbanzChallenge(guild_id, ctx.channel_id, player1, player2)
+
+    # AUTO-ACCEPT IF CHALLENGED USER IS INDIO
+    if player2.id == INDIO_USER_ID:
+        await start_active_game_session(challenge)
+        await respond(
+            ctx,
+            f"🤖 **¡El Indio aceptó tu desafío!** La partida comenzó por DM.",
+            ephemeral=True,
+        )
+        return
+
     _pending_challenges[player2.id] = challenge
 
     embed = discord.Embed(

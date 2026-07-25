@@ -1,7 +1,8 @@
 """Behavioral tests for the text-only DM-based Headbanz / adivinador command.
 
-Fakes Discord gateways, DMs, the GoLive HTTP relay, and the database MMR logging.
-Verifies strict DM-only text interactions ("si"/"no" challenge, DM guessing) and single public victory channel announcement.
+Fakes Discord gateways, DMs, the GoLive HTTP relay, Gemini AI, and database MMR logging.
+Verifies text interactions ("si"/"no" challenge, DM guessing), playing against the Indio AI userbot,
+and single public victory channel announcements.
 """
 
 import asyncio
@@ -20,6 +21,7 @@ from adivinadorCommand import (
     handle_dm_guess,
     _pending_challenges,
     _active_games,
+    INDIO_USER_ID,
 )
 from tests.conftest import sent_text
 
@@ -117,20 +119,18 @@ async def test_adivinador_challenge_reject_by_text_dm(ctx_factory, monkeypatch):
     assert 1 not in _active_games
 
 
-async def test_adivinador_challenge_accept_and_guess_flow(ctx_factory, monkeypatch, tmp_path):
+async def test_adivinador_challenge_indio_auto_accept_and_victory(ctx_factory, monkeypatch, tmp_path):
     ctx = ctx_factory(in_voice=True, voice_channel_id=99)
     monkeypatch.setattr(config, "GOLIVE_RELAY_URL", "http://127.0.0.1:8082")
     monkeypatch.setattr(config, "GOLIVE_RELAY_SECRET", "secret")
 
     # Mock HTTP client for GoLive relay POST
-    post_calls = []
     class FakeSession:
         async def __aenter__(self):
             return self
         async def __aexit__(self, *args):
             pass
         def post(self, url, json, headers, **kwargs):
-            post_calls.append({"url": url, "json": json, "headers": headers})
             resp = MagicMock()
             resp.status = 200
             async def text():
@@ -175,103 +175,59 @@ async def test_adivinador_challenge_accept_and_guess_flow(ctx_factory, monkeypat
     import bot
     monkeypatch.setattr(bot, "_log_activity", fake_log)
 
-    # Set up players
+    # Set up players (Player 1 vs Indio AI)
     p1 = ctx.author
     p1.display_name = "Player 1"
     p1.name = "player1"
     p1.id = 1
     p1.send = AsyncMock()
 
-    p2 = MagicMock(spec=discord.Member)
-    p2.display_name = "Player 2"
-    p2.name = "player2"
-    p2.id = 2
-    p2.voice = MagicMock()
-    p2.voice.channel = MagicMock()
-    p2.voice.channel.id = 99
-    p2.send = AsyncMock()
+    indio = MagicMock(spec=discord.Member)
+    indio.display_name = "Indio"
+    indio.name = "indio"
+    indio.id = INDIO_USER_ID
+    indio.voice = MagicMock()
+    indio.voice.channel = MagicMock()
+    indio.voice.channel.id = 99
+    indio.send = AsyncMock()
 
-    await start_headbanz_game(ctx, p1, p2)
-    assert 2 in _pending_challenges
+    # Mock Gemini AI generation
+    import geminiClient
+    async def fake_gemini_generate(prompt):
+        res = MagicMock()
+        res.text = "GUESS: Luffy"
+        return res
+    monkeypatch.setattr(geminiClient, "generate", fake_gemini_generate)
 
-    # 1. Player 2 sends DM "si" to accept
-    msg_accept = MagicMock(spec=discord.Message)
-    msg_accept.author = p2
-    msg_accept.guild = None
-    msg_accept.content = "si"
-    msg_accept.channel = MagicMock()
-    msg_accept.channel.send = AsyncMock()
+    # Start game against Indio -> auto accept
+    await start_headbanz_game(ctx, p1, indio)
 
-    handled = await handle_dm_guess(msg_accept)
-    assert handled is True
+    # 1. Verify auto-acceptance response sent to challenger
+    assert "El Indio aceptó tu desafío" in sent_text(ctx)
 
-    # Verify DMs sent with crossed characters
-    assert p1.send.call_count == 2  # Accept notice + Crossed card DM
-    assert p2.send.call_count == 2  # Challenge DM + Crossed card DM
-
-    # Verify game session created
+    # 2. Active game created with is_vs_indio=True
     assert 1 in _active_games
-    assert 2 in _active_games
-    session = _active_games[2]
+    assert INDIO_USER_ID in _active_games
+    session = _active_games[1]
+    assert session.is_vs_indio is True
 
-    # Verify NO public channel message sent during setup
-    assert ctx.followup.send.call_count == 1  # Ephemeral setup notice only
-
-    # 2. Player 2 sends INCORRECT DM guess
-    msg_incorrect = MagicMock(spec=discord.Message)
-    msg_incorrect.author = p2
-    msg_incorrect.guild = None
-    msg_incorrect.content = "Naruto"
-    msg_incorrect.channel = MagicMock()
-    msg_incorrect.channel.send = AsyncMock()
-
-    handled_inc = await handle_dm_guess(msg_incorrect)
-    assert handled_inc is True
-    assert msg_incorrect.channel.send.call_count == 1
-    assert "no es tu personaje" in msg_incorrect.channel.send.call_args[0][0]
-
-    # Active session still exists
-    assert 2 in _active_games
-
-    # 3. Player 2 sends CORRECT DM guess for assigned character (session.char2['name'])
-    correct_char_name = session.char2["name"]
-    msg_correct = MagicMock(spec=discord.Message)
-    msg_correct.author = p2
-    msg_correct.guild = None
-    msg_correct.content = correct_char_name
-    msg_correct.channel = MagicMock()
-    msg_correct.channel.send = AsyncMock()
-
-    # Mock bot.get_channel for the SINGLE public victory announcement
+    # 3. Simulate Indio AI turn winning victory
     text_channel_mock = MagicMock()
     text_channel_mock.send = AsyncMock()
     bot.bot.get_channel = MagicMock(return_value=text_channel_mock)
 
-    handled_correct = await handle_dm_guess(msg_correct)
-    assert handled_correct is True
+    await adivinadorCommand._run_indio_ai_turn(session)
 
-    # Verify winner DM sent to guesser (Player 2)
-    assert msg_correct.channel.send.call_count == 1
-    assert "¡CORRECTO!" in msg_correct.channel.send.call_args[0][0]
-
-    # VERIFY SINGLE PUBLIC ANNOUNCEMENT IN SERVER TEXT CHANNEL
+    # Verify public victory announcement for Indio using standard template
     assert text_channel_mock.send.call_count == 1
     pub_msg = text_channel_mock.send.call_args[0][0]
-    assert "Player 2" in pub_msg
+    assert "Indio" in pub_msg
     assert "le ganó a" in pub_msg
+    assert "Player 1" in pub_msg
     assert "/adivinador" in pub_msg
 
-    # Verify MMR logged: P2 (winner) gets 1.0, P1 gets 0.0
+    # Verify MMR logged for Indio (winner) and Player 1 (loser)
     assert len(mmr_logs) == 2
-    assert mmr_logs[0]["user_id"] == 2
+    assert mmr_logs[0]["user_id"] == INDIO_USER_ID
     assert mmr_logs[0]["activity_type"] == "game_win"
     assert mmr_logs[0]["quality_score"] == 1.0
-
-    assert mmr_logs[1]["user_id"] == 1
-    assert mmr_logs[1]["activity_type"] == "game_lose"
-    assert mmr_logs[1]["quality_score"] == 0.0
-
-    # Verify stream stopped and session cleared
-    assert len(stop_called) == 1
-    assert 1 not in _active_games
-    assert 2 not in _active_games

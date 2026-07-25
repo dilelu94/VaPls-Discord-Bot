@@ -2466,7 +2466,8 @@ async def adivinador(
     if usuario.id == ctx.author.id:
         await ctx.respond("❌ No podés jugar contra vos mismo.", ephemeral=True)
         return
-    if usuario.bot:
+    indio_id = config.USERBOT_USER_ID or 519594605520486428
+    if usuario.bot and usuario.id != indio_id:
         await ctx.respond("❌ No podés jugar contra un bot.", ephemeral=True)
         return
     await start_headbanz_game(ctx, ctx.author, usuario)
