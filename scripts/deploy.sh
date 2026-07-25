@@ -156,6 +156,43 @@ if [ -f "$MAIN_ENV" ]; then
     echo "    Set .env GOLIVE_RELAY_SECRET=$GOLIVE_SECRET"
 fi
 
+# ── 5e. Configure automatic yt-dlp and POT plugin updates ─────────────────────
+echo "==> Configuring yt-dlp-update.service and yt-dlp-update.timer..."
+cat <<EOF | sudo tee /etc/systemd/system/yt-dlp-update.service > /dev/null
+[Unit]
+Description=Auto-update yt-dlp and bgutil POT plugin
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/usr/bin/pip install --user --upgrade --pre 'yt-dlp[default]' bgutil-ytdlp-pot-provider
+ExecStartPost=/usr/bin/sudo /usr/bin/systemctl restart discord-bot
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/yt-dlp-update.timer > /dev/null
+[Unit]
+Description=Daily update of yt-dlp and bgutil POT plugin
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now yt-dlp-update.timer
+echo "    yt-dlp-update.timer enabled and active"
+
 # ── 6. Restart services ───────────────────────────────────────────────────────
 echo "==> Restarting services..."
 SERVICES="discord-bot indio-userbot"

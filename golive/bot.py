@@ -302,6 +302,125 @@ class GoLiveStream:
         log.info("[STREAM] Stream stopped and cleaned up")
 
 
+class HeadbanzGoLiveStream:
+    """Manages GoLive streaming of a static image for the Headbanz game."""
+    def __init__(self, bot, guild_id: int, channel_id: int, vc, image_path: str) -> None:
+        self.bot = bot
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.vc = vc
+        self.image_path = image_path
+        self.conn = None
+        self.video_player = None
+        self.audio_sender = None
+        self.video_ssrc = None
+        self.is_live = False
+        self._stopped = False
+        self._inactivity_task = None
+
+    async def start(self) -> None:
+        log.info("[HEADBANZ] Establishing GoLive connection...")
+        self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
+        await self.conn.connect(timeout=30.0)
+        self.video_ssrc = self.conn.ssrc + 1
+        await self._start_players()
+        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
+
+    async def _start_players(self) -> None:
+        from streamer import HeadbanzPlayer
+        from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
+        proxy_vc = _GoLiveVCProxy(self.conn)
+        self.video_player = HeadbanzPlayer(
+            image_path=self.image_path,
+            voice_client=proxy_vc,
+            fps=15.0,
+        )
+        self.video_player.start()
+        log.info("[HEADBANZ] Headbanz video player started")
+
+        log.info("[HEADBANZ] Waiting for audio FIFO...")
+        try:
+            f = await asyncio.wait_for(
+                asyncio.to_thread(open, self.video_player.audio_fifo, "rb"),
+                timeout=15.0,
+            )
+        except TimeoutError:
+            log.error("[HEADBANZ] Timed out waiting for audio FIFO")
+            raise RuntimeError("Timed out waiting for audio FIFO")
+
+        self.audio_sender = GoLiveAudioSender(
+            file_obj=f,
+            conn=self.conn,
+            is_source_active=self.video_player.is_source_active,
+        )
+        self.audio_sender.start()
+        log.info("[HEADBANZ] Audio sender started")
+
+    async def _stop_players(self) -> None:
+        if self.video_player:
+            self.video_player.stop()
+        if self.audio_sender:
+            self.audio_sender.stop()
+        await asyncio.to_thread(self._wait_players)
+        self.video_player = None
+        self.audio_sender = None
+
+    def _wait_players(self) -> None:
+        deadline = time.monotonic() + 5.0
+        for p in (self.video_player, self.audio_sender):
+            if p and p.is_alive():
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    p.join(timeout=remaining)
+                if p.is_alive():
+                    log.warning("[HEADBANZ] %s still alive after 5s", p.name)
+
+    async def _inactivity_loop(self) -> None:
+        try:
+            while not self._stopped:
+                await asyncio.sleep(2)
+                if self._stopped:
+                    break
+                if self.conn and not self.conn.healthy:
+                    log.warning("[HEADBANZ] GoLive connection lost. Auto-stopping.")
+                    break
+                if self.video_player and not self.video_player.is_alive():
+                    log.info("[HEADBANZ] Video player ended naturally — auto-stopping")
+                    break
+        except asyncio.CancelledError:
+            return
+        if not self._stopped:
+            _active_streams.pop(self.guild_id, None)
+            await self.stop()
+
+    async def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        if self._inactivity_task:
+            self._inactivity_task.cancel()
+            self._inactivity_task = None
+        log.info("[HEADBANZ] Stopping stream...")
+        try:
+            await self._stop_players()
+        except Exception:
+            pass
+        if self.conn:
+            try:
+                await asyncio.wait_for(self.conn.disconnect(), timeout=5.0)
+            except Exception:
+                pass
+        if self.vc and self.vc.is_connected():
+            try:
+                await self.vc.disconnect(force=True)
+            except Exception:
+                pass
+        guild = client.get_guild(self.guild_id)
+        if guild:
+            _schedule_nickname_restore(guild)
+        log.info("[HEADBANZ] Stream stopped and cleaned up")
+
+
 _active_streams: dict[int, GoLiveStream] = {}
 _nick_restore_tasks: dict[int, asyncio.Task] = {}
 
@@ -482,6 +601,67 @@ async def _relay_stream(request: web.Request) -> web.Response:
     )
 
 
+async def _relay_headbanz(request: web.Request) -> web.Response:
+    log.info("[HEADBANZ] request from %s", request.remote)
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+        image_path = str(data["image_path"]).strip()
+    except Exception as e:
+        log.warning("[HEADBANZ] invalid body: %s", e)
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "client not ready"}, status=503)
+
+    existing = _active_streams.pop(guild_id, None)
+    if existing:
+        await existing.stop()
+
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return web.json_response({"error": "guild not found"}, status=404)
+
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.VoiceChannel):
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+
+    if not isinstance(channel, discord.VoiceChannel):
+        return web.json_response({"error": "not a voice channel"}, status=400)
+
+    await _join_channel(channel)
+    vc = _vc_for_guild(guild)
+    if vc is None or not vc.is_connected():
+        return web.json_response({"error": "not connected"}, status=500)
+
+    stream = HeadbanzGoLiveStream(client, guild_id, channel_id, vc, image_path)
+    try:
+        await stream.start()
+    except Exception as e:
+        await stream.stop()
+        return web.json_response({"error": str(e)}, status=500)
+
+    _active_streams[guild_id] = stream
+    await _set_nickname(guild, "GoLive - Headbanz")
+    return web.json_response(
+        {
+            "started": True,
+            "guild_id": guild_id,
+            "channel_name": channel.name,
+            "video_ssrc": stream.video_ssrc,
+            "is_live": False,
+        }
+    )
+
+
 async def _relay_stopstream(request: web.Request) -> web.Response:
     if not config.RELAY_SECRET:
         return web.json_response({"error": "relay disabled"}, status=503)
@@ -645,6 +825,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/stream", _relay_stream)
     app.router.add_post("/stopstream", _relay_stopstream)
     app.router.add_post("/stream/control", _relay_stream_control)
+    app.router.add_post("/headbanz", _relay_headbanz)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

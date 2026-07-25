@@ -38,6 +38,8 @@ DEFAULT_WEIGHTS = {
     "channel_create": 0,
     "poll_create": 3.0,
     "poll_vote": 0.15,
+    "game_win": 1.5,
+    "game_lose": 1.5,
 }
 
 DEFAULT_CFG = {
@@ -159,6 +161,7 @@ def _schema() -> None:
     _migrate_v2()
     _migrate_v3()
     _migrate_v4()
+    _migrate_v5()
 
 
 def _migrate_v1() -> None:
@@ -205,6 +208,16 @@ def _migrate_v3() -> None:
 
 def _migrate_v4() -> None:
     _conn.execute("UPDATE pet_points SET total_earned = 200 WHERE total_earned = 500")
+    _conn.commit()
+
+
+def _migrate_v5() -> None:
+    for k in ("weight_game_win", "weight_game_lose"):
+        cur = _conn.execute("SELECT 1 FROM config WHERE key=?", (k,))
+        if cur.fetchone() is None:
+            _conn.execute(
+                "INSERT INTO config (key, value) VALUES (?, ?)", (k, "1.5")
+            )
     _conn.commit()
 
 
@@ -581,6 +594,21 @@ def get_user_stats(user_id: int, guild_id: int) -> dict | None:
         (user_id, guild_id, _now() - 86400 * 7),
     )
     r["recent_activities"] = [dict(x) for x in cur2.fetchall()]
+
+    cur_wins = _conn.execute(
+        """SELECT COUNT(*) AS wins FROM activity_log
+           WHERE user_id=? AND guild_id=? AND activity_type='game_win'""",
+        (user_id, guild_id),
+    )
+    r["game_wins"] = cur_wins.fetchone()["wins"]
+
+    cur_losses = _conn.execute(
+        """SELECT COUNT(*) AS losses FROM activity_log
+           WHERE user_id=? AND guild_id=? AND activity_type='game_lose'""",
+        (user_id, guild_id),
+    )
+    r["game_losses"] = cur_losses.fetchone()["losses"]
+
     return r
 
 

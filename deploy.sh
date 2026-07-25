@@ -113,6 +113,44 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now bgutil-pot.service
 echo "bgutil-pot.service activo en puerto 4416"
 
+# Configurar auto-actualización de yt-dlp y el plugin POT diariamente
+echo "Configurando yt-dlp-update.service y yt-dlp-update.timer..."
+cat <<EOF | sudo tee /etc/systemd/system/yt-dlp-update.service > /dev/null
+[Unit]
+Description=Auto-update yt-dlp and bgutil POT plugin
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=${USER}
+ExecStart=/usr/bin/pip install --user --upgrade --pre 'yt-dlp[default]' bgutil-ytdlp-pot-provider
+ExecStartPost=/usr/bin/sudo /usr/bin/systemctl restart discord-bot
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/yt-dlp-update.timer > /dev/null
+[Unit]
+Description=Daily update of yt-dlp and bgutil POT plugin
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now yt-dlp-update.timer
+echo "yt-dlp-update.timer habilitado y activo"
+
+
 # 2. Configurar el entorno virtual de Python
 echo "Creando entorno virtual de Python..."
 python3 -m venv venv

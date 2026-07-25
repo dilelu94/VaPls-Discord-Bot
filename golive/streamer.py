@@ -1353,3 +1353,64 @@ class H264VideoPlayer(threading.Thread):
             self._proc.kill()
             rc = self._proc.wait()
         log.info("H.264 video stream ended (exit code %d)", rc)
+
+
+class HeadbanzPlayer(H264VideoPlayer):
+    """Streams a static composite image for the Headbanz/Adivinador game indefinitely
+    with silent audio.
+    """
+    def __init__(self, image_path: str, voice_client, fps: float = 15.0) -> None:
+        super().__init__(
+            url=image_path,
+            voice_client=voice_client,
+            fps=fps,
+            live=False,
+            audio=False,
+        )
+        self._image_path = image_path
+
+    def _ffmpeg_cmd(self) -> list[str]:
+        enc = self._enc
+        assert enc is not None, "HeadbanzPlayer started with no encoder available"
+
+        br = _stream_bitrate()
+
+        return [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "warning",
+            "-re",
+            "-loop",
+            "1",
+            "-i",
+            self._image_path,
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=stereo",
+            "-c:v",
+            enc.name,
+            *enc.post_codec,
+            "-r",
+            str(int(self._fps)),
+            "-g",
+            str(int(self._fps)),
+            "-f",
+            "h264",
+            "pipe:1",
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-c:a",
+            "pcm_s16le",
+            "-ar",
+            "48000",
+            "-ac",
+            "2",
+            "-f",
+            "s16le",
+            self._audio_fifo,
+        ]
+

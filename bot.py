@@ -38,6 +38,7 @@ import geminiKeys
 import iptv
 import decifrarVoting
 from instagramCommand import start_instagram_reel_stream_logic, start_instagram_stream_logic
+from adivinadorCommand import start_headbanz_game
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import huggingfaceImage
 import transferCommand
@@ -2441,6 +2442,34 @@ async def stopstream(ctx):
 
 
 @bot.slash_command(
+    name="adivinador",
+    description="Inicia una partida de Headbanz / Adivinador contra un usuario",
+)
+async def adivinador(
+    ctx,
+    usuario: discord.Option(
+        discord.Member,
+        description="Usuario contra el que querés jugar",
+        required=True,
+    ),
+):
+    """Slash command to start the Headbanz game.
+
+    Args:
+        ctx: Discord application context.
+        usuario: The opponent player.
+    """
+    _track_command(ctx, "adivinador")
+    if usuario.id == ctx.author.id:
+        await ctx.respond("❌ No podés jugar contra vos mismo.", ephemeral=True)
+        return
+    if usuario.bot:
+        await ctx.respond("❌ No podés jugar contra un bot.", ephemeral=True)
+        return
+    await start_headbanz_game(ctx, ctx.author, usuario)
+
+
+@bot.slash_command(
     name="instagram",
     description="Transmití Reels de Instagram en tu canal de voz (Go Live, infinito)",
 )
@@ -2935,6 +2964,24 @@ async def estadisticas(
             value=val,
             inline=False,
         )
+
+    # Fetch game stats (all-time)
+    user_data = await _fetch_activity(
+        "/activity/user",
+        {"user_id": uid, "guild_id": ctx.guild.id},
+    )
+    game_wins = 0
+    game_losses = 0
+    if user_data and user_data.get("stats"):
+        s = user_data["stats"]
+        game_wins = s.get("game_wins", 0)
+        game_losses = s.get("game_losses", 0)
+
+    embed.add_field(
+        name="🎮 Juegos (histórico)",
+        value=f"🏆 Victorias: **{game_wins}**\n💀 Derrotas: **{game_losses}**",
+        inline=False,
+    )
 
     try:
         await ctx.followup.send(embed=embed)
