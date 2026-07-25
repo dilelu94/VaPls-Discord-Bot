@@ -38,6 +38,7 @@ import geminiKeys
 import iptv
 import decifrarVoting
 from instagramCommand import start_instagram_reel_stream_logic, start_instagram_stream_logic
+import adivinadorCommand
 from adivinadorCommand import start_headbanz_game
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import huggingfaceImage
@@ -883,6 +884,8 @@ async def on_message(message):
 
     content = (message.content or "").strip()
     if not content:
+        return
+    if await adivinadorCommand.handle_dm_guess(message):
         return
     found = geminiKeys.extract_keys_from_text(content)
     if not found:
