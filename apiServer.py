@@ -1198,6 +1198,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     )
                     if reply:
                         return web.json_response({"messages": [reply], "done": True})
+                import adivinadorCommand
+                fake_msg = types.SimpleNamespace(
+                    author=author,
+                    channel=buf,
+                    content=text,
+                    guild=None,
+                )
+                if await adivinadorCommand.handle_dm_guess(fake_msg):
+                    return web.json_response({"messages": buf.messages, "done": True})
                 return web.json_response(
                     {
                         "messages": ["⏰ No tengo ninguna sesión pendiente con vos."],

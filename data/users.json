@@ -61,10 +61,14 @@
       "greeting": [
         {
           "path": "Audios/ay-ay-necesito-pito.mp3",
-          "weight": 99
+          "weight": 98
         },
         {
           "path": "Audios/el-monte-everest-no-tiene-nada-en-contra-de-mi_cut_025338.mp3",
+          "weight": 1
+        },
+        {
+          "path": "Audios/viny-amor-descabellado.mp3",
           "weight": 1
         }
       ],
@@ -242,7 +246,20 @@
     },
     "138430902547120129": {
       "name": "Enrique",
-      "greeting": "Audios/enrique.mp3",
+      "greeting": [
+        {
+          "path": "Audios/enrique.mp3",
+          "weight": 98
+        },
+        {
+          "path": "Audios/enrique_invertido.mp3",
+          "weight": 1
+        },
+        {
+          "path": "Audios/enrique_tiktok_invertido.mp3",
+          "weight": 1
+        }
+      ],
       "traits": [
         "pronombres: él",
         "nombre real: Enrique",
