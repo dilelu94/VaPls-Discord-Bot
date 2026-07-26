@@ -143,8 +143,10 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
         if not info:
             return None
 
-        title: str = info.get("title") or "YouTube Stream"
-        is_live = info.get("live_status") == "is_live"
+        is_twitch = "twitch.tv" in url.lower()
+        default_title = "Twitch Stream" if is_twitch else "YouTube Stream"
+        title: str = info.get("title") or info.get("uploader") or default_title
+        is_live = info.get("live_status") == "is_live" or info.get("is_live") is True
 
         # HLS for live streams only (avoids YouTube's unreliable HLS for VODs).
         formats: list[dict] = info.get("formats") or []

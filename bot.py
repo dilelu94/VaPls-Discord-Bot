@@ -2312,6 +2312,14 @@ async def stream(
             await safe_respond(ctx, f"⚠️ Error cargando el buscador: {e}")
         return
 
+    raw_canal = canal.strip()
+    if not raw_canal.startswith(("http://", "https://", "rtsp://", "rtmp://")):
+        if re.match(r"^(?:www\.)?twitch\.tv/", raw_canal, re.I):
+            canal = f"https://{raw_canal}"
+        elif re.match(r"^twitch[:/ ]+([a-zA-Z0-9_]+)$", raw_canal, re.I):
+            m = re.match(r"^twitch[:/ ]+([a-zA-Z0-9_]+)$", raw_canal, re.I)
+            canal = f"https://www.twitch.tv/{m.group(1)}"
+
     is_url = canal.startswith(("http://", "https://", "rtsp://", "rtmp://"))
 
     # Instagram Reel detection — use yt-dlp extraction + vertical letterboxing
@@ -2331,8 +2339,16 @@ async def stream(
 
     if is_url:
         stream_url = canal
-        channel_name = "Stream Directo"
-        source_type = "youtube" if re.search(r'youtube\.com|youtu\.be', canal, re.I) else "url"
+        if re.search(r'twitch\.tv', canal, re.I):
+            source_type = "twitch"
+            match = re.search(r'twitch\.tv/([a-zA-Z0-9_]+)', canal, re.I)
+            channel_name = match.group(1) if match else "Twitch"
+        elif re.search(r'youtube\.com|youtu\.be', canal, re.I):
+            source_type = "youtube"
+            channel_name = "YouTube Stream"
+        else:
+            source_type = "url"
+            channel_name = "Stream Directo"
     else:
         source_type = "iptv"
         results = await iptv.search(canal, limit=5)
