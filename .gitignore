@@ -11,6 +11,7 @@ audio/*
 data/*
 # ...except the static users dataset (shared via git, not runtime-generated)
 !data/users.json
+!data/adivinador_characters.json
 
 # File transfer session data (tracked by the server, not the repo)
 transfers/
