@@ -251,3 +251,11 @@ ISRAEL_ALERTS_CHANNEL_ID = int(os.getenv("ISRAEL_ALERTS_CHANNEL_ID", "0"))
 SCHEDULED_STREAM_ENABLED = os.getenv("SCHEDULED_STREAM_ENABLED", "true").lower() == "true"
 SCHEDULED_STREAM_URL = os.getenv("SCHEDULED_STREAM_URL", "https://www.youtube.com/watch?v=0Bjsv6Ft9nk")
 SCHEDULED_STREAM_FALLBACK_CHANNEL_ID = int(os.getenv("SCHEDULED_STREAM_FALLBACK_CHANNEL_ID", "809945936822403092"))
+
+# --- Instagram Webhooks (Meta for Developers) --------------------------------
+# App credentials and access token obtained from developers.facebook.com.
+# INSTAGRAM_VERIFY_TOKEN must match the value set in the Webhook configuration.
+INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID", "")
+INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "")
+INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
+INSTAGRAM_VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "indio_webhook_token_2026")

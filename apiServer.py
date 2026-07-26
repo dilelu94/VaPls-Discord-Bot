@@ -180,6 +180,7 @@ async def authMiddleware(request: web.Request, handler):
         request.path.startswith("/upload")
         or request.path.startswith("/dl")
         or request.path.startswith("/static")
+        or request.path.startswith("/webhook")
     ):
         return await handler(request)
     err = _checkAuth(request)
@@ -762,6 +763,60 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return None
         candidates.sort(key=lambda x: x[1], reverse=True)
         return candidates[0][0]
+
+    async def verifyWebhook(request: web.Request) -> web.Response:
+        """Handle Meta's GET verification request for Instagram Webhooks."""
+        mode = request.query.get("hub.mode")
+        token = request.query.get("hub.verify_token")
+        challenge = request.query.get("hub.challenge")
+
+        if mode == "subscribe" and token == config.INSTAGRAM_VERIFY_TOKEN:
+            return web.Response(text=challenge)
+        return web.Response(status=403)
+
+    async def _process_instagram_webhook(body: dict) -> None:
+        entries = body.get("entry", [])
+        import re
+        import json
+        from instagramCommand import start_instagram_reel_stream_logic
+        
+        for entry in entries:
+            for messaging in entry.get("messaging", []):
+                message = messaging.get("message", {})
+                
+                # Check for reels URL in text or anywhere in the message JSON
+                urls = re.findall(r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/[\w-]+/?", json.dumps(message))
+                
+                if urls:
+                    url = urls[0]
+                    logger.info(f"Received Instagram webhook with Reel URL: {url}")
+                    
+                    guild = bot.guilds[0] if bot.guilds else None
+                    if guild:
+                        voice_channel = await _pickAutoVoiceChannel(guild)
+                        if voice_channel:
+                            success, status_msg = await start_instagram_reel_stream_logic(
+                                guild.id, voice_channel, url
+                            )
+                            
+                            text_channel = guild.system_channel or guild.text_channels[0]
+                            if text_channel:
+                                await text_channel.send(f"📩 *Recibí un Reel por DM de Instagram, reproduciendo en el canal de voz...*")
+                                
+    async def handleWebhook(request: web.Request) -> web.Response:
+        """Handle incoming Meta webhooks (POST)."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.Response(status=400)
+
+        # Meta requires a quick 200 OK response
+        if body.get("object") == "instagram":
+            # Spawn a task to process the payload asynchronously
+            asyncio.create_task(_process_instagram_webhook(body))
+            return web.Response(text="EVENT_RECEIVED", status=200)
+        
+        return web.Response(status=404)
 
     async def playAudio(request: web.Request) -> web.Response:
         """Play an uploaded audio file in a guild voice channel.
@@ -1807,6 +1862,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/github-webhook", githubWebhook)
     app.router.add_post("/telegram-message", telegramMessage)
     app.router.add_post("/telegram-image", telegramImage)
+    app.router.add_get("/webhook", verifyWebhook)
+    app.router.add_post("/webhook", handleWebhook)
     return app
 
 
