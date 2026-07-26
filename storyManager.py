@@ -46,6 +46,7 @@ _story_dm_context: dict[int, dict] = {}
 _pending_owner_approvals: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
+_recent_stories: dict[int, list[str]] = {}
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -72,6 +73,7 @@ def _state_flush() -> None:
         "last_chat_activity": {str(k): v for k, v in _last_chat_activity.items()},
         "messages_since_story": {str(k): v for k, v in _messages_since_story.items()},
         "last_voice_trigger": {str(k): v for k, v in _last_voice_trigger.items()},
+        "recent_stories": {str(k): v for k, v in _recent_stories.items()},
     }
     p = Path(_STATE_FILE)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -108,6 +110,14 @@ def _recover_state() -> None:
     _load_int_dict(data.get("last_chat_activity", {}), _last_chat_activity, float)
     _load_int_dict(data.get("messages_since_story", {}), _messages_since_story, int)
     _load_int_dict(data.get("last_voice_trigger", {}), _last_voice_trigger, float)
+
+    rs = data.get("recent_stories", {})
+    for k, v in rs.items():
+        try:
+            if isinstance(v, list):
+                _recent_stories[int(k)] = [str(x) for x in v]
+        except ValueError:
+            pass
 
     logger.info("[STORY] recovered story state from %s", _STATE_FILE)
 
@@ -210,8 +220,6 @@ amigos. Una joda entre amigos, no una descripción. No digas "esta imagen" \
 o "en esta foto" — hablalo como si fuera algo que pasó o una situación \
 que todos conocen. Sin insultos, sin malas palabras. \
 Chiste respetuoso, como una joda entre amigos que se tienen cariño. \
-NUNCA repitas recurrentemente los mismos chistes internos o anécdotas \
-(ej. piononos, robos de quesos, la programación de Viny, etc.). \
 Inventá chistes frescos basados en la imagen, no te apoyes siempre en la memoria estática.
 
 Max 2-3 oraciones. Español rioplatense, con voseo, informal, de barrio. \
@@ -286,6 +294,13 @@ def _can_post_story(guild_id: int) -> bool:
     return True
 
 
+def _add_recent_story(guild_id: int, story: str) -> None:
+    lst = _recent_stories.setdefault(guild_id, [])
+    if len(lst) >= 5:
+        lst.pop(0)
+    lst.append(story)
+
+
 # ── Image → Gemini ─────────────────────────────────────────────────────────
 
 
@@ -333,6 +348,11 @@ async def _generate_story(
     lt_block = geminiCommand._format_long_term(lt, members)
     if lt_block:
         system += "\n\n" + lt_block
+
+    recent = _recent_stories.get(guild_id)
+    if recent:
+        system += "\n\nTus últimos chistes generados (NO repitas estas ideas, ni la estructura, inventá algo 100% distinto):\n"
+        system += "\n".join(f"- {s}" for s in recent)
 
     msg = "Hacé un chiste sobre esta imagen."
     if user_feedback:
@@ -716,6 +736,8 @@ async def trigger_story(
         )
         return False
 
+    _add_recent_story(guild_id, story)
+
     logger.info(
         "story trigger(%s): gemini generated story (%d chars)", trigger_type, len(story)
     )
@@ -963,6 +985,9 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 guild_id,
             )
             return
+
+        _add_recent_story(guild_id, new_story)
+        _state_flush()
 
         ch = bot.get_channel(channel_id)
         ok = await _post_review(channel_id, rel_path, new_story, guild_id, bot)
