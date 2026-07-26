@@ -2479,6 +2479,10 @@ async def adivinador(
         usuario: The opponent player.
     """
     _track_command(ctx, "adivinador")
+    try:
+        await ctx.defer(ephemeral=True)
+    except Exception:
+        pass
     if usuario.id == ctx.author.id:
         await ctx.respond("❌ No podés jugar contra vos mismo.", ephemeral=True)
         return

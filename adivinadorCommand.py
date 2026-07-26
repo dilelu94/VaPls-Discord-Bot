@@ -31,20 +31,20 @@ INDIO_USER_ID = getattr(config, "USERBOT_USER_ID", 0) or 519594605520486428
 
 
 async def ensure_font_downloaded() -> None:
-    """Ensure Outfit-Bold.ttf is downloaded and cached locally."""
+    """Ensure Outfit font is downloaded and cached locally."""
     if os.path.exists(FONT_PATH):
         return
     os.makedirs(FONT_DIR, exist_ok=True)
-    url = "https://github.com/google/fonts/raw/main/ofl/outfit/static/Outfit-Bold.ttf"
+    url = "https://raw.githubusercontent.com/google/fonts/main/ofl/outfit/Outfit%5Bwght%5D.ttf"
     try:
-        log.info("[HEADBANZ] Downloading Outfit-Bold font...")
+        log.info("[HEADBANZ] Downloading Outfit font...")
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10.0) as resp:
                 if resp.status == 200:
                     data = await resp.read()
                     with open(FONT_PATH, "wb") as f:
                         f.write(data)
-                    log.info("[HEADBANZ] Outfit-Bold font downloaded successfully.")
+                    log.info("[HEADBANZ] Outfit font downloaded successfully.")
                 else:
                     log.warning(
                         "[HEADBANZ] Font download failed with HTTP %d",
@@ -57,7 +57,9 @@ async def ensure_font_downloaded() -> None:
 async def respond(ctx, *args, **kwargs):
     """Safely respond to a Discord context, adapting to test mocks if needed."""
     try:
-        if hasattr(ctx, "response") and not getattr(getattr(ctx, "response", None), "is_done", lambda: True)():
+        if hasattr(ctx, "followup"):
+            return await ctx.followup.send(*args, **kwargs)
+        elif hasattr(ctx, "response") and not getattr(getattr(ctx, "response", None), "is_done", lambda: True)():
             return await ctx.respond(*args, **kwargs)
         else:
             return await ctx.followup.send(*args, **kwargs)
@@ -259,19 +261,20 @@ async def send_character_dm(
         return True  # Internal virtual DM for Indio AI
 
     embed = discord.Embed(
-        title="🎮 ¡Empezó Headbanz / Adivinador!",
+        title=f"🎭 PERSONAJE DEL RIVAL ({opponent_name})",
         description=(
-            f"Estás jugando contra **{opponent_name}**.\n\n"
-            f"**Tu personaje es secreto para vos.**\n"
-            f"El personaje de **{opponent_name}** que tenés que ayudarle a adivinar es:\n"
-            f"✨ **{char_name}** (de *{char_source}*)\n\n"
-            f"⚠️ **¡NO abras la transmisión del canal de voz!** Si mirás la transmisión, verás tu propio personaje y perderás la partida.\n\n"
-            f"💡 **¿Cómo adivinar?** Para adivinar tu propio personaje, escribime el nombre directamente por acá por **mensaje privado (DM)** a este bot."
+            f"# ✨ {char_name}\n"
+            f"**Origen / Serie:** {char_source}\n\n"
+            f"📌 **Tu misión:** Darle pistas a **{opponent_name}** por voz o chat para que logre adivinar a **{char_name}**.\n\n"
+            f"⚠️ **REGLA:** ¡NO abras la transmisión GoLive en el canal de voz! (Ahí se ve la carta de TU personaje secreto).\n\n"
+            f"💡 **¿Cómo adivinar tu propio personaje?**\n"
+            f"Escribime el nombre directo a este mensaje privado (DM)."
         ),
-        color=0xE94560,
+        color=0x00D2FF,
     )
-    if char_img_url:
+    if char_img_url and char_img_url.startswith(("http://", "https://")):
         embed.set_image(url=char_img_url)
+
     try:
         await user.send(embed=embed)
         return True
