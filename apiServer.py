@@ -2053,5 +2053,133 @@ async def startApiServer(bot: discord.Bot) -> web.AppRunner:
     site = web.TCPSite(runner, host=config.API_HOST, port=config.API_PORT)
     await site.start()
     asyncio.create_task(_process_pending_images())
+    if config.INSTAGRAM_ACCESS_TOKEN:
+        asyncio.create_task(_poll_instagram_inbox(bot))
+        logger.info("Instagram DM polling started (every 30s)")
     logger.info(f"HTTP API listening on http://{config.API_HOST}:{config.API_PORT}")
     return runner
+
+
+_seen_instagram_message_ids: set[str] = set()
+
+
+async def _poll_instagram_inbox(bot: discord.Bot) -> None:
+    """Poll the Instagram inbox every 30 seconds for new Reel DMs.
+
+    Uses the Meta Graph API conversations endpoint with the configured
+    INSTAGRAM_ACCESS_TOKEN. Processes any new messages containing Instagram
+    Reel URLs, triggering the same logic as the webhook handler.
+
+    Async:
+        This function is a coroutine meant to run as a background task.
+    """
+    import re
+    import json
+    from instagramCommand import start_instagram_reel_stream_logic
+
+    global _seen_instagram_message_ids
+    POLL_INTERVAL = 30  # seconds
+    API_BASE = "https://graph.facebook.com/v25.0"
+
+    logger.info("[INSTAGRAM-POLL] Poller started")
+
+    # Seed seen IDs with current messages so we don't replay old ones on startup
+    try:
+        async with aiohttp.ClientSession() as session:
+            seed_url = (
+                f"{API_BASE}/me/conversations"
+                f"?platform=instagram"
+                f"&fields=messages{{id}}"
+                f"&access_token={config.INSTAGRAM_ACCESS_TOKEN}"
+            )
+            async with session.get(seed_url) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    for conv in data.get("data", []):
+                        for msg in conv.get("messages", {}).get("data", []):
+                            _seen_instagram_message_ids.add(msg["id"])
+                    logger.info(
+                        f"[INSTAGRAM-POLL] Seeded {len(_seen_instagram_message_ids)} existing message IDs"
+                    )
+                else:
+                    body = await resp.text()
+                    logger.warning(f"[INSTAGRAM-POLL] Seed request failed {resp.status}: {body}")
+    except Exception as e:
+        logger.warning(f"[INSTAGRAM-POLL] Seed error: {e}")
+
+    while True:
+        await asyncio.sleep(POLL_INTERVAL)
+        if not config.INSTAGRAM_ACCESS_TOKEN:
+            continue
+        try:
+            async with aiohttp.ClientSession() as session:
+                conv_url = (
+                    f"{API_BASE}/me/conversations"
+                    f"?platform=instagram"
+                    f"&fields=messages{{id,message,from,shares}}"
+                    f"&access_token={config.INSTAGRAM_ACCESS_TOKEN}"
+                )
+                async with session.get(conv_url) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.warning(f"[INSTAGRAM-POLL] Conversations error {resp.status}: {body}")
+                        continue
+                    data = await resp.json()
+
+            for conv in data.get("data", []):
+                for msg in conv.get("messages", {}).get("data", []):
+                    msg_id = msg.get("id")
+                    if not msg_id or msg_id in _seen_instagram_message_ids:
+                        continue
+                    _seen_instagram_message_ids.add(msg_id)
+
+                    sender = msg.get("from", {})
+                    username = sender.get("username") or sender.get("name") or "desconocido"
+
+                    # Skip blocked users
+                    if "netanyahu" in username.lower():
+                        logger.info(f"[INSTAGRAM-POLL] Ignoring blocked user: {username}")
+                        continue
+
+                    # Find reel URLs in message text or shares
+                    raw = json.dumps(msg)
+                    urls = re.findall(
+                        r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/[\w-]+/?",
+                        raw,
+                    )
+                    if not urls:
+                        continue
+
+                    reel_url = urls[0]
+                    logger.info(
+                        f"[INSTAGRAM-POLL] New Reel from @{username}: {reel_url}"
+                    )
+
+                    guild = bot.guilds[0] if bot.guilds else None
+                    if not guild:
+                        continue
+
+                    # Post link to target channel
+                    target_channel_id = 451580655650996236
+                    text_channel = bot.get_channel(target_channel_id)
+                    if not text_channel:
+                        try:
+                            text_channel = await bot.fetch_channel(target_channel_id)
+                        except Exception:
+                            text_channel = guild.system_channel or guild.text_channels[0]
+
+                    if text_channel:
+                        await text_channel.send(
+                            f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
+                            f"*Reproduciendo en el canal de voz...*"
+                        )
+
+                    # Start stream in voice channel
+                    voice_channel = await _pickAutoVoiceChannel(guild)
+                    if voice_channel:
+                        await start_instagram_reel_stream_logic(
+                            guild.id, voice_channel, reel_url
+                        )
+
+        except Exception as e:
+            logger.error(f"[INSTAGRAM-POLL] Unhandled error: {e}")
