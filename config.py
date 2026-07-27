@@ -117,7 +117,7 @@ INDIO_REPLY_CHANNEL_ID = int(os.getenv("INDIO_REPLY_CHANNEL_ID", "14900082782754
 
 # --- Indio story system ----------------------------------------------------
 # Canal donde se postean las historias generadas para revisión comunitaria.
-INDIO_STORY_CHANNEL_ID = int(os.getenv("INDIO_STORY_CHANNEL_ID", "451580655650996236"))
+INDIO_STORY_CHANNEL_ID = int(os.getenv("INDIO_STORY_CHANNEL_ID", "1490008278275461280"))
 # Directorio donde se extraen las imágenes del pool.
 INDIO_STORY_POOL_DIR = os.getenv("INDIO_STORY_POOL_DIR", "indio_images/pool")
 # Máximo de stories por día (por servidor).

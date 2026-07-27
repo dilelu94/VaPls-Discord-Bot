@@ -943,8 +943,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
                                 guild.id, voice_channel, url, sender_name=username
                             )
                             
-                            # Post notification to target channel 451580655650996236
-                            target_channel_id = 451580655650996236
+                            # Post notification to target channel
+                            target_channel_id = config.INDIO_STORY_CHANNEL_ID
                             text_channel = bot.get_channel(target_channel_id)
                             if not text_channel:
                                 try:
@@ -2219,7 +2219,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         continue
 
                     # Post link to target channel
-                    target_channel_id = 451580655650996236
+                    target_channel_id = config.INDIO_STORY_CHANNEL_ID
                     text_channel = bot.get_channel(target_channel_id)
                     if not text_channel:
                         try:
