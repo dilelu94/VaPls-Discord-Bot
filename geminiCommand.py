@@ -5692,6 +5692,134 @@ async def inject_telegram_message(
             _spawn(_maybe_compress(mem_key))
 
 
+async def indioInstagramLogic(
+    sender_username: str,
+    pregunta: str,
+    sender_id: str,
+    bot: discord.Bot,
+) -> None:
+    """Process an Instagram DM text message using the Indio's Discord memory,
+    invoke Gemini, and reply back to the Instagram sender via the Graph API.
+    """
+    import aiohttp
+    from users import USERS
+
+    # Resolve speaker identity and Discord ID from users config
+    discord_user_id = None
+    speaker = "alguien"
+    for uid, udata in USERS.items():
+        if udata.get("instagram", "").lower() == sender_username.lower():
+            discord_user_id = uid
+            speaker = udata.get("name", "alguien")
+            break
+
+    # Bind memory to the primary Discord guild
+    guild = bot.guilds[0] if bot.guilds else None
+    guild_id = guild.id if guild else 451575911704428554
+    mem_key = f"guild-{guild_id}"
+
+    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    tagged_message = f"{speaker}: {pregunta or ''}"
+
+    async with lock:
+        history_snapshot = list(_indio_history.get(mem_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
+
+    # Build prompts, system instruction, roster, lore, emojis, and player state
+    await _maybe_refresh_current_members(mem_key, guild_id)
+    current_members = list(_indio_current_members.get(mem_key, []))
+    lt_block = _format_long_term(long_term_snapshot, current_members)
+    emoji_block = _format_guild_emojis(guild)
+    player_block = _format_player_state(bot, guild_id)
+
+    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (
+        f"\n\n{stable_extras}" if stable_extras else ""
+    )
+    system_instruction = _inject_image_catalog(system_instruction)
+
+    logger.info(
+        f"[INSTAGRAM-INDIO] Generating reply for @{sender_username} (speaker: {speaker})"
+    )
+
+    try:
+        reply = await geminiClient.generate(
+            user_message=tagged_message,
+            system_instruction=system_instruction,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
+            tools=_INDIO_TOOLS,
+            volatile_context=player_block or None,
+        )
+    except geminiClient.GeminiError as e:
+        logger.error(f"[INSTAGRAM-INDIO] GeminiError: {e}")
+        return
+    except Exception as e:
+        logger.error(f"[INSTAGRAM-INDIO] Unexpected error: {e}")
+        return
+
+    # Strip prefixes and literal commands
+    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
+    if not clean_reply:
+        clean_reply = "..."
+
+    # Send response back to Instagram via Page Messages endpoint
+    page_token = config.INSTAGRAM_PAGE_TOKEN
+    if page_token:
+        try:
+            url = f"https://graph.facebook.com/v25.0/me/messages?access_token={page_token}"
+            payload = {
+                "recipient": {"id": sender_id},
+                "message": {"text": clean_reply},
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.error(f"[INSTAGRAM-INDIO] Failed to send DM {resp.status}: {body}")
+                    else:
+                        logger.info(f"[INSTAGRAM-INDIO] Sent DM to @{sender_username}")
+        except Exception as e:
+            logger.error(f"[INSTAGRAM-INDIO] Send error: {e}")
+
+    # Persist in memory history
+    _turn_ts = time.time()
+    user_turn = {
+        "role": "user",
+        "parts": [
+            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
+        ],
+        "ts": _turn_ts,
+    }
+    model_turn = {
+        "role": "model",
+        "parts": [
+            {"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}
+        ],
+        "ts": _turn_ts,
+    }
+
+    if mem_key in _indio_compressing:
+        async with lock:
+            queue = _indio_compress_queue.setdefault(mem_key, [])
+            queue.append(user_turn)
+            queue.append(model_turn)
+        await _persist_indio_state()
+    else:
+        async with lock:
+            existing = _indio_history.get(mem_key, history_snapshot)
+            new_hist = list(existing) + [user_turn, model_turn]
+            if len(new_hist) > _HISTORY_HARD_CAP:
+                new_hist = new_hist[-_HISTORY_HARD_CAP:]
+            _indio_history[mem_key] = new_hist
+            _indio_last_seen[mem_key] = time.time()
+            history_size_after = len(new_hist)
+        await _persist_indio_state()
+
+        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+            _spawn(_maybe_compress(mem_key))
+
+
 async def describe_image(file_bytes: bytes, mime_type: str = "image/jpeg") -> str:
     """Send an image to Gemini and return a short description."""
     import base64

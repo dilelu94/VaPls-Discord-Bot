@@ -2190,6 +2190,18 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         raw,
                     )
                     if not urls:
+                        # Process text message with Indio's Discord memory & reply back to Instagram
+                        text_msg = msg.get("message", {}).get("text", "").strip()
+                        if text_msg and sender.get("id"):
+                            from geminiCommand import indioInstagramLogic
+                            asyncio.create_task(
+                                indioInstagramLogic(
+                                    sender_username=username,
+                                    pregunta=text_msg,
+                                    sender_id=sender["id"],
+                                    bot=bot,
+                                )
+                            )
                         continue
 
                     reel_url = urls[0]
