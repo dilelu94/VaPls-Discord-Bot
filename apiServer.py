@@ -2080,7 +2080,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
     from users import get_allowed_instagram_usernames
 
     global _seen_instagram_message_ids
-    POLL_INTERVAL = 20  # seconds
+    POLL_INTERVAL = 15  # seconds
     API_BASE = "https://graph.facebook.com/v25.0"
 
     logger.info("[INSTAGRAM-POLL] Poller started")
