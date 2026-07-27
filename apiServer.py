@@ -2055,7 +2055,8 @@ async def startApiServer(bot: discord.Bot) -> web.AppRunner:
     asyncio.create_task(_process_pending_images())
     if config.INSTAGRAM_PAGE_TOKEN and config.INSTAGRAM_PAGE_ID:
         asyncio.create_task(_poll_instagram_inbox(bot))
-        logger.info("Instagram DM polling started (every 15s)")
+        asyncio.create_task(_poll_instagram_comments(bot))
+        logger.info("Instagram DM and Comment polling started")
     logger.info(f"HTTP API listening on http://{config.API_HOST}:{config.API_PORT}")
     return runner
 
@@ -2290,5 +2291,107 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
 
         except Exception as e:
             logger.error(f"[INSTAGRAM-POLL] Unhandled error: {e}")
+
+
+async def _poll_instagram_comments(bot: discord.Bot) -> None:
+    """Poll the Instagram posts for new comments and reply to whitelisted users."""
+    API_BASE = "https://graph.facebook.com/v25.0"
+    POLL_INTERVAL = 3600  # 1 hour
+
+    page_token = config.INSTAGRAM_PAGE_TOKEN
+    page_id = config.INSTAGRAM_PAGE_ID
+
+    if not page_token or not page_id:
+        logger.error("[INSTAGRAM-COMMENTS] Page token or Page ID missing — comment polling disabled")
+        return
+
+    # 1. Resolve connected Instagram Business Account ID
+    insta_acc_id: str | None = None
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"{API_BASE}/{page_id}?fields=instagram_business_account&access_token={page_token}"
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    res = await resp.json()
+                    insta_acc_id = res.get("instagram_business_account", {}).get("id")
+                    if insta_acc_id:
+                        logger.info(f"[INSTAGRAM-COMMENTS] Resolved Instagram Business ID: {insta_acc_id}")
+                else:
+                    body = await resp.text()
+                    logger.warning(f"[INSTAGRAM-COMMENTS] Failed to resolve Instagram ID {resp.status}: {body}")
+    except Exception as e:
+        logger.warning(f"[INSTAGRAM-COMMENTS] Error resolving Instagram ID: {e}")
+
+    if not insta_acc_id:
+        logger.error("[INSTAGRAM-COMMENTS] No Instagram Business Account found — comment polling disabled")
+        return
+
+    # Helper function to query Meta
+    async def _query_comments():
+        try:
+            # 2. Get last 10 media posts
+            media_url = f"{API_BASE}/{insta_acc_id}/media?fields=id&limit=10&access_token={page_token}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(media_url) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.warning(f"[INSTAGRAM-COMMENTS] Media fetch error {resp.status}: {body}")
+                        return
+                    media_data = await resp.json()
+
+            from users import get_allowed_instagram_usernames
+            allowed_ig_users = get_allowed_instagram_usernames()
+
+            for media in media_data.get("data", []):
+                media_id = media.get("id")
+                # 3. Get comments and replies on this media
+                comments_url = f"{API_BASE}/{media_id}/comments?fields=id,text,username,timestamp,replies%7Bid,username%7D&access_token={page_token}"
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(comments_url) as resp:
+                        if resp.status != 200:
+                            body = await resp.text()
+                            logger.warning(f"[INSTAGRAM-COMMENTS] Comments fetch error {resp.status}: {body}")
+                            continue
+                        comments_data = await resp.json()
+
+                for comment in comments_data.get("data", []):
+                    comment_id = comment.get("id")
+                    commenter = (comment.get("username") or "").lower()
+                    comment_text = comment.get("text", "").strip()
+
+                    # Only process comments from authorized users
+                    if commenter not in allowed_ig_users:
+                        continue
+
+                    # Check if Indio has already replied
+                    has_replied = False
+                    replies = comment.get("replies", {}).get("data", [])
+                    for r in replies:
+                        if (r.get("username") or "").lower() == "indio.goldstein":
+                            has_replied = True
+                            break
+
+                    if has_replied:
+                        continue
+
+                    logger.info(f"[INSTAGRAM-COMMENTS] Processing comment {comment_id} from @{commenter}: {comment_text}")
+
+                    # Generate reply via Gemini
+                    from geminiCommand import indioInstagramCommentLogic
+                    asyncio.create_task(
+                        indioInstagramCommentLogic(
+                            sender_username=commenter,
+                            pregunta=comment_text,
+                            comment_id=comment_id,
+                            bot=bot,
+                        )
+                    )
+        except Exception as e:
+            logger.error(f"[INSTAGRAM-COMMENTS] Error in comment poll cycle: {e}")
+
+    # Run polling loop
+    while True:
+        await _query_comments()
+        await asyncio.sleep(POLL_INTERVAL)
 
 

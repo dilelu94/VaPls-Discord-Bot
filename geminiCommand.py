@@ -117,14 +117,12 @@ trasfondo que tiñe tus respuestas (vocabulario, referencias, qué chistes \
 hacer con quién, qué temas evitar) y mencionalas solo cuando la conversación \
 lo pide naturalmente. Variá entre distintas anécdotas de cada persona — no \
 siempre el mismo chiste para el mismo amigo. NUNCA repitas recurrentemente \
-los mismos chistes internos o anécdotas (ej. piononos, robos, programación) \
-a menos que te saquen el tema directamente. Inventá respuestas frescas. \
+los mismos chistes internos o anécdotas. Inventá respuestas frescas. \
 \
 Sos muy buena persona y querés mucho a tus amigos. Tratalos con cariño. Si \
-bien conocés sus defectos (ej: si alguien no trabaja o tiene un pasado \
-dudoso, como Viny), no los uses para atacarlos constantemente ni seas rudo \
-con ellos. Podés hacerles un chiste muy de vez en cuando, pero tu tono \
-general debe ser amable y de apoyo ("aguante"). \
+bien conocés sus defectos o los chistes internos de la barra, no los uses para \
+atacarlos constantemente ni seas rudo. Podés hacerles un chiste muy de vez en \
+cuando, pero tu tono general debe ser amable y de apoyo ("aguante"). \
 
 REGLAS ESTRICTAS para tools de música/sonido: NO uses NINGUNA tool a menos \
 que el usuario te esté dando una orden DIRECTA de reproducción. Preguntas, \
@@ -1429,6 +1427,20 @@ def _inject_image_catalog(system_instruction: str) -> str:
     return system_instruction
 
 
+def _format_recent_stories(guild_id: int) -> str:
+    try:
+        import storyManager
+        recent = storyManager.get_recent_stories(guild_id)
+        if recent:
+            return (
+                "Tus últimos chistes y anécdotas generados (NO repitas estas ideas ni su estructura, inventá algo 100% distinto):\n"
+                + "\n".join(f"- {s}" for s in recent)
+            )
+    except Exception:
+        pass
+    return ""
+
+
 def _humanize_age(seconds: float) -> str:
     """Render an age-in-seconds as a Spanish short tag for the prompt.
 
@@ -1626,19 +1638,23 @@ def _write_json_atomic(path: str, payload: dict) -> None:
         raise
 
 
-def _indio_memory_key(ctx: discord.ApplicationContext) -> str:
-    """Build the memory bucket key for the Indio persona.
+def _indio_memory_key(ctx: discord.ApplicationContext) -> tuple[str, str]:
+    """Build the memory bucket keys for the Indio persona.
 
     Args:
         ctx: Discord application context.
 
     Returns:
-        A string key scoped to the guild (or DM if no guild).
+        A tuple (hist_key, lt_key) scoped to the channel for short-term history
+        and scoped to the guild for long-term memory.
     """
     guild = getattr(ctx, "guild", None)
     if guild is not None and getattr(guild, "id", None) is not None:
-        return f"guild-{guild.id}"
-    return f"dm-{getattr(ctx.author, 'id', 'unknown')}"
+        lt_key = f"guild-{guild.id}"
+        hist_key = f"guild-{guild.id}-channel-{getattr(ctx, 'channel_id', 'unknown')}"
+        return hist_key, lt_key
+    key = f"dm-{getattr(ctx.author, 'id', 'unknown')}"
+    return key, key
 
 
 def _split_for_discord(text: str) -> list[str]:
@@ -2610,21 +2626,21 @@ async def _compress_per_user(
     return _sanitize_long_term(new_lt)
 
 
-async def _maybe_compress(mem_key: str) -> None:
+async def _maybe_compress(hist_key: str, lt_key: str) -> None:
     """Fire-and-forget: if the short-term history is over the threshold,
     distill its oldest portion into long-term notes and drop those turns from
     short-term. Safe against concurrent /indio calls because: (a) we hold the
     per-key lock only at read+write points, and (b) we slice from the FRONT by
     count, not by index, so new turns appended during compression aren't lost."""
-    if mem_key in _indio_compressing:
+    if hist_key in _indio_compressing:
         return
-    lock = _indio_locks.get(mem_key)
+    lock = _indio_locks.get(hist_key)
     if lock is None:
         return
-    _indio_compressing.add(mem_key)
+    _indio_compressing.add(hist_key)
     try:
         async with lock:
-            history = _indio_history.get(mem_key, [])
+            history = _indio_history.get(hist_key, [])
             if len(history) < _HISTORY_COMPRESS_THRESHOLD:
                 return
             # Even count: keep both sides of each user/model pair aligned.
@@ -2634,49 +2650,49 @@ async def _maybe_compress(mem_key: str) -> None:
             if drop_count <= 0:
                 return
             old_turns = history[:drop_count]
-            current_lt = dict(_indio_long_term.get(mem_key, {}))
+            current_lt = dict(_indio_long_term.get(lt_key, {}))
         new_lt = await _compress_per_user(current_lt, old_turns)
         success = new_lt is not None
         if success:
             async with lock:
-                history = _indio_history.get(mem_key, [])
+                history = _indio_history.get(hist_key, [])
                 if len(history) >= drop_count:
-                    _indio_history[mem_key] = history[drop_count:]
-                _indio_long_term[mem_key] = new_lt
+                    _indio_history[hist_key] = history[drop_count:]
+                _indio_long_term[lt_key] = new_lt
             await _persist_indio_state()
             logger.info(
-                "indio compress: ok for %s (dropped %d turns, users=%d)",
-                mem_key,
+                "indio compress: ok for %s/%s (dropped %d turns, users=%d)",
+                hist_key,
+                lt_key,
                 drop_count,
                 len(new_lt.get("users", {})),
             )
         else:
-            logger.info("indio compress: skipped (lt unchanged) for %s", mem_key)
+            logger.info("indio compress: skipped (lt unchanged) for %s", hist_key)
 
         # Drain queued turns that arrived while compression was running.
         # Always runs, regardless of whether compression succeeded.
-        queue_turns = _indio_compress_queue.pop(mem_key, [])
+        queue_turns = _indio_compress_queue.pop(hist_key, [])
         if queue_turns:
             async with lock:
-                history = list(_indio_history.get(mem_key, []))
+                history = list(_indio_history.get(hist_key, []))
                 history.extend(queue_turns)
                 if len(history) > _HISTORY_HARD_CAP:
                     history = history[-_HISTORY_HARD_CAP:]
-                _indio_history[mem_key] = history
-                _indio_last_seen[mem_key] = time.time()
+                _indio_history[hist_key] = history
+                _indio_last_seen[hist_key] = time.time()
                 size_after_drain = len(history)
             await _persist_indio_state()
             logger.info(
                 "indio compress: drained %d queued turns for %s (hist=%d)",
                 len(queue_turns),
-                mem_key,
+                hist_key,
                 size_after_drain,
             )
             if not success and size_after_drain >= _HISTORY_COMPRESS_THRESHOLD:
-                _spawn(_maybe_compress(mem_key))
+                _spawn(_maybe_compress(hist_key, lt_key))
     finally:
-        _indio_compressing.discard(mem_key)
-
+        _indio_compressing.discard(hist_key)
 
 # Maps each Gemini tool name to its internal action label and the key under
 # ``args`` where the string argument lives (or ``None`` if the tool takes no
@@ -4613,8 +4629,8 @@ async def indioLogic(
         This function is a coroutine and must be awaited.
     """
     _evict_stale_indio()
-    mem_key = _indio_memory_key(ctx)
-    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    hist_key, lt_key = _indio_memory_key(ctx)
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     speaker = getattr(ctx.author, "display_name", None) or getattr(
         ctx.author, "name", "alguien"
     )
@@ -4709,12 +4725,12 @@ async def indioLogic(
     async with lock:
         history_reset = False
         if nuevo:
-            had_state = bool(_indio_history.get(mem_key)) or bool(
-                _indio_long_term.get(mem_key)
+            had_state = bool(_indio_history.get(hist_key)) or bool(
+                _indio_long_term.get(lt_key)
             )
-            _indio_history.pop(mem_key, None)
-            _indio_last_seen.pop(mem_key, None)
-            _indio_long_term.pop(mem_key, None)
+            _indio_history.pop(hist_key, None)
+            _indio_last_seen.pop(hist_key, None)
+            _indio_long_term.pop(lt_key, None)
             if had_state:
                 history_reset = True
                 analytics.capture(
@@ -4723,26 +4739,27 @@ async def indioLogic(
                     guild=ctx.guild,
                     properties={"trigger": "nuevo_param", "scope": "guild"},
                 )
-        history_snapshot = list(_indio_history.get(mem_key, []))
-        long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
+        history_snapshot = list(_indio_history.get(hist_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(lt_key, {}))
     if history_reset:
         await _persist_indio_state()
 
     guild_for_extras = getattr(ctx, "guild", None)
     guild_id = getattr(guild_for_extras, "id", None)
     # Lazy daily refresh of the Main characters roster into persistent memory.
-    await _maybe_refresh_current_members(mem_key, guild_id)
-    current_members = list(_indio_current_members.get(mem_key, []))
+    await _maybe_refresh_current_members(lt_key, guild_id)
+    current_members = list(_indio_current_members.get(lt_key, []))
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_count = len(getattr(guild_for_extras, "emojis", None) or [])
     emoji_block = _format_guild_emojis(guild_for_extras)
     player_block = _format_player_state(getattr(ctx, "bot", None), guild_id)
     logger.info(
-        "indio: roster=%d, lt_users=%d, emojis=%d (mem_key=%s)",
+        "indio: roster=%d, lt_users=%d, emojis=%d (hist_key=%s, lt_key=%s)",
         len(current_members),
         len((long_term_snapshot.get("users") or {})),
         emoji_count,
-        mem_key,
+        hist_key,
+        lt_key,
     )
     # Stable cache prefix: persona + long-term notes + emojis (change rarely
     # within a session). Player state is volatile (current track/queue) so it
@@ -4752,6 +4769,9 @@ async def indioLogic(
         f"\n\n{stable_extras}" if stable_extras else ""
     )
     system_instruction = _inject_image_catalog(system_instruction)
+    recent_block = _format_recent_stories(guild_id)
+    if recent_block:
+        system_instruction += "\n\n" + recent_block
 
     t0 = time.monotonic()
     # Solo activamos el aviso de rotación cuando el Indio responde en el canal
@@ -5034,27 +5054,27 @@ async def indioLogic(
             ],
             "ts": _turn_ts,
         }
-        if mem_key in _indio_compressing:
+        if hist_key in _indio_compressing:
             async with lock:
-                queue = _indio_compress_queue.setdefault(mem_key, [])
+                queue = _indio_compress_queue.setdefault(hist_key, [])
                 queue.append(user_turn)
                 queue.append(model_turn)
             await _persist_indio_state()
         else:
             async with lock:
-                existing = _indio_history.get(mem_key, history_snapshot)
+                existing = _indio_history.get(hist_key, history_snapshot)
                 new_hist = list(existing) + [user_turn, model_turn]
                 # Hard cap as a safety net if compression keeps failing.
                 if len(new_hist) > _HISTORY_HARD_CAP:
                     new_hist = new_hist[-_HISTORY_HARD_CAP:]
-                _indio_history[mem_key] = new_hist
-                _indio_last_seen[mem_key] = time.time()
+                _indio_history[hist_key] = new_hist
+                _indio_last_seen[hist_key] = time.time()
                 history_size_after = len(new_hist)
             await _persist_indio_state()
 
             # Background distillation when the short-term log grows past threshold.
             if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-                _spawn(_maybe_compress(mem_key))
+                _spawn(_maybe_compress(hist_key, lt_key))
 
     analytics.capture(
         "indio invoked",
@@ -5155,8 +5175,9 @@ async def indioFromVoice(
     speaker = speaker_name or (member.display_name if member else None) or "alguien"
 
     _evict_stale_indio()
-    mem_key = f"guild-{guild_id}"
-    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    lt_key = f"guild-{guild_id}"
+    hist_key = f"guild-{guild_id}-channel-{channel_id}"
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     tagged_message = f"{speaker}: {pregunta}"
     # Key the pending choice by the Discord user id (propagated from the
     # userbot), falling back to the name only when no id is available.
@@ -5181,11 +5202,11 @@ async def indioFromVoice(
         return
 
     async with lock:
-        history_snapshot = list(_indio_history.get(mem_key, []))
-        long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
+        history_snapshot = list(_indio_history.get(hist_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(lt_key, {}))
 
-    await _maybe_refresh_current_members(mem_key, guild_id)
-    current_members = list(_indio_current_members.get(mem_key, []))
+    await _maybe_refresh_current_members(lt_key, guild_id)
+    current_members = list(_indio_current_members.get(lt_key, []))
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
     player_block = _format_player_state(bot, guild_id)
@@ -5197,6 +5218,9 @@ async def indioFromVoice(
         f"\n\n{stable_extras}" if stable_extras else ""
     )
     system_instruction = _inject_image_catalog(system_instruction)
+    recent_block = _format_recent_stories(guild_id)
+    if recent_block:
+        system_instruction += "\n\n" + recent_block
 
     # ---- Context from replied-to message + image download ----
     volatile = player_block or None
@@ -5488,25 +5512,25 @@ async def indioFromVoice(
             ],
             "ts": _turn_ts,
         }
-        if mem_key in _indio_compressing:
+        if hist_key in _indio_compressing:
             async with lock:
-                queue = _indio_compress_queue.setdefault(mem_key, [])
+                queue = _indio_compress_queue.setdefault(hist_key, [])
                 queue.append(user_turn)
                 queue.append(model_turn)
             await _persist_indio_state()
         else:
             async with lock:
-                existing = _indio_history.get(mem_key, history_snapshot)
+                existing = _indio_history.get(hist_key, history_snapshot)
                 new_hist = list(existing) + [user_turn, model_turn]
                 if len(new_hist) > _HISTORY_HARD_CAP:
                     new_hist = new_hist[-_HISTORY_HARD_CAP:]
-                _indio_history[mem_key] = new_hist
-                _indio_last_seen[mem_key] = time.time()
+                _indio_history[hist_key] = new_hist
+                _indio_last_seen[hist_key] = time.time()
                 history_size_after = len(new_hist)
             await _persist_indio_state()
 
             if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-                _spawn(_maybe_compress(mem_key))
+                _spawn(_maybe_compress(hist_key, lt_key))
 
     # Si la respuesta se redirigio a otro canal, fallback al primer mensaje
     # del Indio en el target como landing point del link cuando no hubo header.
@@ -5660,36 +5684,37 @@ async def inject_telegram_message(
     The message is appended as a user turn (no model turn — Indio does not
     reply).  Periodic compression will distill it into long-term notes.
     """
-    mem_key = f"guild-{guild_id}"
-    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    lt_key = f"guild-{guild_id}"
+    hist_key = f"guild-{guild_id}-channel-telegram"
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     sanitized = _sanitize_for_history(f"{speaker}: {text}")
     user_turn: dict = {
         "role": "user",
         "parts": [{"text": sanitized[:_STORED_MSG_MAX_CHARS]}],
         "ts": ts,
     }
-    if mem_key in _indio_compressing:
+    if hist_key in _indio_compressing:
         async with lock:
-            _indio_compress_queue.setdefault(mem_key, []).append(user_turn)
+            _indio_compress_queue.setdefault(hist_key, []).append(user_turn)
         await _persist_indio_state()
         logger.info(
-            "injected telegram message from %s (%d chars, mem=%s, queue)",
-            speaker, len(text), mem_key,
+            "injected telegram message from %s (%d chars, hist_key=%s, queue)",
+            speaker, len(text), hist_key,
         )
     else:
         async with lock:
-            history = list(_indio_history.get(mem_key, []))
+            history = list(_indio_history.get(hist_key, []))
             history.append(user_turn)
-            _indio_history[mem_key] = history
-            _indio_last_seen[mem_key] = ts
+            _indio_history[hist_key] = history
+            _indio_last_seen[hist_key] = ts
             size = len(history)
         await _persist_indio_state()
         logger.info(
-            "injected telegram message from %s (%d chars, mem=%s, hist=%d)",
-            speaker, len(text), mem_key, size,
+            "injected telegram message from %s (%d chars, hist_key=%s, hist=%d)",
+            speaker, len(text), hist_key, size,
         )
         if size >= _HISTORY_COMPRESS_THRESHOLD:
-            _spawn(_maybe_compress(mem_key))
+            _spawn(_maybe_compress(hist_key, lt_key))
 
 
 async def indioInstagramLogic(
@@ -5716,18 +5741,19 @@ async def indioInstagramLogic(
     # Bind memory to the primary Discord guild
     guild = bot.guilds[0] if bot.guilds else None
     guild_id = guild.id if guild else 451575911704428554
-    mem_key = f"guild-{guild_id}"
+    lt_key = f"guild-{guild_id}"
+    hist_key = f"guild-{guild_id}-channel-instagram"
 
-    lock = _indio_locks.setdefault(mem_key, asyncio.Lock())
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     tagged_message = f"{speaker}: {pregunta or ''}"
 
     async with lock:
-        history_snapshot = list(_indio_history.get(mem_key, []))
-        long_term_snapshot = dict(_indio_long_term.get(mem_key, {}))
+        history_snapshot = list(_indio_history.get(hist_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(lt_key, {}))
 
     # Build prompts, system instruction, roster, lore, emojis, and player state
-    await _maybe_refresh_current_members(mem_key, guild_id)
-    current_members = list(_indio_current_members.get(mem_key, []))
+    await _maybe_refresh_current_members(lt_key, guild_id)
+    current_members = list(_indio_current_members.get(lt_key, []))
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
     player_block = _format_player_state(bot, guild_id)
@@ -5737,6 +5763,9 @@ async def indioInstagramLogic(
         f"\n\n{stable_extras}" if stable_extras else ""
     )
     system_instruction = _inject_image_catalog(system_instruction)
+    recent_block = _format_recent_stories(guild_id)
+    if recent_block:
+        system_instruction += "\n\n" + recent_block
 
     logger.info(
         f"[INSTAGRAM-INDIO] Generating reply for @{sender_username} (speaker: {speaker})"
@@ -5803,25 +5832,160 @@ async def indioInstagramLogic(
         "ts": _turn_ts,
     }
 
-    if mem_key in _indio_compressing:
+    if hist_key in _indio_compressing:
         async with lock:
-            queue = _indio_compress_queue.setdefault(mem_key, [])
+            queue = _indio_compress_queue.setdefault(hist_key, [])
             queue.append(user_turn)
             queue.append(model_turn)
         await _persist_indio_state()
     else:
         async with lock:
-            existing = _indio_history.get(mem_key, history_snapshot)
+            existing = _indio_history.get(hist_key, history_snapshot)
             new_hist = list(existing) + [user_turn, model_turn]
             if len(new_hist) > _HISTORY_HARD_CAP:
                 new_hist = new_hist[-_HISTORY_HARD_CAP:]
-            _indio_history[mem_key] = new_hist
-            _indio_last_seen[mem_key] = time.time()
+            _indio_history[hist_key] = new_hist
+            _indio_last_seen[hist_key] = time.time()
             history_size_after = len(new_hist)
         await _persist_indio_state()
 
         if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-            _spawn(_maybe_compress(mem_key))
+            _spawn(_maybe_compress(hist_key, lt_key))
+
+
+async def indioInstagramCommentLogic(
+    sender_username: str,
+    pregunta: str,
+    comment_id: str,
+    bot: discord.Bot,
+) -> None:
+    """Process an Instagram comment using the Indio's Discord memory,
+    invoke Gemini, and reply back to the comment via the Graph API.
+    """
+    import aiohttp
+    from users import USERS
+
+    # Resolve speaker identity and Discord ID from users config
+    discord_user_id = None
+    speaker = "alguien"
+    for uid, udata in USERS.items():
+        if udata.get("instagram", "").lower() == sender_username.lower():
+            discord_user_id = uid
+            speaker = udata.get("name", "alguien")
+            break
+
+    # Bind memory to the primary Discord guild
+    guild = bot.guilds[0] if bot.guilds else None
+    guild_id = guild.id if guild else 451575911704428554
+    lt_key = f"guild-{guild_id}"
+    hist_key = f"guild-{guild_id}-channel-instagram-comments"
+
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
+    tagged_message = f"{speaker}: {pregunta or ''}"
+
+    async with lock:
+        history_snapshot = list(_indio_history.get(hist_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(lt_key, {}))
+
+    # Build prompts, system instruction, roster, lore, emojis, and player state
+    await _maybe_refresh_current_members(lt_key, guild_id)
+    current_members = list(_indio_current_members.get(lt_key, []))
+    lt_block = _format_long_term(long_term_snapshot, current_members)
+    emoji_block = _format_guild_emojis(guild)
+    player_block = _format_player_state(bot, guild_id)
+
+    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (
+        f"\n\n{stable_extras}" if stable_extras else ""
+    )
+    system_instruction = _inject_image_catalog(system_instruction)
+    recent_block = _format_recent_stories(guild_id)
+    if recent_block:
+        system_instruction += "\n\n" + recent_block
+
+    logger.info(
+        f"[INSTAGRAM-COMMENTS-INDIO] Generating reply to @{sender_username}'s comment (speaker: {speaker})"
+    )
+
+    try:
+        reply = await geminiClient.generate(
+            user_message=tagged_message,
+            system_instruction=system_instruction,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
+            tools=_INDIO_TOOLS,
+            volatile_context=player_block or None,
+        )
+    except geminiClient.GeminiError as e:
+        logger.error(f"[INSTAGRAM-COMMENTS-INDIO] GeminiError: {e}")
+        return
+    except Exception as e:
+        logger.error(f"[INSTAGRAM-COMMENTS-INDIO] Unexpected error: {e}")
+        return
+
+    # Strip prefixes and literal commands
+    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
+    
+    # Strip Discord custom emoji markup (e.g. <:name:id>) which Instagram cannot render
+    clean_reply = _CUSTOM_EMOJI_MARKUP_RE.sub("", clean_reply).strip()
+    
+    if not clean_reply:
+        clean_reply = "..."
+
+    # Send reply back to the Instagram comment thread
+    page_token = config.INSTAGRAM_PAGE_TOKEN
+    if page_token:
+        try:
+            url = f"https://graph.facebook.com/v25.0/{comment_id}/replies?access_token={page_token}"
+            payload = {
+                "message": clean_reply,
+            }
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as resp:
+                    if resp.status != 200:
+                        body = await resp.text()
+                        logger.error(f"[INSTAGRAM-COMMENTS-INDIO] Failed to post reply {resp.status}: {body}")
+                    else:
+                        logger.info(f"[INSTAGRAM-COMMENTS-INDIO] Replied to @{sender_username}'s comment")
+        except Exception as e:
+            logger.error(f"[INSTAGRAM-COMMENTS-INDIO] Reply send error: {e}")
+
+    # Persist in memory history
+    _turn_ts = time.time()
+    user_turn = {
+        "role": "user",
+        "parts": [
+            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
+        ],
+        "ts": _turn_ts,
+    }
+    model_turn = {
+        "role": "model",
+        "parts": [
+            {"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}
+        ],
+        "ts": _turn_ts,
+    }
+
+    if hist_key in _indio_compressing:
+        async with lock:
+            queue = _indio_compress_queue.setdefault(hist_key, [])
+            queue.append(user_turn)
+            queue.append(model_turn)
+        await _persist_indio_state()
+    else:
+        async with lock:
+            existing = _indio_history.get(hist_key, history_snapshot)
+            new_hist = list(existing) + [user_turn, model_turn]
+            if len(new_hist) > _HISTORY_HARD_CAP:
+                new_hist = new_hist[-_HISTORY_HARD_CAP:]
+            _indio_history[hist_key] = new_hist
+            _indio_last_seen[hist_key] = time.time()
+            history_size_after = len(new_hist)
+        await _persist_indio_state()
+
+        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
+            _spawn(_maybe_compress(hist_key, lt_key))
 
 
 async def describe_image(file_bytes: bytes, mime_type: str = "image/jpeg") -> str:
