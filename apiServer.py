@@ -943,10 +943,24 @@ def makeApp(bot: discord.Bot) -> web.Application:
                                 guild.id, voice_channel, url
                             )
                             
-                            text_channel = guild.system_channel or guild.text_channels[0]
+                            # Post notification to target channel 451580655650996236
+                            target_channel_id = 451580655650996236
+                            text_channel = bot.get_channel(target_channel_id)
+                            if not text_channel:
+                                try:
+                                    text_channel = await bot.fetch_channel(target_channel_id)
+                                except Exception:
+                                    pass
+
+                            if not text_channel:
+                                text_channel = guild.system_channel or guild.text_channels[0]
+
                             if text_channel:
                                 sender_display = f"@{username}" if username else "alguien"
-                                await text_channel.send(f"📩 *Recibí un Reel por DM de Instagram de {sender_display}, reproduciendo en el canal de voz...*")
+                                await text_channel.send(
+                                    f"📩 *Recibí un Reel por DM de Instagram de {sender_display}:* {url}\n"
+                                    f"*Reproduciendo en el canal de voz...*"
+                                )
                                 
     async def handleWebhook(request: web.Request) -> web.Response:
         """Handle incoming Meta webhooks (POST)."""
