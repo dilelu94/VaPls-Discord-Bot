@@ -5760,6 +5760,10 @@ async def indioInstagramLogic(
     # Strip prefixes and literal commands
     clean_reply = _strip_speaker_prefix(reply.text)
     clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
+    
+    # Strip Discord custom emoji markup (e.g. <:name:id>) which Instagram cannot render
+    clean_reply = _CUSTOM_EMOJI_MARKUP_RE.sub("", clean_reply).strip()
+    
     if not clean_reply:
         clean_reply = "..."
 
