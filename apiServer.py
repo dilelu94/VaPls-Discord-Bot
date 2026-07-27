@@ -2066,9 +2066,10 @@ _seen_instagram_message_ids: set[str] = set()
 async def _poll_instagram_inbox(bot: discord.Bot) -> None:
     """Poll the Instagram inbox every 30 seconds for new Reel DMs.
 
-    Uses the Meta Graph API conversations endpoint with the configured
-    INSTAGRAM_ACCESS_TOKEN. Processes any new messages containing Instagram
-    Reel URLs, triggering the same logic as the webhook handler.
+    Fetches a Page access token for the Indio.Goldstein page from the
+    Meta Graph API using the configured INSTAGRAM_ACCESS_TOKEN (user token).
+    Then polls the Page's Instagram conversations every 30s, processing any
+    new messages that contain an Instagram Reel URL.
 
     Async:
         This function is a coroutine meant to run as a background task.
@@ -2083,16 +2084,49 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
 
     logger.info("[INSTAGRAM-POLL] Poller started")
 
-    # Seed seen IDs with current messages so we don't replay old ones on startup
+    # --- Obtain Page access token for Indio.Goldstein ---
+    page_token: str | None = None
+    page_id: str | None = None
     try:
         async with aiohttp.ClientSession() as session:
-            seed_url = (
-                f"{API_BASE}/me/conversations"
-                f"?platform=instagram"
-                f"&fields=messages{{id}}"
-                f"&access_token={config.INSTAGRAM_ACCESS_TOKEN}"
+            accounts_url = (
+                f"{API_BASE}/me/accounts"
+                f"?access_token={config.INSTAGRAM_ACCESS_TOKEN}"
             )
-            async with session.get(seed_url) as resp:
+            async with session.get(accounts_url) as resp:
+                if resp.status == 200:
+                    accounts = await resp.json()
+                    for page in accounts.get("data", []):
+                        # Pick the Indio.Goldstein page (MESSAGING task required)
+                        if "MESSAGING" in page.get("tasks", []):
+                            page_token = page["access_token"]
+                            page_id = page["id"]
+                            logger.info(
+                                f"[INSTAGRAM-POLL] Using page '{page['name']}' (ID {page_id})"
+                            )
+                            break
+                else:
+                    body = await resp.text()
+                    logger.warning(f"[INSTAGRAM-POLL] /me/accounts error {resp.status}: {body}")
+    except Exception as e:
+        logger.warning(f"[INSTAGRAM-POLL] Error fetching page token: {e}")
+
+    if not page_token or not page_id:
+        logger.error("[INSTAGRAM-POLL] No page token found — polling disabled")
+        return
+
+    def _build_url(fields: str) -> str:
+        return (
+            f"{API_BASE}/{page_id}/conversations"
+            f"?platform=instagram"
+            f"&fields={fields}"
+            f"&access_token={page_token}"
+        )
+
+    # Seed seen IDs so we don't replay old messages on startup
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(_build_url("messages{id}")) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for conv in data.get("data", []):
@@ -2109,17 +2143,11 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
 
     while True:
         await asyncio.sleep(POLL_INTERVAL)
-        if not config.INSTAGRAM_ACCESS_TOKEN:
-            continue
         try:
             async with aiohttp.ClientSession() as session:
-                conv_url = (
-                    f"{API_BASE}/me/conversations"
-                    f"?platform=instagram"
-                    f"&fields=messages{{id,message,from,shares}}"
-                    f"&access_token={config.INSTAGRAM_ACCESS_TOKEN}"
-                )
-                async with session.get(conv_url) as resp:
+                async with session.get(
+                    _build_url("messages{id,message,from,shares}")
+                ) as resp:
                     if resp.status != 200:
                         body = await resp.text()
                         logger.warning(f"[INSTAGRAM-POLL] Conversations error {resp.status}: {body}")
@@ -2151,9 +2179,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         continue
 
                     reel_url = urls[0]
-                    logger.info(
-                        f"[INSTAGRAM-POLL] New Reel from @{username}: {reel_url}"
-                    )
+                    logger.info(f"[INSTAGRAM-POLL] New Reel from @{username}: {reel_url}")
 
                     guild = bot.guilds[0] if bot.guilds else None
                     if not guild:
@@ -2166,7 +2192,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         try:
                             text_channel = await bot.fetch_channel(target_channel_id)
                         except Exception:
-                            text_channel = guild.system_channel or guild.text_channels[0]
+                            text_channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
 
                     if text_channel:
                         await text_channel.send(
@@ -2174,9 +2200,15 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                             f"*Reproduciendo en el canal de voz...*"
                         )
 
-                    # Start stream in voice channel
-                    voice_channel = await _pickAutoVoiceChannel(guild)
-                    if voice_channel:
+                    # Pick most-populated voice channel
+                    candidates = [
+                        (ch, sum(1 for m in ch.members if not m.bot))
+                        for ch in guild.voice_channels
+                    ]
+                    candidates = [c for c in candidates if c[1] > 0]
+                    if candidates:
+                        candidates.sort(key=lambda x: x[1], reverse=True)
+                        voice_channel = candidates[0][0]
                         await start_instagram_reel_stream_logic(
                             guild.id, voice_channel, reel_url
                         )
