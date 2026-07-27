@@ -264,36 +264,37 @@ class GoLiveStream:
             self._inactivity_task.cancel()
             self._inactivity_task = None
 
-        log.info("[STREAM] Stopping stream...")
-        try:
-            await self._stop_players()
-        except Exception:
-            pass
-        # Drain window: let any in-flight nacl/opus encrypt calls complete
-        # before closing the UDP socket, to avoid heap corruption from
-        # concurrent C-level crypto operations.
-        if self.conn:
-            try:
-                await asyncio.wait_for(self.conn.disconnect(), timeout=5.0)
-            except Exception:
-                pass
-
-        # Disconnect from voice channel
+        # 1. Disconnect from voice channel FIRST to make it instant for the users
         if disconnect_voice and self.vc:
             try:
                 if hasattr(self.vc, "_connection") and self.vc.is_connected():
                     log.info("[STREAM] Disconnecting voice client...")
                     await asyncio.wait_for(
                         self.vc._connection.disconnect(force=True, wait=False),
-                        timeout=5.0
+                        timeout=3.0
                     )
                     self.vc.cleanup()
                     log.info("[STREAM] VoiceClient disconnected and cleaned up")
                 elif self.vc.is_connected():
-                    await asyncio.wait_for(self.vc.disconnect(force=True), timeout=5.0)
+                    await asyncio.wait_for(self.vc.disconnect(force=True), timeout=3.0)
                     log.info("[STREAM] VoiceClient disconnected gracefully")
             except Exception as e:
                 log.warning("[STREAM] VoiceClient disconnect failed: %s", e)
+
+        log.info("[STREAM] Stopping stream and cleaning up resources...")
+        try:
+            await self._stop_players()
+        except Exception:
+            pass
+
+        # Drain window: let any in-flight nacl/opus encrypt calls complete
+        # before closing the UDP socket, to avoid heap corruption from
+        # concurrent C-level crypto operations.
+        if self.conn:
+            try:
+                await asyncio.wait_for(self.conn.disconnect(), timeout=3.0)
+            except Exception:
+                pass
 
         guild = client.get_guild(self.guild_id)
         if guild:
