@@ -2077,12 +2077,17 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
     import re
     import json
     from instagramCommand import start_instagram_reel_stream_logic
+    from users import get_allowed_instagram_usernames
 
     global _seen_instagram_message_ids
     POLL_INTERVAL = 30  # seconds
     API_BASE = "https://graph.facebook.com/v25.0"
 
     logger.info("[INSTAGRAM-POLL] Poller started")
+
+    # Build whitelist of authorized Instagram usernames from users.py
+    allowed_ig_users = get_allowed_instagram_usernames()
+    logger.info(f"[INSTAGRAM-POLL] Authorized senders: {sorted(allowed_ig_users)}")
 
     # --- Resolve Page token and Page ID ---
     # Fast path: use INSTAGRAM_PAGE_TOKEN + INSTAGRAM_PAGE_ID if both configured.
@@ -2167,11 +2172,15 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                     _seen_instagram_message_ids.add(msg_id)
 
                     sender = msg.get("from", {})
-                    username = sender.get("username") or sender.get("name") or "desconocido"
+                    username = (
+                        sender.get("username") or sender.get("name") or ""
+                    ).lower()
 
-                    # Skip blocked users
-                    if "netanyahu" in username.lower():
-                        logger.info(f"[INSTAGRAM-POLL] Ignoring blocked user: {username}")
+                    # Only process messages from authorized Instagram users
+                    if username not in allowed_ig_users:
+                        logger.info(
+                            f"[INSTAGRAM-POLL] Ignoring unauthorized sender: @{username}"
+                        )
                         continue
 
                     # Find reel URLs in message text or shares

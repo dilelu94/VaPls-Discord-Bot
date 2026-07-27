@@ -446,3 +446,22 @@ USERS: dict[int, dict]
 GROUP_LORE: dict[str, list[str]]
 NON_DISCORD_MEMBERS: list[dict]
 USERS, GROUP_LORE, NON_DISCORD_MEMBERS = _load()
+
+
+def get_allowed_instagram_usernames() -> set[str]:
+    """Return the set of Instagram usernames authorized to trigger the bot.
+
+    Includes every Discord user that has an ``instagram`` field in USERS,
+    plus every entry in NON_DISCORD_MEMBERS that has an ``instagram`` field
+    (e.g. Bibi).  All usernames are lowercased for case-insensitive matching.
+    """
+    allowed: set[str] = set()
+    for user in USERS.values():
+        ig = user.get("instagram")
+        if ig:
+            allowed.add(ig.lower())
+    for member in NON_DISCORD_MEMBERS:
+        ig = member.get("instagram")
+        if ig:
+            allowed.add(ig.lower())
+    return allowed
