@@ -201,7 +201,7 @@ class GoLiveStream:
                             break
                     else:
                         log.info("[STREAM] Video player ended naturally — auto-stopping")
-                        disconnect_voice = True
+                        disconnect_voice = False
                         break
         except asyncio.CancelledError:
             return
@@ -255,7 +255,7 @@ class GoLiveStream:
         if self.video_player:
             self.video_player.seek(target_sec)
 
-    async def stop(self, disconnect_voice: bool = True):
+    async def stop(self, disconnect_voice: bool = False):
         if self._stopped:
             return
         self._stopped = True
@@ -264,7 +264,15 @@ class GoLiveStream:
             self._inactivity_task.cancel()
             self._inactivity_task = None
 
-        # 1. Disconnect from voice channel FIRST to make it instant for the users
+        # 1. Stop streaming / screenshare immediately (STREAM_DELETE)
+        if self.conn:
+            log.info("[STREAM] Stopping GoLive screenshare transmission...")
+            try:
+                await asyncio.wait_for(self.conn.disconnect(), timeout=2.0)
+            except Exception as e:
+                log.warning("[STREAM] GoLive disconnect failed: %s", e)
+
+        # 2. Disconnect from voice channel if requested (e.g. by watchdog or stop command)
         if disconnect_voice and self.vc:
             try:
                 if hasattr(self.vc, "_connection") and self.vc.is_connected():
@@ -281,20 +289,11 @@ class GoLiveStream:
             except Exception as e:
                 log.warning("[STREAM] VoiceClient disconnect failed: %s", e)
 
-        log.info("[STREAM] Stopping stream and cleaning up resources...")
+        log.info("[STREAM] Cleaning up players...")
         try:
             await self._stop_players()
         except Exception:
             pass
-
-        # Drain window: let any in-flight nacl/opus encrypt calls complete
-        # before closing the UDP socket, to avoid heap corruption from
-        # concurrent C-level crypto operations.
-        if self.conn:
-            try:
-                await asyncio.wait_for(self.conn.disconnect(), timeout=3.0)
-            except Exception:
-                pass
 
         guild = client.get_guild(self.guild_id)
         if guild:
