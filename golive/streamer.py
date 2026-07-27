@@ -504,6 +504,7 @@ def _detect_encoder() -> _EncoderConfig | None:
     vaapi_pre = ["-vaapi_device", "/dev/dri/renderD128"]
     res = _stream_resolution()
     br = _stream_bitrate()
+    pad_str = f"force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black"
     vaapi_vf = f"format=nv12,hwupload,scale_vaapi={res}"
 
     # Hardware encoders are preferred over software, so a working GPU is always
@@ -535,7 +536,7 @@ def _detect_encoder() -> _EncoderConfig | None:
                     "-bufsize",
                     br,
                 ],
-                vf=f"scale={res}",
+                vf=f"scale={res}:{pad_str}",
             )
         log.info(
             "h264_nvenc is compiled in but unavailable (no usable NVIDIA GPU/driver) "
@@ -602,7 +603,7 @@ def _libopenh264_config() -> _EncoderConfig:
             "-threads", "4",
             "-allow_skip_frames", "1",
         ],
-        vf=f"scale={res}",
+        vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
 
 

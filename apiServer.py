@@ -181,6 +181,8 @@ async def authMiddleware(request: web.Request, handler):
         or request.path.startswith("/dl")
         or request.path.startswith("/static")
         or request.path.startswith("/webhook")
+        or request.path.startswith("/privacy")
+        or request.path.startswith("/delete-data")
     ):
         return await handler(request)
     err = _checkAuth(request)
@@ -773,6 +775,126 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if mode == "subscribe" and token == config.INSTAGRAM_VERIFY_TOKEN:
             return web.Response(text=challenge)
         return web.Response(status=403)
+
+    async def privacyPage(request: web.Request) -> web.Response:
+        """Serve the Privacy Policy page for Meta App Review."""
+        html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Política de Privacidad - MyWebhookApp</title>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0f0f12;
+            color: #e4e4e7;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #ffffff;
+            border-bottom: 1px solid #27272a;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #f4f4f5;
+            margin-top: 30px;
+        }
+        p, li {
+            color: #a1a1aa;
+        }
+        .container {
+            background-color: #18181b;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #27272a;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Política de Privacidad</h1>
+        <p>Última actualización: 27 de Julio de 2026</p>
+        <p>Esta política de privacidad describe cómo <strong>MyWebhookApp</strong> procesa la información cuando interactúas con nuestro bot de Instagram.</p>
+        
+        <h2>1. Información que Recopilamos</h2>
+        <p>No recopilamos ni almacenamos de forma persistente ningún tipo de información personal, mensajes privados, nombres de usuario ni identificadores en bases de datos externas.</p>
+        
+        <h2>2. Uso de la Información</h2>
+        <p>Cuando envías un mensaje con un enlace (Reel) al bot de Instagram, procesamos el enlace únicamente en memoria para extraer el contenido multimedia y transmitir el audio en nuestro canal de Discord de forma temporal. Una vez finalizada la transmisión, no queda ningún registro del mensaje en nuestros servidores.</p>
+        
+        <h2>3. Compartir Datos con Terceros</h2>
+        <p>No vendemos, alquilamos ni compartimos ninguna información con terceros bajo ninguna circunstancia.</p>
+        
+        <h2>4. Contacto</h2>
+        <p>Si tienes alguna pregunta sobre esta política de privacidad, puedes contactar al administrador del sistema.</p>
+    </div>
+</body>
+</html>"""
+        return web.Response(text=html, content_type="text/html")
+
+    async def deleteDataPage(request: web.Request) -> web.Response:
+        """Serve the User Data Deletion Instructions page for Meta App Review."""
+        html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instrucciones de Eliminación de Datos - MyWebhookApp</title>
+    <style>
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0f0f12;
+            color: #e4e4e7;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        h1 {
+            color: #ffffff;
+            border-bottom: 1px solid #27272a;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #f4f4f5;
+            margin-top: 30px;
+        }
+        p, li {
+            color: #a1a1aa;
+        }
+        .container {
+            background-color: #18181b;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #27272a;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Instrucciones de Eliminación de Datos</h1>
+        <p>Última actualización: 27 de Julio de 2026</p>
+        <p>De acuerdo con las regulaciones de la Plataforma de Meta, proporcionamos instrucciones detalladas sobre cómo eliminar tus datos de usuario asociados con <strong>MyWebhookApp</strong>.</p>
+        
+        <h2>Retención de Datos</h2>
+        <p>Dado que <strong>MyWebhookApp</strong> no almacena de forma persistente ningún dato personal, mensajes, ni identificadores de usuario en sus servidores, no existe ninguna base de datos de la cual eliminar tu información.</p>
+        
+        <h2>Cómo Revocar el Acceso de la Aplicación</h2>
+        <p>Si deseas revocar el acceso de nuestra aplicación a tu cuenta de Instagram, puedes hacerlo siguiendo estos pasos oficiales de Meta:</p>
+        <ol>
+            <li>Ve a la configuración de tu perfil de Instagram.</li>
+            <li>Selecciona <strong>Aplicaciones y sitios web</strong>.</li>
+            <li>Busca <strong>MyWebhookApp</strong> en la lista de aplicaciones activas.</li>
+            <li>Haz clic en <strong>Eliminar</strong> para revocar todos los permisos concedidos.</li>
+        </ol>
+    </div>
+</body>
+</html>"""
+        return web.Response(text=html, content_type="text/html")
 
     async def _process_instagram_webhook(body: dict) -> None:
         entries = body.get("entry", [])
@@ -1887,6 +2009,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/telegram-image", telegramImage)
     app.router.add_get("/webhook", verifyWebhook)
     app.router.add_post("/webhook", handleWebhook)
+    app.router.add_get("/privacy", privacyPage)
+    app.router.add_get("/delete-data", deleteDataPage)
     return app
 
 

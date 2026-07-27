@@ -77,7 +77,7 @@ async def start_instagram_reel_stream_logic(
     if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
         return False, "❌ El relay GoLive no está configurado."
 
-    url = urljoin(config.GOLIVE_RELAY_URL, "/instagram")
+    url = urljoin(config.GOLIVE_RELAY_URL, "/stream")
     headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
     payload = {
         "guild_id": guild_id,
