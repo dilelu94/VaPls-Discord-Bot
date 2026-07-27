@@ -2080,7 +2080,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
     from users import get_allowed_instagram_usernames
 
     global _seen_instagram_message_ids
-    POLL_INTERVAL = 10  # seconds
+    POLL_INTERVAL = 20  # seconds
     API_BASE = "https://graph.facebook.com/v25.0"
 
     logger.info("[INSTAGRAM-POLL] Poller started")
@@ -2208,24 +2208,56 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         except Exception:
                             text_channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
 
+                    # Map Instagram username to Discord User ID from users.py
+                    from users import USERS
+                    discord_user_id = None
+                    for uid, udata in USERS.items():
+                        if udata.get("instagram", "").lower() == username:
+                            discord_user_id = uid
+                            break
+
+                    member = None
+                    voice_channel = None
+                    if discord_user_id:
+                        member = guild.get_member(discord_user_id)
+                        if not member:
+                            try:
+                                member = await guild.fetch_member(discord_user_id)
+                            except Exception:
+                                pass
+
+                    if member and member.voice and member.voice.channel:
+                        voice_channel = member.voice.channel
+
+                    if not voice_channel:
+                        # User is not connected to a voice channel — alert and skip stream
+                        if text_channel:
+                            mention = member.mention if member else f"@{username}"
+                            await text_channel.send(
+                                f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
+                                f"⚠️ {mention}, tenés que estar conectado a un canal de voz de Discord para reproducir el reel."
+                            )
+                        continue
+
+                    # Start stream in the user's voice channel
                     if text_channel:
                         await text_channel.send(
                             f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
-                            f"*Reproduciendo en el canal de voz...*"
+                            f"*Reproduciendo en {voice_channel.name}...*"
                         )
 
-                    # Pick most-populated voice channel
-                    candidates = [
-                        (ch, sum(1 for m in ch.members if not m.bot))
-                        for ch in guild.voice_channels
-                    ]
-                    candidates = [c for c in candidates if c[1] > 0]
-                    if candidates:
-                        candidates.sort(key=lambda x: x[1], reverse=True)
-                        voice_channel = candidates[0][0]
-                        await start_instagram_reel_stream_logic(
-                            guild.id, voice_channel, reel_url, sender_name=username
-                        )
+                    success, status_msg = await start_instagram_reel_stream_logic(
+                        guild.id, voice_channel, reel_url, sender_name=username
+                    )
+                    if not success:
+                        if status_msg == "busy":
+                            if text_channel:
+                                await text_channel.send(
+                                    "⚠️ Ya hay un reel o transmisión activa en este momento. Esperá a que termine."
+                                )
+                        else:
+                            if text_channel:
+                                await text_channel.send(status_msg)
 
         except Exception as e:
             logger.error(f"[INSTAGRAM-POLL] Unhandled error: {e}")

@@ -534,10 +534,10 @@ async def _relay_stream(request: web.Request) -> web.Response:
             log.warning("[STREAM] client still not ready after 30s")
             return web.json_response({"error": "client not ready"}, status=503)
 
-    existing = _active_streams.pop(guild_id, None)
-    if existing:
-        log.info("[STREAM] stopping existing stream for guild=%s", guild_id)
-        await existing.stop()
+    existing = _active_streams.get(guild_id)
+    if existing and not existing._stopped:
+        log.warning("[STREAM] already streaming for guild=%s", guild_id)
+        return web.json_response({"error": "busy", "message": "Already streaming"}, status=409)
 
     guild = client.get_guild(guild_id)
     if guild is None:
@@ -619,9 +619,10 @@ async def _relay_headbanz(request: web.Request) -> web.Response:
     if not client.is_ready():
         return web.json_response({"error": "client not ready"}, status=503)
 
-    existing = _active_streams.pop(guild_id, None)
-    if existing:
-        await existing.stop()
+    existing = _active_streams.get(guild_id)
+    if existing and not existing._stopped:
+        log.warning("[HEADBANZ] already streaming for guild=%s", guild_id)
+        return web.json_response({"error": "busy", "message": "Already streaming"}, status=409)
 
     guild = client.get_guild(guild_id)
     if guild is None:
