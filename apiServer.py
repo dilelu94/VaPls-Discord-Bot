@@ -2191,7 +2191,14 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                     )
                     if not urls:
                         # Process text message with Indio's Discord memory & reply back to Instagram
-                        text_msg = msg.get("message", {}).get("text", "").strip()
+                        msg_field = msg.get("message")
+                        if isinstance(msg_field, dict):
+                            text_msg = msg_field.get("text", "").strip()
+                        elif isinstance(msg_field, str):
+                            text_msg = msg_field.strip()
+                        else:
+                            text_msg = ""
+
                         if text_msg and sender.get("id"):
                             from geminiCommand import indioInstagramLogic
                             asyncio.create_task(
