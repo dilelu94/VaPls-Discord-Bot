@@ -2084,32 +2084,37 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
 
     logger.info("[INSTAGRAM-POLL] Poller started")
 
-    # --- Obtain Page access token for Indio.Goldstein ---
-    page_token: str | None = None
-    page_id: str | None = None
-    try:
-        async with aiohttp.ClientSession() as session:
-            accounts_url = (
-                f"{API_BASE}/me/accounts"
-                f"?access_token={config.INSTAGRAM_ACCESS_TOKEN}"
-            )
-            async with session.get(accounts_url) as resp:
-                if resp.status == 200:
-                    accounts = await resp.json()
-                    for page in accounts.get("data", []):
-                        # Pick the Indio.Goldstein page (MESSAGING task required)
-                        if "MESSAGING" in page.get("tasks", []):
-                            page_token = page["access_token"]
-                            page_id = page["id"]
-                            logger.info(
-                                f"[INSTAGRAM-POLL] Using page '{page['name']}' (ID {page_id})"
-                            )
-                            break
-                else:
-                    body = await resp.text()
-                    logger.warning(f"[INSTAGRAM-POLL] /me/accounts error {resp.status}: {body}")
-    except Exception as e:
-        logger.warning(f"[INSTAGRAM-POLL] Error fetching page token: {e}")
+    # --- Resolve Page token and Page ID ---
+    # Fast path: use INSTAGRAM_PAGE_TOKEN + INSTAGRAM_PAGE_ID if both configured.
+    page_token: str | None = config.INSTAGRAM_PAGE_TOKEN or None
+    page_id: str | None = config.INSTAGRAM_PAGE_ID or None
+
+    if page_token and page_id:
+        logger.info(f"[INSTAGRAM-POLL] Using configured page token for page ID {page_id}")
+    elif config.INSTAGRAM_ACCESS_TOKEN:
+        # Fallback: derive page token from user token via /me/accounts
+        try:
+            async with aiohttp.ClientSession() as session:
+                accounts_url = (
+                    f"{API_BASE}/me/accounts"
+                    f"?access_token={config.INSTAGRAM_ACCESS_TOKEN}"
+                )
+                async with session.get(accounts_url) as resp:
+                    if resp.status == 200:
+                        accounts = await resp.json()
+                        for page in accounts.get("data", []):
+                            if "MESSAGING" in page.get("tasks", []):
+                                page_token = page["access_token"]
+                                page_id = page["id"]
+                                logger.info(
+                                    f"[INSTAGRAM-POLL] Using page '{page['name']}' (ID {page_id})"
+                                )
+                                break
+                    else:
+                        body = await resp.text()
+                        logger.warning(f"[INSTAGRAM-POLL] /me/accounts error {resp.status}: {body}")
+        except Exception as e:
+            logger.warning(f"[INSTAGRAM-POLL] Error fetching page token: {e}")
 
     if not page_token or not page_id:
         logger.error("[INSTAGRAM-POLL] No page token found — polling disabled")

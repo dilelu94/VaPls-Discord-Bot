@@ -259,3 +259,8 @@ INSTAGRAM_APP_ID = os.getenv("INSTAGRAM_APP_ID", "")
 INSTAGRAM_APP_SECRET = os.getenv("INSTAGRAM_APP_SECRET", "")
 INSTAGRAM_ACCESS_TOKEN = os.getenv("INSTAGRAM_ACCESS_TOKEN", "")
 INSTAGRAM_VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "indio_webhook_token_2026")
+# Page token + Page ID for polling Instagram DMs directly (no /me/accounts lookup needed).
+# INSTAGRAM_PAGE_TOKEN: long-lived Page access token for Indio.Goldstein page.
+# INSTAGRAM_PAGE_ID: numeric Facebook Page ID of Indio.Goldstein.
+INSTAGRAM_PAGE_TOKEN = os.getenv("INSTAGRAM_PAGE_TOKEN", "")
+INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID", "")
