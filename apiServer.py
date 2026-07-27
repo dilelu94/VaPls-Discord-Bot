@@ -2176,8 +2176,8 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         sender.get("username") or sender.get("name") or ""
                     ).lower()
 
-                    # Only process messages from authorized Instagram users
-                    if username not in allowed_ig_users:
+                    # Only process messages from authorized Instagram users (allow the bot's own IG handle too)
+                    if username not in allowed_ig_users and username != "indio.goldstein":
                         logger.info(
                             f"[INSTAGRAM-POLL] Ignoring unauthorized sender: @{username}"
                         )
@@ -2247,6 +2247,16 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
 
                     if member and member.voice and member.voice.channel:
                         voice_channel = member.voice.channel
+                    elif username == "indio.goldstein":
+                        # Auto-select voice channel: pick the one with most members
+                        candidates = [
+                            (ch, sum(1 for m in ch.members if not m.bot))
+                            for ch in guild.voice_channels
+                        ]
+                        candidates = [c for c in candidates if c[1] > 0]
+                        if candidates:
+                            candidates.sort(key=lambda x: x[1], reverse=True)
+                            voice_channel = candidates[0][0]
 
                     if not voice_channel:
                         # User is not connected to a voice channel — alert and skip stream
