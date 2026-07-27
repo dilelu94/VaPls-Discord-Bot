@@ -782,14 +782,36 @@ def makeApp(bot: discord.Bot) -> web.Application:
         
         for entry in entries:
             for messaging in entry.get("messaging", []):
+                sender_id = messaging.get("sender", {}).get("id")
                 message = messaging.get("message", {})
+                
+                # Fetch sender's username from Meta Graph API
+                username = None
+                if sender_id and config.INSTAGRAM_ACCESS_TOKEN:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            # Meta Graph API endpoint for Instagram Page-Scoped User ID profile
+                            url = f"https://graph.facebook.com/v25.0/{sender_id}?fields=username&access_token={config.INSTAGRAM_ACCESS_TOKEN}"
+                            async with session.get(url) as resp:
+                                if resp.status == 200:
+                                    user_data = await resp.json()
+                                    username = user_data.get("username")
+                    except Exception as e:
+                        logger.error(f"Error fetching Instagram user profile: {e}")
+
+                # Exclude specific blocked usernames (e.g. netanyahu)
+                if username:
+                    username_lower = username.lower()
+                    if "netanyahu" in username_lower:
+                        logger.info(f"Ignoring Instagram message from blocked user: {username}")
+                        continue
                 
                 # Check for reels URL in text or anywhere in the message JSON
                 urls = re.findall(r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/[\w-]+/?", json.dumps(message))
                 
                 if urls:
                     url = urls[0]
-                    logger.info(f"Received Instagram webhook with Reel URL: {url}")
+                    logger.info(f"Received Instagram webhook from {username or 'unknown'} with Reel URL: {url}")
                     
                     guild = bot.guilds[0] if bot.guilds else None
                     if guild:
@@ -801,7 +823,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
                             
                             text_channel = guild.system_channel or guild.text_channels[0]
                             if text_channel:
-                                await text_channel.send(f"📩 *Recibí un Reel por DM de Instagram, reproduciendo en el canal de voz...*")
+                                sender_display = f"@{username}" if username else "alguien"
+                                await text_channel.send(f"📩 *Recibí un Reel por DM de Instagram de {sender_display}, reproduciendo en el canal de voz...*")
                                 
     async def handleWebhook(request: web.Request) -> web.Response:
         """Handle incoming Meta webhooks (POST)."""
