@@ -201,7 +201,7 @@ class GoLiveStream:
                             break
                     else:
                         log.info("[STREAM] Video player ended naturally — auto-stopping")
-                        disconnect_voice = False
+                        disconnect_voice = True
                         break
         except asyncio.CancelledError:
             return

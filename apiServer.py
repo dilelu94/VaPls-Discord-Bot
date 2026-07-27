@@ -940,7 +940,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         voice_channel = await _pickAutoVoiceChannel(guild)
                         if voice_channel:
                             success, status_msg = await start_instagram_reel_stream_logic(
-                                guild.id, voice_channel, url
+                                guild.id, voice_channel, url, sender_name=username
                             )
                             
                             # Post notification to target channel 451580655650996236
@@ -2080,7 +2080,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
     from users import get_allowed_instagram_usernames
 
     global _seen_instagram_message_ids
-    POLL_INTERVAL = 30  # seconds
+    POLL_INTERVAL = 10  # seconds
     API_BASE = "https://graph.facebook.com/v25.0"
 
     logger.info("[INSTAGRAM-POLL] Poller started")
@@ -2224,7 +2224,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         candidates.sort(key=lambda x: x[1], reverse=True)
                         voice_channel = candidates[0][0]
                         await start_instagram_reel_stream_logic(
-                            guild.id, voice_channel, reel_url
+                            guild.id, voice_channel, reel_url, sender_name=username
                         )
 
         except Exception as e:

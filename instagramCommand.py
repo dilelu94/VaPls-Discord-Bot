@@ -64,6 +64,7 @@ async def start_instagram_reel_stream_logic(
     guild_id: int,
     voice_channel,
     reel_url: str,
+    sender_name: str | None = None,
 ) -> tuple[bool, str]:
     """Sends a specific Instagram Reel URL to the GoLive relay for streaming.
 
@@ -84,9 +85,12 @@ async def start_instagram_reel_stream_logic(
         "channel_id": voice_channel.id,
         "url": reel_url,
     }
+    if sender_name:
+        payload["channel_name"] = f"Reel de @{sender_name}"
+
     log.info(
-        "[INSTAGRAM_REEL_LOGIC] POST %s guild=%s channel=%s url=%s",
-        url, guild_id, voice_channel.id, reel_url[:80],
+        "[INSTAGRAM_REEL_LOGIC] POST %s guild=%s channel=%s url=%s sender=%s",
+        url, guild_id, voice_channel.id, reel_url[:80], sender_name,
     )
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     try:
@@ -100,4 +104,5 @@ async def start_instagram_reel_stream_logic(
         log.exception("instagram reel relay failed")
         return False, f"⚠️ Error iniciando stream del reel: {e}"
 
-    return True, f"📱 Reproduciendo reel de Instagram en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."
+    suffix = f" enviado por @{sender_name}" if sender_name else ""
+    return True, f"📱 Reproduciendo reel de Instagram{suffix} en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."
