@@ -67,6 +67,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "fotos": [
             "Un bombero alto y robusto sonriendo al lado de un camión de bomberos rojo.",
         ],
+        "instagram": "milanesanti",
     },
     211354006805676032: {
         "name": "Miles",
@@ -96,6 +97,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "explicó al indio sobre sus límites técnicos",
             "explico al indio sobre sus limites tecnicos",
         ],
+        "instagram": "luque.leonel",
     },
     189830039922016256: {
         "name": "Viny",
@@ -137,6 +139,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "fotos": [
             "Un pelado flaco con auriculares grandes frente a una computadora en una habitación desordenada.",
         ],
+        "instagram": "juan.nc",
     },
     309714566265438221: {
         "name": "Chalo",
@@ -188,6 +191,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "esta en una secta",
             "no entra a Discord hace un monton",
         ],
+        "instagram": "juji_96",
     },
     293815496866922507: {
         "name": "Seba",
@@ -268,6 +272,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "vendio la heladera para comprar droga (chiste interno)",
             "fisurea la heladera a cada rato",
         ],
+        "instagram": "frankk_.98",
     },
     581288610410790912: {
         "name": "Caro",
@@ -314,6 +319,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "profesor de musica",
             "ama trabajar con niños (es su laburo dando clases)",
         ],
+        "instagram": "enrioz",
     },
     268872891729182720: {
         "name": "Mati",
@@ -338,6 +344,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "no puede vender el auto",
             "solo le gustan las chicas blancas con ciudadania europea",
         ],
+        "instagram": "mattferzz",
     },
     310165756384116736: {
         "name": "Magote",
@@ -352,6 +359,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "anecdotas": [
             "desarrolló una aplicación (chiste: lo logró antes que Viny, que estudia programación hace 10 años)",
         ],
+        "instagram": "maggott696",
     },
     519594605520486428: {
         "name": "El Indio",
@@ -402,6 +410,7 @@ _FALLBACK_NON_DISCORD: list[dict] = [
             "el indio tiene fotos con él",
             "tiene pedido de captura por la corte internacional (chiste interno del grupo)",
         ],
+        "instagram": "b.netanyahu",
     },
 ]
 
