@@ -123,6 +123,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
     import yt_dlp
 
     def _run() -> tuple[str, str, bool] | None:
+        is_instagram = "instagram.com" in url.lower()
         opts = {
             "quiet": True,
             "no_warnings": True,
@@ -130,7 +131,10 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
             "remote_components": ["ejs:github"],
             "format": "bestvideo[vcodec!*=av01]+bestaudio/best[vcodec!*=av01]",
         }
-        cookies = _get_cookies_path()
+        if is_instagram:
+            opts["http_headers"] = {"User-Agent": _CHROME_150_UA}
+
+        cookies = _get_instagram_cookies_path() if is_instagram else _get_cookies_path()
         if cookies:
             opts["cookiefile"] = cookies
         ext_args = _get_extractor_args()
