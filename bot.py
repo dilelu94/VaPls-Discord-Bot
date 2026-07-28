@@ -3185,6 +3185,16 @@ async def help_cmd(ctx):
         inline=False,
     )
     embed.add_field(
+        name="📱 Instagram",
+        value=(
+            "Podés chatear con el Indio por mensaje directo a su Instagram: **@indio.goldstein**.\n"
+            "⚠️ **Importante**: Para que la API pueda leer tus DMs, tenés que estar en la whitelist "
+            "y haber aceptado la invitación de Tester de la aplicación en: "
+            "https://www.instagram.com/accounts/manage_access/ (sección *Invitaciones de tester*)."
+        ),
+        inline=False,
+    )
+    embed.add_field(
         name="📊 Estadísticas",
         value=(
             "**/estadisticas** `[usuario]` — resumen de voz, sesión actual y MMR.\n"
