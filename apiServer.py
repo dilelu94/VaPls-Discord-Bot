@@ -2131,13 +2131,14 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
             f"{API_BASE}/{page_id}/conversations"
             f"?platform=instagram"
             f"&fields={fields}"
+            f"&limit=10"  # Only fetch the 10 most recent conversations
             f"&access_token={page_token}"
         )
 
     # Seed seen IDs so we don't replay old messages on startup
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(_build_url("messages{id}")) as resp:
+            async with session.get(_build_url("messages.limit(10){id}")) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     for conv in data.get("data", []):
@@ -2157,7 +2158,7 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    _build_url("messages{id,message,from,shares}")
+                    _build_url("messages.limit(5){id,message,from,shares}")
                 ) as resp:
                     if resp.status != 200:
                         body = await resp.text()
