@@ -3082,6 +3082,7 @@ _ACTION_SUCCESS_SUFFIX = {
     "STOP_MUSIC": "listo ✅",
     "GENERATE_IMAGE": "listo 🎨",
     "EDIT_IMAGE": "listo 🎨",
+    "USE_IMAGE": "",
 }
 
 # When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
