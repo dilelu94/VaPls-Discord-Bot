@@ -19,8 +19,8 @@ from geminiCommand import indioFromVoice, indioLogic
 KEY = "guild-100"
 
 
-def history(gc, key=KEY):
-    return gc._indio_history.get(key, [])
+def history(gc, key=KEY, channel_id=42):
+    return gc._indio_history.get(f"{key}-channel-{channel_id}", [])
 
 
 def texts(turns):
@@ -155,7 +155,7 @@ async def test_indioFromVoice_text_function_call_skips_history(
     )
     await _drain()
 
-    assert len(history(indio)) == 0
+    assert len(history(indio, channel_id=111)) == 0
 
 
 async def test_indioFromVoice_text_normal_saves_history(
@@ -179,7 +179,7 @@ async def test_indioFromVoice_text_normal_saves_history(
         speaker_name="Tobi",
     )
 
-    assert len(history(indio)) == 2
+    assert len(history(indio, channel_id=111)) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ async def test_indioFromVoice_voice_skips_history(
         from_voice=True,
     )
     await _drain()
-    assert len(history(indio)) == 0
+    assert len(history(indio, channel_id=111)) == 0
 
 
 async def test_indioFromVoice_voice_no_function_still_no_history(
@@ -239,4 +239,4 @@ async def test_indioFromVoice_voice_no_function_still_no_history(
         from_voice=True,
     )
 
-    assert len(history(indio)) == 0
+    assert len(history(indio, channel_id=111)) == 0

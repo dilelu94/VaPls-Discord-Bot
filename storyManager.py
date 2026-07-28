@@ -299,6 +299,11 @@ def _add_recent_story(guild_id: int, story: str) -> None:
     if len(lst) >= 5:
         lst.pop(0)
     lst.append(story)
+    _state_flush()
+
+
+def get_recent_stories(guild_id: int) -> list[str]:
+    return list(_recent_stories.get(guild_id, []))
 
 
 # ── Image → Gemini ─────────────────────────────────────────────────────────

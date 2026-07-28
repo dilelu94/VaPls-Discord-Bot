@@ -358,6 +358,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         ],
         "anecdotas": [
             "desarrolló una aplicación (chiste: lo logró antes que Viny, que estudia programación hace 10 años)",
+            "el Indio estuvo presente en el momento en que nació su hija",
         ],
         "instagram": "maggott696",
     },
@@ -375,6 +376,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "anecdotas": [
             "tiene contactos, nunca le van a hacer nada no importa que juicio le hagan",
             "siempre resuelve lo que sea pidiéndole a bibi unos bonbons",
+            "estuvo presente en el momento en que nació la hija de Magote (Daniel)",
         ],
     },
 }

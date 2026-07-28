@@ -27,7 +27,7 @@ async def test_emoji_markup_stripped_from_model_turn(
     assert "<:ahegao:765>" in visible
 
     # Stored: history is clean.
-    stored = [p["text"] for t in indio._indio_history["guild-100"] for p in t["parts"]]
+    stored = [p["text"] for t in indio._indio_history["guild-100-channel-42"] for p in t["parts"]]
     assert all("<:ahegao:765>" not in s for s in stored)
     assert all("<a:" not in s and "<:" not in s for s in stored)
 
@@ -42,7 +42,7 @@ async def test_bare_shortcode_stripped_from_model_turn(
 
     await indio.indioLogic(ctx, "che", nuevo=False)
 
-    stored = [p["text"] for t in indio._indio_history["guild-100"] for p in t["parts"]]
+    stored = [p["text"] for t in indio._indio_history["guild-100-channel-42"] for p in t["parts"]]
     assert all(":ahegao:" not in s for s in stored)
 
 
@@ -56,7 +56,7 @@ async def test_emoji_in_user_question_stripped_from_history(
 
     await indio.indioLogic(ctx, "hola <:ahegao:765> indio", nuevo=False)
 
-    user_turn = indio._indio_history["guild-100"][0]
+    user_turn = indio._indio_history["guild-100-channel-42"][0]
     user_text = user_turn["parts"][0]["text"]
     assert "<:ahegao:765>" not in user_text
     # But the speaker identity + the wording the user typed survive.
@@ -80,7 +80,7 @@ async def test_model_speaker_prefix_stripped_from_visible_and_stored(
     assert "jaja boludo" in visible
     assert "[Miles]:" not in visible
 
-    model_turn = indio._indio_history["guild-100"][1]
+    model_turn = indio._indio_history["guild-100-channel-42"][1]
     model_text = model_turn["parts"][0]["text"]
     assert "[Miles]:" not in model_text
     assert "jaja boludo" in model_text
@@ -99,7 +99,7 @@ async def test_discord_mentions_stripped_from_history(
         ctx, "che <@123> mirá <#456> de <@&789>", nuevo=False,
     )
 
-    user_text = indio._indio_history["guild-100"][0]["parts"][0]["text"]
+    user_text = indio._indio_history["guild-100-channel-42"][0]["parts"][0]["text"]
     assert "<@123>" not in user_text
     assert "<#456>" not in user_text
     assert "<@&789>" not in user_text
@@ -120,6 +120,6 @@ async def test_indio_self_prefix_stripped(
 
     visible = "\n".join(m for m in ctx.sent_messages if m is not None)
     assert "Indio:" not in visible.split("\n")[-1]  # at start of reply at least
-    model_text = indio._indio_history["guild-100"][1]["parts"][0]["text"]
+    model_text = indio._indio_history["guild-100-channel-42"][1]["parts"][0]["text"]
     assert not model_text.lower().startswith("indio:")
     assert "todo bien che" in model_text
