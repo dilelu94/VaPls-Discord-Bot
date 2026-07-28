@@ -256,6 +256,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "anecdotas": [
             "va a la casa de los padres 3 veces a la semana",
         ],
+        "instagram": "toobiiasp",
     },
     495255209715433472: {
         "name": "Franko",
