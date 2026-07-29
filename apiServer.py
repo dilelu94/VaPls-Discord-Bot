@@ -942,7 +942,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                             success, status_msg = await start_instagram_reel_stream_logic(
                                 guild.id, voice_channel, url, sender_name=username
                             )
-                            
+
                             # Post notification to target channel
                             target_channel_id = config.INDIO_STORY_CHANNEL_ID
                             text_channel = bot.get_channel(target_channel_id)
@@ -957,10 +957,18 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
                             if text_channel:
                                 sender_display = f"@{username}" if username else "alguien"
-                                await text_channel.send(
-                                    f"📩 *Recibí un Reel por DM de Instagram de {sender_display}:* {url}\n"
-                                    f"*Reproduciendo en el canal de voz...*"
-                                )
+                                header = f"📩 *Recibí un Reel por DM de Instagram de {sender_display}:* {url}\n"
+                                if success:
+                                    if status_msg.startswith("queued:"):
+                                        pos = status_msg.split(":")[1]
+                                        await text_channel.send(f"{header}⏳ Ya hay un reel reproduciéndose. El reel se puso en cola (posición #{pos}).")
+                                    else:
+                                        await text_channel.send(f"{header}*Reproduciendo en {voice_channel.name}...*")
+                                else:
+                                    if status_msg == "busy":
+                                        await text_channel.send(f"{header}⚠️ Ya hay una transmisión activa (IPTV/TV). Esperá a que termine.")
+                                    else:
+                                        await text_channel.send(f"{header}{status_msg}")
                                 
     async def handleWebhook(request: web.Request) -> web.Response:
         """Handle incoming Meta webhooks (POST)."""
@@ -2271,24 +2279,22 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         continue
 
                     # Start stream in the user's voice channel
-                    if text_channel:
-                        await text_channel.send(
-                            f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
-                            f"*Reproduciendo en {voice_channel.name}...*"
-                        )
-
                     success, status_msg = await start_instagram_reel_stream_logic(
                         guild.id, voice_channel, reel_url, sender_name=username
                     )
-                    if not success:
-                        if status_msg == "busy":
-                            if text_channel:
-                                await text_channel.send(
-                                    "⚠️ Ya hay un reel o transmisión activa en este momento. Esperá a que termine."
-                                )
+                    if text_channel:
+                        header = f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
+                        if success:
+                            if status_msg.startswith("queued:"):
+                                pos = status_msg.split(":")[1]
+                                await text_channel.send(f"{header}⏳ Ya hay un reel reproduciéndose. El reel se puso en cola (posición #{pos}).")
+                            else:
+                                await text_channel.send(f"{header}*Reproduciendo en {voice_channel.name}...*")
                         else:
-                            if text_channel:
-                                await text_channel.send(status_msg)
+                            if status_msg == "busy":
+                                await text_channel.send(f"{header}⚠️ Ya hay una transmisión activa (IPTV/TV). Esperá a que termine.")
+                            else:
+                                await text_channel.send(f"{header}{status_msg}")
 
         except Exception as e:
             logger.error(f"[INSTAGRAM-POLL] Unhandled error: {e}")

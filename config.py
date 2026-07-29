@@ -264,3 +264,6 @@ INSTAGRAM_VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "indio_webhook_toke
 # INSTAGRAM_PAGE_ID: numeric Facebook Page ID of Indio.Goldstein.
 INSTAGRAM_PAGE_TOKEN = os.getenv("INSTAGRAM_PAGE_TOKEN", "")
 INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID", "")
+
+# Discord User ID of the GoLive userbot (espermabebo)
+GOLIVE_USER_ID = int(os.getenv("GOLIVE_USER_ID", "1517756542160736387"))
