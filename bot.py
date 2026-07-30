@@ -697,57 +697,6 @@ async def on_voice_state_update(member, before, after):
     Async:
         This function is a coroutine and must be awaited by the Discord client.
     """
-    # Track GoLive userbot stream teardown for Instagram Reels queueing
-    if member.id == config.GOLIVE_USER_ID:
-        was_streaming = getattr(before, "self_stream", False)
-        is_streaming = getattr(after, "self_stream", False)
-        
-        # If it stopped streaming or left the channel entirely
-        if (was_streaming and not is_streaming) or (before.channel and not after.channel):
-            guild_id = (before.channel or after.channel).guild.id
-            from instagramCommand import _current_golive_stream_types, _instagram_reel_queues, start_instagram_reel_stream_logic
-            
-            # Clear active stream type
-            _current_golive_stream_types.pop(guild_id, None)
-            
-            # Check if there are Reels in the queue
-            queue = _instagram_reel_queues.get(guild_id)
-            if queue:
-                next_reel = queue.pop(0)
-                if not queue:
-                    _instagram_reel_queues.pop(guild_id, None)
-                
-                log.info("[REEL-QUEUE] Spawning next Reel from queue for guild %s: %s", guild_id, next_reel["url"])
-                
-                target_channel_id = config.INDIO_STORY_CHANNEL_ID
-                text_channel = bot.get_channel(target_channel_id)
-                if not text_channel:
-                    try:
-                        text_channel = await bot.fetch_channel(target_channel_id)
-                    except Exception:
-                        pass
-                
-                if text_channel:
-                    sender_display = f"@{next_reel['sender_name']}" if next_reel['sender_name'] else "alguien"
-                    await text_channel.send(
-                        f"⏳ *Siguiente en cola:* Reel enviado por {sender_display}\n"
-                        f"*Reproduciendo en {next_reel['voice_channel'].name}...*"
-                    )
-                
-                # Start playback in background after a tiny sleep to allow voice state teardown
-                async def _delayed_play():
-                    await asyncio.sleep(1.5)
-                    success, status_msg = await start_instagram_reel_stream_logic(
-                        guild_id,
-                        next_reel["voice_channel"],
-                        next_reel["url"],
-                        sender_name=next_reel["sender_name"]
-                    )
-                    if not success:
-                        log.warning("[REEL-QUEUE] Failed to play queued Reel: %s", status_msg)
-                        
-                asyncio.create_task(_delayed_play())
-
     # Bot-only logic for analytics, greetings, idle watchdog
     if member == bot.user:
         if not before.channel and after.channel:
@@ -2508,11 +2457,6 @@ async def stopstream(ctx):
 
     _active_sources.pop(ctx.guild_id, None)
     _paused_streams.discard(ctx.guild_id)
-
-    # Clear Instagram Reels queue and active stream tracking
-    from instagramCommand import _instagram_reel_queues, _current_golive_stream_types
-    _instagram_reel_queues.pop(ctx.guild_id, None)
-    _current_golive_stream_types.pop(ctx.guild_id, None)
 
     await safe_respond(ctx, "🛑 Stream detenido.")
 

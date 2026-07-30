@@ -1999,6 +1999,49 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return web.json_response({"error": "not found"}, status=404)
         return web.json_response(pet)
 
+    async def instagramGenerateReply(request: web.Request) -> web.Response:
+        """Endpoint called by the local PC scraper script to generate an Indio DM response.
+        
+        Body JSON: {username, text?, reel_caption?, image_b64?}
+        """
+        try:
+            data = await request.json()
+            username = str(data["username"]).strip().lower()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        
+        if not username:
+            return web.json_response({"error": "empty username"}, status=400)
+            
+        text = data.get("text") or ""
+        reel_caption = data.get("reel_caption") or ""
+        image_b64 = data.get("image_b64") or ""
+        
+        image_description = None
+        if image_b64:
+            import base64
+            try:
+                from geminiCommand import describe_image
+                image_bytes = base64.b64decode(image_b64)
+                image_description = await describe_image(image_bytes)
+                logger.info(f"[INSTAGRAM-INDIO-SCRAPER] Story image description: {image_description}")
+            except Exception as e:
+                logger.error(f"[INSTAGRAM-INDIO-SCRAPER] Failed to describe story image: {e}")
+
+        from geminiCommand import indioInstagramScraperLogic
+        try:
+            result = await indioInstagramScraperLogic(
+                sender_username=username,
+                pregunta=text,
+                reel_caption=reel_caption,
+                image_description=image_description,
+                bot=bot,
+            )
+            return web.json_response(result)
+        except Exception as e:
+            logger.exception("Failed in indioInstagramScraperLogic")
+            return web.json_response({"error": str(e)}, status=500)
+
     app.router.add_get("/upload/{token}", uploadPage)
     app.router.add_post("/upload/{token}/init", uploadInit)
     app.router.add_post("/upload/{token}/chunk/{idx}", uploadChunk)
@@ -2021,6 +2064,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/play-audio", playAudio)
     app.router.add_get("/queue", queue)
     app.router.add_post("/indio", indioVoice)
+    app.router.add_post("/instagram/generate-reply", instagramGenerateReply)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
     app.router.add_post("/indio-image", submitIndioImage)
@@ -2161,6 +2205,8 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
     except Exception as e:
         logger.warning(f"[INSTAGRAM-POLL] Seed error: {e}")
 
+    is_initial_poll = True
+
     while True:
         await asyncio.sleep(POLL_INTERVAL)
         try:
@@ -2173,6 +2219,20 @@ async def _poll_instagram_inbox(bot: discord.Bot) -> None:
                         logger.warning(f"[INSTAGRAM-POLL] Conversations error {resp.status}: {body}")
                         continue
                     data = await resp.json()
+
+            if is_initial_poll:
+                # Dynamically seed from the first successful polling response
+                seeded_count = 0
+                for conv in data.get("data", []):
+                    for msg in conv.get("messages", {}).get("data", []):
+                        if msg.get("id"):
+                            _seen_instagram_message_ids.add(msg["id"])
+                            seeded_count += 1
+                logger.info(
+                    f"[INSTAGRAM-POLL] Dynamically seeded {seeded_count} message IDs. Skipping processing for this run."
+                )
+                is_initial_poll = False
+                continue
 
             for conv in data.get("data", []):
                 for msg in conv.get("messages", {}).get("data", []):

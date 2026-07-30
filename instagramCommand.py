@@ -60,10 +60,6 @@ async def start_instagram_stream_logic(
     return True, f"📱 Transmitiendo Reels de Instagram en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."
 
 
-_instagram_reel_queues: dict[int, list[dict]] = {}
-_current_golive_stream_types: dict[int, str] = {}
-
-
 async def start_instagram_reel_stream_logic(
     guild_id: int,
     voice_channel,
@@ -102,31 +98,17 @@ async def start_instagram_reel_stream_logic(
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:
                 body = await resp.text()
-                if resp.status == 409:
-                    # Busy: check if it is a Reel currently playing
-                    is_reel_playing = False
-                    if _current_golive_stream_types.get(guild_id) == "reel":
-                        is_reel_playing = True
-                    else:
-                        # Fallback: check nickname of the GoLive userbot in the guild
-                        member = voice_channel.guild.get_member(config.GOLIVE_USER_ID)
-                        if member:
-                            nick = (member.nick or member.name or "").lower()
-                            if "reel" in nick:
-                                is_reel_playing = True
-
-                    if is_reel_playing:
-                        q = _instagram_reel_queues.setdefault(guild_id, [])
-                        q.append({
-                            "url": reel_url,
-                            "sender_name": sender_name,
-                            "voice_channel": voice_channel,
-                        })
-                        pos = len(q)
-                        log.info("[INSTAGRAM_REEL_LOGIC] Queued Reel in position %s", pos)
-                        return True, f"queued:{pos}"
-                    else:
-                        return False, "busy"
+                if resp.status == 200:
+                    try:
+                        data = json.loads(body)
+                        if data.get("status") == "queued":
+                            pos = data.get("position", 1)
+                            log.info("[INSTAGRAM_REEL_LOGIC] Queued successfully on GoLive relay in position %s", pos)
+                            return True, f"queued:{pos}"
+                    except Exception:
+                        pass
+                elif resp.status == 409:
+                    return False, "busy"
 
                 if resp.status >= 400:
                     log.warning("instagram reel relay HTTP %s: %s", resp.status, body[:200])
@@ -135,7 +117,5 @@ async def start_instagram_reel_stream_logic(
         log.exception("instagram reel relay failed")
         return False, f"⚠️ Error iniciando stream del reel: {e}"
 
-    # Playback started successfully
-    _current_golive_stream_types[guild_id] = "reel"
     suffix = f" enviado por @{sender_name}" if sender_name else ""
     return True, f"playing:📱 Reproduciendo reel de Instagram{suffix} en **{voice_channel.name}**.\nUsá **/stopstream** para cortar."

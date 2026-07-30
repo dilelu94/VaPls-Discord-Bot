@@ -120,12 +120,12 @@ _FALLBACK_USERS: dict[int, dict] = {
             "nombre real: Juan",
             "apodos: Viny, Pela (y variantes de pelado)",
             "pelado",
-            "no tiene trabajo",
+            "no tiene trabajo, aunque trabajó un par de veces",
             "de Gualeguaychu",
             "medio afeminado",
             "es re colgado, nunca quiere jugar a nada",
             "juega CS",
-            "estudia programación hace 10 años y nunca hizo una app",
+            "(privado, no mencionar): no lo cargues con que no trabaja, es pelado o estudia programación; dale un respiro y tratalo con más buena onda",
         ],
         "preguntas_tipicas": [
             "y la hermana de Mila?",
@@ -359,7 +359,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "uno de los mejores amigos del indio",
         ],
         "anecdotas": [
-            "desarrolló una aplicación (chiste: lo logró antes que Viny, que estudia programación hace 10 años)",
+            "desarrolló una aplicación",
             "el Indio estuvo presente en el momento en que nació su hija",
         ],
         "instagram": "maggott696",
@@ -395,7 +395,6 @@ _FALLBACK_GROUP_LORE: dict[str, list[str]] = {
         "Bibi tiene pedido de captura por la corte internacional",
         "los que juegan CS son giles, los que juegan Dota unos capos",
         "los piononos sirven para limpiarse y dejarte un postrecito",
-        "hasta Magote (que no estudia) desarrolló una app y Viny, que estudia programación hace 10 años, todavía no",
         "Chalo pescó un pescado con forma de pija",
     ],
 }

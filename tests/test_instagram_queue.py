@@ -1,168 +1,179 @@
+import sys
+import os
+from unittest.mock import MagicMock, AsyncMock, patch
+
+# Mock local modules not installed in dev/test environments so golive.bot imports successfully
+for _mod in ("video_compat", "davey_compat", "golive_connection", "instagram_feed", "instagram_streamer", "streamer", "ytdlp"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+import discord
+if not hasattr(discord, "voice_state"):
+    discord.voice_state = MagicMock()
+if "discord.voice_state" not in sys.modules:
+    sys.modules["discord.voice_state"] = discord.voice_state
+
+# golive/bot.py imports the root config.py but expects golive/config.py LOG_LEVEL
+import config
+config.LOG_LEVEL = "INFO"
+
+# Now we can import golive.bot directly from the package structure
+import golive.bot as golive_bot
+from golive.bot import GoLiveStream, _relay_stream, _active_streams
+
 import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
-import discord
-
-import config
-import instagramCommand
-from instagramCommand import (
-    start_instagram_reel_stream_logic,
-    _instagram_reel_queues,
-    _current_golive_stream_types,
-)
-from bot import on_voice_state_update
+from aiohttp import web
 
 
 @pytest.fixture(autouse=True)
-def setup_golive_config():
-    """Setup dummy GoLive relay configurations for testing."""
-    old_url = config.GOLIVE_RELAY_URL
-    old_secret = config.GOLIVE_RELAY_SECRET
-    config.GOLIVE_RELAY_URL = "http://localhost:8082"
-    config.GOLIVE_RELAY_SECRET = "test_secret"
+def clean_active_streams():
+    """Clear active streams dictionary before/after each test."""
+    _active_streams.clear()
     yield
-    config.GOLIVE_RELAY_URL = old_url
-    config.GOLIVE_RELAY_SECRET = old_secret
-
-
-@pytest.fixture(autouse=True)
-def clean_instagram_queues():
-    """Clear queues and active streams before/after each test."""
-    _instagram_reel_queues.clear()
-    _current_golive_stream_types.clear()
-    yield
-    _instagram_reel_queues.clear()
-    _current_golive_stream_types.clear()
-
-
-class MockResponse:
-    def __init__(self, status, text_val=""):
-        self.status = status
-        self._text_val = text_val
-
-    async def text(self):
-        return self._text_val
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        pass
+    _active_streams.clear()
 
 
 @pytest.mark.asyncio
-async def test_reel_stream_logic_success():
-    """A successful GoLive stream POST sets the active type to 'reel'."""
-    guild_id = 12345
-    mock_vc = MagicMock(spec=discord.VoiceChannel)
-    mock_vc.id = 67890
+async def test_golive_stream_initial_state():
+    """Constructor sets up queue, queue_titles, and is_first_reel flag correctly."""
+    mock_vc = MagicMock()
+    mock_vc.ssrc = 100
 
-    mock_post = MagicMock(return_value=MockResponse(200, "OK"))
+    # Instagram Reel URL
+    stream1 = GoLiveStream(None, 123, 456, mock_vc, "https://instagram.com/reel/123")
+    assert stream1.queue == []
+    assert stream1.queue_titles == []
+    assert stream1.is_first_reel is True
 
-    with patch("aiohttp.ClientSession.post", mock_post):
-        success, msg = await start_instagram_reel_stream_logic(
-            guild_id, mock_vc, "https://instagram.com/reel/123", sender_name="mati"
-        )
-        assert success is True
-        assert msg.startswith("playing:")
-        assert _current_golive_stream_types.get(guild_id) == "reel"
-
-
-@pytest.mark.asyncio
-async def test_reel_stream_logic_queueing():
-    """If a Reel is already playing (HTTP 409), the new one gets queued."""
-    guild_id = 12345
-    mock_vc = MagicMock(spec=discord.VoiceChannel)
-    mock_vc.id = 67890
-
-    # Simulate active Reel stream
-    _current_golive_stream_types[guild_id] = "reel"
-
-    mock_post = MagicMock(return_value=MockResponse(409, "busy"))
-
-    with patch("aiohttp.ClientSession.post", mock_post):
-        success, msg = await start_instagram_reel_stream_logic(
-            guild_id, mock_vc, "https://instagram.com/reel/abc", sender_name="tobi"
-        )
-        assert success is True
-        assert msg == "queued:1"
-        assert len(_instagram_reel_queues[guild_id]) == 1
-        assert _instagram_reel_queues[guild_id][0]["url"] == "https://instagram.com/reel/abc"
-        assert _instagram_reel_queues[guild_id][0]["sender_name"] == "tobi"
+    # IPTV URL (Non-Instagram)
+    stream2 = GoLiveStream(None, 123, 456, mock_vc, "http://iptv.com/channel.m3u8")
+    assert stream2.is_first_reel is False
 
 
 @pytest.mark.asyncio
-async def test_reel_stream_logic_busy_tv():
-    """If an IPTV stream is playing (HTTP 409), queueing is skipped."""
-    guild_id = 12345
-    mock_vc = MagicMock(spec=discord.VoiceChannel)
-    mock_vc.id = 67890
+async def test_golive_stream_first_reel_delay():
+    """First Reel stream connect applies a 5-second initial connect sleep."""
+    mock_vc = MagicMock()
+    mock_vc.ssrc = 100
 
-    # Simulate active IPTV stream
-    _current_golive_stream_types[guild_id] = "iptv"
+    stream = GoLiveStream(None, 123, 456, mock_vc, "https://instagram.com/reel/123")
+    
+    mock_connect = AsyncMock()
+    mock_start_players = AsyncMock()
+    mock_sleep = AsyncMock()
+    mock_extract = AsyncMock(return_value=("https://instagram.com/reel/123", "Reel Title", False))
 
-    mock_post = MagicMock(return_value=MockResponse(409, "busy"))
+    ytdlp_module = sys.modules.get('ytdlp')
 
-    with patch("aiohttp.ClientSession.post", mock_post):
-        success, msg = await start_instagram_reel_stream_logic(
-            guild_id, mock_vc, "https://instagram.com/reel/xyz", sender_name="tobi"
-        )
-        assert success is False
-        assert msg == "busy"
-        assert guild_id not in _instagram_reel_queues
+    with patch("golive.bot.GoLiveConnection") as mock_golive_conn_class, \
+         patch.object(stream, "_start_players", mock_start_players), \
+         patch.object(ytdlp_module, "_yt_extract_url", mock_extract), \
+         patch("asyncio.sleep", mock_sleep), \
+         patch("asyncio.create_task") as mock_create_task:
+
+        mock_conn_inst = MagicMock()
+        mock_conn_inst.connect = mock_connect
+        mock_conn_inst.ssrc = 100
+        mock_golive_conn_class.return_value = mock_conn_inst
+
+        await stream.start()
+        
+        # Verify 5 second connect delay was applied
+        mock_sleep.assert_called_once_with(5.0)
+        assert stream.is_first_reel is False
 
 
 @pytest.mark.asyncio
-async def test_on_voice_state_update_dispatch():
-    """When GoLive bot stops streaming, the next Reel in queue is automatically played."""
-    guild_id = 12345
-    mock_guild = MagicMock(spec=discord.Guild)
-    mock_guild.id = guild_id
+async def test_relay_stream_queueing():
+    guild_id = 123
+    mock_vc = MagicMock()
+    mock_vc.ssrc = 100
 
-    mock_vc = MagicMock(spec=discord.VoiceChannel)
-    mock_vc.id = 67890
-    mock_vc.guild = mock_guild
+    active_stream = GoLiveStream(None, guild_id, 456, mock_vc, "https://instagram.com/reel/current")
+    _active_streams[guild_id] = active_stream
 
-    mock_member = MagicMock(spec=discord.Member)
-    mock_member.id = config.GOLIVE_USER_ID
-    mock_member.guild = mock_guild
+    # Construct dummy HTTP Request
+    mock_request = MagicMock(spec=web.Request)
+    mock_request.remote = "127.0.0.1"
+    
+    # Auth headers setup using root config mocks
+    with patch("golive.bot.config") as mock_golive_config:
+        mock_golive_config.RELAY_SECRET = "test"
+        mock_request.headers = {"X-API-Secret": "test"}
 
-    mock_before = MagicMock(spec=discord.VoiceState)
-    mock_before.self_stream = True
-    mock_before.channel = mock_vc
+        # Request payload
+        payload = {
+            "guild_id": guild_id,
+            "channel_id": 456,
+            "url": "https://instagram.com/reel/new_one",
+            "channel_name": "Mati Reel"
+        }
+        mock_request.json = AsyncMock(return_value=payload)
 
-    mock_after = MagicMock(spec=discord.VoiceState)
-    mock_after.self_stream = False
-    mock_after.channel = mock_vc
+        # Trigger relay_stream
+        with patch("golive.bot.client.is_ready", return_value=True):
+            resp = await _relay_stream(mock_request)
+            assert resp.status == 200
+            
+            # Check queue
+            assert len(active_stream.queue) == 1
+            assert active_stream.queue[0] == "https://instagram.com/reel/new_one"
+            assert active_stream.queue_titles[0] == "Mati Reel"
 
-    # Queue a Reel
-    _instagram_reel_queues[guild_id] = [
-        {"url": "https://instagram.com/reel/queued1", "sender_name": "mati", "voice_channel": mock_vc}
-    ]
-    _current_golive_stream_types[guild_id] = "reel"
 
-    mock_play_logic = AsyncMock(return_value=(True, "playing:..."))
-    mock_text_channel = MagicMock()
-    mock_text_channel.send = AsyncMock()
+@pytest.mark.asyncio
+async def test_inactivity_loop_consumes_queue():
+    """GoLiveStream inactivity loop plays next Reel in queue on natural video end."""
+    guild_id = 123
+    mock_vc = MagicMock()
+    mock_vc.ssrc = 100
 
-    with patch("bot.bot.get_channel", return_value=mock_text_channel), \
-         patch("instagramCommand.start_instagram_reel_stream_logic", mock_play_logic):
-        
-        await on_voice_state_update(mock_member, mock_before, mock_after)
-        
-        # Verify active state was cleared on teardown
-        assert _current_golive_stream_types.get(guild_id) is None
-        
-        # Verify the item was popped from the queue
-        assert guild_id not in _instagram_reel_queues
-        
-        # Check text channel alert was sent
-        mock_text_channel.send.assert_called_once()
-        
-        # Wait a brief moment to allow the delayed playback task to run
-        await asyncio.sleep(2.0)
-        
-        # Check that start_instagram_reel_stream_logic was triggered
-        mock_play_logic.assert_called_once_with(
-            guild_id, mock_vc, "https://instagram.com/reel/queued1", sender_name="mati"
-        )
+    stream = GoLiveStream(None, guild_id, 456, mock_vc, "https://instagram.com/reel/1")
+    stream.queue = ["https://instagram.com/reel/2"]
+    stream.queue_titles = ["Second Reel"]
+    stream.is_live = False  # VOD
+
+    # Simulate player ended
+    mock_player = MagicMock()
+    mock_player.is_alive = MagicMock(return_value=False)
+    stream.video_player = mock_player
+
+    mock_stop = AsyncMock()
+    mock_start = AsyncMock()
+    mock_extract = AsyncMock(return_value=("http://stream_url", "Title", False))
+    mock_client = MagicMock()
+    mock_client.get_guild = MagicMock(return_value=None)
+
+    # Configure the mocked ytdlp module
+    ytdlp_module = sys.modules.get('ytdlp')
+    ytdlp_module._yt_extract_url = mock_extract
+
+    sleep_calls = 0
+    async def mock_sleep_impl(sec):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError()
+
+    with patch.object(stream, "_stop_players", mock_stop), \
+         patch.object(stream, "_start_players", mock_start), \
+         patch("golive.bot.client", mock_client):
+         
+         # Run the inactivity loop with the mock sleep
+         with patch("asyncio.sleep", mock_sleep_impl):
+             try:
+                 await stream._inactivity_loop()
+             except asyncio.CancelledError:
+                 pass
+             
+             # Verify stop was called to clean up old players
+             mock_stop.assert_called_once()
+             
+             # Verify next url extraction
+             mock_extract.assert_called_once_with("https://instagram.com/reel/2")
+             
+             # Verify it updated current URL and started new players
+             assert stream.url == "https://instagram.com/reel/2"
+             mock_start.assert_called_once()
+             assert stream.queue == []

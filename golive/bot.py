@@ -67,6 +67,10 @@ class GoLiveStream:
         self.reconnect_attempts = 0
         self._stopped = False
         self._inactivity_task = None
+        self.queue = []
+        self.queue_titles = []
+        self.idle_event = None
+        self.is_first_reel = ("instagram.com" in url)
 
     async def start(self):
         from ytdlp import _yt_extract_url
@@ -101,6 +105,12 @@ class GoLiveStream:
         self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
         await self.conn.connect(timeout=30.0)
         self.video_ssrc = self.conn.ssrc + 1
+
+        if self.is_first_reel:
+            log.info("[STREAM] First Instagram Reel detected. Pausing 5 seconds for viewers to connect...")
+            await asyncio.sleep(5.0)
+            # Reset is_first_reel so subsequent queued items in this stream don't delay
+            self.is_first_reel = False
         
         await self._start_players()
         self._inactivity_task = asyncio.create_task(self._inactivity_loop())
@@ -200,9 +210,47 @@ class GoLiveStream:
                             log.error("[STREAM] Failed to restart players: %s", e)
                             break
                     else:
-                        log.info("[STREAM] Video player ended naturally — auto-stopping")
-                        disconnect_voice = False
-                        break
+                        log.info("[STREAM] Video player ended naturally.")
+                        if self.queue:
+                            next_url = self.queue.pop(0)
+                            next_title = self.queue_titles.pop(0)
+                            log.info("[STREAM] Playing next queued video: %s (%s)", next_url, next_title)
+                            
+                            await self._stop_players()
+                            
+                            # Resolve target URL via yt-dlp
+                            from ytdlp import _yt_extract_url
+                            try:
+                                res = await _yt_extract_url(next_url)
+                                if res:
+                                    self.target_url, self.title, self.is_live = res
+                                    self.url = next_url
+                                else:
+                                    log.error("[STREAM] yt-dlp failed to extract next URL")
+                                    continue
+                            except Exception as e:
+                                log.error("[STREAM] yt-dlp extraction failed for next URL: %s", e)
+                                continue
+                            
+                            # Set nickname to reflect new video
+                            guild = client.get_guild(self.guild_id)
+                            if guild:
+                                await _set_nickname(guild, f"GoLive - {next_title}")
+                            
+                            await self._start_players()
+                        else:
+                            log.info("[STREAM] No more videos in queue. Entering idle state for 60 seconds...")
+                            await self._stop_players()
+                            
+                            self.idle_event = asyncio.Event()
+                            try:
+                                await asyncio.wait_for(self.idle_event.wait(), timeout=60.0)
+                                log.info("[STREAM] Woken up from idle state by new queued video!")
+                                continue
+                            except asyncio.TimeoutError:
+                                log.info("[STREAM] Idle timeout reached. Closing stream.")
+                                disconnect_voice = False
+                                break
         except asyncio.CancelledError:
             return
 
@@ -536,6 +584,18 @@ async def _relay_stream(request: web.Request) -> web.Response:
 
     existing = _active_streams.get(guild_id)
     if existing and not existing._stopped:
+        is_existing_reel = "instagram.com" in (existing.url or "")
+        is_new_reel = "instagram.com" in url
+        if is_existing_reel or is_new_reel:
+            existing.queue.append(url)
+            existing.queue_titles.append(stream_title or "Reel")
+            log.info("[STREAM] Queued URL in active GoLiveStream: %s (pos=%s)", url, len(existing.queue))
+            if existing.idle_event and not existing.idle_event.is_set():
+                existing.idle_event.set()
+            return web.json_response({
+                "status": "queued",
+                "position": len(existing.queue)
+            })
         log.warning("[STREAM] already streaming for guild=%s", guild_id)
         return web.json_response({"error": "busy", "message": "Already streaming"}, status=409)
 
