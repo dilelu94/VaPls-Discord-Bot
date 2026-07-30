@@ -17,8 +17,8 @@ logging.basicConfig(
 logger = logging.getLogger("instagram_scraper")
 
 # --- CONFIGURACIÓN LOCAL ---
-INSTAGRAM_USERNAME = "indio.goldstein"  # Tu usuario de Instagram del Indio
-COOKIES_PATH = "instagram_cookies.json"  # Ruta para persistir la sesión
+INSTAGRAM_USERNAME = "indio.goldstein"  # Tu usuario de Instagram del Indio (cuenta secundaria)
+COOKIES_PATH = f"instagram_cookies_{INSTAGRAM_USERNAME}.json"  # Ruta para persistir la sesión dinámica
 PROCESSED_COMMENTS_PATH = "processed_comments.json"  # Registro de notificaciones de comentarios respondidas
 
 # Dirección de tu servidor en Oracle Cloud (cambiar si usas otra IP/puerto)
