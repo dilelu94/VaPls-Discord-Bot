@@ -101,7 +101,8 @@ def process_inbox(cl):
     """Revisa y responde mensajes directos (DMs) de texto, Reels e Historias."""
     logger.info("Revisando la bandeja de entrada de Instagram (DMs)...")
     try:
-        threads = cl.direct_threads(limit=10)
+        # Usamos amount=10 en lugar de limit=10 (firma correcta de instagrapi)
+        threads = cl.direct_threads(amount=10)
         
         for thread in threads:
             if not thread.messages:
@@ -198,15 +199,19 @@ def process_comment_mentions(cl):
     logger.info("Revisando notificaciones para menciones en comentarios...")
     processed_comments = load_processed_comments()
     try:
-        activities = cl.get_activity_feed()
+        # news_inbox_v1 es el método correcto para traer las notificaciones de actividad
+        inbox_data = cl.news_inbox_v1()
         
-        for item in activities:
-            text = item.text.lower()
+        # Agrupamos historias nuevas y viejas para procesar defensivamente
+        stories = inbox_data.get("new_stories", []) + inbox_data.get("old_stories", [])
+        
+        for story in stories:
+            args = story.get("args", {})
+            text = args.get("text", "").lower()
             
-            # Verificar si la notificación es una mención en un comentario
+            # Verificar si es una mención en comentario
             if "mencionó" in text or "mentioned" in text:
                 if "comentario" in text or "comment" in text:
-                    args = item.args or {}
                     media_id = args.get("media_id") or args.get("media_pk")
                     comment_id = args.get("comment_id") or args.get("comment_pk")
                     comment_text = args.get("comment_text") or ""
@@ -214,13 +219,13 @@ def process_comment_mentions(cl):
                     if not media_id or not comment_id:
                         continue
                         
-                    # Usar el ID de la notificación para evitar repeticiones
-                    notification_id = str(item.pk)
+                    # Usar el ID de la notificación para evitar duplicados
+                    notification_id = str(story.get("pk") or comment_id)
                     if notification_id in processed_comments:
                         continue
                         
-                    # Extraer el usuario remitente del texto de la notificación
-                    parts = item.text.split()
+                    # Extraer el usuario de la notificación (ej: "dilelu te mencionó...")
+                    parts = text.split()
                     sender_username = parts[0].strip().replace("@", "").lower() if parts else "alguien"
                     
                     # Si la whitelist está activa y no está en ella, ignorar
@@ -238,7 +243,7 @@ def process_comment_mentions(cl):
                     if reply:
                         logger.info(f"Respondiendo al comentario de @{sender_username}: '{reply}'")
                         try:
-                            # Responder comentario
+                            # Responder comentario en Instagram
                             cl.media_comment(media_id, reply, replied_to_comment_id=comment_id)
                             # Registrar como respondido
                             save_processed_comment(notification_id)
