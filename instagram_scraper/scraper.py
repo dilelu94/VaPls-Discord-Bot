@@ -148,18 +148,24 @@ def process_inbox(cl):
                     logger.info(f"Mención en historia de @{sender_username} sin imagen descargable.")
                 pregunta = story.title or ""
 
-            # 2. Reel de Instagram compartido
+            # 2. Reel de Instagram compartido o Media Share
             elif last_msg.clip:
                 is_reel = True
                 reel_caption = last_msg.clip.caption_text or ""
-                logger.info(f"El usuario compartió un Reel. Caption: '{reel_caption}'")
+                logger.info(f"El usuario compartió un Reel (clip). Caption: '{reel_caption}'")
+            elif last_msg.media_share:
+                is_reel = True
+                reel_caption = last_msg.media_share.caption_text or ""
+                logger.info(f"El usuario compartió un Reel/Media. Caption: '{reel_caption}'")
 
             # 3. Mensaje de texto simple
             elif last_msg.text:
                 pregunta = last_msg.text
                 logger.info(f"El usuario envió un texto: '{pregunta}'")
             else:
-                logger.info("Tipo de mensaje no soportado (imagen, audio, etc.). Ignorando.")
+                # Loguear las propiedades del mensaje para depurar formatos futuros
+                msg_attrs = [attr for attr in ["text", "clip", "media_share", "story_share", "reel_share", "xma_share"] if getattr(last_msg, attr, None)]
+                logger.info(f"Tipo de mensaje no soportado (imagen, audio, etc.). Propiedades activas: {msg_attrs}. Ignorando.")
                 continue
             
             # Consultar al servidor Cloud por la respuesta
