@@ -72,6 +72,17 @@ class GoLiveStream:
         self.idle_event = None
         self.is_first_reel = ("instagram.com" in url)
 
+        # RTP counters carried across reel transitions so the client's jitter
+        # buffer never sees the video clock jump backwards on the same SSRC.
+        self._video_seq: int = 0
+        self._video_ts: int = 0
+        self._audio_seq: int = 0
+        self._audio_ts: int = 0
+        # Background yt-dlp prefetch of the next queued reel: url -> (target_url,
+        # title, is_live), plus the set of urls currently being resolved.
+        self._prefetch_cache: dict[str, tuple[str, str, bool]] = {}
+        self._prefetch_urls: set[str] = set()
+
     async def start(self):
         from ytdlp import _yt_extract_url
         
@@ -119,6 +130,11 @@ class GoLiveStream:
         from streamer import H264VideoPlayer, _stream_fps
         from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
         proxy_vc = _GoLiveVCProxy(self.conn)
+        if self._video_ts or self._audio_ts:
+            log.info(
+                "[STREAM] Seeding RTP: video seq=%d ts=%d, audio seq=%d ts=%d",
+                self._video_seq, self._video_ts, self._audio_seq, self._audio_ts,
+            )
         self.video_player = H264VideoPlayer(
             url=self.target_url,
             voice_client=proxy_vc,
@@ -126,6 +142,8 @@ class GoLiveStream:
             live=self.is_live,
             audio=True,
             original_url=self.url,
+            initial_seq=self._video_seq,
+            initial_ts=self._video_ts,
         )
         self.video_player.start()
         log.info("[STREAM] Video player started for '%s'", self.title)
@@ -144,6 +162,8 @@ class GoLiveStream:
             file_obj=f,
             conn=self.conn,
             is_source_active=self.video_player.is_source_active,
+            initial_seq=self._audio_seq,
+            initial_ts=self._audio_ts,
         )
         self.audio_sender.start()
         log.info("[STREAM] Audio sender started for '%s'", self.title)
@@ -156,9 +176,28 @@ class GoLiveStream:
         
         await asyncio.to_thread(self._wait_players)
         
+        # Snapshot the RTP counters before discarding the players so the next
+        # reel's players continue the same seq/ts on the shared SSRC.
+        vp = self.video_player
+        if vp is not None:
+            s = getattr(vp, "_seq", None)
+            t = getattr(vp, "_ts", None)
+            if isinstance(s, int):
+                self._video_seq = s & 0xFFFF
+            if isinstance(t, int):
+                self._video_ts = t & 0xFFFF_FFFF
+        ap = self.audio_sender
+        if ap is not None:
+            s = getattr(ap, "_seq", None)
+            t = getattr(ap, "_ts", None)
+            if isinstance(s, int):
+                self._audio_seq = s & 0xFFFF
+            if isinstance(t, int):
+                self._audio_ts = t & 0xFFFF_FFFF
+
         self.video_player = None
         self.audio_sender = None
-        
+
     def _wait_players(self):
         deadline = time.monotonic() + 5.0
         for p in (self.video_player, self.audio_sender):
@@ -169,12 +208,31 @@ class GoLiveStream:
                 if p.is_alive():
                     log.warning('[STREAM] %s still alive after 5s', p.name)
 
+    async def _prefetch_next(self) -> None:
+        """Resolve the next queued reel's stream URL in the background so the
+        reel-to-reel transition has no yt-dlp wait."""
+        if self._stopped or not self.queue:
+            return
+        from ytdlp import _yt_extract_url
+        url = self.queue[0]
+        if url in self._prefetch_cache or url in self._prefetch_urls:
+            return
+        self._prefetch_urls.add(url)
+        try:
+            res = await _yt_extract_url(url)
+            if res and not self._stopped:
+                self._prefetch_cache[url] = res
+        except Exception as e:
+            log.warning("[STREAM] prefetch failed for %s: %s", url, e)
+        finally:
+            self._prefetch_urls.discard(url)
+
     async def _inactivity_loop(self):
         """Monitors player health and reconnects if live, or auto-stops."""
         disconnect_voice = True
         try:
             while not self._stopped:
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.5)
                 if self._stopped:
                     break
 
@@ -218,18 +276,21 @@ class GoLiveStream:
                             
                             await self._stop_players()
                             
-                            # Resolve target URL via yt-dlp
-                            from ytdlp import _yt_extract_url
-                            try:
-                                res = await _yt_extract_url(next_url)
-                                if res:
-                                    self.target_url, self.title, self.is_live = res
-                                    self.url = next_url
-                                else:
-                                    log.error("[STREAM] yt-dlp failed to extract next URL")
+                            # Resolve target URL via yt-dlp (prefetched while the
+                            # previous reel was playing; inline fallback otherwise).
+                            res = self._prefetch_cache.pop(next_url, None)
+                            if res is None:
+                                from ytdlp import _yt_extract_url
+                                try:
+                                    res = await _yt_extract_url(next_url)
+                                except Exception as e:
+                                    log.error("[STREAM] yt-dlp extraction failed for next URL: %s", e)
                                     continue
-                            except Exception as e:
-                                log.error("[STREAM] yt-dlp extraction failed for next URL: %s", e)
+                            if res:
+                                self.target_url, self.title, self.is_live = res
+                                self.url = next_url
+                            else:
+                                log.error("[STREAM] yt-dlp failed to extract next URL")
                                 continue
                             
                             # Set nickname to reflect new video
@@ -238,6 +299,8 @@ class GoLiveStream:
                                 await _set_nickname(guild, f"GoLive - {next_title}")
                             
                             await self._start_players()
+                            if self.queue:
+                                asyncio.create_task(self._prefetch_next())
                         else:
                             log.info("[STREAM] No more videos in queue. Entering idle state for 60 seconds...")
                             await self._stop_players()
@@ -592,6 +655,9 @@ async def _relay_stream(request: web.Request) -> web.Response:
             log.info("[STREAM] Queued URL in active GoLiveStream: %s (pos=%s)", url, len(existing.queue))
             if existing.idle_event and not existing.idle_event.is_set():
                 existing.idle_event.set()
+            # Prefetch the next queued reel's stream URL in the background so the
+            # reel-to-reel transition doesn't stall on yt-dlp extraction.
+            asyncio.create_task(existing._prefetch_next())
             return web.json_response({
                 "status": "queued",
                 "position": len(existing.queue)

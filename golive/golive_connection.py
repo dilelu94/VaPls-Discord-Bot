@@ -440,6 +440,8 @@ class GoLiveAudioSender(threading.Thread):
         file_obj,
         conn: GoLiveConnection,
         is_source_active: Callable[[], bool] | None = None,
+        initial_seq: int = 0,
+        initial_ts: int = 0,
     ) -> None:
         super().__init__(name="GoLiveAudio", daemon=True)
         self._f = file_obj
@@ -450,8 +452,8 @@ class GoLiveAudioSender(threading.Thread):
         # read is treated as that gap (wait for the new writer) rather than EOF.
         self._is_source_active = is_source_active
 
-        self._seq: int = 0
-        self._ts: int = 0
+        self._seq: int = initial_seq & 0xFFFF
+        self._ts: int = initial_ts & 0xFFFF_FFFF
         self._nonce: int = 0  # running nonce counter for lite/rtpsize modes
 
     def stop(self) -> None:

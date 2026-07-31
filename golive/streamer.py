@@ -769,6 +769,8 @@ class H264VideoPlayer(threading.Thread):
         audio: bool = True,
         probe_size: int = 2_000_000,
         original_url: str | None = None,
+        initial_seq: int = 0,
+        initial_ts: int = 0,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
@@ -782,8 +784,8 @@ class H264VideoPlayer(threading.Thread):
         self._live = live
         self._audio = audio
         self._probe_size = probe_size
-        self._seq: int = 0
-        self._ts: int = 0
+        self._seq: int = initial_seq & 0xFFFF
+        self._ts: int = initial_ts & 0xFFFF_FFFF
         self._ts_inc: int = round(_CLOCK / fps)
         self._ssrc: int = voice_client.ssrc + 1  # VIDEO_SSRC_OFFSET = 1
         self._packets_sent: int = 0
