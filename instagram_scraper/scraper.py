@@ -43,19 +43,6 @@ API_SECRET = os.getenv("API_SECRET") or "tu_secreto_aqui"
 MIN_DELAY_SECS = 1800   # 30 minutos
 MAX_DELAY_SECS = 5400   # 1 hora y media
 
-# Horario de silencio/sueño (en base a la hora local de tu PC)
-SILENCE_START_HOUR = 2  # 2 AM
-SILENCE_END_HOUR = 10   # 10 AM
-
-def check_silence_time():
-    import datetime
-    now = datetime.datetime.now()
-    hour = now.hour
-    if SILENCE_START_HOUR < SILENCE_END_HOUR:
-        return SILENCE_START_HOUR <= hour < SILENCE_END_HOUR
-    else: # Horario cruza la medianoche (ej: de 22:00 a 06:00)
-        return hour >= SILENCE_START_HOUR or hour < SILENCE_END_HOUR
-
 def load_processed_comments():
     if os.path.exists(PROCESSED_COMMENTS_PATH):
         try:
@@ -713,11 +700,6 @@ def main():
         # Calcular el tiempo de espera aleatorio antes de la próxima consulta
         delay = random.randint(MIN_DELAY_SECS, MAX_DELAY_SECS)
         
-        if check_silence_time():
-            logger.info(f"Horario de silencio activo (2 AM - 10 AM). Durmiendo hasta la próxima revisión...")
-            time.sleep(1800)  # Dormir 30 minutos y re-evaluar
-            continue
-            
         # Refrescar la whitelist real del cloud (users.py) antes de procesar
         fetch_whitelist()
         
