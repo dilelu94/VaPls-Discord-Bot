@@ -76,3 +76,4 @@ instagram_scraper/instagram_cookies_*.json
 instagram_scraper/non_whitelist_counts.json
 instagram_scraper/processed_comments.json
 instagram_scraper/processed_messages.json
+instagram_scraper/seen_reels.json
