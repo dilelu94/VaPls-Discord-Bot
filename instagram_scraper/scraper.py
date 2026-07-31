@@ -151,14 +151,17 @@ def track_non_whitelisted(cl, username, counts, seen, item_id):
         except Exception as e:
             logger.error(f"Error al notificar a @{ALERT_USERNAME} por @{key}: {e}")
 
-def fetch_gemini_reply(username, text, reel_caption, image_b64=None):
+def fetch_gemini_reply(username, text, reel_caption, image_b64=None, video_url=None, video_duration=None, is_reel_mention=False):
     url = f"{CLOUD_SERVER_URL}/instagram/generate-reply"
     headers = {"X-API-Secret": API_SECRET}
     payload = {
         "username": username,
         "text": text,
         "reel_caption": reel_caption,
-        "image_b64": image_b64 or ""
+        "image_b64": image_b64 or "",
+        "video_url": video_url or "",
+        "video_duration": video_duration,
+        "is_reel_mention": is_reel_mention,
     }
     try:
         response = requests.post(url, json=payload, headers=headers, timeout=40)
@@ -493,28 +496,31 @@ def process_comment_mentions(cl):
                         if img_url:
                             image_b64 = download_image_b64(cl, img_url)
                 else:
-                    # Comment mention: extraer media_id, comment_id y caption del reel
+                    # Comment mention: extraer media_id, comment_id, caption y contexto visual del reel
                     if media_list:
                         media_item = media_list[0]
                         mid = media_item.get("id", "").split("_")[0]
                         comment_text = args.get("comment_text") or ""
                         reel_caption_for_reply = None
                         image_b64_for_reply = None
+                        video_url = None
+                        video_duration = None
                         if mid:
                             try:
                                 media_info = cl.media_info(mid)
                                 reel_caption_for_reply = media_info.caption_text or None
                                 if reel_caption_for_reply:
                                     logger.info(f"Caption del Reel: '{reel_caption_for_reply[:80]}'")
-                                else:
-                                    thumb_url = getattr(media_info, 'thumbnail_url', None)
-                                    if thumb_url:
-                                        image_b64_for_reply = download_image_b64(cl, thumb_url)
-                                        if image_b64_for_reply:
-                                            logger.info(f"Thumbnail descargado como contexto visual para @{username}")
+                                video_url = getattr(media_info, 'video_url', None) or None
+                                video_duration = getattr(media_info, 'video_duration', None) or None
+                                thumb_url = getattr(media_info, 'thumbnail_url', None)
+                                if thumb_url:
+                                    image_b64_for_reply = download_image_b64(cl, thumb_url)
+                                    if image_b64_for_reply:
+                                        logger.info(f"Thumbnail descargado como fallback visual para @{username}")
                             except Exception as e:
                                 logger.debug(f"No se pudo obtener info del reel: {e}")
-                        reply_data = fetch_gemini_reply(username, comment_text, reel_caption_for_reply, image_b64_for_reply)
+                        reply_data = fetch_gemini_reply(username, comment_text, reel_caption_for_reply, image_b64_for_reply, video_url, video_duration, True)
                         if reply_data and reply_data.get("reply"):
                             reply = reply_data["reply"]
                             logger.info(f"Respondiendo comentario de @{username}: '{reply}'")
@@ -584,20 +590,23 @@ def process_comment_mentions(cl):
                     logger.info(f"Comentario de @{username}: '{comment_text}'")
                     reel_caption_for_reply = None
                     image_b64_for_reply = None
+                    video_url = None
+                    video_duration = None
                     try:
                         media_info = cl.media_info(media_id)
                         reel_caption_for_reply = media_info.caption_text or None
                         if reel_caption_for_reply:
                             logger.info(f"Caption del Reel: '{reel_caption_for_reply[:80]}'")
-                        else:
-                            thumb_url = getattr(media_info, 'thumbnail_url', None)
-                            if thumb_url:
-                                image_b64_for_reply = download_image_b64(cl, thumb_url)
-                                if image_b64_for_reply:
-                                    logger.info(f"Thumbnail descargado como contexto visual para @{username}")
+                        video_url = getattr(media_info, 'video_url', None) or None
+                        video_duration = getattr(media_info, 'video_duration', None) or None
+                        thumb_url = getattr(media_info, 'thumbnail_url', None)
+                        if thumb_url:
+                            image_b64_for_reply = download_image_b64(cl, thumb_url)
+                            if image_b64_for_reply:
+                                logger.info(f"Thumbnail descargado como fallback visual para @{username}")
                     except Exception as e:
                         logger.debug(f"No se pudo obtener info del reel: {e}")
-                    reply_data = fetch_gemini_reply(username, comment_text, reel_caption_for_reply, image_b64_for_reply)
+                    reply_data = fetch_gemini_reply(username, comment_text, reel_caption_for_reply, image_b64_for_reply, video_url, video_duration, True)
                     if reply_data and reply_data.get("reply"):
                         reply = reply_data["reply"]
                         logger.info(f"Respondiendo comentario: '{reply}'")

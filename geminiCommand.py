@@ -5867,6 +5867,7 @@ async def indioInstagramScraperLogic(
     pregunta: str,
     reel_caption: str | None,
     image_description: str | None = None,
+    is_reel_mention: bool = False,
     bot: discord.Bot = None,
 ) -> dict:
     """Process an Instagram DM (text or Reel caption) from the local scraper userbot,
@@ -5905,7 +5906,7 @@ async def indioInstagramScraperLogic(
     pregunta = (pregunta or "").strip()
     reel_caption = (reel_caption or "").strip()
 
-    is_reel = bool(reel_caption or "instagram.com/reel/" in pregunta)
+    is_reel = is_reel_mention or bool(reel_caption or "instagram.com/reel/" in pregunta)
 
     if is_reel and not reel_caption and not pregunta and not image_description:
         # It's a Reel without a caption, and no text message accompanied it
@@ -5936,7 +5937,15 @@ async def indioInstagramScraperLogic(
         return {"reply": None, "react": "heart"}
 
     # Compile the tagged message for Gemini
-    if image_description:
+    if image_description and is_reel_mention:
+        context_clause = f"Te mencionaron en los comentarios de un Reel. En el video se ve: '{image_description}'"
+        if reel_caption:
+            context_clause += f" El reel dice: '{reel_caption}'"
+        if pregunta:
+            tagged_message = f"{speaker}: [{context_clause}] {pregunta}"
+        else:
+            tagged_message = f"{speaker}: [{context_clause}]"
+    elif image_description:
         if pregunta:
             tagged_message = f"{speaker}: [Te mencionó en su Historia. La imagen de la historia muestra: '{image_description}'] {pregunta}"
         else:
@@ -5984,20 +5993,27 @@ async def indioInstagramScraperLogic(
 
     # For reels, replace everything with a minimal short-response prompt
     if is_reel:
-        if reel_caption:
-            system_instruction = (
-                "Sos el Indio, un viejo amigo divertido y ocurrente. "
-                "Te compartieron un Reel con este texto. Respondé con UNA sola oración breve "
-                "(máximo 15 palabras) relacionada al contenido del video. "
-                "No saludes, no te presentes, no preguntes nada. Solo un comentario corto."
+        if reel_caption and image_description:
+            prompt_context = (
+                f"Te compartieron un Reel con este texto: '{reel_caption}'. "
+                f"En el video se ve: '{image_description}'"
             )
-            player_block = None
-            tools_to_use = None
-            history_for_reel = []
-            max_tokens = 60
+        elif reel_caption:
+            prompt_context = f"Te compartieron un Reel con este texto: '{reel_caption}'"
+        elif image_description:
+            prompt_context = f"Te compartieron un Reel. En el video se ve: '{image_description}'"
         else:
-            # Reel sin caption — esto ya se manejó en el scraper local
-            pass
+            prompt_context = "Te compartieron un Reel."
+        system_instruction = (
+            "Sos el Indio, un viejo amigo divertido y ocurrente. "
+            f"{prompt_context} Respondé con UNA sola oración breve "
+            "(máximo 15 palabras) relacionada al contenido del video. "
+            "No saludes, no te presentes, no preguntes nada. Solo un comentario corto."
+        )
+        player_block = None
+        tools_to_use = None
+        history_for_reel = []
+        max_tokens = 60
     else:
         max_tokens = 1024
 

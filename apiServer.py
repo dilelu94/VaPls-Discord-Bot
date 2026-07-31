@@ -2006,25 +2006,39 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def instagramGenerateReply(request: web.Request) -> web.Response:
         """Endpoint called by the local PC scraper script to generate an Indio DM response.
-        
-        Body JSON: {username, text?, reel_caption?, image_b64?}
+
+        Body JSON: {username, text?, reel_caption?, image_b64?, video_url?, video_duration?, is_reel_mention?}
         """
         try:
             data = await request.json()
             username = str(data["username"]).strip().lower()
         except Exception:
             return web.json_response({"error": "invalid body"}, status=400)
-        
+
         if not username:
             return web.json_response({"error": "empty username"}, status=400)
-            
+
         text = data.get("text") or ""
         reel_caption = data.get("reel_caption") or ""
         image_b64 = data.get("image_b64") or ""
-        
+        video_url = data.get("video_url") or ""
+        video_duration = data.get("video_duration")
+        is_reel_mention = bool(data.get("is_reel_mention", False))
+
+        # Para menciones en comentarios de Reels, priorizamos un frame del video
+        # real sobre el thumbnail (que suele ser clickbait ajeno al contenido).
+        if video_url:
+            try:
+                from reelFrame import grab_frame
+                frame = await grab_frame(video_url, video_duration)
+                if frame:
+                    image_b64 = base64.b64encode(frame).decode()
+                    logger.info("[INSTAGRAM-INDIO-SCRAPER] Usando frame del reel como contexto visual")
+            except Exception as e:
+                logger.warning(f"[INSTAGRAM-INDIO-SCRAPER] No se pudo extraer frame del reel: {e}")
+
         image_description = None
         if image_b64:
-            import base64
             try:
                 from geminiCommand import describe_image
                 image_bytes = base64.b64decode(image_b64)
@@ -2040,6 +2054,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 pregunta=text,
                 reel_caption=reel_caption,
                 image_description=image_description,
+                is_reel_mention=is_reel_mention,
                 bot=bot,
             )
             return web.json_response(result)
