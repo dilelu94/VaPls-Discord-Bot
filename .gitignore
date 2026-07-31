@@ -68,3 +68,11 @@ test_app_url.py
 test_app_url_headful.py
 
 .aider*
+
+# Instagram scraper runtime state (secrets + local caches)
+instagram_scraper/.scraper_env
+instagram_scraper/ig_whitelist.json
+instagram_scraper/instagram_cookies_*.json
+instagram_scraper/non_whitelist_counts.json
+instagram_scraper/processed_comments.json
+instagram_scraper/processed_messages.json

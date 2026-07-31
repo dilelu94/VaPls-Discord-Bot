@@ -5727,142 +5727,6 @@ async def inject_telegram_message(
             _spawn(_maybe_compress(hist_key, lt_key))
 
 
-async def indioInstagramLogic(
-    sender_username: str,
-    pregunta: str,
-    sender_id: str,
-    bot: discord.Bot,
-) -> None:
-    """Process an Instagram DM text message using the Indio's Discord memory,
-    invoke Gemini, and reply back to the Instagram sender via the Graph API.
-    """
-    import aiohttp
-    from users import USERS
-
-    # Resolve speaker identity and Discord ID from users config
-    discord_user_id = None
-    speaker = "alguien"
-    for uid, udata in USERS.items():
-        if udata.get("instagram", "").lower() == sender_username.lower():
-            discord_user_id = uid
-            speaker = udata.get("name", "alguien")
-            break
-
-    # Bind memory to the primary Discord guild
-    guild = bot.guilds[0] if bot.guilds else None
-    guild_id = guild.id if guild else 451575911704428554
-    lt_key = f"guild-{guild_id}"
-    hist_key = f"guild-{guild_id}-channel-instagram"
-
-    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
-    tagged_message = f"{speaker}: {pregunta or ''}"
-
-    async with lock:
-        history_snapshot = list(_indio_history.get(hist_key, []))
-        long_term_snapshot = dict(_indio_long_term.get(lt_key, {}))
-
-    # Build prompts, system instruction, roster, lore, emojis, and player state
-    await _maybe_refresh_current_members(lt_key, guild_id)
-    current_members = list(_indio_current_members.get(lt_key, []))
-    lt_block = _format_long_term(long_term_snapshot, current_members)
-    emoji_block = _format_guild_emojis(guild)
-    player_block = _format_player_state(bot, guild_id)
-
-    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (
-        f"\n\n{stable_extras}" if stable_extras else ""
-    )
-    system_instruction = _inject_image_catalog(system_instruction)
-    recent_block = _format_recent_stories(guild_id)
-    if recent_block:
-        system_instruction += "\n\n" + recent_block
-
-    logger.info(
-        f"[INSTAGRAM-INDIO] Generating reply for @{sender_username} (speaker: {speaker})"
-    )
-
-    try:
-        reply = await geminiClient.generate(
-            user_message=tagged_message,
-            system_instruction=system_instruction,
-            history=_stamp_history_for_prompt(history_snapshot, time.time()),
-            tools=_INDIO_TOOLS,
-            volatile_context=player_block or None,
-        )
-    except geminiClient.GeminiError as e:
-        logger.error(f"[INSTAGRAM-INDIO] GeminiError: {e}")
-        return
-    except Exception as e:
-        logger.error(f"[INSTAGRAM-INDIO] Unexpected error: {e}")
-        return
-
-    # Strip prefixes and literal commands
-    clean_reply = _strip_speaker_prefix(reply.text)
-    clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
-    
-    # Strip Discord custom emoji markup (e.g. <:name:id>) which Instagram cannot render
-    clean_reply = _CUSTOM_EMOJI_MARKUP_RE.sub("", clean_reply).strip()
-    
-    if not clean_reply:
-        clean_reply = "..."
-
-    # Send response back to Instagram via Page Messages endpoint
-    page_token = config.INSTAGRAM_PAGE_TOKEN
-    if page_token:
-        try:
-            url = f"https://graph.facebook.com/v25.0/me/messages?access_token={page_token}"
-            payload = {
-                "recipient": {"id": sender_id},
-                "message": {"text": clean_reply},
-            }
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        logger.error(f"[INSTAGRAM-INDIO] Failed to send DM {resp.status}: {body}")
-                    else:
-                        logger.info(f"[INSTAGRAM-INDIO] Sent DM to @{sender_username}")
-        except Exception as e:
-            logger.error(f"[INSTAGRAM-INDIO] Send error: {e}")
-
-    # Persist in memory history
-    _turn_ts = time.time()
-    user_turn = {
-        "role": "user",
-        "parts": [
-            {"text": _sanitize_for_history(tagged_message)[:_STORED_MSG_MAX_CHARS]}
-        ],
-        "ts": _turn_ts,
-    }
-    model_turn = {
-        "role": "model",
-        "parts": [
-            {"text": _sanitize_for_history(clean_reply)[:_STORED_MSG_MAX_CHARS]}
-        ],
-        "ts": _turn_ts,
-    }
-
-    if hist_key in _indio_compressing:
-        async with lock:
-            queue = _indio_compress_queue.setdefault(hist_key, [])
-            queue.append(user_turn)
-            queue.append(model_turn)
-        await _persist_indio_state()
-    else:
-        async with lock:
-            existing = _indio_history.get(hist_key, history_snapshot)
-            new_hist = list(existing) + [user_turn, model_turn]
-            if len(new_hist) > _HISTORY_HARD_CAP:
-                new_hist = new_hist[-_HISTORY_HARD_CAP:]
-            _indio_history[hist_key] = new_hist
-            _indio_last_seen[hist_key] = time.time()
-            history_size_after = len(new_hist)
-        await _persist_indio_state()
-
-        if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
-            _spawn(_maybe_compress(hist_key, lt_key))
-
-
 async def indioInstagramCommentLogic(
     sender_username: str,
     pregunta: str,
@@ -6118,9 +5982,24 @@ async def indioInstagramScraperLogic(
         player_block = None
         tools_to_use = None
 
-    # For reels, we instruct Gemini to be extremely brief and contextual
+    # For reels, replace everything with a minimal short-response prompt
     if is_reel:
-        system_instruction += "\n\n[Instagram Reel Context] El usuario te compartió un Reel. Tu respuesta debe ser sumamente corta (una sola oración breve o frase graciosa) y reaccionar de forma natural al video/temática."
+        if reel_caption:
+            system_instruction = (
+                "Sos el Indio, un viejo amigo divertido y ocurrente. "
+                "Te compartieron un Reel con este texto. Respondé con UNA sola oración breve "
+                "(máximo 15 palabras) relacionada al contenido del video. "
+                "No saludes, no te presentes, no preguntes nada. Solo un comentario corto."
+            )
+            player_block = None
+            tools_to_use = None
+            history_for_reel = []
+            max_tokens = 60
+        else:
+            # Reel sin caption — esto ya se manejó en el scraper local
+            pass
+    else:
+        max_tokens = 1024
 
     logger.info(
         f"[INSTAGRAM-INDIO-SCRAPER] Generating reply for @{sender_username} (speaker: {speaker}, whitelisted: {is_whitelisted})"

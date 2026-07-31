@@ -66,6 +66,30 @@ async def test_api_generate_reply_empty_username(local_server):
         ) as resp:
             assert resp.status == 400
 
+async def test_api_webhook_noop_returns_event_received(local_server):
+    # The Meta webhook is a no-op now: it must ack with EVENT_RECEIVED and
+    # never spawn reel-to-Discord streaming (which was removed).
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{local_server}/webhook",
+            json={"object": "instagram", "entry": []},
+            headers={"X-API-Secret": "test_secret_key_123"}
+        ) as resp:
+            assert resp.status == 200
+            assert (await resp.text()) == "EVENT_RECEIVED"
+
+@patch("users.get_allowed_instagram_usernames")
+async def test_api_instagram_whitelist(mock_allowed, local_server):
+    mock_allowed.return_value = {"mati", "leonel"}
+    async with aiohttp.ClientSession() as session:
+        async with session.get(
+            f"{local_server}/instagram/whitelist",
+            headers={"X-API-Secret": "test_secret_key_123"}
+        ) as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["whitelist"] == ["leonel", "mati"]
+
 @patch("geminiCommand.indioInstagramScraperLogic")
 async def test_api_generate_reply_success(mock_scraper_logic, local_server):
     # Configuramos el mock de la lógica del scraper para retornar un resultado simulado

@@ -896,82 +896,13 @@ def makeApp(bot: discord.Bot) -> web.Application:
 </html>"""
         return web.Response(text=html, content_type="text/html")
 
-    async def _process_instagram_webhook(body: dict) -> None:
-        entries = body.get("entry", [])
-        import re
-        import json
-        from instagramCommand import start_instagram_reel_stream_logic
-        
-        for entry in entries:
-            for messaging in entry.get("messaging", []):
-                sender_id = messaging.get("sender", {}).get("id")
-                message = messaging.get("message", {})
-                
-                # Fetch sender's username from Meta Graph API
-                username = None
-                if sender_id and config.INSTAGRAM_ACCESS_TOKEN:
-                    try:
-                        async with aiohttp.ClientSession() as session:
-                            # Meta Graph API endpoint for Instagram Page-Scoped User ID profile
-                            url = f"https://graph.facebook.com/v25.0/{sender_id}?fields=username&access_token={config.INSTAGRAM_ACCESS_TOKEN}"
-                            async with session.get(url) as resp:
-                                if resp.status == 200:
-                                    user_data = await resp.json()
-                                    username = user_data.get("username")
-                    except Exception as e:
-                        logger.error(f"Error fetching Instagram user profile: {e}")
-
-                # Exclude specific blocked usernames (e.g. netanyahu)
-                if username:
-                    username_lower = username.lower()
-                    if "netanyahu" in username_lower:
-                        logger.info(f"Ignoring Instagram message from blocked user: {username}")
-                        continue
-                
-                # Check for reels URL in text or anywhere in the message JSON
-                urls = re.findall(r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/[\w-]+/?", json.dumps(message))
-                
-                if urls:
-                    url = urls[0]
-                    logger.info(f"Received Instagram webhook from {username or 'unknown'} with Reel URL: {url}")
-                    
-                    guild = bot.guilds[0] if bot.guilds else None
-                    if guild:
-                        voice_channel = await _pickAutoVoiceChannel(guild)
-                        if voice_channel:
-                            success, status_msg = await start_instagram_reel_stream_logic(
-                                guild.id, voice_channel, url, sender_name=username
-                            )
-
-                            # Post notification to target channel
-                            target_channel_id = config.INDIO_STORY_CHANNEL_ID
-                            text_channel = bot.get_channel(target_channel_id)
-                            if not text_channel:
-                                try:
-                                    text_channel = await bot.fetch_channel(target_channel_id)
-                                except Exception:
-                                    pass
-
-                            if not text_channel:
-                                text_channel = guild.system_channel or guild.text_channels[0]
-
-                            if text_channel:
-                                sender_display = f"@{username}" if username else "alguien"
-                                header = f"📩 *Recibí un Reel por DM de Instagram de {sender_display}:* {url}\n"
-                                if success:
-                                    if status_msg.startswith("queued:"):
-                                        pos = status_msg.split(":")[1]
-                                        await text_channel.send(f"{header}⏳ Ya hay un reel reproduciéndose. El reel se puso en cola (posición #{pos}).")
-                                    else:
-                                        await text_channel.send(f"{header}*Reproduciendo en {voice_channel.name}...*")
-                                else:
-                                    if status_msg == "busy":
-                                        await text_channel.send(f"{header}⚠️ Ya hay una transmisión activa (IPTV/TV). Esperá a que termine.")
-                                    else:
-                                        await text_channel.send(f"{header}{status_msg}")
-                                
     async def handleWebhook(request: web.Request) -> web.Response:
-        """Handle incoming Meta webhooks (POST)."""
+        """Handle incoming Meta webhooks (POST).
+
+        No-op since the official Instagram DM path (webhook processing +
+        reel-to-Discord streaming) was removed. Still returns EVENT_RECEIVED
+        so Meta keeps the subscription healthy.
+        """
         try:
             body = await request.json()
         except Exception:
@@ -979,10 +910,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         # Meta requires a quick 200 OK response
         if body.get("object") == "instagram":
-            # Spawn a task to process the payload asynchronously
-            asyncio.create_task(_process_instagram_webhook(body))
             return web.Response(text="EVENT_RECEIVED", status=200)
-        
+
         return web.Response(status=404)
 
     async def playAudio(request: web.Request) -> web.Response:
@@ -2042,6 +1971,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.exception("Failed in indioInstagramScraperLogic")
             return web.json_response({"error": str(e)}, status=500)
 
+    async def instagramWhitelist(request: web.Request) -> web.Response:
+        """Return the whitelist of Instagram usernames authorized to interact with the bot.
+
+        Same source of truth as the Instagram pollers (users.get_allowed_instagram_usernames):
+        Discord users that have an ``instagram`` field in users.py / data/users.json.
+        """
+        from users import get_allowed_instagram_usernames
+        return web.json_response({"whitelist": sorted(get_allowed_instagram_usernames())})
+
     app.router.add_get("/upload/{token}", uploadPage)
     app.router.add_post("/upload/{token}/init", uploadInit)
     app.router.add_post("/upload/{token}/chunk/{idx}", uploadChunk)
@@ -2065,6 +2003,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/queue", queue)
     app.router.add_post("/indio", indioVoice)
     app.router.add_post("/instagram/generate-reply", instagramGenerateReply)
+    app.router.add_get("/instagram/whitelist", instagramWhitelist)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
     app.router.add_post("/indio-image", submitIndioImage)
@@ -2106,258 +2045,11 @@ async def startApiServer(bot: discord.Bot) -> web.AppRunner:
     await site.start()
     asyncio.create_task(_process_pending_images())
     if config.INSTAGRAM_PAGE_TOKEN and config.INSTAGRAM_PAGE_ID:
-        asyncio.create_task(_poll_instagram_inbox(bot))
         asyncio.create_task(_poll_instagram_comments(bot))
-        logger.info("Instagram DM and Comment polling started")
+        logger.info("Instagram Comment polling started")
     logger.info(f"HTTP API listening on http://{config.API_HOST}:{config.API_PORT}")
     return runner
 
-
-_seen_instagram_message_ids: set[str] = set()
-
-
-async def _poll_instagram_inbox(bot: discord.Bot) -> None:
-    """Poll the Instagram inbox every 30 seconds for new Reel DMs.
-
-    Fetches a Page access token for the Indio.Goldstein page from the
-    Meta Graph API using the configured INSTAGRAM_ACCESS_TOKEN (user token).
-    Then polls the Page's Instagram conversations every 30s, processing any
-    new messages that contain an Instagram Reel URL.
-
-    Async:
-        This function is a coroutine meant to run as a background task.
-    """
-    import re
-    import json
-    from instagramCommand import start_instagram_reel_stream_logic
-    from users import get_allowed_instagram_usernames
-
-    global _seen_instagram_message_ids
-    POLL_INTERVAL = 15  # seconds
-    API_BASE = "https://graph.facebook.com/v25.0"
-
-    logger.info("[INSTAGRAM-POLL] Poller started")
-
-    # Build whitelist of authorized Instagram usernames from users.py
-    allowed_ig_users = get_allowed_instagram_usernames()
-    logger.info(f"[INSTAGRAM-POLL] Authorized senders: {sorted(allowed_ig_users)}")
-
-    # --- Resolve Page token and Page ID ---
-    # Fast path: use INSTAGRAM_PAGE_TOKEN + INSTAGRAM_PAGE_ID if both configured.
-    page_token: str | None = config.INSTAGRAM_PAGE_TOKEN or None
-    page_id: str | None = config.INSTAGRAM_PAGE_ID or None
-
-    if page_token and page_id:
-        logger.info(f"[INSTAGRAM-POLL] Using configured page token for page ID {page_id}")
-    elif config.INSTAGRAM_ACCESS_TOKEN:
-        # Fallback: derive page token from user token via /me/accounts
-        try:
-            async with aiohttp.ClientSession() as session:
-                accounts_url = (
-                    f"{API_BASE}/me/accounts"
-                    f"?access_token={config.INSTAGRAM_ACCESS_TOKEN}"
-                )
-                async with session.get(accounts_url) as resp:
-                    if resp.status == 200:
-                        accounts = await resp.json()
-                        for page in accounts.get("data", []):
-                            if "MESSAGING" in page.get("tasks", []):
-                                page_token = page["access_token"]
-                                page_id = page["id"]
-                                logger.info(
-                                    f"[INSTAGRAM-POLL] Using page '{page['name']}' (ID {page_id})"
-                                )
-                                break
-                    else:
-                        body = await resp.text()
-                        logger.warning(f"[INSTAGRAM-POLL] /me/accounts error {resp.status}: {body}")
-        except Exception as e:
-            logger.warning(f"[INSTAGRAM-POLL] Error fetching page token: {e}")
-
-    if not page_token or not page_id:
-        logger.error("[INSTAGRAM-POLL] No page token found — polling disabled")
-        return
-
-    def _build_url(fields: str) -> str:
-        return (
-            f"{API_BASE}/{page_id}/conversations"
-            f"?platform=instagram"
-            f"&fields={fields}"
-            f"&limit=10"  # Only fetch the 10 most recent conversations
-            f"&access_token={page_token}"
-        )
-
-    # Seed seen IDs so we don't replay old messages on startup
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(_build_url("messages.limit(10){id}")) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for conv in data.get("data", []):
-                        for msg in conv.get("messages", {}).get("data", []):
-                            _seen_instagram_message_ids.add(msg["id"])
-                    logger.info(
-                        f"[INSTAGRAM-POLL] Seeded {len(_seen_instagram_message_ids)} existing message IDs"
-                    )
-                else:
-                    body = await resp.text()
-                    logger.warning(f"[INSTAGRAM-POLL] Seed request failed {resp.status}: {body}")
-    except Exception as e:
-        logger.warning(f"[INSTAGRAM-POLL] Seed error: {e}")
-
-    is_initial_poll = True
-
-    while True:
-        await asyncio.sleep(POLL_INTERVAL)
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    _build_url("messages.limit(5){id,message,from,shares}")
-                ) as resp:
-                    if resp.status != 200:
-                        body = await resp.text()
-                        logger.warning(f"[INSTAGRAM-POLL] Conversations error {resp.status}: {body}")
-                        continue
-                    data = await resp.json()
-
-            if is_initial_poll:
-                # Dynamically seed from the first successful polling response
-                seeded_count = 0
-                for conv in data.get("data", []):
-                    for msg in conv.get("messages", {}).get("data", []):
-                        if msg.get("id"):
-                            _seen_instagram_message_ids.add(msg["id"])
-                            seeded_count += 1
-                logger.info(
-                    f"[INSTAGRAM-POLL] Dynamically seeded {seeded_count} message IDs. Skipping processing for this run."
-                )
-                is_initial_poll = False
-                continue
-
-            for conv in data.get("data", []):
-                for msg in conv.get("messages", {}).get("data", []):
-                    msg_id = msg.get("id")
-                    if not msg_id or msg_id in _seen_instagram_message_ids:
-                        continue
-                    _seen_instagram_message_ids.add(msg_id)
-
-                    sender = msg.get("from", {})
-                    username = (
-                        sender.get("username") or sender.get("name") or ""
-                    ).lower()
-
-                    # Only process messages from authorized Instagram users (allow the bot's own IG handle too)
-                    if username not in allowed_ig_users and username != "indio.goldstein":
-                        logger.info(
-                            f"[INSTAGRAM-POLL] Ignoring unauthorized sender: @{username}"
-                        )
-                        continue
-
-                    # Find reel URLs in message text or shares
-                    raw = json.dumps(msg)
-                    urls = re.findall(
-                        r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/[\w-]+/?",
-                        raw,
-                    )
-                    if not urls:
-                        # Process text message with Indio's Discord memory & reply back to Instagram
-                        msg_field = msg.get("message")
-                        if isinstance(msg_field, dict):
-                            text_msg = msg_field.get("text", "").strip()
-                        elif isinstance(msg_field, str):
-                            text_msg = msg_field.strip()
-                        else:
-                            text_msg = ""
-
-                        if text_msg and sender.get("id"):
-                            from geminiCommand import indioInstagramLogic
-                            asyncio.create_task(
-                                indioInstagramLogic(
-                                    sender_username=username,
-                                    pregunta=text_msg,
-                                    sender_id=sender["id"],
-                                    bot=bot,
-                                )
-                            )
-                        continue
-
-                    reel_url = urls[0]
-                    logger.info(f"[INSTAGRAM-POLL] New Reel from @{username}: {reel_url}")
-
-                    guild = bot.guilds[0] if bot.guilds else None
-                    if not guild:
-                        continue
-
-                    # Post link to target channel
-                    target_channel_id = config.INDIO_STORY_CHANNEL_ID
-                    text_channel = bot.get_channel(target_channel_id)
-                    if not text_channel:
-                        try:
-                            text_channel = await bot.fetch_channel(target_channel_id)
-                        except Exception:
-                            text_channel = guild.system_channel or (guild.text_channels[0] if guild.text_channels else None)
-
-                    # Map Instagram username to Discord User ID from users.py
-                    from users import USERS
-                    discord_user_id = None
-                    for uid, udata in USERS.items():
-                        if udata.get("instagram", "").lower() == username:
-                            discord_user_id = uid
-                            break
-
-                    member = None
-                    voice_channel = None
-                    if discord_user_id:
-                        member = guild.get_member(discord_user_id)
-                        if not member:
-                            try:
-                                member = await guild.fetch_member(discord_user_id)
-                            except Exception:
-                                pass
-
-                    if member and member.voice and member.voice.channel:
-                        voice_channel = member.voice.channel
-                    elif username == "indio.goldstein":
-                        # Auto-select voice channel: pick the one with most members
-                        candidates = [
-                            (ch, sum(1 for m in ch.members if not m.bot))
-                            for ch in guild.voice_channels
-                        ]
-                        candidates = [c for c in candidates if c[1] > 0]
-                        if candidates:
-                            candidates.sort(key=lambda x: x[1], reverse=True)
-                            voice_channel = candidates[0][0]
-
-                    if not voice_channel:
-                        # User is not connected to a voice channel — alert and skip stream
-                        if text_channel:
-                            mention = member.mention if member else f"@{username}"
-                            await text_channel.send(
-                                f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
-                                f"⚠️ {mention}, tenés que estar conectado a un canal de voz de Discord para reproducir el reel."
-                            )
-                        continue
-
-                    # Start stream in the user's voice channel
-                    success, status_msg = await start_instagram_reel_stream_logic(
-                        guild.id, voice_channel, reel_url, sender_name=username
-                    )
-                    if text_channel:
-                        header = f"#### 📩 *Reel de @{username} por Instagram DM:* {reel_url}\n"
-                        if success:
-                            if status_msg.startswith("queued:"):
-                                pos = status_msg.split(":")[1]
-                                await text_channel.send(f"{header}⏳ Ya hay un reel reproduciéndose. El reel se puso en cola (posición #{pos}).")
-                            else:
-                                await text_channel.send(f"{header}*Reproduciendo en {voice_channel.name}...*")
-                        else:
-                            if status_msg == "busy":
-                                await text_channel.send(f"{header}⚠️ Ya hay una transmisión activa (IPTV/TV). Esperá a que termine.")
-                            else:
-                                await text_channel.send(f"{header}{status_msg}")
-
-        except Exception as e:
-            logger.error(f"[INSTAGRAM-POLL] Unhandled error: {e}")
 
 
 async def _poll_instagram_comments(bot: discord.Bot) -> None:
