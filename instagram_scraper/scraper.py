@@ -618,18 +618,21 @@ def process_comment_mentions(cl):
         if counts_modified:
             save_non_whitelist_counts(counts, seen)
 
-def push_home_feed(cl):
-    """Toma los primeros reels de video del feed principal y los manda al cloud.
-
-    El cloud los acumula en una cola (máx 50) que /instagram reproduce en
-    Discord. Los que ya están en la cola no se duplican (dedupe por code).
-    """
-    logger.info("Recopilando Reels del feed principal de Instagram...")
+def fetch_feed_reels(cl):
+    """Toma reels de video del feed conectado (home) y, si viene vacío, de Friends."""
     try:
         medias = cl.reels(amount=10)
     except Exception as e:
         logger.error(f"Error al obtener el feed de reels: {e}")
-        return
+        medias = []
+
+    if not medias:
+        logger.info("Feed conectado vacío — probando pestaña Friends...")
+        try:
+            medias = cl.friends_reels(amount=10)
+        except Exception as e:
+            logger.error(f"Error al obtener el feed de Friends: {e}")
+            medias = []
 
     reels = []
     for media in medias:
@@ -644,6 +647,17 @@ def push_home_feed(cl):
             "url": f"https://www.instagram.com/reel/{code}/",
             "caption": caption,
         })
+    return reels
+
+
+def push_home_feed(cl):
+    """Toma los primeros reels de video del feed y los manda al cloud.
+
+    El cloud los acumula en una cola (máx 50) que /instagram reproduce en
+    Discord. Los que ya están en la cola no se duplican (dedupe por code).
+    """
+    logger.info("Recopilando Reels del feed principal de Instagram...")
+    reels = fetch_feed_reels(cl)
 
     if not reels:
         logger.info("No había reels de video en el feed en esta pasada.")
