@@ -631,6 +631,55 @@ def process_comment_mentions(cl):
         if counts_modified:
             save_non_whitelist_counts(counts, seen)
 
+def push_home_feed(cl):
+    """Toma los primeros reels de video del feed principal y los manda al cloud.
+
+    El cloud los acumula en una cola (máx 50) que /instagram reproduce en
+    Discord. Los que ya están en la cola no se duplican (dedupe por code).
+    """
+    logger.info("Recopilando Reels del feed principal de Instagram...")
+    try:
+        medias = cl.reels(amount=10)
+    except Exception as e:
+        logger.error(f"Error al obtener el feed de reels: {e}")
+        return
+
+    reels = []
+    for media in medias:
+        if getattr(media, "media_type", None) != 2:  # 2 = video (reel)
+            continue
+        code = getattr(media, "code", None)
+        if not code:
+            continue
+        caption = getattr(media, "caption_text", None) or ""
+        reels.append({
+            "code": code,
+            "url": f"https://www.instagram.com/reel/{code}/",
+            "caption": caption,
+        })
+
+    if not reels:
+        logger.info("No había reels de video en el feed en esta pasada.")
+        return
+
+    try:
+        resp = requests.post(
+            f"{CLOUD_SERVER_URL}/instagram/feed",
+            json={"reels": reels},
+            headers={"X-API-Secret": API_SECRET},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            logger.info(
+                f"Feed enviado al cloud: {len(reels)} reels "
+                f"({data.get('added', 0)} nuevos, total {data.get('total', 0)})"
+            )
+        else:
+            logger.error(f"Error del cloud al enviar feed ({resp.status_code}): {resp.text[:200]}")
+    except Exception as e:
+        logger.error(f"Error de conexión con el cloud al enviar feed: {e}")
+
 def main():
     cl = Client()
     
@@ -677,6 +726,9 @@ def main():
         
         # 2. Procesar menciones públicas en comentarios
         process_comment_mentions(cl)
+        
+        # 3. Push de los Reels del feed principal al cloud (/instagram)
+        push_home_feed(cl)
         
         logger.info(f"Revisión completa. Durmiendo por {delay // 60} minutos...")
         time.sleep(delay)

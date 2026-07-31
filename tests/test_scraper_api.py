@@ -158,3 +158,65 @@ async def test_api_generate_reply_with_story_image(mock_describe, mock_scraper_l
         ) as resp:
             assert resp.status == 200
             mock_describe.assert_called_once()
+
+
+async def test_api_instagram_feed_enqueue_dedupe_pop(local_server):
+    import apiServer
+    apiServer._instagram_feed_queue.clear()
+    apiServer._save_feed_queue()
+    headers = {"X-API-Secret": "test_secret_key_123"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(f"{local_server}/instagram/feed", json={"reels": [
+            {"code": "AAA", "url": "https://www.instagram.com/reel/AAA/", "caption": "primero"},
+            {"code": "BBB", "url": "https://www.instagram.com/reel/BBB/", "caption": "segundo"},
+        ]}, headers=headers) as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["ok"] is True
+            assert data["added"] == 2
+            assert data["total"] == 2
+        async with session.post(f"{local_server}/instagram/feed", json={"reels": [
+            {"code": "AAA", "url": "https://www.instagram.com/reel/AAA/", "caption": "dup"},
+            {"code": "CCC", "url": "https://www.instagram.com/reel/CCC/", "caption": "tercero"},
+        ]}, headers=headers) as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["added"] == 1
+            assert data["total"] == 3
+    popped = apiServer.pop_instagram_feed_queue(2)
+    assert [r["code"] for r in popped] == ["AAA", "BBB"]
+    assert [r["code"] for r in apiServer.get_instagram_feed_queue()] == ["CCC"]
+    apiServer.push_instagram_feed_queue(popped)
+    assert [r["code"] for r in apiServer.get_instagram_feed_queue()] == ["CCC", "AAA", "BBB"]
+
+
+async def test_api_instagram_feed_cap_50_fifo(local_server):
+    import apiServer
+    apiServer._instagram_feed_queue.clear()
+    apiServer._save_feed_queue()
+    headers = {"X-API-Secret": "test_secret_key_123"}
+    reels = [
+        {"code": f"R{i:03d}", "url": f"https://www.instagram.com/reel/R{i:03d}/"}
+        for i in range(60)
+    ]
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{local_server}/instagram/feed", json={"reels": reels}, headers=headers
+        ) as resp:
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["added"] == 60
+            assert data["total"] == 50
+    q = apiServer.get_instagram_feed_queue()
+    assert len(q) == 50
+    assert q[0]["code"] == "R010"
+    assert q[-1]["code"] == "R059"
+
+
+async def test_api_instagram_feed_invalid_body(local_server):
+    headers = {"X-API-Secret": "test_secret_key_123"}
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            f"{local_server}/instagram/feed", json={"reels": "not-a-list"}, headers=headers
+        ) as resp:
+            assert resp.status == 400

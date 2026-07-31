@@ -10,6 +10,7 @@ Provides two entry points:
   the video via yt-dlp (no credentials needed).
 """
 
+import json
 import logging
 
 import aiohttp
