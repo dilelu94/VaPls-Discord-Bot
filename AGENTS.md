@@ -342,13 +342,11 @@ scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh
 
 | Archivo                        | Rol                                                                                       |
 | ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `instagramCommand.py`          | **Nuevo.** Comando `/instagram` + view de control                                         |
 | `golive/instagram_feed.py`     | **Nuevo.** Login Instagram (instagrapi), fetch feed, cola de reels, ciclo infinito        |
 | `golive/instagram_streamer.py` | **Nuevo.** `InstagramReelPlayer` adapta `H264VideoPlayer` con loop + orientación vertical |
 | `golive/streamer.py`           | **Modificar.** Agregar resolución vertical con `pad` (barras negras)                      |
 | `golive/bot.py`                | **Modificar.** Endpoint `/instagram` en relay + orquestación de `InstagramReelPlayer`     |
 | `golive/ytdlp.py`              | **Modificar.** Asegurar extracción de Instagram Reels con cookies                         |
-| `bot.py`                       | **Modificar.** Registrar `/instagram` slash command                                       |
 | `golive/requirements.txt`      | **Modificar.** Agregar `instagrapi`                                                       |
 
 ### Config necesaria (pendiente)

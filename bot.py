@@ -37,7 +37,6 @@ import errorHandler
 import geminiKeys
 import iptv
 import decifrarVoting
-from instagramCommand import start_instagram_reel_stream_logic
 import adivinadorCommand
 from adivinadorCommand import start_headbanz_game
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
@@ -2322,21 +2321,6 @@ async def stream(
 
     is_url = canal.startswith(("http://", "https://", "rtsp://", "rtmp://"))
 
-    # Instagram Reel detection — use yt-dlp extraction + vertical letterboxing
-    if is_url and re.match(
-        r"https?://(?:www\.)?instagram\.com/(?:reel|reels|p)/",
-        canal,
-    ):
-        log.info("[STREAM] Instagram reel detected: %s", canal[:80])
-        success, status_msg = await start_instagram_reel_stream_logic(
-            ctx.guild_id, voice_channel, canal,
-        )
-        if redirect_ch:
-            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-        else:
-            await safe_respond(ctx, status_msg)
-        return
-
     if is_url:
         stream_url = canal
         if re.search(r'twitch\.tv', canal, re.I):
@@ -2492,109 +2476,6 @@ async def adivinador(
         await ctx.respond("❌ No podés jugar contra un bot.", ephemeral=True)
         return
     await start_headbanz_game(ctx, ctx.author, usuario)
-
-
-@bot.slash_command(
-    name="instagram",
-    description="Transmití los últimos Reels del feed de Instagram (hasta 10 por tanda)",
-)
-async def instagram(ctx):
-    """Reproduce el feed de Instagram del Indio acumulado por el scraper local.
-
-    Toma los Reels más viejos de la cola (hasta 10) y los transmite por
-    GoLive: el primero arranca el stream y el resto quedan encolados en el
-    relay. Usá /stopstream para cortar. La cola la llena el scraper local
-    cada revisión, así que conviene dejar pasar un rato entre usos.
-
-    Args:
-        ctx: Discord application context.
-
-    Side Effects:
-        Pops from apiServer's feed queue, joins voice, POSTs to the GoLive
-        relay, and begins streaming the queued Instagram Reels via GoLive.
-    """
-    will_redirect = (
-        config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
-    )
-    await safe_defer(ctx, ephemeral=will_redirect)
-    redirect_ch = None
-    if will_redirect:
-        try:
-            await ctx.interaction.edit_original_response(
-                content=f"instagram en <#{config.INDIO_PLAY_CHANNEL_ID}>"
-            )
-        except Exception:
-            pass
-        if ctx.guild:
-            ch = ctx.guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
-            if ch is not None and hasattr(ch, "send"):
-                redirect_ch = ch
-
-    _track_command(ctx, "instagram")
-
-    reels = apiServer.pop_instagram_feed_queue(10)
-    if not reels:
-        msg = (
-            "❌ Todavía no hay Reels del feed de Instagram en la cola. "
-            "El scraper los va juntando solo; probá en un rato."
-        )
-        if redirect_ch:
-            await redirect_ch.send(content=f"<@{ctx.author.id}> {msg}")
-        else:
-            await safe_respond(ctx, msg)
-        return
-
-    voice_state = getattr(ctx.author, "voice", None)
-    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
-    if voice_channel is None:
-        apiServer.push_instagram_feed_queue(reels)
-        msg = "❌ Tenés que estar en un canal de voz para iniciar un stream."
-        if redirect_ch:
-            await redirect_ch.send(content=f"<@{ctx.author.id}> {msg}")
-        else:
-            await safe_respond(ctx, msg)
-        return
-
-    sent = []
-    first_msg = ""
-    for reel in reels:
-        success, status_msg = await start_instagram_reel_stream_logic(
-            ctx.guild_id, voice_channel, reel["url"]
-        )
-        if not first_msg:
-            first_msg = status_msg
-        if not success:
-            break
-        sent.append(reel)
-
-    unsent = reels[len(sent):]
-    if unsent:
-        apiServer.push_instagram_feed_queue(unsent)
-
-    if not sent:
-        if first_msg == "busy":
-            msg = (
-                "⚠️ Ya hay una transmisión activa de otra fuente. "
-                "Parala con **/stopstream** y volvé a intentar."
-            )
-        else:
-            msg = f"⚠️ No pude iniciar el stream del feed de Instagram. {first_msg}"
-    elif unsent:
-        msg = (
-            f"📱 Reproduciendo **{len(sent)}** Reels del feed de Instagram en "
-            f"**{voice_channel.name}**. Quedaron {len(unsent)} en cola para la próxima.\n"
-            "Usá **/stopstream** para cortar."
-        )
-    else:
-        msg = (
-            f"📱 Reproduciendo **{len(reels)}** Reels del feed de Instagram en "
-            f"**{voice_channel.name}**.\nUsá **/stopstream** para cortar."
-        )
-
-    if redirect_ch:
-        await redirect_ch.send(content=f"<@{ctx.author.id}> {msg}")
-    else:
-        await safe_respond(ctx, msg)
 
 
 @bot.slash_command(
@@ -3210,7 +3091,6 @@ async def help_cmd(ctx):
             "**/huh** — activa/desactiva el sonido de confirmación del indio.\n"
             "**/stream** `canal` — transmití IPTV por Go Live.\n"
             "**/stopstream** — detiene el stream de IPTV.\n"
-            "**/instagram** — transmití los Reels del feed de Instagram (cola del scraper)."
         ),
         inline=False,
     )

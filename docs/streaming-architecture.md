@@ -361,7 +361,6 @@ golive/instagram_streamer.py (InstagramReelPlayer):
 | `golive/instagram_feed.py`     | `InstagramReelFeed` — cola de reel URLs via instaloader            |
 | `golive/instagram_streamer.py` | `InstagramReelPlayer` — loop + orientación vertical                |
 | `golive/ytdlp.py`              | `_instaloader_reel_feed_urls()` + `_extract_instagram_sync()`      |
-| `instagramCommand.py`          | Comando `/instagram` + `/stream` para reels individuales           |
 | `golive/requirements.txt`      | `instaloader @ git+https://github.com/instaloader/instaloader.git` |
 
 ### Dependencia: instaloader

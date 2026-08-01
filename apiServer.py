@@ -117,82 +117,6 @@ async def _process_pending_images() -> None:
 _load_pending_queue()
 
 
-# ---- Instagram home-feed queue -------------------------------------------
-# The local scraper pushes the account's home-feed reels here once per poll
-# loop; the /instagram slash command pops the oldest ones and streams them
-# via the GoLive relay. Persisted to survive restarts.
-_instagram_feed_queue: list[dict] = []
-_FEED_QUEUE_PATH = os.path.join(os.path.dirname(__file__), "data", "instagram_feed.json")
-_FEED_MAX = 50
-
-
-def _save_feed_queue() -> None:
-    try:
-        with open(_FEED_QUEUE_PATH, "w") as f:
-            json.dump(_instagram_feed_queue, f)
-    except Exception as e:
-        logger.error("Error guardando cola de feed de Instagram: %s", e)
-
-
-def _load_feed_queue() -> None:
-    global _instagram_feed_queue
-    try:
-        with open(_FEED_QUEUE_PATH) as f:
-            _instagram_feed_queue = json.load(f)
-        if _instagram_feed_queue:
-            logger.info("loaded %d instagram feed reels", len(_instagram_feed_queue))
-    except (FileNotFoundError, json.JSONDecodeError):
-        _instagram_feed_queue = []
-
-
-def _enqueue_feed_reels(reels: list) -> int:
-    """Append reels (dedup by ``code``), cap at ``_FEED_MAX`` (oldest dropped), persist.
-
-    Returns:
-        Number of reels actually added.
-    """
-    existing = {r["code"] for r in _instagram_feed_queue}
-    added = 0
-    for reel in reels:
-        if not isinstance(reel, dict):
-            continue
-        code = str(reel.get("code") or "").strip()
-        if not code or code in existing:
-            continue
-        _instagram_feed_queue.append({
-            "code": code,
-            "url": reel.get("url") or f"https://www.instagram.com/reel/{code}/",
-            "caption": reel.get("caption") or "",
-        })
-        existing.add(code)
-        added += 1
-        if len(_instagram_feed_queue) > _FEED_MAX:
-            del _instagram_feed_queue[0]
-    _save_feed_queue()
-    return added
-
-
-def get_instagram_feed_queue() -> list[dict]:
-    """Return a copy of the pending home-feed reels (oldest first)."""
-    return list(_instagram_feed_queue)
-
-
-def pop_instagram_feed_queue(n: int = 10) -> list[dict]:
-    """Pop and return the oldest ``n`` reels, persisting the change."""
-    popped = _instagram_feed_queue[:n]
-    del _instagram_feed_queue[:n]
-    _save_feed_queue()
-    return popped
-
-
-def push_instagram_feed_queue(reels: list) -> int:
-    """Re-add reels that were popped but never streamed (e.g. no voice channel)."""
-    return _enqueue_feed_reels(reels)
-
-
-_load_feed_queue()
-
-
 class _BufferChannel:
     """Fake Discord channel that buffers send() calls for API relay."""
 
@@ -2070,24 +1994,6 @@ def makeApp(bot: discord.Bot) -> web.Application:
         """
         from users import get_allowed_instagram_usernames
         return web.json_response({"whitelist": sorted(get_allowed_instagram_usernames())})
-
-    async def instagramFeed(request: web.Request) -> web.Response:
-        """Receive home-feed reels pushed by the local scraper and enqueue them.
-
-        Body JSON: {reels: [{code, url, caption}]}. Reels are deduped by
-        ``code`` and kept at most 50 (oldest dropped on overflow).
-        """
-        try:
-            data = await request.json()
-            reels = data.get("reels") or []
-        except Exception:
-            return web.json_response({"error": "invalid body"}, status=400)
-        if not isinstance(reels, list):
-            return web.json_response({"error": "reels must be a list"}, status=400)
-        added = _enqueue_feed_reels(reels)
-        return web.json_response({"ok": True, "added": added, "total": len(_instagram_feed_queue)})
-
-    app.router.add_post("/instagram/feed", instagramFeed)
 
     app.router.add_get("/upload/{token}", uploadPage)
     app.router.add_post("/upload/{token}/init", uploadInit)

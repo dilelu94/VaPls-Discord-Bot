@@ -33,8 +33,6 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 COOKIES_PATH = str(SCRIPT_DIR / f"instagram_cookies_{INSTAGRAM_USERNAME}.json")
 PROCESSED_COMMENTS_PATH = str(SCRIPT_DIR / "processed_comments.json")
 PROCESSED_MESSAGES_PATH = str(SCRIPT_DIR / "processed_messages.json")
-SEEN_REELS_PATH = str(SCRIPT_DIR / "seen_reels.json")
-SEEN_REELS_MAX = 500
 
 # Tunnel SSH: el scraper habla con localhost:8080 que el SSH tunnel redirige
 # al API server en Oracle Cloud. Si no usás tunnel, cambiá esta variable.
@@ -42,8 +40,8 @@ CLOUD_SERVER_URL = os.getenv("CLOUD_SERVER_URL", "http://localhost:8080")
 API_SECRET = os.getenv("API_SECRET") or "tu_secreto_aqui"
 
 # Rango de espera aleatorio entre consultas de bandeja (en segundos)
-MIN_DELAY_SECS = 1800   # 30 minutos
-MAX_DELAY_SECS = 5400   # 1 hora y media
+MIN_DELAY_SECS = 21600  # 6 horas
+MAX_DELAY_SECS = 43200  # 12 horas
 
 def load_processed_comments():
     if os.path.exists(PROCESSED_COMMENTS_PATH):
@@ -78,22 +76,6 @@ def save_processed_messages(ids):
             json.dump(list(ids), f)
     except Exception as e:
         logger.error(f"Error al guardar mensajes procesados: {e}")
-
-def load_seen_reels():
-    if os.path.exists(SEEN_REELS_PATH):
-        try:
-            with open(SEEN_REELS_PATH, "r") as f:
-                return set(json.load(f))
-        except Exception:
-            pass
-    return set()
-
-def save_seen_reels(seen):
-    try:
-        with open(SEEN_REELS_PATH, "w") as f:
-            json.dump(list(seen), f)
-    except Exception as e:
-        logger.error(f"Error al guardar reels vistos: {e}")
 
 # --- Alerta de usuarios fuera de la whitelist (users.py en el cloud) ---
 NON_WHITELIST_COUNTS_PATH = str(SCRIPT_DIR / "non_whitelist_counts.json")
@@ -660,102 +642,6 @@ def process_comment_mentions(cl):
         if counts_modified:
             save_non_whitelist_counts(counts, seen)
 
-def _raw_reels(cl, endpoint):
-    """Extrae reels de video de la respuesta cruda de un endpoint de clips.
-
-    IG puede servir los reels bajo ``items`` o bajo ``items_with_ads``
-    (migración de anuncios); instagrapi 2.18 solo lee ``items``, así que
-    leemos la respuesta cruda y juntamos ambas fuentes.
-    """
-    try:
-        result = cl.private_request(endpoint, data=" ", params={"max_id": ""})
-    except Exception as e:
-        logger.error(f"Error al obtener reels de {endpoint}: {e}")
-        return []
-
-    seen = set()
-    reels = []
-    raw_items = list(result.get("items", []) or []) + list(result.get("items_with_ads", []) or [])
-    for item in raw_items:
-        media = item.get("media") if isinstance(item, dict) else None
-        if not isinstance(media, dict) or media.get("media_type") != 2:  # 2 = video (reel)
-            continue
-        pk = str(media.get("pk") or "")
-        if not pk or pk in seen:
-            continue
-        seen.add(pk)
-        code = media.get("code")
-        if not code:
-            continue
-        cap = media.get("caption")
-        caption = cap.get("text", "") if isinstance(cap, dict) else (cap or "")
-        reels.append({
-            "code": code,
-            "url": f"https://www.instagram.com/reel/{code}/",
-            "caption": caption,
-        })
-    return reels
-
-
-def fetch_feed_reels(cl):
-    """Toma reels de video del feed algorítmico de Instagram.
-
-    Prioridad: pestaña Reels conectada (IG la devuelve vacía a sesiones
-    automatizadas) y luego el feed de Explore (clips/discover), que sirve los
-    reels bajo ``items_with_ads`` y no ``items``. Sin fallback a Friends.
-    """
-    reels = _raw_reels(cl, "clips/connected/")
-    if reels:
-        return reels
-    logger.info("Feed conectado vacío — probando Explore...")
-    reels = _raw_reels(cl, "clips/discover/")
-    if reels:
-        return reels
-    logger.info("Feed algorítmico vacío en esta pasada.")
-    return []
-
-
-def push_home_feed(cl):
-    """Toma los reels nuevos del feed algorítmico y los manda al cloud.
-
-    El cloud los acumula en una cola (máx 50) que /instagram reproduce en
-    Discord. Los códigos ya enviados (seen_reels.json) no se repiten nunca.
-    """
-    logger.info("Recopilando Reels del feed algorítmico de Instagram...")
-    reels = fetch_feed_reels(cl)
-
-    if not reels:
-        logger.info("No había reels de video en el feed en esta pasada.")
-        return
-
-    seen = load_seen_reels()
-    fresh = [r for r in reels if r["code"] not in seen]
-    if not fresh:
-        logger.info("El feed no trajo reels nuevos (todos ya enviados antes).")
-        return
-
-    try:
-        resp = requests.post(
-            f"{CLOUD_SERVER_URL}/instagram/feed",
-            json={"reels": fresh},
-            headers={"X-API-Secret": API_SECRET},
-            timeout=30,
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            seen.update(r["code"] for r in fresh)
-            if len(seen) > SEEN_REELS_MAX:
-                seen = set(sorted(seen)[-SEEN_REELS_MAX:])
-            save_seen_reels(seen)
-            logger.info(
-                f"Feed enviado al cloud: {len(fresh)} reels nuevos "
-                f"({data.get('added', 0)} agregados, total {data.get('total', 0)})"
-            )
-        else:
-            logger.error(f"Error del cloud al enviar feed ({resp.status_code}): {resp.text[:200]}")
-    except Exception as e:
-        logger.error(f"Error de conexión con el cloud al enviar feed: {e}")
-
 def main():
     cl = Client()
     
@@ -797,9 +683,6 @@ def main():
         
         # 2. Procesar menciones públicas en comentarios
         process_comment_mentions(cl)
-        
-        # 3. Push de los Reels del feed principal al cloud (/instagram)
-        push_home_feed(cl)
         
         logger.info(f"Revisión completa. Durmiendo por {delay // 60} minutos...")
         time.sleep(delay)
