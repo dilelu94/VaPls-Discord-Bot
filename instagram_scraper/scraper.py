@@ -203,6 +203,22 @@ def download_image_b64(cl, image_url):
         logger.error(f"Error al descargar imagen: {e}")
     return None
 
+def _relogin(cl):
+    """Re-authenticate with the credentials from .scraper_env.
+
+    ``cl.relogin()`` alone can't recover: the session is loaded via
+    ``load_settings()``, which never populates ``cl.username``/``cl.password``,
+    so relogin fails with "Both username and password must be provided" when
+    Instagram invalidates the session. A fresh ``login()`` with the env
+    credentials refreshes the cookie file in place.
+    """
+    password = os.getenv("INSTAGRAM_PASSWORD")
+    if password:
+        cl.login(INSTAGRAM_USERNAME, password)
+    else:
+        cl.relogin()
+    cl.dump_settings(COOKIES_PATH)
+
 def process_inbox(cl):
     """Revisa y responde mensajes directos (DMs) de texto, Reels e Historias."""
     logger.info("Revisando la bandeja de entrada de Instagram (DMs)...")
@@ -404,8 +420,7 @@ def process_inbox(cl):
     except ClientError as e:
         logger.error(f"Error de cliente de Instagram en inbox: {e}")
         try:
-            cl.relogin()
-            cl.dump_settings(COOKIES_PATH)
+            _relogin(cl)
         except Exception as re_err:
             logger.error(f"Error al re-iniciar sesión: {re_err}")
     except Exception as e:
