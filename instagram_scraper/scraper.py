@@ -8,7 +8,7 @@ import base64
 from pathlib import Path
 import requests
 from instagrapi import Client
-from instagrapi.exceptions import ClientError
+from instagrapi.exceptions import ClientError, ChallengeRequired
 
 # Configurar logging profesional
 logging.basicConfig(
@@ -42,6 +42,14 @@ API_SECRET = os.getenv("API_SECRET") or "tu_secreto_aqui"
 # Rango de espera aleatorio entre consultas de bandeja (en segundos)
 MIN_DELAY_SECS = 21600  # 6 horas
 MAX_DELAY_SECS = 43200  # 12 horas
+
+# Backoff de sesión: ante un checkpoint de Instagram (ChallengeRequired) no se
+# vuelve a intentar login — eso es lo que más suspende cuentas. Se pausa y se
+# espera a que el dueño complete la verificación en la app.
+LOGIN_BACKOFF_PATH = str(SCRIPT_DIR / "login_backoff.json")
+CHALLENGE_BACKOFF_SECS = 24 * 3600      # 24 horas tras un checkpoint
+REPEATED_FAILURES_LIMIT = 3             # 3 fallos seguidos → pausa prolongada
+LONG_BACKOFF_SECS = 7 * 24 * 3600       # 7 días si se repiten los fallos
 
 def load_processed_comments():
     if os.path.exists(PROCESSED_COMMENTS_PATH):
@@ -146,6 +154,7 @@ def track_non_whitelisted(cl, username, counts, seen, item_id):
         msg = f"@{key} (fuera de la whitelist) te mandó {count} mensajes/menciones en Instagram."
         try:
             uid = cl.user_id_from_username(ALERT_USERNAME)
+            _human_delay(15, 40, "alerta no-whitelist")
             cl.direct_send(msg, user_ids=[uid])
             logger.info(f"Alerta enviada a @{ALERT_USERNAME}: @{key} acumula {count} interacciones")
         except Exception as e:
@@ -185,6 +194,75 @@ def download_image_b64(cl, image_url):
         logger.error(f"Error al descargar imagen: {e}")
     return None
 
+def _human_delay(lo, hi, what=""):
+    """Pausa aleatoria que imita lectura/tipeo humano."""
+    d = random.uniform(lo, hi)
+    if what:
+        logger.info(f"Pausa humana ({what}): {d:.0f}s")
+    time.sleep(d)
+
+
+def load_login_backoff():
+    if os.path.exists(LOGIN_BACKOFF_PATH):
+        try:
+            with open(LOGIN_BACKOFF_PATH, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_login_backoff(state):
+    try:
+        with open(LOGIN_BACKOFF_PATH, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.error(f"Error al guardar backoff de login: {e}")
+
+
+def clear_login_backoff():
+    if os.path.exists(LOGIN_BACKOFF_PATH):
+        try:
+            os.remove(LOGIN_BACKOFF_PATH)
+        except Exception as e:
+            logger.error(f"Error al limpiar backoff de login: {e}")
+
+
+def login_blocked_until():
+    """Timestamp hasta el cual no conviene reintentar login, o ``None``."""
+    nxt = load_login_backoff().get("next_allowed_at", 0)
+    if nxt and time.time() < nxt:
+        return nxt
+    return None
+
+
+def record_login_failure(reason):
+    """Registra un fallo de sesión y extiende el backoff si se repite."""
+    state = load_login_backoff()
+    state["failures"] = state.get("failures", 0) + 1
+    state["last_reason"] = reason
+    state["last_at"] = time.time()
+    if state["failures"] >= REPEATED_FAILURES_LIMIT:
+        state["next_allowed_at"] = time.time() + LONG_BACKOFF_SECS
+    else:
+        state["next_allowed_at"] = time.time() + CHALLENGE_BACKOFF_SECS
+    save_login_backoff(state)
+    logger.warning(
+        f"Fallo de sesión ({reason}) #{state['failures']}. "
+        f"Próximo intento permitido: {time.ctime(state['next_allowed_at'])}"
+    )
+
+
+def _apply_regional_profile(cl):
+    """Coherencia regional argentina: locale es_AR y GMT-03:00.
+
+    instagrapi viene con ``en_US``/``GMT-04:00`` por defecto; una cuenta
+    argentina reportando metadata de USA es una señal detectable.
+    """
+    cl.set_locale("es_AR")
+    cl.set_timezone_offset(-10800, "America/Argentina/Buenos_Aires")
+
+
 def _relogin(cl):
     """Re-authenticate with the credentials from .scraper_env.
 
@@ -200,6 +278,7 @@ def _relogin(cl):
     else:
         cl.relogin()
     cl.dump_settings(COOKIES_PATH)
+    clear_login_backoff()
 
 def process_inbox(cl):
     """Revisa y responde mensajes directos (DMs) de texto, Reels e Historias."""
@@ -210,6 +289,7 @@ def process_inbox(cl):
     counts_modified = False
     try:
         threads = cl.direct_threads(amount=10)
+        clear_login_backoff()
 
         for thread in threads:
             if not thread.messages:
@@ -368,6 +448,7 @@ def process_inbox(cl):
                 if not reel_caption:
                     logger.info(f"Reel/story sin caption de @{sender_username}. ❤️")
                     try:
+                        _human_delay(8, 20, "reacción")
                         cl.direct_send_reaction(thread.id, target.id, "❤️")
                     except Exception as e:
                         logger.error(f"Error al reaccionar: {e}")
@@ -386,25 +467,35 @@ def process_inbox(cl):
             if react == "heart":
                 logger.info(f"Cloud ordenó ❤️ para @{sender_username}")
                 try:
+                    _human_delay(8, 20, "reacción")
                     cl.direct_send_reaction(thread.id, target.id, "❤️")
                 except Exception as e:
                     logger.error(f"Error al reaccionar: {e}")
             elif reply:
                 logger.info(f"Enviando respuesta a @{sender_username}: '{reply[:80]}...'")
                 try:
+                    _human_delay(20, 60, "respondiendo DM")
                     cl.direct_send(reply, thread_ids=[thread.id])
                 except Exception as e:
                     logger.error(f"Error al enviar DM: {e}")
 
             processed.add(str(target.id))
             modified = True
+            _human_delay(30, 120, "entre DMs")
 
+    except ChallengeRequired as e:
+        logger.error(f"Checkpoint de Instagram activo en la bandeja: {e}")
+        record_login_failure("challenge")
     except ClientError as e:
         logger.error(f"Error de cliente de Instagram en inbox: {e}")
-        try:
-            _relogin(cl)
-        except Exception as re_err:
-            logger.error(f"Error al re-iniciar sesión: {re_err}")
+        if login_blocked_until() is None:
+            try:
+                _relogin(cl)
+            except Exception as re_err:
+                logger.error(f"Error al re-iniciar sesión: {re_err}")
+                record_login_failure("relogin")
+        else:
+            logger.warning("Relogin bloqueado por backoff de sesión.")
     except Exception as e:
         logger.error(f"Error inesperado en inbox: {e}")
     finally:
@@ -421,6 +512,7 @@ def process_comment_mentions(cl):
     counts_modified = False
     try:
         inbox_data = cl.news_inbox_v1()
+        clear_login_backoff()
         
         # --- story_mentions: menciones ACTIVAS en historias (el carrusel de arriba) ---
         sm = inbox_data.get("story_mentions", {})
@@ -447,6 +539,7 @@ def process_comment_mentions(cl):
                         if path and os.path.exists(path):
                             with open(path, "rb") as f:
                                 image_b64 = base64.b64encode(f.read()).decode("utf-8")
+                    _human_delay(8, 20, "reacción")
                     cl.story_like(media_id)
                     logger.info(f"❤️ historia de @{username}")
                 except Exception as e:
@@ -458,6 +551,7 @@ def process_comment_mentions(cl):
                     logger.info(f"Enviando DM a @{username} por mención en historia: '{reply[:80]}'")
                     try:
                         uid = cl.user_id_from_username(username)
+                        _human_delay(20, 60, "respondiendo mención")
                         cl.direct_send(reply, user_ids=[uid])
                     except Exception as e:
                         logger.error(f"Error enviando DM: {e}")
@@ -502,6 +596,7 @@ def process_comment_mentions(cl):
                                 if path and os.path.exists(path):
                                     with open(path, "rb") as f:
                                         image_b64 = base64.b64encode(f.read()).decode("utf-8")
+                            _human_delay(8, 20, "reacción")
                             cl.story_like(media_id_str)
                             logger.info(f"❤️ historia de @{username}")
                         except Exception as e:
@@ -542,6 +637,7 @@ def process_comment_mentions(cl):
                             try:
                                 comment_id = args.get("comment_id") or ""
                                 if mid and comment_id:
+                                    _human_delay(30, 90, "respondiendo comentario")
                                     cl.media_comment(mid, reply, replied_to_comment_id=comment_id)
                             except Exception as e:
                                 logger.error(f"Error al responder comentario: {e}")
@@ -556,6 +652,7 @@ def process_comment_mentions(cl):
                         logger.info(f"Enviando DM a @{username} por mención en historia: '{reply[:80]}'")
                         try:
                             uid = cl.user_id_from_username(username)
+                            _human_delay(20, 60, "respondiendo mención")
                             cl.direct_send(reply, user_ids=[uid])
                         except Exception as e:
                             logger.error(f"Error enviando DM: {e}")
@@ -626,6 +723,7 @@ def process_comment_mentions(cl):
                         reply = reply_data["reply"]
                         logger.info(f"Respondiendo comentario: '{reply}'")
                         try:
+                            _human_delay(30, 90, "respondiendo comentario")
                             cl.media_comment(media_id, reply, replied_to_comment_id=comment_id)
                         except Exception as e:
                             logger.error(f"Error al responder comentario: {e}")
@@ -636,6 +734,9 @@ def process_comment_mentions(cl):
                 logger.info(f"@mención via rich_text de @{username}: {rich_text[:100]}")
                 save_processed_comment(notification_id)
             
+    except ChallengeRequired as e:
+        logger.error(f"Checkpoint de Instagram activo en menciones: {e}")
+        record_login_failure("challenge")
     except Exception as e:
         logger.error(f"Error inesperado al procesar menciones: {e}")
     finally:
@@ -643,7 +744,7 @@ def process_comment_mentions(cl):
             save_non_whitelist_counts(counts, seen)
 
 def main():
-    cl = Client()
+    cl = Client(delay_range=[1, 4])
     
     # Intentar cargar sesión guardada para evitar logins sospechosos
     if os.path.exists(COOKIES_PATH):
@@ -652,6 +753,9 @@ def main():
             logger.info("Sesión cargada desde las cookies guardadas.")
         except Exception as e:
             logger.warning(f"No se pudo cargar la sesión guardada: {e}")
+
+    # Fingerprint regional coherente (es_AR / GMT-03:00) antes de cualquier request
+    _apply_regional_profile(cl)
     
     # Si no hay sesión válida, loguearse de forma convencional
     if not cl.user_id:
@@ -667,9 +771,17 @@ def main():
         except Exception as e:
             logger.error(f"Error al iniciar sesión: {e}")
             return
+    else:
+        cl.dump_settings(COOKIES_PATH)
+
+    device = cl.settings.get("device_settings", {})
+    logger.info(
+        "Fingerprint activo: device=%s locale=%s timezone=%s (%s) delay_range=%s",
+        device.get("device"), cl.locale, cl.timezone_name, cl.timezone_offset, cl.delay_range,
+    )
 
     fetch_whitelist()
-    logger.info("Comenzando bucle de polling asíncrono híbrido...")
+    logger.info("Comenzando bucle de polling híbrido con humanización...")
     
     while True:
         # Calcular el tiempo de espera aleatorio antes de la próxima consulta
@@ -677,6 +789,17 @@ def main():
         
         # Refrescar la whitelist real del cloud (users.py) antes de procesar
         fetch_whitelist()
+
+        # Si hay un checkpoint/backoff activo, no tocar Instagram hasta que venza
+        blocked = login_blocked_until()
+        if blocked:
+            wait = max(delay, int(blocked - time.time()) + 60)
+            logger.warning(
+                f"Backoff de sesión activo hasta {time.ctime(blocked)}. "
+                f"Durmiendo {wait // 60} minutos."
+            )
+            time.sleep(wait)
+            continue
         
         # 1. Procesar DMs (Reels, historias y textos)
         process_inbox(cl)

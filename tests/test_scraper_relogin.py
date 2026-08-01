@@ -14,10 +14,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "instagram_scrap
 import scraper
 
 
-def test_process_inbox_relogins_with_env_password(monkeypatch):
+def test_process_inbox_relogins_with_env_password(monkeypatch, tmp_path):
     cl = MagicMock()
     cl.direct_threads.side_effect = ClientError("login_required")
     monkeypatch.setenv("INSTAGRAM_PASSWORD", "pw")
+    monkeypatch.setattr(scraper, "LOGIN_BACKOFF_PATH", str(tmp_path / "login_backoff.json"))
 
     scraper.process_inbox(cl)
 
