@@ -5786,7 +5786,7 @@ async def indioInstagramCommentLogic(
             user_message=tagged_message,
             system_instruction=system_instruction,
             history=_stamp_history_for_prompt(history_snapshot, time.time()),
-            tools=_INDIO_TOOLS,
+            tools=None,
             volatile_context=player_block or None,
         )
     except geminiClient.GeminiError as e:
@@ -5804,6 +5804,11 @@ async def indioInstagramCommentLogic(
     clean_reply = _CUSTOM_EMOJI_MARKUP_RE.sub("", clean_reply).strip()
     
     if not clean_reply:
+        logger.warning(
+            "[INSTAGRAM-COMMENTS-INDIO] empty reply for @%s (function_calls=%d)",
+            sender_username,
+            len(reply.function_calls),
+        )
         clean_reply = "..."
 
     # Send reply back to the Instagram comment thread
@@ -5975,7 +5980,10 @@ async def indioInstagramScraperLogic(
         recent_block = _format_recent_stories(guild_id)
         if recent_block:
             system_instruction += "\n\n" + recent_block
-        tools_to_use = _INDIO_TOOLS
+        # Los DMs de Instagram no pueden despachar tools de Discord (play_music,
+        # generate_image, etc.): pasarlas hace que Gemini a veces responda solo
+        # con un functionCall sin texto y el DM quede en "..." silencioso.
+        tools_to_use = None
     else:
         # Non-whitelisted users get isolated base personality with strict privacy instructions
         system_instruction = (
@@ -6041,6 +6049,11 @@ async def indioInstagramScraperLogic(
     clean_reply = _CUSTOM_EMOJI_MARKUP_RE.sub("", clean_reply).strip()
     
     if not clean_reply:
+        logger.warning(
+            "[INSTAGRAM-INDIO-SCRAPER] empty reply for @%s (function_calls=%d)",
+            sender_username,
+            len(reply.function_calls),
+        )
         clean_reply = "..."
 
     # Persist in memory history
