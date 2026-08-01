@@ -8,7 +8,13 @@ import base64
 from pathlib import Path
 import requests
 from instagrapi import Client
-from instagrapi.exceptions import ClientError, ChallengeRequired
+from instagrapi.exceptions import (
+    ChallengeRequired,
+    ClientError,
+    ClientThrottledError,
+    RateLimitError,
+    SentryBlock,
+)
 
 # Configurar logging profesional
 logging.basicConfig(
@@ -50,6 +56,10 @@ LOGIN_BACKOFF_PATH = str(SCRIPT_DIR / "login_backoff.json")
 CHALLENGE_BACKOFF_SECS = 24 * 3600      # 24 horas tras un checkpoint
 REPEATED_FAILURES_LIMIT = 3             # 3 fallos seguidos → pausa prolongada
 LONG_BACKOFF_SECS = 7 * 24 * 3600       # 7 días si se repiten los fallos
+
+# Warm-up: cada N ciclos se refresca el tray de reels/historias para simular
+# "abrir la app" en vez de solo entrar directo a la bandeja de DMs.
+WARMUP_EVERY_N = 2
 
 def load_processed_comments():
     if os.path.exists(PROCESSED_COMMENTS_PATH):
@@ -251,6 +261,29 @@ def record_login_failure(reason):
         f"Fallo de sesión ({reason}) #{state['failures']}. "
         f"Próximo intento permitido: {time.ctime(state['next_allowed_at'])}"
     )
+
+
+def record_throttle():
+    """Registra un 429/rate-limit/sentry-block para monitorear acumulación.
+
+    No toca el backoff de sesión: un throttle no es un fallo de login, y
+    reintentar login justo cuando Instagram está limitando empeora las cosas.
+    """
+    state = load_login_backoff()
+    state["throttles"] = state.get("throttles", 0) + 1
+    state["last_throttle_at"] = time.time()
+    save_login_backoff(state)
+    logger.warning(
+        f"Rate-limit de Instagram (#{state['throttles']} en el período actual). "
+        "No se reintenta login; se respeta el ritmo normal de polling."
+    )
+
+
+def _warmup(cl):
+    """Refresca el tray de reels/historias simulando abrir la app."""
+    logger.info("Warm-up: refrescando tray de reels/historias...")
+    cl.get_reels_tray_feed("cold_start")
+    logger.info("Warm-up de tray completado.")
 
 
 def _apply_regional_profile(cl):
@@ -486,6 +519,8 @@ def process_inbox(cl):
     except ChallengeRequired as e:
         logger.error(f"Checkpoint de Instagram activo en la bandeja: {e}")
         record_login_failure("challenge")
+    except (ClientThrottledError, RateLimitError, SentryBlock) as e:
+        record_throttle()
     except ClientError as e:
         logger.error(f"Error de cliente de Instagram en inbox: {e}")
         if login_blocked_until() is None:
@@ -737,6 +772,8 @@ def process_comment_mentions(cl):
     except ChallengeRequired as e:
         logger.error(f"Checkpoint de Instagram activo en menciones: {e}")
         record_login_failure("challenge")
+    except (ClientThrottledError, RateLimitError, SentryBlock) as e:
+        record_throttle()
     except Exception as e:
         logger.error(f"Error inesperado al procesar menciones: {e}")
     finally:
@@ -779,13 +816,20 @@ def main():
         "Fingerprint activo: device=%s locale=%s timezone=%s (%s) delay_range=%s",
         device.get("device"), cl.locale, cl.timezone_name, cl.timezone_offset, cl.delay_range,
     )
+    logger.info(
+        "Credenciales para relogin: usuario=@%s password=%s",
+        INSTAGRAM_USERNAME,
+        "presente" if os.getenv("INSTAGRAM_PASSWORD") else "AUSENTE (el relogin no podrá recuperarse solo)",
+    )
 
     fetch_whitelist()
     logger.info("Comenzando bucle de polling híbrido con humanización...")
+    cycle = 0
     
     while True:
         # Calcular el tiempo de espera aleatorio antes de la próxima consulta
         delay = random.randint(MIN_DELAY_SECS, MAX_DELAY_SECS)
+        cycle += 1
         
         # Refrescar la whitelist real del cloud (users.py) antes de procesar
         fetch_whitelist()
@@ -800,6 +844,19 @@ def main():
             )
             time.sleep(wait)
             continue
+
+        # Warm-up esporádico: cada WARMUP_EVERY_N ciclos simulamos abrir la app
+        if cycle % WARMUP_EVERY_N == 0:
+            try:
+                _human_delay(5, 15, "warm-up")
+                _warmup(cl)
+            except (ClientThrottledError, RateLimitError, SentryBlock) as e:
+                record_throttle()
+            except ChallengeRequired as e:
+                logger.error(f"Checkpoint durante warm-up: {e}")
+                record_login_failure("challenge")
+            except Exception as e:
+                logger.warning(f"Warm-up no crítico falló: {e}")
         
         # 1. Procesar DMs (Reels, historias y textos)
         process_inbox(cl)

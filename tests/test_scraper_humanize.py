@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-from instagrapi.exceptions import ChallengeRequired, ClientError
+from instagrapi.exceptions import ChallengeRequired, ClientError, ClientThrottledError, RateLimitError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "instagram_scraper"))
 import scraper
@@ -70,3 +70,34 @@ def test_process_inbox_clears_backoff_on_success(backoff_path):
     cl.user_id = "1"
     scraper.process_inbox(cl)
     assert scraper.load_login_backoff() == {}
+
+
+def test_record_throttle_counts_without_extending_login_backoff(backoff_path):
+    scraper.record_throttle()
+    scraper.record_throttle()
+    state = scraper.load_login_backoff()
+    assert state["throttles"] == 2
+    assert "next_allowed_at" not in state
+    assert scraper.login_blocked_until() is None
+
+
+def test_process_inbox_throttle_does_not_relogin(backoff_path):
+    cl = MagicMock()
+    cl.direct_threads.side_effect = ClientThrottledError("too many requests")
+    scraper.process_inbox(cl)
+    cl.login.assert_not_called()
+    cl.relogin.assert_not_called()
+    assert scraper.load_login_backoff()["throttles"] == 1
+
+
+def test_process_comment_mentions_throttle_recorded(backoff_path):
+    cl = MagicMock()
+    cl.news_inbox_v1.side_effect = RateLimitError("rate_limit_error")
+    scraper.process_comment_mentions(cl)
+    assert scraper.load_login_backoff()["throttles"] == 1
+
+
+def test_warmup_calls_reels_tray():
+    cl = MagicMock()
+    scraper._warmup(cl)
+    cl.get_reels_tray_feed.assert_called_once_with("cold_start")
