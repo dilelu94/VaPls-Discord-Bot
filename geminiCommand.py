@@ -3074,6 +3074,14 @@ def _failure_feedback(status: str) -> Optional[str]:
         return (
             f"no encontré el sonido ({reason})" if reason else "no encontré ese sonido"
         )
+    if status.startswith("spacewar: fail"):
+        return "no pude mandar la guía de Spacewar"
+    if status.startswith("use_image: fail"):
+        return "no pude mandar la imagen"
+    if status.startswith("image: fail") or status.startswith("image_edit: fail"):
+        return "no pude generar la imagen"
+    if ": fail" in status or status.startswith("fail"):
+        return "no pude hacer eso"
     if status.startswith("resume: reconnect failed"):
         return "no pude reconectarme al canal para retomar la música"
     return None
@@ -3092,6 +3100,8 @@ _ACTION_SUCCESS_SUFFIX = {
     "GENERATE_IMAGE": "listo 🎨",
     "EDIT_IMAGE": "listo 🎨",
     "USE_IMAGE": "",
+    "SPACEWAR_GUIDE": "",
+    "DJ_MODE": "",
 }
 
 # When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
@@ -3338,7 +3348,6 @@ async def _dispatch_indio_actions(
                         )
                         try:
                             import huggingfaceImage
-                            import discord
 
                             path = await huggingfaceImage.generate(
                                 arg, config.HUGGINGFACE_API_TOKEN
@@ -3446,7 +3455,6 @@ async def _dispatch_indio_actions(
                             if download_ok:
                                 try:
                                     import huggingfaceImage
-                                    import discord
 
                                     output_path = (
                                         await huggingfaceImage.generate_img2img(
@@ -3533,32 +3541,47 @@ async def _dispatch_indio_actions(
                     ok = False
                     msg = ""
                     try:
-                        channel = bot.get_channel(target_cid)
-                        if channel is None:
-                            channel = await bot.fetch_channel(target_cid)
-                        if channel:
-                            _mgr = _init_image_mgr()
-                            _img_path = _mgr.get_image_path(
-                                "2ed104f9-c1f2-4ed6-aebc-76083b539f96"
+                        _mgr = _init_image_mgr()
+                        _img_path = _mgr.get_image_path(
+                            "2ed104f9-c1f2-4ed6-aebc-76083b539f96"
+                        )
+                        file_path_str = (
+                            str(_img_path.resolve())
+                            if (_img_path and _img_path.exists())
+                            else None
+                        )
+                        if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
+                            relayed = await _relay_to_userbot(
+                                target_cid,
+                                SPACEWAR_GUIDE_TEXT,
+                                None,
+                                file_path=file_path_str,
                             )
-                            kwargs = {}
-                            if _img_path and _img_path.exists():
-                                kwargs["file"] = discord.File(
-                                    str(_img_path),
-                                    filename="spacewar_guide.png",
-                                )
-                            await channel.send(SPACEWAR_GUIDE_TEXT, **kwargs)
-                            ok = True
-                            msg = "guide sent"
-                        else:
-                            msg = "channel not found"
+                            if relayed:
+                                ok = True
+                                msg = "guide sent via relay"
+                        if not ok:
+                            channel = bot.get_channel(target_cid)
+                            if channel is None:
+                                channel = await bot.fetch_channel(target_cid)
+                            if channel is not None:
+                                kwargs = {}
+                                if file_path_str:
+                                    kwargs["file"] = discord.File(
+                                        file_path_str,
+                                        filename="spacewar_guide.png",
+                                    )
+                                await channel.send(SPACEWAR_GUIDE_TEXT, **kwargs)
+                                ok = True
+                                msg = "guide sent"
+                            else:
+                                msg = "channel not found"
                     except Exception as e:
                         logger.exception("indio SPACEWAR_GUIDE failed")
                         msg = f"error: {e}"
                     statuses.append(f"spacewar: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio SPACEWAR_GUIDE → ok=%s msg=%s", ok, msg)
                 elif action == "USE_IMAGE":
-                    import discord as _discord
                     import json as _json
 
                     # arg is a JSON blob with image_id + optional caption
@@ -3609,7 +3632,7 @@ async def _dispatch_indio_actions(
                                 payload = {}
                                 if caption:
                                     payload["content"] = caption
-                                payload["file"] = _discord.File(str(img_path))
+                                payload["file"] = discord.File(str(img_path))
                                 await channel.send(**payload)
                                 ok = True
                                 msg = "sent direct"
@@ -3753,7 +3776,7 @@ async def _dispatch_indio_actions(
                     # indio doesn't falsely claim audio that may never play.
                     suffix = _ACTION_RELAY_SUCCESS_SUFFIX.get(
                         primary_action,
-                        _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅"),
+                        _ACTION_SUCCESS_SUFFIX.get(primary_action, ""),
                     )
                     if (
                         from_voice
@@ -3763,7 +3786,7 @@ async def _dispatch_indio_actions(
                         suffix += f" <#{config.INDIO_PLAY_CHANNEL_ID}>"
                     result_line = suffix
                 else:
-                    suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, "listo ✅")
+                    suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, "")
                     if (
                         from_voice
                         and primary_action == "PLAY_MUSIC"

@@ -64,6 +64,20 @@ def test_success_status_returns_none():
     assert _failure_feedback("music: ok — algun tema") is None
     assert _failure_feedback("skip: ok") is None
     assert _failure_feedback("pause: ok") is None
+    assert _failure_feedback("spacewar: ok — guide sent") is None
+    assert _failure_feedback("use_image: ok — sent direct") is None
+
+
+def test_image_and_spacewar_failures_surface_friendly_messages():
+    """When spacewar_guide or image tools fail, _failure_feedback must return
+    an actionable error instead of None (which would cause false 'listo ✅' suffixes)."""
+    from geminiCommand import _failure_feedback
+
+    assert _failure_feedback("spacewar: fail — channel not found") == "no pude mandar la guía de Spacewar"
+    assert _failure_feedback("use_image: fail — file missing") == "no pude mandar la imagen"
+    assert _failure_feedback("image: fail — timeout") == "no pude generar la imagen"
+    assert _failure_feedback("image_edit: fail — error") == "no pude generar la imagen"
+    assert _failure_feedback("unknown_tool: fail — bad") == "no pude hacer eso"
 
 
 # --- End-to-end: _dispatch_indio_actions edits reply in place on failure ----

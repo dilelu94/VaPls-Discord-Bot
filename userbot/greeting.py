@@ -74,7 +74,14 @@ def resolve_greeting_path(user_id: int) -> Optional[str]:
             return None
     if not isinstance(rel, str):
         return None
-    return os.path.join(config.CUSTOM_AUDIO_PATH, rel)
+    primary = os.path.join(config.CUSTOM_AUDIO_PATH, rel)
+    if os.path.exists(primary):
+        return primary
+    if rel.startswith("Audios/") or rel.startswith("Audios\\"):
+        alt = os.path.join(config.CUSTOM_AUDIO_PATH, rel[7:])
+        if os.path.exists(alt):
+            return alt
+    return primary
 
 
 async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:
