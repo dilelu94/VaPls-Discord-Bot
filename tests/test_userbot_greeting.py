@@ -51,8 +51,12 @@ greeting, ubcfg = _load_userbot_greeting()
 @pytest.fixture(autouse=True)
 def _reset_throttle():
     greeting._last_greeting.clear()
+    greeting._pity_state.clear()
+    greeting._pity_loaded = True
     yield
     greeting._last_greeting.clear()
+    greeting._pity_state.clear()
+    greeting._pity_loaded = False
 
 
 @pytest.fixture
@@ -66,6 +70,7 @@ def fake_users(monkeypatch):
 @pytest.fixture(autouse=True)
 def _audio_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(ubcfg, "CUSTOM_AUDIO_PATH", str(tmp_path))
+    monkeypatch.setattr(ubcfg, "GREETING_PITY_PATH", str(tmp_path / "greeting_pity.json"))
     return tmp_path
 
 
@@ -182,3 +187,139 @@ async def test_disabled_globally_short_circuits(fake_users, monkeypatch):
     played = await greeting.play_user_greeting(vc, user_id=42, channel_id=100)
     assert played is False
     vc.play.assert_not_called()
+
+
+def test_pity_increases_effective_weight_for_rare_audio():
+    items = [
+        {"path": "common.mp3", "weight": 99},
+        {"path": "rare_1pct.mp3", "weight": 1},
+    ]
+    # At 0 misses
+    paths, weights, rare = greeting.calculate_effective_weights(items, user_id=10, pity_state={})
+    assert paths == ["common.mp3", "rare_1pct.mp3"]
+    assert weights == [99.0, 1.0]
+    assert rare == {"rare_1pct.mp3"}
+
+    # At 10 misses for rare_1pct
+    paths, weights, _ = greeting.calculate_effective_weights(
+        items, user_id=10, pity_state={"rare_1pct.mp3": 10}
+    )
+    assert weights == [99.0, 11.0]
+
+    # At 99 misses for rare_1pct -> weight is 1 * (1 + 99) = 100 (more than common!)
+    paths, weights, _ = greeting.calculate_effective_weights(
+        items, user_id=10, pity_state={"rare_1pct.mp3": 99}
+    )
+    assert weights == [99.0, 100.0]
+
+
+def test_common_audios_do_not_gain_pity():
+    # 50/50 audios (base prob 50% > 5%)
+    items = [
+        {"path": "caro1.mp3", "weight": 50},
+        {"path": "caro2.mp3", "weight": 50},
+    ]
+    paths, weights, rare = greeting.calculate_effective_weights(
+        items, user_id=20, pity_state={"caro1.mp3": 50, "caro2.mp3": 50}
+    )
+    assert rare == set()
+    assert weights == [50.0, 50.0]
+
+
+def test_pity_counter_increments_on_miss_and_resets_on_hit(fake_users, monkeypatch):
+    fake_users({
+        30: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 99},
+                {"path": "rare.mp3", "weight": 1},
+            ]
+        }
+    })
+
+    # Simulate 3 rolls where common is picked every time
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
+    greeting.resolve_greeting_path(30)
+    assert greeting._pity_state[30]["rare.mp3"] == 1
+
+    greeting.resolve_greeting_path(30)
+    assert greeting._pity_state[30]["rare.mp3"] == 2
+
+    greeting.resolve_greeting_path(30)
+    assert greeting._pity_state[30]["rare.mp3"] == 3
+
+    # Now simulate rare is picked
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["rare.mp3"])
+    greeting.resolve_greeting_path(30)
+    assert greeting._pity_state[30]["rare.mp3"] == 0
+
+
+def test_multiple_rare_audios_track_independently(fake_users, monkeypatch):
+    fake_users({
+        40: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 98},
+                {"path": "rare_a.mp3", "weight": 1},
+                {"path": "rare_b.mp3", "weight": 1},
+            ]
+        }
+    })
+
+    # 1. common picked -> both rare_a and rare_b increment
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
+    greeting.resolve_greeting_path(40)
+    assert greeting._pity_state[40]["rare_a.mp3"] == 1
+    assert greeting._pity_state[40]["rare_b.mp3"] == 1
+
+    # 2. rare_a picked -> rare_a resets to 0, rare_b increments to 2
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["rare_a.mp3"])
+    greeting.resolve_greeting_path(40)
+    assert greeting._pity_state[40]["rare_a.mp3"] == 0
+    assert greeting._pity_state[40]["rare_b.mp3"] == 2
+
+
+def test_pity_state_persists_to_disk_and_reloads(fake_users, tmp_path, monkeypatch):
+    pity_file = tmp_path / "greeting_pity.json"
+    monkeypatch.setattr(ubcfg, "GREETING_PITY_PATH", str(pity_file))
+
+    fake_users({
+        50: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 99},
+                {"path": "rare.mp3", "weight": 1},
+            ]
+        }
+    })
+
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
+    greeting.resolve_greeting_path(50)
+    assert pity_file.exists()
+
+    # Clear memory and reload from disk
+    greeting._pity_state.clear()
+    greeting._pity_loaded = False
+    loaded = greeting.load_pity_state(str(pity_file))
+    assert loaded[50]["rare.mp3"] == 1
+
+
+async def test_throttled_greeting_does_not_advance_pity(fake_users, _audio_dir, monkeypatch):
+    audio = _audio_dir / "common.mp3"
+    audio.write_bytes(b"fake")
+    fake_users({
+        60: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 99},
+                {"path": "rare.mp3", "weight": 1},
+            ]
+        }
+    })
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+    vc = _make_vc()
+
+    # First call succeeds
+    assert await greeting.play_user_greeting(vc, user_id=60, channel_id=5) is True
+    misses_after_first = greeting._pity_state.get(60, {}).get("rare.mp3", 0)
+
+    # Second call is throttled -> pity counter should NOT change
+    assert await greeting.play_user_greeting(vc, user_id=60, channel_id=5) is False
+    assert greeting._pity_state.get(60, {}).get("rare.mp3", 0) == misses_after_first
+

@@ -3643,8 +3643,28 @@ async def sacudir(
         return
 
     if veces > 5:
-        if getattr(ctx.author, "top_role", None) and getattr(usuario, "top_role", None):
-            if ctx.author.top_role <= usuario.top_role:
+        is_owner = (
+            ctx.author.id == getattr(config, "OWNER_ID", None)
+            or (ctx.guild is not None and ctx.author.id == ctx.guild.owner_id)
+        )
+        if not is_owner:
+            author_member = ctx.author if hasattr(ctx.author, "top_role") else (ctx.guild.get_member(ctx.author.id) if ctx.guild else ctx.author)
+            target_member = usuario if hasattr(usuario, "top_role") else (ctx.guild.get_member(usuario.id) if ctx.guild else usuario)
+            
+            author_top = getattr(author_member, "top_role", None)
+            target_top = getattr(target_member, "top_role", None)
+            author_is_admin = bool(getattr(getattr(author_member, "guild_permissions", None), "administrator", False))
+            target_is_admin = bool(getattr(getattr(target_member, "guild_permissions", None), "administrator", False))
+
+            has_higher_rank = False
+            if author_is_admin and not target_is_admin:
+                has_higher_rank = True
+            elif author_top and target_top and author_top > target_top:
+                has_higher_rank = True
+            elif author_top and not target_top:
+                has_higher_rank = True
+
+            if not has_higher_rank:
                 await ctx.respond(f"❌ Necesitás tener un rango mayor al de {usuario.mention} para sacudirlo más de 5 veces.", ephemeral=True)
                 return
 

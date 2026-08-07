@@ -181,6 +181,12 @@ CUSTOM_AUDIO_PATH = os.getenv(
 GREETING_ENABLED = os.getenv("GREETING_ENABLED", "true").lower() == "true"
 # Throttle por canal: minimo de segundos entre dos greetings en el mismo VC.
 GREETING_THROTTLE_SECONDS = float(os.getenv("GREETING_THROTTLE_SECONDS", "15"))
+# Path al archivo JSON donde se persiste el estado de pity / rachas de audios raros.
+GREETING_PITY_PATH = os.getenv("GREETING_PITY_PATH", "data/greeting_pity.json")
+# Umbral de probabilidad base (por defecto 5% = 0.05) por debajo del cual un audio
+# es considerado raro (ej. los audios de 1%) y acumula probabilidad progresiva (pity).
+GREETING_RARE_THRESHOLD = float(os.getenv("GREETING_RARE_THRESHOLD", "0.05"))
+
 
 # --- Wake sound (confirmation cue on wake-word detection) ------------------
 # Cuando VOSK detecta la palabra clave ("indio"), el userbot reproduce un

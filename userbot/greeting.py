@@ -13,6 +13,7 @@ come out at the same perceived level as the louder ones.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import random
@@ -30,6 +31,106 @@ FFMPEG_NORMALIZE_OPTS = '-af "dynaudnorm=p=0.95:f=200"'
 _last_greeting: dict[int, float] = {}
 _last_wake_sound: dict[int, float] = {}
 
+# In-memory pity state: {user_id: {rel_path: miss_count}}
+_pity_state: dict[int, dict[str, int]] = {}
+_pity_loaded = False
+
+
+def _get_pity_file_path() -> str:
+    return getattr(config, "GREETING_PITY_PATH", "data/greeting_pity.json")
+
+
+def load_pity_state(path: Optional[str] = None) -> dict[int, dict[str, int]]:
+    """Load pity counters from JSON file into in-memory ``_pity_state``."""
+    global _pity_state, _pity_loaded
+    file_path = path or _get_pity_file_path()
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            _pity_state = {
+                int(uid): {str(p): int(cnt) for p, cnt in paths.items()}
+                for uid, paths in raw.items()
+                if isinstance(paths, dict)
+            }
+        else:
+            _pity_state = {}
+    except Exception:
+        logger.exception("[GREETING] failed to load pity state from %s", file_path)
+        _pity_state = {}
+    _pity_loaded = True
+    return _pity_state
+
+
+def save_pity_state(path: Optional[str] = None) -> None:
+    """Safely persist in-memory ``_pity_state`` to JSON file using atomic write."""
+    file_path = path or _get_pity_file_path()
+    try:
+        dir_name = os.path.dirname(os.path.abspath(file_path))
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        tmp_path = file_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump({str(uid): counts for uid, counts in _pity_state.items()}, f, indent=2)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        logger.exception("[GREETING] failed to save pity state to %s", file_path)
+
+
+def _ensure_pity_loaded() -> None:
+    global _pity_loaded
+    if not _pity_loaded:
+        load_pity_state()
+
+
+def calculate_effective_weights(
+    items: list,
+    user_id: int,
+    pity_state: Optional[dict[str, int]] = None,
+    rare_threshold: Optional[float] = None,
+) -> tuple[list[str], list[float], set[str]]:
+    """Calculate effective weights for a list of greeting items taking pity into account.
+
+    Returns:
+        (paths, effective_weights, rare_paths)
+    """
+    if rare_threshold is None:
+        rare_threshold = getattr(config, "GREETING_RARE_THRESHOLD", 0.05)
+
+    paths: list[str] = []
+    base_weights: list[float] = []
+    for item in items:
+        if isinstance(item, dict) and "path" in item:
+            paths.append(item["path"])
+            base_weights.append(float(item.get("weight", 1)))
+        elif isinstance(item, str):
+            paths.append(item)
+            base_weights.append(1.0)
+
+    if not paths:
+        return [], [], set()
+
+    total_base = sum(base_weights)
+    if total_base <= 0:
+        total_base = float(len(base_weights))
+        base_weights = [1.0] * len(base_weights)
+
+    user_pity = pity_state if pity_state is not None else (_pity_state.get(user_id) or {})
+    rare_paths = set()
+    effective_weights: list[float] = []
+
+    for path, base_w in zip(paths, base_weights):
+        base_prob = base_w / total_base
+        if base_prob <= rare_threshold:
+            rare_paths.add(path)
+            misses = max(0, user_pity.get(path, 0))
+            # Progressive weight: base_w * (1 + misses)
+            effective_weights.append(base_w * (1.0 + misses))
+        else:
+            effective_weights.append(base_w)
+
+    return paths, effective_weights, rare_paths
+
 
 def _users_map() -> dict:
     """Late import so tests can monkeypatch ``users.USERS`` after import."""
@@ -40,7 +141,7 @@ def _users_map() -> dict:
     return USERS or {}
 
 
-def resolve_greeting_path(user_id: int) -> Optional[str]:
+def resolve_greeting_path(user_id: int, *, record_pity: bool = True) -> Optional[str]:
     """Return the absolute greeting path for a user, or ``None`` when the user
     has no explicit greeting configured.
 
@@ -48,6 +149,9 @@ def resolve_greeting_path(user_id: int) -> Optional[str]:
     - Plain string: ``"Audios/bokita.mp3"``
     - List of strings: ``["a.mp3", "b.mp3"]`` — picks one at random
     - List of dicts with weights: ``[{"path": "a.mp3", "weight": 99}, ...]``
+
+    For weighted items, audios with low base probability (<= 5% by default)
+    gain pity / progressive chance on every miss until played.
 
     No default fallback — only users with an explicit ``greeting`` key in
     ``users.USERS`` produce a path.
@@ -59,19 +163,20 @@ def resolve_greeting_path(user_id: int) -> Optional[str]:
     if not rel:
         return None
     if isinstance(rel, list) and rel:
-        paths = []
-        weights = []
-        for item in rel:
-            if isinstance(item, dict) and "path" in item:
-                paths.append(item["path"])
-                weights.append(item.get("weight", 1))
-            elif isinstance(item, str):
-                paths.append(item)
-                weights.append(1)
-        if paths:
-            rel = random.choices(paths, weights=weights, k=1)[0]
-        else:
+        _ensure_pity_loaded()
+        paths, weights, rare_paths = calculate_effective_weights(rel, user_id)
+        if not paths:
             return None
+        chosen_path = random.choices(paths, weights=weights, k=1)[0]
+        if record_pity and rare_paths:
+            user_counts = _pity_state.setdefault(user_id, {})
+            if chosen_path in rare_paths:
+                user_counts[chosen_path] = 0
+            for r_path in rare_paths:
+                if r_path != chosen_path:
+                    user_counts[r_path] = user_counts.get(r_path, 0) + 1
+            save_pity_state()
+        rel = chosen_path
     if not isinstance(rel, str):
         return None
     primary = os.path.join(config.CUSTOM_AUDIO_PATH, rel)
@@ -108,8 +213,8 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
     """
     if not getattr(config, "GREETING_ENABLED", True):
         return False
-    path = resolve_greeting_path(user_id)
-    if path is None:
+    info = _users_map().get(user_id) or {}
+    if not info.get("greeting"):
         return False
     now = time.time()
     last = _last_greeting.get(channel_id, 0.0)
@@ -127,6 +232,9 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
             logger.info("[GREETING] vc already playing (channel=%s)", channel_id)
             return False
     except Exception:
+        return False
+    path = resolve_greeting_path(user_id)
+    if path is None:
         return False
     if not os.path.exists(path):
         logger.warning("[GREETING] file missing: %s", path)
