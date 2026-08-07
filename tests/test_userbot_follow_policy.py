@@ -101,22 +101,22 @@ def test_ignored_users_do_not_count(monkeypatch):
     assert channel_has_humans(_channel_with([ignored])) is False
 
 
-def test_self_muted_users_do_not_count():
-    """A user who muted themselves isn't actively participating, so the bot
-    shouldn't anchor on them when deciding whether to follow active movers."""
+def test_self_muted_users_still_count():
+    """A user who only muted their microphone can still hear, so they count
+    as present in the channel to prevent the bot from abandoning them."""
     muted = SimpleNamespace(
         id=5, bot=False,
-        voice=SimpleNamespace(self_mute=True, mute=False),
+        voice=SimpleNamespace(self_mute=True, mute=False, self_deaf=False, deaf=False),
     )
-    assert channel_has_humans(_channel_with([muted])) is False
+    assert channel_has_humans(_channel_with([muted])) is True
 
 
-def test_server_muted_users_do_not_count():
+def test_server_muted_users_still_count():
     muted = SimpleNamespace(
         id=5, bot=False,
-        voice=SimpleNamespace(self_mute=False, mute=True),
+        voice=SimpleNamespace(self_mute=False, mute=True, self_deaf=False, deaf=False),
     )
-    assert channel_has_humans(_channel_with([muted])) is False
+    assert channel_has_humans(_channel_with([muted])) is True
 
 
 def test_unmuted_user_alongside_muted_user_still_counts():
@@ -124,11 +124,11 @@ def test_unmuted_user_alongside_muted_user_still_counts():
     has a participating human; the bot should stay."""
     muted = SimpleNamespace(
         id=5, bot=False,
-        voice=SimpleNamespace(self_mute=True, mute=False),
+        voice=SimpleNamespace(self_mute=True, mute=False, self_deaf=False, deaf=False),
     )
     active = SimpleNamespace(
         id=6, bot=False,
-        voice=SimpleNamespace(self_mute=False, mute=False),
+        voice=SimpleNamespace(self_mute=False, mute=False, self_deaf=False, deaf=False),
     )
     assert channel_has_humans(_channel_with([muted, active])) is True
 
