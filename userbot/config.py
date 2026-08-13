@@ -10,6 +10,9 @@ load_dotenv()
 USER_TOKEN = os.getenv("USER_TOKEN")
 
 # --- faster-whisper transcription -----------------------------------------
+# Master toggle to disable faster-whisper model loading (saves ~1.5GB RAM).
+# When false, the userbot will still connect and track activity but won't transcribe.
+WHISPER_ENABLED = os.getenv("WHISPER_ENABLED", "true").lower() == "true"
 # Model name (e.g. "tiny", "base", "small") or a HuggingFace repo. Resolved
 # via faster-whisper's standard download path. On the Ampere A1 4/24 server,
 # "small" runs comfortably real-time with concurrency 5; "base" was the cap

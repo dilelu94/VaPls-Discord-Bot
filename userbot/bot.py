@@ -265,20 +265,24 @@ from collections import defaultdict, deque
 import numpy as np
 from faster_whisper import WhisperModel
 
-log.info(
-    f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
-    f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
-    f"cpu_threads={config.WHISPER_CPU_THREADS}) ..."
-)
-whisper_model = WhisperModel(
-    config.WHISPER_MODEL,
-    device="cpu",
-    compute_type=config.WHISPER_COMPUTE_TYPE,
-    cpu_threads=config.WHISPER_CPU_THREADS,
-    num_workers=1,
-    download_root=config.WHISPER_CACHE_DIR or None,
-)
-log.info("✅ Whisper model loaded.")
+if config.WHISPER_ENABLED:
+    log.info(
+        f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
+        f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
+        f"cpu_threads={config.WHISPER_CPU_THREADS}) ..."
+    )
+    whisper_model = WhisperModel(
+        config.WHISPER_MODEL,
+        device="cpu",
+        compute_type=config.WHISPER_COMPUTE_TYPE,
+        cpu_threads=config.WHISPER_CPU_THREADS,
+        num_workers=1,
+        download_root=config.WHISPER_CACHE_DIR or None,
+    )
+    log.info("✅ Whisper model loaded.")
+else:
+    log.info("WHISPER_ENABLED=false. Speech-to-text disabled. (Model not loaded)")
+    whisper_model = None
 
 import unicodedata
 
@@ -564,6 +568,8 @@ class TranscriberSink(voice_recv.AudioSink):
 
 def _run_whisper(pcm_16k_bytes: bytes) -> str:
     """Run Whisper on s16le 16k mono bytes. Returns concatenated text."""
+    if whisper_model is None:
+        return ""
     audio = np.frombuffer(pcm_16k_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     segments, _info = whisper_model.transcribe(
         audio,
@@ -594,6 +600,10 @@ def _run_whisper_wake(pcm_16k_bytes: bytes) -> str:
         like YouTube-subtitle text. A hallucination won't contain "indio", so
         it's correctly rejected downstream.
     """
+    if whisper_model is None:
+        # If whisper is disabled, assume VOSK got it right and return the wake word
+        # so the pipeline doesn't abort. (Though _run_whisper will still return "")
+        return "indio"
     audio = np.frombuffer(pcm_16k_bytes, dtype=np.int16).astype(np.float32) / 32768.0
     segments, _info = whisper_model.transcribe(
         audio,
