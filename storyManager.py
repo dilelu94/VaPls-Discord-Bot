@@ -46,6 +46,7 @@ _story_dm_context: dict[int, dict] = {}
 _pending_owner_approvals: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
+_last_attempt_at: dict[int, float] = {}
 _recent_stories: dict[int, list[str]] = {}
 
 _background_tasks: set[asyncio.Task] = set()
@@ -1211,6 +1212,9 @@ async def _watch_loop(bot) -> None:
 
         # Min 1/day: if no story today and idle > daily_min, trigger now
         if not has_story_today and idle_secs >= daily_min:
+            if time.time() - _last_attempt_at.get(gid, 0.0) < 3600:
+                continue
+            _last_attempt_at[gid] = time.time()
             _spawn(
                 trigger_story(
                     bot, gid, config.INDIO_STORY_CHANNEL_ID, trigger_type="daily_min"
