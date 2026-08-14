@@ -208,9 +208,6 @@ sudo systemctl restart $SERVICES
 sleep 5
 FAILED=""
 CHECK_SERVICES="discord-bot indio-userbot"
-if [ -f /etc/systemd/system/golive-userbot.service ]; then
-    CHECK_SERVICES="$CHECK_SERVICES golive-userbot"
-fi
 for svc in $CHECK_SERVICES; do
     STATUS=$(systemctl is-active "$svc" 2>/dev/null || true)
     if [ "$STATUS" != "active" ]; then
@@ -218,6 +215,13 @@ for svc in $CHECK_SERVICES; do
         FAILED="${FAILED} $svc"
     fi
 done
+
+if [ -f /etc/systemd/system/golive-userbot.service ]; then
+    GOLIVE_STATUS=$(systemctl is-active "golive-userbot" 2>/dev/null || true)
+    if [ "$GOLIVE_STATUS" != "active" ]; then
+        echo "WARNING: golive-userbot is '$GOLIVE_STATUS' (optional service — check GOLIVE_TOKEN)"
+    fi
+fi
 
 if [ -n "$FAILED" ]; then
     echo ""
