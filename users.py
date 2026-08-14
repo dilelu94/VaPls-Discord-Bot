@@ -143,7 +143,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     309714566265438221: {
         "name": "Chalo",
-        "greeting": "Audios/bokita.mp3",
+        "greeting": [
+            {
+                "path": "Audios/bokita.mp3",
+                "weight": 99
+            },
+            {
+                "path": "Audios/himno_river.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Gonzalo",
