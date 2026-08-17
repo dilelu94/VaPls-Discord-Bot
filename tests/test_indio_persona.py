@@ -18,3 +18,5 @@ def test_indio_system_prompt_includes_masculine_stance_on_attraction():
     assert "belleza femenina" in system or "atracción física" in system
     assert "persignado" in system or "moralista" in system
     assert "degenerado" in system
+    assert "tranquilizate" in system
+    assert "novia" in system
