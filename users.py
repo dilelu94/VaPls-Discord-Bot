@@ -146,11 +146,11 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/bokita.mp3",
-                "weight": 99
+                "weight": 99.99
             },
             {
                 "path": "Audios/himno_river.mp3",
-                "weight": 1
+                "weight": 0.01
             }
         ],
         "traits": [
