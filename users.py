@@ -149,7 +149,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 99.99
             },
             {
-                "path": "Audios/himno_river.mp3",
+                "path": "Audios/fuego_intoxicados.mp3",
                 "weight": 0.01
             }
         ],
