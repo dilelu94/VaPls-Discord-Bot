@@ -3797,7 +3797,14 @@ async def playSoundFromIndio(bot, guild_id: int, sound_query: str) -> tuple[bool
         return False, "CUSTOM_AUDIO_PATH no configurado"
     needle = sound_query.strip().lower()
     matches: list[str] = []
-    for dirpath, _dirs, files in os.walk(root):
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [
+            d
+            for d in dirs
+            if not d.startswith(".")
+            and not d.startswith("_")
+            and d.lower() not in {"secretos", "secret", "greetings", "sorpresas"}
+        ]
         for f in files:
             if not f.lower().endswith((".opus", ".wav", ".ogg", ".m4a", ".flac")):
                 continue

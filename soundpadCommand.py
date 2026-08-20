@@ -84,10 +84,22 @@ def iter_clips(output_dir: str):
         return
     for category in sorted(os.listdir(output_dir)):
         cat_dir = os.path.join(output_dir, category)
-        if not os.path.isdir(cat_dir) or category.startswith("."):
+        cat_lower = category.lower()
+        if (
+            not os.path.isdir(cat_dir)
+            or category.startswith(".")
+            or category.startswith("_")
+            or cat_lower in {"secretos", "secret", "greetings", "sorpresas"}
+        ):
             continue
         for root, dirs, files in os.walk(cat_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            dirs[:] = [
+                d
+                for d in dirs
+                if not d.startswith(".")
+                and not d.startswith("_")
+                and d.lower() not in {"secretos", "secret", "greetings", "sorpresas"}
+            ]
             for f in sorted(files):
                 _, ext = os.path.splitext(f)
                 if ext.lower() not in _AUDIO_EXTS:
@@ -359,7 +371,10 @@ class SoundpadView(discord.ui.View):
             [
                 d
                 for d in os.listdir(output_dir)
-                if os.path.isdir(os.path.join(output_dir, d)) and not d.startswith(".")
+                if os.path.isdir(os.path.join(output_dir, d))
+                and not d.startswith(".")
+                and not d.startswith("_")
+                and d.lower() not in {"secretos", "secret", "greetings", "sorpresas"}
             ]
         )
 
