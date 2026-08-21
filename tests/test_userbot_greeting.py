@@ -323,3 +323,61 @@ async def test_throttled_greeting_does_not_advance_pity(fake_users, _audio_dir, 
     assert await greeting.play_user_greeting(vc, user_id=60, channel_id=5) is False
     assert greeting._pity_state.get(60, {}).get("rare.mp3", 0) == misses_after_first
 
+
+def test_member_count_doubles_rare_audio_effective_weight_at_10_members():
+    items = [
+        {"path": "common.mp3", "weight": 99},
+        {"path": "rare_1pct.mp3", "weight": 1},
+    ]
+
+    # At 1 member (solo join)
+    _, weights_1, _ = greeting.calculate_effective_weights(
+        items, user_id=10, pity_state={}, member_count=1
+    )
+    assert weights_1 == [99.0, 1.0]
+
+    # At 10 members in voice channel -> rare weight doubles (2.0x)
+    _, weights_10, _ = greeting.calculate_effective_weights(
+        items, user_id=10, pity_state={}, member_count=10
+    )
+    assert weights_10 == [99.0, 2.0]
+
+    # At 10 members with 4 misses: base_w (1.0) * (1 + 4) * 2.0 = 10.0
+    _, weights_10_misses, _ = greeting.calculate_effective_weights(
+        items, user_id=10, pity_state={"rare_1pct.mp3": 4}, member_count=10
+    )
+    assert weights_10_misses == [99.0, 10.0]
+
+
+async def test_play_user_greeting_detects_channel_member_count(fake_users, _audio_dir, monkeypatch):
+    audio = _audio_dir / "common.mp3"
+    audio.write_bytes(b"fake")
+    fake_users({
+        70: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 99},
+                {"path": "rare.mp3", "weight": 1},
+            ]
+        }
+    })
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+
+    # Mock voice client with 10 human members in channel
+    vc = _make_vc()
+    members = [SimpleNamespace(id=i, bot=False) for i in range(10)]
+    vc.channel.members = members
+
+    captured_member_counts = []
+    orig_calc = greeting.calculate_effective_weights
+
+    def spy_calc(items, user_id, pity_state=None, rare_threshold=None, member_count=1):
+        captured_member_counts.append(member_count)
+        return orig_calc(items, user_id, pity_state, rare_threshold, member_count=member_count)
+
+    monkeypatch.setattr(greeting, "calculate_effective_weights", spy_calc)
+
+    played = await greeting.play_user_greeting(vc, user_id=70, channel_id=500)
+    assert played is True
+    assert captured_member_counts == [10]
+
+

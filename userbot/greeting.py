@@ -88,8 +88,10 @@ def calculate_effective_weights(
     user_id: int,
     pity_state: Optional[dict[str, int]] = None,
     rare_threshold: Optional[float] = None,
+    member_count: int = 1,
 ) -> tuple[list[str], list[float], set[str]]:
-    """Calculate effective weights for a list of greeting items taking pity into account.
+    """Calculate effective weights for a list of greeting items taking pity and
+    channel member count into account.
 
     Returns:
         (paths, effective_weights, rare_paths)
@@ -119,13 +121,15 @@ def calculate_effective_weights(
     rare_paths = set()
     effective_weights: list[float] = []
 
+    people_mult = 1.0 + (max(1, member_count) - 1) / 9.0
+
     for path, base_w in zip(paths, base_weights):
         base_prob = base_w / total_base
         if base_prob <= rare_threshold:
             rare_paths.add(path)
             misses = max(0, user_pity.get(path, 0))
-            # Progressive weight: base_w * (1 + misses)
-            effective_weights.append(base_w * (1.0 + misses))
+            # Progressive weight: base_w * (1 + misses) * people_mult
+            effective_weights.append(base_w * (1.0 + misses) * people_mult)
         else:
             effective_weights.append(base_w)
 
@@ -141,7 +145,12 @@ def _users_map() -> dict:
     return USERS or {}
 
 
-def resolve_greeting_path(user_id: int, *, record_pity: bool = True) -> Optional[str]:
+def resolve_greeting_path(
+    user_id: int,
+    *,
+    record_pity: bool = True,
+    member_count: int = 1,
+) -> Optional[str]:
     """Return the absolute greeting path for a user, or ``None`` when the user
     has no explicit greeting configured.
 
@@ -151,7 +160,8 @@ def resolve_greeting_path(user_id: int, *, record_pity: bool = True) -> Optional
     - List of dicts with weights: ``[{"path": "a.mp3", "weight": 99}, ...]``
 
     For weighted items, audios with low base probability (<= 5% by default)
-    gain pity / progressive chance on every miss until played.
+    gain pity / progressive chance on every miss until played, scaled by
+    the number of members in the voice channel.
 
     No default fallback — only users with an explicit ``greeting`` key in
     ``users.USERS`` produce a path.
@@ -164,7 +174,9 @@ def resolve_greeting_path(user_id: int, *, record_pity: bool = True) -> Optional
         return None
     if isinstance(rel, list) and rel:
         _ensure_pity_loaded()
-        paths, weights, rare_paths = calculate_effective_weights(rel, user_id)
+        paths, weights, rare_paths = calculate_effective_weights(
+            rel, user_id, member_count=member_count
+        )
         if not paths:
             return None
         chosen_path = random.choices(paths, weights=weights, k=1)[0]
@@ -233,7 +245,15 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
             return False
     except Exception:
         return False
-    path = resolve_greeting_path(user_id)
+    member_count = 1
+    try:
+        channel = getattr(vc, "channel", None)
+        if channel and hasattr(channel, "members"):
+            humans = [m for m in channel.members if not getattr(m, "bot", False)]
+            member_count = len(humans) if humans else len(channel.members)
+    except Exception:
+        member_count = 1
+    path = resolve_greeting_path(user_id, member_count=member_count)
     if path is None:
         return False
     if not os.path.exists(path):
