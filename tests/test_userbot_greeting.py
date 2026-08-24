@@ -313,6 +313,9 @@ async def test_throttled_greeting_does_not_advance_pity(fake_users, _audio_dir, 
         }
     })
     monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+    # Pin the random selection so common.mp3 is always picked (file exists),
+    # regardless of member_count scaling affecting rare.mp3's effective weight.
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
     vc = _make_vc()
 
     # First call succeeds
