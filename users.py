@@ -47,6 +47,10 @@ _FALLBACK_USERS: dict[int, dict] = {
             {
                 "path": "Mila/dorime_WdWNsGk.mp3",
                 "weight": 1
+            },
+            {
+                "path": "Mila/Mila_Y0 HE FOLL4DO CON COCODRILOS - RESIDENTE XD.mp3",
+                "weight": 1
             }
         ],
         "traits": [
