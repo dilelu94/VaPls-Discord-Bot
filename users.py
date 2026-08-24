@@ -149,6 +149,10 @@ _FALLBACK_USERS: dict[int, dict] = {
         "name": "Chalo",
         "greeting": [
             {
+                "path": None,
+                "weight": 99
+            },
+            {
                 "path": "Secretos/fuego_intoxicados.mp3",
                 "weight": 1
             }

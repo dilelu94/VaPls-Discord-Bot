@@ -106,6 +106,10 @@
       "name": "Chalo",
       "greeting": [
         {
+          "path": null,
+          "weight": 99
+        },
+        {
           "path": "Secretos/fuego_intoxicados.mp3",
           "weight": 1
         }

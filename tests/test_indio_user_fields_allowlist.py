@@ -47,6 +47,8 @@ def test_greeting_never_leaks_to_indio_prompt():
     rendered = _format_long_term({"users": {}}, current_members=members)
 
     for path in greetings:
+        if path is None:
+            continue  # null path = "play nothing" sentinel, no string to leak
         assert path not in rendered, f"greeting path leaked: {path!r}"
         # También chequeamos el basename (e.g. 'hava-nagila-cut.mp3') por si
         # alguien rendereara solo el filename sin el prefijo de carpeta.
