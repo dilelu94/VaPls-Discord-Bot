@@ -542,7 +542,9 @@ async def _set_nickname(guild: discord.Guild, name: str) -> None:
     """Change the golive bot's nickname in a guild (32-char Discord limit)."""
     nick = name[:32]
     try:
-        me = guild.get_member(client.user.id)
+        me = getattr(guild, "me", None) or guild.get_member(client.user.id)
+        if me is None:
+            me = await guild.fetch_member(client.user.id)
         if me is not None:
             await me.edit(nick=nick)
             log.info("[NICK] set to '%s' in guild=%s", nick, guild.id)
@@ -604,6 +606,13 @@ async def _join_channel(channel: discord.VoiceChannel):
                 vc = await channel.connect(reconnect=True, timeout=20.0)
         else:
             log.info("[VOICE] Connecting to %s (%s)", channel.name, channel.guild.name)
+            if channel.guild.me and getattr(channel.guild.me, "voice", None) and channel.guild.me.voice.channel:
+                log.info("[VOICE] Resetting stale voice state in %s before connect", channel.guild.me.voice.channel.name)
+                try:
+                    await channel.guild.change_voice_state(channel=None)
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    log.warning("[VOICE] Stale state reset error (ignored): %s", e)
             vc = await channel.connect(reconnect=True, timeout=20.0)
     except Exception as e:
         log.exception("[VOICE] Failed to join %s: %s", channel.name, e)

@@ -38,7 +38,7 @@ _MTU: int = 1_200  # safe MTU for Discord voice UDP
 # bursting them can overrun a receiver's ingest, which drops the burst → a
 # freeze. Pacing (like a real WebRTC sender) keeps the instantaneous rate down.
 # Opt-in via STREAM_PACKET_PACE (default 0.0 = off); see _packet_pace_fraction.
-_DEFAULT_PACKET_PACE: float = 0.0
+_DEFAULT_PACKET_PACE: float = 0.75
 
 # H.264 NAL unit type IDs (low 5 bits of NAL header byte)
 _NAL_NON_IDR: int = 1
@@ -375,11 +375,11 @@ def rewrite_sps_vui(nal: bytes) -> bytes:
 
 # STREAM_QUALITY presets → (resolution, fps, video bitrate).
 _STREAM_PRESETS: dict[str, tuple[str, float, str]] = {
-    "720p": ("1280:720", 30.0, "10000k"),
-    "1080p": ("1920:1080", 60.0, "12000k"),
-    "4k": ("3840:2160", 60.0, "24000k"),
+    "720p": ("1280:720", 30.0, "2500k"),
+    "1080p": ("1920:1080", 30.0, "4500k"),
+    "4k": ("3840:2160", 60.0, "15000k"),
 }
-_DEFAULT_QUALITY = "1080p"
+_DEFAULT_QUALITY = "720p"
 
 
 def _packet_pace_fraction() -> float:
@@ -571,15 +571,17 @@ def _detect_encoder() -> _EncoderConfig | None:
             "DEBUG logging to see the FFmpeg error."
         )
 
-    # libx264 intentionally skipped — Discord's video server drops streams
-    # encoded with libx264 (see slopsoil STREAMING.md).
     if "libopenh264" in available and _test_encoder("libopenh264", []):
         log.info("video encoder: libopenh264 (software)")
         return _libopenh264_config()
 
+    if "libx264" in available and _test_encoder("libx264", []):
+        log.info("video encoder: libx264 (software)")
+        return _libx264_config()
+
     log.warning(
         "no working H.264 encoder found — video streaming disabled. "
-        "Ensure ffmpeg-free (or equivalent) is installed with libopenh264, "
+        "Ensure ffmpeg (or equivalent) is installed with libx264 or libopenh264, "
         "or that VA-API/NVENC drivers are functional."
     )
     return None
@@ -602,6 +604,27 @@ def _libopenh264_config() -> _EncoderConfig:
             "-bufsize", br,
             "-threads", "4",
             "-allow_skip_frames", "1",
+        ],
+        vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
+    )
+
+
+def _libx264_config() -> _EncoderConfig:
+    """libx264 software encoder config fallback when libopenh264 is unavailable."""
+    res = _stream_resolution()
+    br = _stream_bitrate()
+    return _EncoderConfig(
+        name="libx264",
+        pre_input=["-threads", "4"],
+        post_codec=[
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-level:v", "4.2",
+            "-b:v", br,
+            "-maxrate", br,
+            "-bufsize", br,
+            "-threads", "4",
         ],
         vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
@@ -929,13 +952,8 @@ class H264VideoPlayer(threading.Thread):
         if self._start_time > 0:
             pre_input.extend(["-ss", str(self._start_time)])
         
-        is_youtube = self._original_url and ("youtube.com" in self._original_url or "youtu.be" in self._original_url)
         input_args = []
-        if is_youtube:
-            input_args += ["-i", "pipe:0"]
-            is_url = True
-            audio_map_idx = 0
-        elif isinstance(self._url, (tuple, list)):
+        if isinstance(self._url, (tuple, list)):
             for u in self._url:
                 if u.startswith(("http://", "https://")) and "googlevideo.com" not in u and "cdninstagram.com" not in u:
                     input_args += ["-http_persistent", "0"]
@@ -957,7 +975,7 @@ class H264VideoPlayer(threading.Thread):
         # -reconnect flags are HTTP-only; FFmpeg rejects them for local files or pipes.
         reconnect_args = (
             ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
-            if (is_url and not is_youtube)
+            if is_url
             else []
         )
         video_out_args = [
@@ -1153,45 +1171,13 @@ class H264VideoPlayer(threading.Thread):
             "FFmpeg encoder=%s command: %s",
             self._enc.name if self._enc else "?", " ".join(_safe_cmd),
         )
-        is_youtube = self._original_url and ("youtube.com" in self._original_url or "youtu.be" in self._original_url)
-        if is_youtube:
-            import sys
-            from ytdlp import _get_cookies_path
-            cookies_path = _get_cookies_path()
-            yt_dlp_cmd = [
-                sys.executable, "-m", "yt_dlp",
-                "--cookies", cookies_path or "",
-                "--extractor-args", "youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416",
-                "-f", "best[ext=mp4]/best",
-                "-o", "-",
-                self._original_url
-            ]
-            if not cookies_path:
-                yt_dlp_cmd.remove("--cookies")
-                yt_dlp_cmd.remove("")
-            
-            log.info("Starting yt-dlp pipe for YouTube: %s", " ".join(yt_dlp_cmd))
-            self._yt_proc = subprocess.Popen(
-                yt_dlp_cmd,
-                stdout=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-            )
-            
-            self._proc = subprocess.Popen(
-                cmd,
-                stdin=self._yt_proc.stdout,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-            )
-        else:
-            self._proc = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                bufsize=0,
-            )
+        self._proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
         # If stop() was called before Popen completed, terminate immediately.
         if self._end.is_set():
             self._kill_proc(self._proc)

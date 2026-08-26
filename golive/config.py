@@ -12,7 +12,7 @@ USER_TOKEN = os.getenv("GOLIVE_TOKEN")
 
 RELAY_HOST = os.getenv("GOLIVE_RELAY_HOST", "127.0.0.1")
 RELAY_PORT = int(os.getenv("GOLIVE_RELAY_PORT", "8082"))
-RELAY_SECRET = os.getenv("GOLIVE_RELAY_SECRET", "")
+RELAY_SECRET = os.getenv("GOLIVE_RELAY_SECRET") or os.getenv("RELAY_SECRET") or "vapls-golive-shared-secret"
 
 _guild_raw = os.getenv("GOLIVE_GUILD_ALLOWLIST", "")
 GUILD_ALLOWLIST = (

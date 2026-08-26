@@ -99,7 +99,7 @@ INDIO_RELAY_TIMEOUT = float(os.getenv("INDIO_RELAY_TIMEOUT", "10"))
 # The /stream slash command POSTs here instead of the indio relay.
 GOLIVE_RELAY_URL = os.getenv("GOLIVE_RELAY_URL", "")
 GOLIVE_RELAY_SECRET = os.getenv("GOLIVE_RELAY_SECRET", "")
-GOLIVE_RELAY_TIMEOUT = float(os.getenv("GOLIVE_RELAY_TIMEOUT", "10"))
+GOLIVE_RELAY_TIMEOUT = float(os.getenv("GOLIVE_RELAY_TIMEOUT", "30"))
 
 # Cuando el indio decide poner musica via [PLAY_MUSIC: ...], los mensajes
 # de estado y el panel de control del GuildPlayer se postean siempre en
@@ -265,5 +265,5 @@ INSTAGRAM_VERIFY_TOKEN = os.getenv("INSTAGRAM_VERIFY_TOKEN", "indio_webhook_toke
 INSTAGRAM_PAGE_TOKEN = os.getenv("INSTAGRAM_PAGE_TOKEN", "")
 INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID", "")
 
-# Discord User ID of the GoLive userbot (espermabebo)
-GOLIVE_USER_ID = int(os.getenv("GOLIVE_USER_ID", "1517756542160736387"))
+# Discord User ID of the GoLive userbot (golive.)
+GOLIVE_USER_ID = int(os.getenv("GOLIVE_USER_ID", "1541984338386620492"))

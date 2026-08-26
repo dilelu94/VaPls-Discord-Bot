@@ -353,8 +353,8 @@ def test_member_count_doubles_rare_audio_effective_weight_at_10_members():
 
 
 async def test_play_user_greeting_detects_channel_member_count(fake_users, _audio_dir, monkeypatch):
-    audio = _audio_dir / "common.mp3"
-    audio.write_bytes(b"fake")
+    ( _audio_dir / "common.mp3" ).write_bytes(b"fake")
+    ( _audio_dir / "rare.mp3" ).write_bytes(b"fake")
     fake_users({
         70: {
             "greeting": [

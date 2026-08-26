@@ -8,9 +8,9 @@ VaPls tiene **tres procesos** independientes que corren como systemd services en
 | ---------------- | ---------------------------- | ---------------------------------------- | ------ |
 | `discord-bot`    | VaPls bot (token de bot)     | Slash commands, `/stream`, `/play`, etc. | —      |
 | `indio-userbot`  | `espermabebo` (cuenta real)  | Voice receive, ASR, wake-word "indio"    | `8081` |
-| `golive-userbot` | `espermabebo` (misma cuenta) | IPTV Go Live streaming                   | `8082` |
+| `golive-userbot` | `golive.` (cuenta real)      | IPTV Go Live streaming                   | `8082` |
 
-El **indio** y el **golive** usan la **misma cuenta de Discord** (`espermabebo`) pero corren en venvs separados con systemd services distintos. No comparten código de streaming entre sí.
+El **indio** (`dilelu2`) y el **golive** (`golive.` / email: `milesbeca01@gmail.com` / ID: `1541984338386620492`) corren en venvs separados con systemd services distintos. No comparten código de streaming entre sí.
 
 ---
 

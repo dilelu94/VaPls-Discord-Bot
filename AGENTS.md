@@ -238,7 +238,7 @@ GOLIVE_RELAY_TIMEOUT=30
 En `golive/.env`:
 
 ```env
-GOLIVE_TOKEN=<user token de la cuenta Discord usada para Go Live>
+GOLIVE_TOKEN=<user token de la cuenta Discord usada para Go Live (cuenta: golive. / ID: 1541984338386620492 / email: milesbeca01@gmail.com)>
 RELAY_SECRET=<mismo secret que arriba>
 RELAY_HOST=127.0.0.1
 RELAY_PORT=8082
@@ -287,6 +287,9 @@ golive: encoder probe OK → libx264
    - **Problemas secundarios**: `bestvideo` elegía AV1 (sin decoder en ARM), y devolvía tuple de URLs (video+audio separados) que el streamer no manejaba. Además, `-http_persistent 0` estaba aplicado a URLs YouTube y fallaba con "Option not found" en direct MP4 de googlevideo.com.
      - **Fix final (a0b0e2e)**: `"format": "best"` (combined H264, single URL, max 720p) y `-http_persistent 0` solo para URLs HTTP que NO sean googlevideo.com (IPTV sí, YouTube no).
 
+4. **(2026-08-26) CPU lag y fallback `libx264` + preset 720p30 en servidor ARM**:
+   - _Causas_: (a) `_detect_encoder()` omitía `libx264` si no estaba `libopenh264` en Ubuntu ARM, provocando `AssertionError: no encoder available`. (b) `STREAM_QUALITY` usaba `1080p60` a 12 Mbps por defecto, saturando los vCPUs de la instancia ARM. (c) `_set_nickname` fallaba si el miembro del bot no estaba en caché. (d) Error `NameError: name 'is_youtube'` por variable residual.
+   - **Fixes**: Habilitado `libx264` (`-preset ultrafast -tune zerolatency`), predeterminado `720p` (30fps / 2500k bitrate) para fluidez óptima por CPU, y resolución de apodos mediante `guild.me`.
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
