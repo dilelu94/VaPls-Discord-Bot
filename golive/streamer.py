@@ -38,7 +38,7 @@ _MTU: int = 1_200  # safe MTU for Discord voice UDP
 # bursting them can overrun a receiver's ingest, which drops the burst → a
 # freeze. Pacing (like a real WebRTC sender) keeps the instantaneous rate down.
 # Opt-in via STREAM_PACKET_PACE (default 0.0 = off); see _packet_pace_fraction.
-_DEFAULT_PACKET_PACE: float = 0.0
+_DEFAULT_PACKET_PACE: float = 0.75
 
 # H.264 NAL unit type IDs (low 5 bits of NAL header byte)
 _NAL_NON_IDR: int = 1
@@ -375,11 +375,11 @@ def rewrite_sps_vui(nal: bytes) -> bytes:
 
 # STREAM_QUALITY presets → (resolution, fps, video bitrate).
 _STREAM_PRESETS: dict[str, tuple[str, float, str]] = {
-    "720p": ("1280:720", 30.0, "10000k"),
-    "1080p": ("1920:1080", 60.0, "12000k"),
-    "4k": ("3840:2160", 60.0, "24000k"),
+    "720p": ("1280:720", 30.0, "2500k"),
+    "1080p": ("1920:1080", 30.0, "4500k"),
+    "4k": ("3840:2160", 60.0, "15000k"),
 }
-_DEFAULT_QUALITY = "1080p"
+_DEFAULT_QUALITY = "720p"
 
 
 def _packet_pace_fraction() -> float:
@@ -615,16 +615,17 @@ def _libx264_config() -> _EncoderConfig:
     br = _stream_bitrate()
     return _EncoderConfig(
         name="libx264",
-        pre_input=["-threads", "4"],
+        pre_input=["-threads", "2"],
         post_codec=[
             "-preset", "ultrafast",
             "-tune", "zerolatency",
             "-profile:v", "baseline",
+            "-pix_fmt", "yuv420p",
             "-level:v", "4.2",
             "-b:v", br,
             "-maxrate", br,
             "-bufsize", br,
-            "-threads", "4",
+            "-threads", "2",
         ],
         vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
