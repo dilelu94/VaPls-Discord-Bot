@@ -39,16 +39,7 @@ def _find_voice_client(bot, guild_id: int) -> Optional[discord.VoiceClient]:
 
 
 def _is_active(vc) -> bool:
-    """Return True when the bot has a reason to stay in this voice channel.
-
-    Reasons:
-    * Currently producing audio (``is_playing``).
-    * Intentionally paused (``is_paused``).
-    * There's a live soundpad panel in the guild — the user can still click
-      a button to play a clip, so leaving voice would orphan the panel.
-    * Auto-DJ is active and there are humans in the channel — the bot is
-      fetching or waiting to propose the next track.
-    """
+    """Return True when the bot has a reason to stay in this voice channel."""
     try:
         if vc.is_playing():
             return True
@@ -59,6 +50,16 @@ def _is_active(vc) -> bool:
             return True
     except Exception:
         pass
+
+    # Check human presence in the channel if members list is available
+    channel = getattr(vc, "channel", None)
+    if channel is not None:
+        members = getattr(channel, "members", None)
+        if members is not None and isinstance(members, (list, tuple, set)):
+            humans = sum(1 for m in members if not getattr(m, "bot", True))
+            if humans == 0:
+                return False
+
     try:
         from soundpadCommand import has_active_panel
 
@@ -67,8 +68,8 @@ def _is_active(vc) -> bool:
         if guild_id is not None and has_active_panel(guild_id):
             return True
     except Exception:
-        # Soundpad module may be unavailable in some test setups — fail open.
         pass
+
     try:
         from playCommand import guildPlayers
 
@@ -82,14 +83,12 @@ def _is_active(vc) -> bool:
                 if getattr(player, "isStartingPlayback", False):
                     return True
                 if player.autodj_active:
-                    humans = sum(1 for m in vc.channel.members if not m.bot)
-                    if humans > 0:
-                        logger.debug(
-                            "idle watchdog: staying — Auto-DJ active (guild=%s, humans=%d)",
-                            guild_id,
-                            humans,
-                        )
-                        return True
+                    logger.debug(
+                        "idle watchdog: staying — Auto-DJ active (guild=%s, humans=%d)",
+                        guild_id,
+                        humans,
+                    )
+                    return True
     except Exception:
         pass
     return False

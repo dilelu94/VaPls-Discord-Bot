@@ -848,6 +848,24 @@ async def on_voice_state_update(member, before, after):
 
 
 @bot.event
+async def on_member_join(member: discord.Member):
+    """Send welcome image DM to new members joining the server."""
+    if member.bot:
+        return
+    log.info("[WELCOME] Member %s (ID: %s) joined guild %s", member.display_name, member.id, getattr(member.guild, "name", "unknown"))
+    welcome_img_path = os.path.join(os.path.dirname(__file__), "data", "welcome_image.png")
+    if os.path.exists(welcome_img_path):
+        try:
+            file = discord.File(welcome_img_path, filename="welcome.png")
+            await member.send(file=file)
+            log.info("[WELCOME] Sent welcome image DM to %s (ID: %s)", member.display_name, member.id)
+        except discord.Forbidden:
+            log.warning("[WELCOME] Cannot send DM to %s (DMs disabled/blocked)", member.display_name)
+        except Exception as e:
+            log.exception("[WELCOME] Error sending welcome DM to %s: %s", member.display_name, e)
+
+
+@bot.event
 async def on_message(message):
     """Log activities from guild messages + DM handler for Gemini API keys.
 
