@@ -205,7 +205,7 @@ def _serializeMemberVoice(member: discord.Member) -> dict:
         "id": member.id,
         "display_name": member.display_name,
         "name": member.name,
-        "is_bot": member.bot,
+        "is_bot": member.bot or member.id in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID},
         "muted": bool(vs and vs.mute),
         "deafened": bool(vs and vs.deaf),
         "self_mute": bool(vs and vs.self_mute),
@@ -614,7 +614,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "id": m.id,
                     "display_name": m.display_name,
                     "name": m.name,
-                    "is_bot": m.bot,
+                    "is_bot": m.bot or m.id in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID},
                     "status": str(getattr(m, "status", "unknown")),
                 }
                 for m in guild.members
@@ -757,8 +757,18 @@ def makeApp(bot: discord.Bot) -> web.Application:
         guild: discord.Guild,
     ) -> Optional[discord.VoiceChannel]:
         """Pick the most populated voice channel for autoplay."""
+        system_bot_ids = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
         candidates = [
-            (ch, sum(1 for m in ch.members if not m.bot)) for ch in guild.voice_channels
+            (
+                ch,
+                sum(
+                    1
+                    for m in ch.members
+                    if not getattr(m, "bot", False)
+                    and getattr(m, "id", None) not in system_bot_ids
+                ),
+            )
+            for ch in guild.voice_channels
         ]
         candidates = [c for c in candidates if c[1] > 0]
         if not candidates:

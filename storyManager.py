@@ -1267,7 +1267,8 @@ def check_voice_trigger(guild_id: int, channel) -> bool:
         return False
     if channel is None:
         return False
-    humans = sum(1 for m in channel.members if not m.bot)
+    system_bots = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
+    humans = sum(1 for m in channel.members if not m.bot and m.id not in system_bots)
     if humans >= config.INDIO_STORY_VOICE_MIN_MEMBERS:
         _last_voice_trigger[guild_id] = now
         _state_flush()

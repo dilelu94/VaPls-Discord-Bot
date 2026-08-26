@@ -1129,7 +1129,13 @@ class GuildPlayer:
             playLogger.info("[AUTODJ] should_continue: vc is None")
             return False
         try:
-            humans = sum(1 for m in self.vc.channel.members if not m.bot)
+            system_bots = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
+            humans = sum(
+                1
+                for m in self.vc.channel.members
+                if not getattr(m, "bot", False)
+                and getattr(m, "id", None) not in system_bots
+            )
         except Exception:
             humans = 1
         if humans <= 0:
@@ -3448,8 +3454,14 @@ def _pick_voice_channel(bot, guild_id: int) -> Optional[discord.VoiceChannel]:
     if guild.voice_client and getattr(guild.voice_client, "channel", None):
         return guild.voice_client.channel
     candidates = []
+    system_bots = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
     for ch in guild.voice_channels:
-        humans = sum(1 for m in ch.members if not m.bot)
+        humans = sum(
+            1
+            for m in ch.members
+            if not getattr(m, "bot", False)
+            and getattr(m, "id", None) not in system_bots
+        )
         if humans > 0:
             candidates.append((ch, humans))
     if not candidates:

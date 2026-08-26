@@ -35,7 +35,7 @@ OWNER_ID = int(os.getenv("OWNER_ID", "211354006805676032"))
 
 # Discord user ID of the userbot (Indio). Excluded from occupancy counts
 # so its presence doesn't trigger or extend MMR activities meant for ≥2 humans.
-USERBOT_USER_ID = int(os.getenv("USERBOT_USER_ID", "0"))
+USERBOT_USER_ID = int(os.getenv("USERBOT_USER_ID", "519594605520486428"))
 
 # PostHog product analytics
 POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")

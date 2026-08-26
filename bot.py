@@ -563,7 +563,13 @@ def _has_others(channel) -> bool:
     if channel is None:
         return False
     return (
-        sum(1 for m in channel.members if not m.bot and m.id != config.USERBOT_USER_ID)
+        sum(
+            1
+            for m in channel.members
+            if not m.bot
+            and m.id != config.USERBOT_USER_ID
+            and m.id != config.GOLIVE_USER_ID
+        )
         >= 2
     )
 
@@ -572,7 +578,13 @@ def _streamers_in(channel) -> list[int]:
     if channel is None:
         return []
     return [
-        m.id for m in channel.members if not m.bot and m.voice and m.voice.self_stream
+        m.id
+        for m in channel.members
+        if not m.bot
+        and m.id != config.USERBOT_USER_ID
+        and m.id != config.GOLIVE_USER_ID
+        and m.voice
+        and m.voice.self_stream
     ]
 
 

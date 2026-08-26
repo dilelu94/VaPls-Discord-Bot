@@ -56,7 +56,13 @@ def _is_active(vc) -> bool:
     if channel is not None:
         members = getattr(channel, "members", None)
         if members is not None and isinstance(members, (list, tuple, set)):
-            humans = sum(1 for m in members if not getattr(m, "bot", True))
+            system_bots = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
+            humans = sum(
+                1
+                for m in members
+                if not getattr(m, "bot", True)
+                and getattr(m, "id", None) not in system_bots
+            )
             if humans == 0:
                 return False
 

@@ -94,9 +94,17 @@ GUILD_ALLOWLIST = (
     {int(x) for x in _guild_ids_raw.split(",") if x.strip()} if _guild_ids_raw else None
 )
 
+GOLIVE_USER_ID = int(os.getenv("GOLIVE_USER_ID", "1541984338386620492"))
+USERBOT_USER_ID = int(os.getenv("USERBOT_USER_ID", "519594605520486428"))
+VAPLS_BOT_ID = int(os.getenv("VAPLS_BOT_ID", "1489830543074918482"))
+
 # Comma-separated user IDs to ignore (e.g. the main bot, other bots).
 _ignore_raw = os.getenv("IGNORE_USER_IDS", "")
 IGNORE_USER_IDS = {int(x) for x in _ignore_raw.split(",") if x.strip()}
+IGNORE_USER_IDS.add(GOLIVE_USER_ID)
+IGNORE_USER_IDS.add(VAPLS_BOT_ID)
+if USERBOT_USER_ID:
+    IGNORE_USER_IDS.add(USERBOT_USER_ID)
 
 # Channel where text transcripts get posted, if writable by the user
 # account. TRANSCRIPT_CHANNEL_ID gana sobre TRANSCRIPT_CHANNEL_NAME cuando

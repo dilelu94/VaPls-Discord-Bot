@@ -230,8 +230,17 @@ async def soundpad_query_autocomplete(ctx):
 
 def _pick_populated_voice_channel(guild: discord.Guild):
     """Return the voice channel in ``guild`` with the most non-bot members, or None."""
+    system_bots = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
     candidates = [
-        (ch, sum(1 for m in ch.members if not m.bot))
+        (
+            ch,
+            sum(
+                1
+                for m in ch.members
+                if not getattr(m, "bot", True)
+                and getattr(m, "id", None) not in system_bots
+            ),
+        )
         for ch in getattr(guild, "voice_channels", [])
     ]
     candidates = [c for c in candidates if c[1] > 0]
