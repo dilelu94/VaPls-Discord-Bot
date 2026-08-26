@@ -152,7 +152,7 @@ class GoLiveStream:
         try:
             f = await asyncio.wait_for(
                 asyncio.to_thread(open, self.video_player.audio_fifo, "rb"),
-                timeout=15.0,
+                timeout=30.0,
             )
         except TimeoutError:
             log.error("[STREAM] Timed out waiting for audio FIFO")
