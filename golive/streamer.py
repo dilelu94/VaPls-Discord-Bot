@@ -603,7 +603,6 @@ def _libopenh264_config() -> _EncoderConfig:
             "-maxrate", br,
             "-bufsize", br,
             "-threads", "4",
-            "-allow_skip_frames", "1",
         ],
         vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
