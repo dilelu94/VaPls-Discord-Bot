@@ -393,9 +393,16 @@ class SoundpadView(discord.ui.View):
             _register_panel(self)
 
     async def on_timeout(self):
-        """Remove this panel from the active-panel registry when it expires."""
+        """Remove this panel from registry and disable UI components when it expires."""
         if self.guild_id is not None:
             _unregister_panel(self.guild_id, self)
+        for item in self.children:
+            item.disabled = True
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
 
     def get_subfolders(self, category: str):
         """Return the list of subfolders for a category.
@@ -634,9 +641,14 @@ class SoundpadView(discord.ui.View):
         if status_text:
             embed.add_field(name="⚡ Estado", value=status_text, inline=False)
 
+        if self.message is None and getattr(interaction, "message", None):
+            self.message = interaction.message
+
         try:
             if interaction.response.is_done():
-                await interaction.edit_original_response(embed=embed, view=self)
+                res = await interaction.edit_original_response(embed=embed, view=self)
+                if res and self.message is None:
+                    self.message = res
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
         except discord.NotFound:
@@ -1197,9 +1209,10 @@ async def soundpadLogic(
             },
         )
         if redirect_channel is not None:
-            await redirect_channel.send("🎛️ Soundpad Control Panel", view=view)
+            msg = await redirect_channel.send("🎛️ Soundpad Control Panel", view=view)
         else:
-            await ctx.followup.send("🎛️ Soundpad Control Panel", view=view)
+            msg = await ctx.followup.send("🎛️ Soundpad Control Panel", view=view)
+        view.message = msg
     except Exception as e:
         analytics.capture_exception(
             e,
