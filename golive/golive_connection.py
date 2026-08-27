@@ -150,6 +150,7 @@ class GoLiveConnection:
         )
 
     async def reinit_dave_session(self) -> None:
+        log.info("GoLive: reinit_dave_session (version=%d, server_id=%s)", self.dave_protocol_version, self.server_id)
         if self.dave_protocol_version > 0:
             # channel_id for go-live DAVE group is server_id - 1
             dave_channel_id = self.server_id - 1  # type: ignore[operator]
@@ -174,6 +175,7 @@ class GoLiveConnection:
             self.dave_session.set_passthrough_mode(True, 10)
 
     async def _recover_from_invalid_commit(self, transition_id: int) -> None:
+        log.warning("GoLive: _recover_from_invalid_commit called for transition_id=%d", transition_id)
         await self.ws.send_as_json(  # type: ignore[union-attr]
             {
                 "op": DiscordVoiceWebSocket.MLS_INVALID_COMMIT_WELCOME,
