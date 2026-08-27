@@ -130,9 +130,21 @@ class DaveSession:
         users = {str(self._user_id)}
         if self._voice_state is not None:
             try:
-                channel = self._voice_state.voice_client.channel
-                for member in channel.members:
-                    users.add(str(member.id))
+                vc = getattr(self._voice_state, "voice_client", None)
+                channel = getattr(vc, "channel", None) if vc else None
+                if channel is not None:
+                    for member in getattr(channel, "members", []):
+                        users.add(str(member.id))
+                    voice_states = getattr(channel, "voice_states", None)
+                    if isinstance(voice_states, dict):
+                        users.update(str(uid) for uid in voice_states.keys())
+                    guild = getattr(channel, "guild", None)
+                    if guild is not None:
+                        g_states = getattr(guild, "voice_states", None)
+                        if isinstance(g_states, dict):
+                            users.update(str(uid) for uid in g_states.keys())
+                        for member in getattr(guild, "members", []):
+                            users.add(str(member.id))
             except Exception as exc:
                 log.warning("[DAVE] Could not read channel members: %s", exc)
         return users
@@ -143,10 +155,12 @@ class DaveSession:
         if ratchet is not None:
             self._encryptor.set_key_ratchet(ratchet)
             self._encryptor.set_passthrough_mode(False)
+            if not self._ready:
+                log.info("[DAVE] Key ratchet established — session READY")
             self._ready = True
             self.status = SessionStatus.active
         else:
-            log.warning("[DAVE] WARNING: get_key_ratchet returned None")
+            log.warning("[DAVE] WARNING: get_key_ratchet returned None (user_id=%s, ready=%s)", self._user_id, self._ready)
 
     # ── Public API (mirrors davey.DaveSession) ────────────────────────────────
 
