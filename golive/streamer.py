@@ -1219,6 +1219,8 @@ class H264VideoPlayer(threading.Thread):
 
         pace = _packet_pace_fraction()
 
+        _STATS_INTERVAL = 5.0  # flush stats every 5s for faster diagnostic feedback
+
         def _flush_stats(now: float) -> None:
             nonlocal _stats_t0, _stats_frames, _stats_late, _stats_late_total
             nonlocal _stats_late_max, _stats_read_block, _stats_pkts0
@@ -1226,11 +1228,15 @@ class H264VideoPlayer(threading.Thread):
             if window <= 0:
                 return
             pct = f" | pace {pace*100:.0f}%" if pace > 0 else ""
+            conn = getattr(self._vc, "_connection", None)
+            dave_ready = getattr(getattr(conn, "dave_session", None), "ready", False)
+            dave_ver = getattr(conn, "dave_protocol_version", 0)
             log.info(
-                "video stats: %.1f fps (target %.0f) | late %d/%d frames "
+                "video stats: %.1f fps (target %.0f) | DAVE ready=%s (v%d) | late %d/%d frames "
                 "(max %.0f ms, total %.0f ms) | ffmpeg read-block %.0f ms / %.1fs "
                 "| %d pkts%s",
                 _stats_frames / window, self._fps,
+                dave_ready, dave_ver,
                 _stats_late, _stats_frames,
                 _stats_late_max * 1000, _stats_late_total * 1000,
                 _stats_read_block * 1000, window,
