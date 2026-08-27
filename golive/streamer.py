@@ -591,9 +591,10 @@ def _libx264_config() -> _EncoderConfig:
     """libx264 software encoder config — primary software encoder with ultrafast zerolatency."""
     res = _stream_resolution()
     br = _stream_bitrate()
+    threads = str(os.cpu_count() or 2)
     return _EncoderConfig(
         name="libx264",
-        pre_input=["-threads", "4"],
+        pre_input=["-threads", threads],
         post_codec=[
             "-preset", "ultrafast",
             "-tune", "zerolatency",
@@ -603,7 +604,7 @@ def _libx264_config() -> _EncoderConfig:
             "-b:v", br,
             "-maxrate", br,
             "-bufsize", br,
-            "-threads", "4",
+            "-threads", threads,
         ],
         vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
@@ -613,16 +614,17 @@ def _libopenh264_config() -> _EncoderConfig:
     """libopenh264 software encoder config fallback when libx264 is unavailable."""
     res = _stream_resolution()
     br = _stream_bitrate()
+    threads = str(os.cpu_count() or 2)
     return _EncoderConfig(
         name="libopenh264",
-        pre_input=["-threads", "4"],
+        pre_input=["-threads", threads],
         post_codec=[
             "-profile:v", "constrained_baseline",
             "-level:v", "4.2",
             "-b:v", br,
             "-maxrate", br,
             "-bufsize", br,
-            "-threads", "4",
+            "-threads", threads,
         ],
         vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
