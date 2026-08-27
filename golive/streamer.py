@@ -375,11 +375,11 @@ def rewrite_sps_vui(nal: bytes) -> bytes:
 
 # STREAM_QUALITY presets → (resolution, fps, video bitrate).
 _STREAM_PRESETS: dict[str, tuple[str, float, str]] = {
-    "720p": ("1280:720", 30.0, "2500k"),
-    "1080p": ("1920:1080", 30.0, "4500k"),
-    "4k": ("3840:2160", 60.0, "15000k"),
+    "720p": ("1280:720", 30.0, "8000k"),
+    "1080p": ("1920:1080", 60.0, "12000k"),
+    "4k": ("3840:2160", 60.0, "24000k"),
 }
-_DEFAULT_QUALITY = "720p"
+_DEFAULT_QUALITY = "1080p"
 
 
 def _packet_pace_fraction() -> float:
@@ -571,13 +571,13 @@ def _detect_encoder() -> _EncoderConfig | None:
             "DEBUG logging to see the FFmpeg error."
         )
 
-    if "libopenh264" in available and _test_encoder("libopenh264", []):
-        log.info("video encoder: libopenh264 (software)")
-        return _libopenh264_config()
-
     if "libx264" in available and _test_encoder("libx264", []):
         log.info("video encoder: libx264 (software)")
         return _libx264_config()
+
+    if "libopenh264" in available and _test_encoder("libopenh264", []):
+        log.info("video encoder: libopenh264 (software)")
+        return _libopenh264_config()
 
     log.warning(
         "no working H.264 encoder found — video streaming disabled. "
@@ -587,10 +587,30 @@ def _detect_encoder() -> _EncoderConfig | None:
     return None
 
 
+def _libx264_config() -> _EncoderConfig:
+    """libx264 software encoder config — primary software encoder with ultrafast zerolatency."""
+    res = _stream_resolution()
+    br = _stream_bitrate()
+    return _EncoderConfig(
+        name="libx264",
+        pre_input=["-threads", "4"],
+        post_codec=[
+            "-preset", "ultrafast",
+            "-tune", "zerolatency",
+            "-profile:v", "baseline",
+            "-pix_fmt", "yuv420p",
+            "-level:v", "4.2",
+            "-b:v", br,
+            "-maxrate", br,
+            "-bufsize", br,
+            "-threads", "4",
+        ],
+        vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
+    )
+
+
 def _libopenh264_config() -> _EncoderConfig:
-    """libopenh264 software encoder config — the primary on machines without a
-    working GPU encoder, and the runtime fallback (see _SW_ENCODER) when a
-    hardware encoder accepts no frames (e.g. VA-API on large MPEG-2 keyframes)."""
+    """libopenh264 software encoder config fallback when libx264 is unavailable."""
     res = _stream_resolution()
     br = _stream_bitrate()
     return _EncoderConfig(
@@ -603,28 +623,6 @@ def _libopenh264_config() -> _EncoderConfig:
             "-maxrate", br,
             "-bufsize", br,
             "-threads", "4",
-        ],
-        vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
-    )
-
-
-def _libx264_config() -> _EncoderConfig:
-    """libx264 software encoder config fallback when libopenh264 is unavailable."""
-    res = _stream_resolution()
-    br = _stream_bitrate()
-    return _EncoderConfig(
-        name="libx264",
-        pre_input=["-threads", "2"],
-        post_codec=[
-            "-preset", "ultrafast",
-            "-tune", "zerolatency",
-            "-profile:v", "baseline",
-            "-pix_fmt", "yuv420p",
-            "-level:v", "4.2",
-            "-b:v", br,
-            "-maxrate", br,
-            "-bufsize", br,
-            "-threads", "2",
         ],
         vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
     )
