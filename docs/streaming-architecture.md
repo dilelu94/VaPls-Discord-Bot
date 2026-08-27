@@ -10,7 +10,7 @@ VaPls tiene **tres procesos** independientes que corren como systemd services en
 | `indio-userbot`  | `espermabebo` (cuenta real)  | Voice receive, ASR, wake-word "indio"    | `8081` |
 | `golive-userbot` | `golive.` (cuenta real)      | IPTV Go Live streaming                   | `8082` |
 
-El **indio** (`dilelu2`) y el **golive** (`golive.` / email: `milesbeca01@gmail.com` / ID: `1541984338386620492`) corren en venvs separados con systemd services distintos. No comparten código de streaming entre sí.
+El **indio** (`dilelu2`) y el **golive** (`golive.` / email: `milesbeca01@gmail.com` / ID: `1541984338386620492`) corren en venvs separados con systemd services distintos. No comparten código de streaming entre sí. La arquitectura de GoLive está basada en el proyecto de referencia [Slopsoil (`dev-topsoil/slopsoil`)](https://github.com/dev-topsoil/slopsoil).
 
 ---
 

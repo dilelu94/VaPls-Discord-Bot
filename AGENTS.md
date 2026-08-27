@@ -172,6 +172,7 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 
 El comando `/stream` busca canales en el playlist público de [iptv-org](https://github.com/iptv-org/iptv)
 y los transmite por Go Live dentro del canal de voz del invocador.
+Basado en la arquitectura del proyecto de referencia [Slopsoil (`dev-topsoil/slopsoil`)](https://github.com/dev-topsoil/slopsoil).
 
 ### Arquitectura (3 procesos)
 
@@ -290,6 +291,10 @@ golive: encoder probe OK → libx264
 4. **(2026-08-26) CPU lag y fallback `libx264` + preset 720p30 en servidor ARM**:
    - _Causas_: (a) `_detect_encoder()` omitía `libx264` si no estaba `libopenh264` en Ubuntu ARM, provocando `AssertionError: no encoder available`. (b) `STREAM_QUALITY` usaba `1080p60` a 12 Mbps por defecto, saturando los vCPUs de la instancia ARM. (c) `_set_nickname` fallaba si el miembro del bot no estaba en caché. (d) Error `NameError: name 'is_youtube'` por variable residual.
    - **Fixes**: Habilitado `libx264` (`-preset ultrafast -tune zerolatency`), predeterminado `720p` (30fps / 2500k bitrate) para fluidez óptima por CPU, y resolución de apodos mediante `guild.me`.
+
+5. **(2026-08-27) Desfasaje H.264 por ausencia de AUDs (`-x264-params aud=1`) y alineación 100 % con Slopsoil (`dev-topsoil/slopsoil`)**:
+   - _Causas_: (a) `libx264` omitía los delimitadores de Access Unit (`_NAL_AUD`, NAL tipo 9) por no incluir `-x264-params aud=1` y `-profile:v high`. Como `streamer.py` utiliza los NALs AUD para delimitar los cuadros exactos, se generaba emparejamiento desfasado de NALs y falla en el cifrado DAVE (`DAVE ready=False`), mostrando 2 FPS en Discord. (b) `-re` no se aplicaba a URLs de VODs HTTP (YouTube), haciendo que FFmpeg duplicara 1000+ cuadros estáticos.
+   - **Fixes**: Alineación 100 % con la implementación canónica de [Slopsoil (`dev-topsoil/slopsoil`)](https://github.com/dev-topsoil/slopsoil): inclusión de `-x264-params aud=1`, `-profile:v high`, `-re` para VODs HTTP, `_DEFAULT_PACKET_PACE = 0.75` y preset `1080p60` a 12.000k (12 Mbps).
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
