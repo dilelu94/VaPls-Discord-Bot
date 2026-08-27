@@ -1214,3 +1214,53 @@ async def test_indioFromVoice_play_music_redirects_header_and_dm(
     assert len(dm_calls) >= 1
     link = dm_calls[0][1]
     assert "8888" in link, f"DM link should reference play channel, got: {link!r}"
+
+
+async def test_indioFromVoice_skips_override_when_replied_content_present(
+    indio, patch_generate, reply_factory, monkeypatch
+):
+    """When a message is a Discord reply to another message (replied_content is set),
+    the response must stay in the channel where the reply was made instead of
+    redirecting to INDIO_REPLY_CHANNEL_ID."""
+    import config
+
+    monkeypatch.setattr(config, "INDIO_REPLY_CHANNEL_ID", 9999, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+    patch_generate(reply=reply_factory(text="respondo aca mismo"))
+
+    original_chan = _fake_target_channel(channel_id=555, guild_id=100)
+    override_chan = _fake_target_channel(channel_id=9999, guild_id=100)
+    bot = MagicMock()
+    bot.get_channel = MagicMock(
+        side_effect=lambda cid: {9999: override_chan, 555: original_chan}.get(cid)
+    )
+    guild = MagicMock()
+    guild.id = 100
+    guild.get_channel = bot.get_channel
+    guild.emojis = []
+    guild.get_member = MagicMock(
+        return_value=types.SimpleNamespace(id=42, display_name="Tobi")
+    )
+    guild.text_channels = []
+    bot.get_guild = MagicMock(return_value=guild)
+    bot.guilds = [guild]
+
+    await indioFromVoice(
+        bot,
+        user_id=42,
+        guild_id=100,
+        channel_id=555,
+        pregunta="tal cual che",
+        speaker_name="Tobi",
+        replied_content="mensaje anterior del indio",
+        replied_author="El Indio",
+    )
+    await _drain()
+
+    assert any(
+        "respondo aca mismo" in (m or "") for m in original_chan.sent_messages
+    )
+    assert override_chan.sent_messages == [], (
+        f"override channel should be untouched, got: {override_chan.sent_messages!r}"
+    )

@@ -2753,30 +2753,14 @@ async def on_message(message):
     # Skip slash-command-shaped messages.
     if content.startswith("/"):
         return
-    if not _INDIO_TEXT_WAKE_RE.search(content):
-        return
-    guild = getattr(message, "guild", None)
-    if guild is None:
-        return
-    if not _guild_allowed(guild.id):
-        return
-    channel_id = getattr(message.channel, "id", None)
-    if channel_id is None:
-        return
-    if not _autoreply_rate_ok(guild.id, channel_id):
-        log.info(f"[INDIO-AUTO] rate-limited (channel={channel_id})")
-        return
-    _autoreply_mark_fired(guild.id, channel_id)
-    speaker_name = _name_for(message.author.id, message.author)
-    log.info(
-        f"[INDIO-AUTO] match in #{getattr(message.channel, 'name', '?')}"
-        f" by {speaker_name}: {content[:100]!r}"
-    )
+
     # ---- Extract replied-to message context for the indio ----
     replied_content = None
     replied_author = None
     attachment_urls = None
     ref = message.reference
+    ref_msg = None
+    is_reply_to_indio = False
     if ref is not None:
         ref_msg = getattr(message, "referenced_message", None)
         if ref_msg is None and ref.message_id is not None:
@@ -2784,11 +2768,9 @@ async def on_message(message):
                 ref_msg = await message.channel.fetch_message(ref.message_id)
             except Exception:
                 log.warning("[AUTOREPLY] fetch_message failed for autoreply reference")
-        if (
-            ref_msg is not None
-            and ref_msg.author is not None
-            and ref_msg.author.id != client.user.id
-        ):
+        if ref_msg is not None and ref_msg.author is not None:
+            if ref_msg.author.id in {client.user.id, config.VAPLS_BOT_ID}:
+                is_reply_to_indio = True
             replied_content = (ref_msg.content or "")[:500]
             replied_author = _name_for(ref_msg.author.id, ref_msg.author)
             images = [
@@ -2816,6 +2798,27 @@ async def on_message(message):
                         }
                         for a in videos[:1]
                     ]
+
+    if not (is_reply_to_indio or _INDIO_TEXT_WAKE_RE.search(content)):
+        return
+
+    guild = getattr(message, "guild", None)
+    if guild is None:
+        return
+    if not _guild_allowed(guild.id):
+        return
+    channel_id = getattr(message.channel, "id", None)
+    if channel_id is None:
+        return
+    if not _autoreply_rate_ok(guild.id, channel_id):
+        log.info(f"[INDIO-AUTO] rate-limited (channel={channel_id})")
+        return
+    _autoreply_mark_fired(guild.id, channel_id)
+    speaker_name = _name_for(message.author.id, message.author)
+    log.info(
+        f"[INDIO-AUTO] match in #{getattr(message.channel, 'name', '?')}"
+        f" by {speaker_name}: {content[:100]!r}"
+    )
 
     # Si no hay adjuntos del reply, usar los del mensaje actual (wake-word directa)
     if attachment_urls is None and message.attachments:
