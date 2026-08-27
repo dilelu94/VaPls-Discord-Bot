@@ -966,11 +966,10 @@ class H264VideoPlayer(threading.Thread):
                 input_args += ["-http_persistent", "0"]
             input_args += ["-i", self._url]
             audio_map_idx = 0
-        # Pace a local VOD file at native rate so FFmpeg emits audio+video in
-        # lockstep at real time instead of racing ahead and bursting — tighter
-        # A/V sync and smoother delivery. Live inputs / URLs are already
-        # real-time, so -re would only stall them.
-        rate_args: list[str] = [] if (self._live or is_url) else ["-re"]
+        # Pace non-live files/URLs (like YouTube VODs) at native rate (-re) so
+        # FFmpeg emits video+audio in real time without bursting the buffer and
+        # generating duplicate frames. Live streams (IPTV) are already real-time.
+        rate_args: list[str] = [] if self._live else ["-re"]
         fflags = "+discardcorrupt"
         # -reconnect flags are HTTP-only; FFmpeg rejects them for local files or pipes.
         reconnect_args = (
