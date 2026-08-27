@@ -167,6 +167,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "anecdotas": [
             "roba quesos cremosos",
             "pescó un pescado con forma de pija",
+            "se hizo un tatuaje diseñado con inteligencia artificial (IA)",
         ],
     },
     471420397049479180: {
