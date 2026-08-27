@@ -955,16 +955,16 @@ class H264VideoPlayer(threading.Thread):
         input_args = []
         if isinstance(self._url, (tuple, list)):
             for u in self._url:
-                if "googlevideo.com" in u:
+                if u.startswith(("http://", "https://")) and "googlevideo.com" not in u:
                     input_args += ["-http_persistent", "0"]
                 input_args += ["-i", u]
             is_url = True
             audio_map_idx = 1
         else:
-            if "googlevideo.com" in self._url:
+            is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+            if is_url and "googlevideo.com" not in self._url:
                 input_args += ["-http_persistent", "0"]
             input_args += ["-i", self._url]
-            is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
             audio_map_idx = 0
         # Pace a local VOD file at native rate so FFmpeg emits audio+video in
         # lockstep at real time instead of racing ahead and bursting — tighter
