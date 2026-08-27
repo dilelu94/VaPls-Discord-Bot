@@ -379,7 +379,7 @@ _STREAM_PRESETS: dict[str, tuple[str, float, str]] = {
     "1080p": ("1920:1080", 60.0, "12000k"),
     "4k": ("3840:2160", 60.0, "24000k"),
 }
-_DEFAULT_QUALITY = "1080p"
+_DEFAULT_QUALITY = "720p"
 
 
 def _packet_pace_fraction() -> float:
