@@ -213,19 +213,19 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/hava-nagila-cut.mp3",
-                "weight": 495
+                "weight": 33
             },
             {
                 "path": "Seba/moneymoneymoney.mp3",
-                "weight": 495
-            },
-            {
-                "path": "Seba/mr-krabs-money_z55UHab.mp3",
-                "weight": 10
+                "weight": 33
             },
             {
                 "path": "Audios/mr-krabs-money-short.mp3",
-                "weight": 495
+                "weight": 33
+            },
+            {
+                "path": "Seba/mr-krabs-money_z55UHab.mp3",
+                "weight": 1
             }
         ],
         "traits": [
