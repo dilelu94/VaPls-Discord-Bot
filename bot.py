@@ -102,13 +102,13 @@ async def safe_defer(ctx, ephemeral: bool = False):
         return False
 
 
-async def safe_respond(ctx, message, ephemeral: bool = False, view=None):
+async def safe_respond(ctx, message=None, ephemeral: bool = False, view=None, embed=None):
     """Send a response or follow-up safely."""
     try:
-        if ctx.response.is_done():
-            return await ctx.followup.send(message, ephemeral=ephemeral, view=view)
+        if hasattr(ctx, "response") and ctx.response.is_done():
+            return await ctx.followup.send(content=message, embed=embed, ephemeral=ephemeral, view=view)
         else:
-            return await ctx.respond(message, ephemeral=ephemeral, view=view)
+            return await ctx.respond(content=message, embed=embed, ephemeral=ephemeral, view=view)
     except Exception:
         pass
 
@@ -522,6 +522,16 @@ async def on_ready():
         log.info("stream health checker started")
     except Exception:
         log.exception("stream health checker startup failed")
+
+    # Start idle watchdogs for any already-connected voice clients on startup
+    for vc in getattr(bot, "voice_clients", []) or []:
+        guild = getattr(vc, "guild", None)
+        if guild is not None:
+            try:
+                start_idle_watchdog(bot, guild.id)
+                log.info("idle watchdog auto-started in on_ready for guild=%s", guild.id)
+            except Exception:
+                log.exception("failed to start idle watchdog in on_ready for guild %s", guild.id)
 
 
 # ---- Voice state tracking for MMR -----------------------------------------
@@ -2615,9 +2625,12 @@ async def stream(
         else:
             info = await jkanime.get_jkanime_anime_info(raw_canal)
             view = JkanimeEpisodeView(info, voice_channel, redirect_ch=redirect_ch)
-            await ctx.interaction.edit_original_response(
-                embed=view.build_embed(), view=view
-            )
+            try:
+                await ctx.interaction.edit_original_response(
+                    embed=view.build_embed(), view=view
+                )
+            except Exception:
+                await safe_respond(ctx, embed=view.build_embed(), view=view)
             return
 
     # Check for anime prefix e.g. "anime: naruto" or "an: jojo"
@@ -2635,7 +2648,10 @@ async def stream(
             description="Seleccioná un anime para elegir el episodio a transmitir:",
             color=0xFF69B4,
         )
-        await ctx.interaction.edit_original_response(embed=embed, view=view)
+        try:
+            await ctx.interaction.edit_original_response(embed=embed, view=view)
+        except Exception:
+            await safe_respond(ctx, embed=embed, view=view)
         return
 
     if not raw_canal.startswith(("http://", "https://", "rtsp://", "rtmp://")):
@@ -2674,7 +2690,10 @@ async def stream(
                     description="Seleccioná un anime para elegir el episodio a transmitir:",
                     color=0xFF69B4,
                 )
-                await ctx.interaction.edit_original_response(embed=embed, view=view)
+                try:
+                    await ctx.interaction.edit_original_response(embed=embed, view=view)
+                except Exception:
+                    await safe_respond(ctx, embed=embed, view=view)
                 return
             await safe_respond(
                 ctx,
