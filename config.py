@@ -6,6 +6,8 @@ apiServer.py, analytics.py, and geminiClient.py.
 """
 
 import os
+import shutil
+import sys
 from dotenv import load_dotenv
 
 # Load environment variables from .env file if it exists
@@ -16,7 +18,15 @@ MODEL_PATH_ES = os.getenv("MODEL_PATH_ES", "models/vosk-model-small-es-0.42")
 MODEL_PATH_EN = os.getenv("MODEL_PATH_EN", "models/vosk-model-small-en-us-0.15")
 AUDIO_DIR = os.getenv("AUDIO_DIR", "/var/home/dilelu/Desktop/Output")
 CUSTOM_AUDIO_PATH = os.getenv("CUSTOM_AUDIO_PATH", "/var/home/dilelu/Desktop/Output")
-YT_DLP_PATH = os.getenv("YT_DLP_PATH", "yt-dlp")
+_raw_yt_dlp = os.getenv("YT_DLP_PATH", "yt-dlp")
+if os.path.isabs(_raw_yt_dlp) and os.path.exists(_raw_yt_dlp):
+    YT_DLP_PATH = _raw_yt_dlp
+else:
+    _venv_yt_dlp = os.path.join(os.path.dirname(sys.executable), "yt-dlp")
+    if os.path.exists(_venv_yt_dlp):
+        YT_DLP_PATH = _venv_yt_dlp
+    else:
+        YT_DLP_PATH = shutil.which(_raw_yt_dlp) or _raw_yt_dlp
 YT_DLP_POT_BASE_URL = os.getenv("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416")
 
 # Guild IDs where slash commands are registered instantly (dev mode).
