@@ -10,15 +10,15 @@ import urllib.request
 log = logging.getLogger("bot.tts")
 
 VOICE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "piper_voices")
-MODEL_NAME = "es_AR-daniela-high"
+MODEL_NAME = "es_ES-davefx-medium"
 MODEL_PATH = os.path.join(VOICE_DIR, f"{MODEL_NAME}.onnx")
 CONFIG_PATH = os.path.join(VOICE_DIR, f"{MODEL_NAME}.onnx.json")
 
-MODEL_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_AR/daniela/high/{MODEL_NAME}.onnx"
-CONFIG_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_AR/daniela/high/{MODEL_NAME}.onnx.json"
+MODEL_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx"
+CONFIG_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx.json"
 
-# Audio filter string to transform Daniela (female) to a clear, natural male voice
-FFMPEG_FILTER = "asetrate=22050*0.72,aresample=22050,atempo=1.38,equalizer=f=180:g=2:width_type=h:width=120,volume=2.8,dynaudnorm=p=0.95:f=150"
+# Voice filter: none (raw DaveFX male model)
+FFMPEG_FILTER = ""
 
 
 def ensure_model_exists() -> bool:
@@ -80,9 +80,10 @@ def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
         "-ar", "22050",
         "-ac", "1",
         "-i", "pipe:0",
-        "-af", FFMPEG_FILTER,
-        output_path
     ]
+    if FFMPEG_FILTER:
+        ffmpeg_cmd.extend(["-af", FFMPEG_FILTER])
+    ffmpeg_cmd.append(output_path)
 
     try:
         # Pipeline: piper_proc (stdout) -> ffmpeg_proc (stdin)

@@ -95,7 +95,7 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 - **Discord bot:** `py-cord`
 - **Userbot:** `discord.py-self` + `discord-ext-voice-recv`
 - **STT:** `faster-whisper` (CTranslate2, offline, modelo `small` int8 en el server ARM 4/24)
-- **TTS:** `piper-tts` (modelo `es_AR-daniela-high` + filtro de voz FFmpeg para tono masculino maduro)
+- **TTS:** `piper-tts` (modelo `es_ES-davefx-medium` nativo de voz masculina sin filtros)
 - **Audio:** `FFmpeg`, `audioop`
 - **HTTP:** `aiohttp`
 - **Configuración:** `python-dotenv`
