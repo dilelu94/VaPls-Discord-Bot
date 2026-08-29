@@ -28,8 +28,11 @@ from streamer import (
 
 try:
     from golive.slopsoil.golive import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
-except ImportError:
-    from golive_connection import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
+except ModuleNotFoundError:
+    try:
+        from slopsoil.golive import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
+    except ModuleNotFoundError:
+        from golive_connection import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
 
 from instagram_feed import InstagramReelFeed
 

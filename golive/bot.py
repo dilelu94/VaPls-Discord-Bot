@@ -28,8 +28,11 @@ import video_compat as vc
 import davey_compat
 try:
     from golive.slopsoil.golive import GoLiveConnection
-except ImportError:
-    from golive_connection import GoLiveConnection
+except ModuleNotFoundError:
+    try:
+        from slopsoil.golive import GoLiveConnection
+    except ModuleNotFoundError:
+        from golive_connection import GoLiveConnection
 
 
 
@@ -149,8 +152,11 @@ class GoLiveStream:
             log.warning("[STREAM] slopsoil_start_live_stream fallback to direct connection: %s", e)
             try:
                 from golive.slopsoil.golive import GoLiveConnection
-            except ImportError:
-                from golive_connection import GoLiveConnection
+            except ModuleNotFoundError:
+                try:
+                    from slopsoil.golive import GoLiveConnection
+                except ModuleNotFoundError:
+                    from golive_connection import GoLiveConnection
             self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
             conn_res = self.conn.connect(timeout=30.0)
             if asyncio.iscoroutine(conn_res) or hasattr(conn_res, "__await__"):
@@ -165,8 +171,11 @@ class GoLiveStream:
         from streamer import H264VideoPlayer, _stream_fps
         try:
             from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
-        except ImportError:
-            from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
+        except ModuleNotFoundError:
+            try:
+                from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
+            except ModuleNotFoundError:
+                from slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
         proxy_vc = _GoLiveVCProxy(self.conn)
         if self._video_ts or self._audio_ts:
             log.info(
@@ -478,9 +487,12 @@ class HeadbanzGoLiveStream:
     async def _start_players(self) -> None:
         from streamer import HeadbanzPlayer
         try:
-            from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
-        except ImportError:
             from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
+        except ModuleNotFoundError:
+            try:
+                from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
+            except ModuleNotFoundError:
+                from slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
         proxy_vc = _GoLiveVCProxy(self.conn)
         self.video_player = HeadbanzPlayer(
             image_path=self.image_path,
