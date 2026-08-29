@@ -43,6 +43,43 @@ def ensure_model_exists() -> bool:
         return False
 
 
+def _get_piper_cmd() -> list[str]:
+    """Find a python executable or piper binary that can run piper-tts."""
+    try:
+        res = subprocess.run(
+            [sys.executable, "-m", "piper", "--help"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        if res.returncode == 0:
+            return [sys.executable, "-m", "piper"]
+    except Exception:
+        pass
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    main_venv_py = os.path.join(base_dir, "venv", "bin", "python3")
+    if os.path.exists(main_venv_py):
+        try:
+            res = subprocess.run(
+                [main_venv_py, "-m", "piper", "--help"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            if res.returncode == 0:
+                return [main_venv_py, "-m", "piper"]
+        except Exception:
+            pass
+
+    import shutil
+    piper_bin = shutil.which("piper")
+    if piper_bin:
+        return [piper_bin]
+
+    return [sys.executable, "-m", "piper"]
+
+
 def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
     """Synthesize text using Piper TTS and process audio with FFmpeg voice filter.
 
@@ -66,8 +103,7 @@ def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
         text_hash = hashlib.md5(cleaned_text.encode("utf-8")).hexdigest()[:10]
         output_path = f"/tmp/tts_indio_{text_hash}.wav"
 
-    piper_cmd = [
-        sys.executable, "-m", "piper",
+    piper_cmd = _get_piper_cmd() + [
         "--model", MODEL_PATH,
         "--config", CONFIG_PATH,
         "--output-raw"
