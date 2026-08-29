@@ -3,7 +3,7 @@ import os
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Mock local modules not installed in dev/test environments so golive.bot imports successfully
-for _mod in ("video_compat", "davey_compat", "golive_connection", "instagram_feed", "instagram_streamer", "streamer", "ytdlp"):
+for _mod in ("video_compat", "davey_compat", "golive_connection", "golive.slopsoil.golive", "instagram_feed", "instagram_streamer", "streamer", "ytdlp"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 

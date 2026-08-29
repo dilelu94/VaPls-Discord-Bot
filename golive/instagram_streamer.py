@@ -26,7 +26,10 @@ from streamer import (
     _SW_ENCODER,
 )
 
-from golive_connection import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
+try:
+    from golive.slopsoil.golive import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
+except ImportError:
+    from golive_connection import GoLiveConnection, _GoLiveVCProxy, GoLiveAudioSender
 
 from instagram_feed import InstagramReelFeed
 
