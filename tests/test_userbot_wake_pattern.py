@@ -43,7 +43,7 @@ def _extract_wake_ns():
     # Captures from _PRESET_1_PATTERNS through the closing bracket of
     # _PRESET_3_FILLER so that _build_vosk_grammar can reference it.
     m = re.search(
-        r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
+        r"^_PRESET_0_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
         src,
         re.MULTILINE | re.DOTALL,
     )
@@ -245,15 +245,55 @@ def test_preset2_bare_indio_does_not_fire():
 
 
 # ---------------------------------------------------------------------------
-# Default preset is 4 (same VOSK gating as preset 2 + Whisper confirmation)
+# ---------------------------------------------------------------------------
+# Default preset is 1 (maximum sensitivity)
 # ---------------------------------------------------------------------------
 
 
-def test_default_preset_is_4():
-    """Out of the box the userbot runs preset 4: same VOSK gating as preset 2
-    ('che indio' only, no 'que indio'/'eh indio') plus the Whisper confirmation
-    layer. The module-level variable must equal 4 before any test changes it."""
-    assert _NS["_SENSITIVITY_PRESET"] == 4
+def test_default_preset_is_1():
+    """Out of the box the userbot runs preset 1: maximum sensitivity.
+    The module-level variable must equal 1 before any test changes it."""
+    assert _NS["_SENSITIVITY_PRESET"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Preset 0 — disabled listening system
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "che indio",
+        "que indio",
+        "eh indio",
+        "indio ponete",
+        "indio reproduci",
+        "indio dale",
+    ],
+)
+def test_preset0_does_not_fire_on_anything(text):
+    """Preset 0: turns off listening entirely, active patterns is empty and no text matches."""
+    set_sensitivity(0)
+    assert active_patterns() == ()
+    assert matches(text) is False
+
+
+def test_preset0_grammar_is_unk_only():
+    """Preset 0: VOSK grammar contains only [unk] catch-all."""
+    import json as _json
+
+    set_sensitivity(0)
+    grammar_phrases = _json.loads(_NS["_build_vosk_grammar"]())
+    assert grammar_phrases == ["[unk]"]
+
+
+def test_invalid_sensitivity_preset_raises():
+    """Presets outside 0-4 must raise ValueError."""
+    with pytest.raises(ValueError):
+        set_sensitivity(5)
+    with pytest.raises(ValueError):
+        set_sensitivity(-1)
 
 
 # ---------------------------------------------------------------------------
@@ -336,9 +376,9 @@ def test_preset1_grammar_includes_que_indio_and_eh_indio():
 
 @pytest.fixture(autouse=True)
 def restore_preset():
-    """Reset sensitivity to the default preset (4) after each test."""
+    """Reset sensitivity to the default preset (1) after each test."""
     yield
-    set_sensitivity(4)
+    set_sensitivity(1)
 
 
 # ---------------------------------------------------------------------------

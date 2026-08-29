@@ -2840,21 +2840,21 @@ async def adivinador(
 
 @bot.slash_command(
     name="sensibilidad",
-    description="Cambia la sensibilidad del wake-word del indio (presets 1-4)",
+    description="Cambia la sensibilidad del wake-word del indio (presets 0-4)",
 )
 async def sensibilidad(
     ctx,
     preset: discord.Option(
         int,
-        description="1=máx sensible, 2=solo che indio, 3=pool grande, 4=como 2 + Whisper confirma indio (default)",
-        choices=[1, 2, 3, 4],
+        description="0=desactivar, 1=máx sensible, 2=solo che indio, 3=pool grande, 4=default (Whisper confirma)",
+        choices=[0, 1, 2, 3, 4],
     ),
 ):
     """Slash command: switch the VOSK wake-word sensitivity preset.
 
     Args:
         ctx: Discord application context.
-        preset: Integer 1-4 selecting the sensitivity preset.
+        preset: Integer 0-4 selecting the sensitivity preset.
 
     Side Effects:
         POSTs to the userbot relay ``/sensibilidad`` which updates the active
@@ -2892,10 +2892,11 @@ async def sensibilidad(
         return
 
     _PRESET_DESCRIPTIONS = {
-        1: "**Preset 1** — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
+        0: "**Preset 0** — desactivar todo el sistema de escucha del indio.",
+        1: "**Preset 1** (default) — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
         2: '**Preset 2** — menos sensible: solo `che indio` + verbos. Reduce falsos positivos de "que".',
         3: "**Preset 3** — menos sensible vía pool grande de frases, pero re-habilita `che/que/eh indio`. Editable a mano.",
-        4: "**Preset 4** (default) — como el 2 (VOSK: solo `che indio`), pero Whisper re-chequea que se haya dicho `indio` en la región del wake-word; si no, descarta.",
+        4: "**Preset 4** — como el 2 (VOSK: solo `che indio`), pero Whisper re-chequea que se haya dicho `indio` en la región del wake-word; si no, descarta.",
     }
     await safe_respond(
         ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"
@@ -3447,7 +3448,7 @@ async def help_cmd(ctx):
         name="🎙️ Voz y Go Live",
         value=(
             "**/entraindio** — hace que el indio (userbot) entre a escuchar.\n"
-            "**/sensibilidad** `1|2|3|4` — ajusta la sensibilidad del wake-word.\n"
+            "**/sensibilidad** `0|1|2|3|4` — ajusta la sensibilidad del wake-word.\n"
             "**/huh** — activa/desactiva el sonido de confirmación del indio.\n"
             "**/stream** `canal` — transmití IPTV por Go Live.\n"
             "**/stopstream** — detiene el stream de IPTV.\n"

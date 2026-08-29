@@ -41,7 +41,7 @@ def _extract_decoder_helpers():
         # and _active_wake_patterns which are called at module exec time.
         (
             "_preset_constants",
-            r"^_PRESET_1_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
+            r"^_PRESET_0_PATTERNS:.*?^_vosk_grammar_generation: int = 0\n",
         ),
         (
             "_PRESET_3_FILLER",
@@ -277,19 +277,11 @@ def test_grammar_contains_relaxed_collapses():
     """Tokens that VOSK-small produces when it mishears the canonical form.
 
     The verb collapses ("indio por", "indio tira") exist in every preset; the
-    "que indio"/"eh indio" invocation variants are preset-1 only (preset 2, the
-    default, drops them), so they are checked against the preset-1 grammar.
+    "que indio"/"eh indio" invocation variants are in preset 1 (the default).
     """
     tokens = json.loads(VOSK_GRAMMAR)
-    for phrase in ("indio por", "indio tira"):
+    for phrase in ("indio por", "indio tira", "que indio", "eh indio"):
         assert phrase in tokens, f"grammar missing {phrase!r}"
-    try:
-        set_sensitivity(1)
-        p1_tokens = json.loads(build_grammar())
-    finally:
-        set_sensitivity(2)
-    for phrase in ("que indio", "eh indio"):
-        assert phrase in p1_tokens, f"preset-1 grammar missing {phrase!r}"
 
 
 def test_grammar_has_unk_catchall():
@@ -303,7 +295,7 @@ def test_preset3_grammar_contains_filler_and_full_invocations():
         set_sensitivity(3)
         tokens = json.loads(build_grammar())
     finally:
-        set_sensitivity(2)
+        set_sensitivity(1)
     # Filler decoys
     for token in ("boludo", "como", "los"):
         assert token in tokens, f"preset-3 grammar missing filler {token!r}"
@@ -331,7 +323,7 @@ def test_preset4_grammar_equals_preset2_grammar():
         set_sensitivity(4)
         p4_grammar = json.loads(build_grammar())
     finally:
-        set_sensitivity(2)
+        set_sensitivity(1)
     assert p4_grammar == p2_grammar
 
 
@@ -341,7 +333,7 @@ def test_preset4_grammar_excludes_que_indio_and_eh_indio():
         set_sensitivity(4)
         tokens = json.loads(build_grammar())
     finally:
-        set_sensitivity(2)
+        set_sensitivity(1)
     assert "que indio" not in tokens
     assert "eh indio" not in tokens
 
@@ -352,5 +344,5 @@ def test_preset4_grammar_excludes_filler():
         set_sensitivity(4)
         tokens = json.loads(build_grammar())
     finally:
-        set_sensitivity(2)
+        set_sensitivity(1)
     assert "boludo" not in tokens
