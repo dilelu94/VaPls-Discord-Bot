@@ -31,6 +31,7 @@ from playCommand import guildPlayers
 from users import USERS
 import storyManager
 import transferCommand
+import tts
 
 logger = logging.getLogger("apiServer")
 
@@ -183,6 +184,7 @@ async def authMiddleware(request: web.Request, handler):
         or request.path.startswith("/webhook")
         or request.path.startswith("/privacy")
         or request.path.startswith("/delete-data")
+        or request.path.startswith("/audio")
     ):
         return await handler(request)
     err = _checkAuth(request)
@@ -1631,6 +1633,54 @@ def makeApp(bot: discord.Bot) -> web.Application:
         )
         return web.json_response({"ok": True, "description": description[:200]})
 
+    async def indioAsk(request: web.Request) -> web.Response:
+        """Process a request from the Telegram bot for the Indio persona.
+
+        Body JSON: {guild_id, prompt, speaker, chat_id, generate_tts}
+        """
+        try:
+            data = await request.json()
+            guild_id = int(data.get("guild_id", 0))
+            prompt = str(data.get("prompt", ""))
+            speaker = str(data.get("speaker", "Usuario"))
+            generate_tts = bool(data.get("generate_tts", False))
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+
+        if not prompt.strip():
+            return web.json_response({"error": "empty prompt"}, status=400)
+
+        indio_response_text = await geminiCommand.generate_indio_telegram_response(
+            guild_id=guild_id,
+            prompt=prompt.strip(),
+            speaker=speaker,
+            bot=bot,
+        )
+
+        formatted_text = indio_response_text if indio_response_text.startswith("Indio:") else f"Indio: {indio_response_text}"
+
+        audio_url = None
+        if generate_tts:
+            audio_filename = await asyncio.to_thread(tts.generate_indio_tts, indio_response_text)
+            if audio_filename:
+                audio_url = f"/audio/{audio_filename}"
+
+        return web.json_response({
+            "text": formatted_text,
+            "audio_url": audio_url,
+        })
+
+    async def getAudio(request: web.Request) -> web.Response:
+        """Serve generated TTS audio files from /tmp/tts_audios/."""
+        filename = os.path.basename(request.match_info.get("filename", ""))
+        if not filename:
+            return web.json_response({"error": "filename required"}, status=400)
+
+        filepath = os.path.join("/tmp/tts_audios", filename)
+        if os.path.isfile(filepath):
+            return web.FileResponse(filepath, headers={"Content-Type": "audio/ogg"})
+        return web.json_response({"error": "Audio not found"}, status=404)
+
     # ---- MMR Admin routes (Basic Auth) --------------------------------
 
     async def adminPage(request: web.Request) -> web.Response:
@@ -1971,6 +2021,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/github-webhook", githubWebhook)
     app.router.add_post("/telegram-message", telegramMessage)
     app.router.add_post("/telegram-image", telegramImage)
+    app.router.add_post("/indio/ask", indioAsk)
+    app.router.add_get("/audio/{filename}", getAudio)
     app.router.add_get("/webhook", verifyWebhook)
     app.router.add_post("/webhook", handleWebhook)
     app.router.add_get("/privacy", privacyPage)

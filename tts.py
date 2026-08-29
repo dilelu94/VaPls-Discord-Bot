@@ -159,3 +159,105 @@ def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
     except Exception as e:
         log.exception("Error generating TTS audio: %s", e)
         return None
+
+
+def generate_indio_tts(text: str, output_dir: str = "/tmp/tts_audios") -> str | None:
+    """Synthesize Indio text into an OGG/Opus audio file for Telegram voice notes.
+
+    Args:
+        text: Text to synthesize.
+        output_dir: Directory where the output audio file will be saved.
+
+    Returns:
+        The generated audio filename (e.g. 'indio_resp_abc123.ogg'), or None on failure.
+    """
+    cleaned_text = (text or "").strip()
+    if not cleaned_text:
+        log.warning("Empty text passed to generate_indio_tts")
+        return None
+
+    if not ensure_model_exists():
+        log.error("Piper model missing and could not be downloaded")
+        return None
+
+    os.makedirs(output_dir, exist_ok=True)
+    text_hash = hashlib.md5((cleaned_text + str(time.time())).encode("utf-8")).hexdigest()[:10]
+    filename = f"indio_resp_{text_hash}.ogg"
+    output_path = os.path.join(output_dir, filename)
+
+    piper_cmd = _get_piper_cmd() + [
+        "--model", MODEL_PATH,
+        "--config", CONFIG_PATH,
+        "--output-raw"
+    ]
+
+    ffmpeg_cmd = [
+        "ffmpeg",
+        "-y",
+        "-f", "s16le",
+        "-ar", "22050",
+        "-ac", "1",
+        "-i", "pipe:0",
+    ]
+    if FFMPEG_FILTER:
+        ffmpeg_cmd.extend(["-af", FFMPEG_FILTER])
+    ffmpeg_cmd.extend(["-c:a", "libopus", "-b:a", "32k", output_path])
+
+    try:
+        piper_proc = subprocess.Popen(
+            piper_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        ffmpeg_proc = subprocess.Popen(
+            ffmpeg_cmd,
+            stdin=piper_proc.stdout,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+
+        if piper_proc.stdout:
+            piper_proc.stdout.close()
+
+        piper_proc.stdin.write(cleaned_text.encode("utf-8"))
+        piper_proc.stdin.close()
+
+        ffmpeg_out, ffmpeg_err = ffmpeg_proc.communicate(timeout=15)
+        piper_proc.wait(timeout=5)
+
+        if ffmpeg_proc.returncode != 0:
+            # Fallback if libopus encoder flag fails for any reason
+            fallback_cmd = [
+                "ffmpeg",
+                "-y",
+                "-f", "s16le",
+                "-ar", "22050",
+                "-ac", "1",
+                "-i", "pipe:0",
+            ]
+            if FFMPEG_FILTER:
+                fallback_cmd.extend(["-af", FFMPEG_FILTER])
+            fallback_cmd.append(output_path)
+
+            piper_proc2 = subprocess.Popen(piper_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            ffmpeg_proc2 = subprocess.Popen(fallback_cmd, stdin=piper_proc2.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if piper_proc2.stdout:
+                piper_proc2.stdout.close()
+            piper_proc2.stdin.write(cleaned_text.encode("utf-8"))
+            piper_proc2.stdin.close()
+            ffmpeg_proc2.communicate(timeout=15)
+            piper_proc2.wait(timeout=5)
+            if ffmpeg_proc2.returncode != 0:
+                log.error("FFmpeg failed during OGG TTS processing: %s", ffmpeg_err.decode())
+                return None
+
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return filename
+        else:
+            log.error("Output OGG file is missing or empty: %s", output_path)
+            return None
+    except Exception as e:
+        log.exception("Error generating OGG TTS audio: %s", e)
+        return None
+

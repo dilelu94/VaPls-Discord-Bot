@@ -6211,8 +6211,105 @@ async def describe_image(file_bytes: bytes, mime_type: str = "image/jpeg") -> st
     return "(imagen sin descripción)"
 
 
+async def generate_indio_telegram_response(
+    guild_id: int,
+    prompt: str,
+    speaker: str = "Usuario",
+    bot: Optional[discord.Bot] = None,
+) -> str:
+    """Generate an Indio persona response for Telegram, update conversation memory,
+    and persist state.
+
+    Args:
+        guild_id: Discord guild ID associated with the memory bucket.
+        prompt: User's question or message.
+        speaker: Name of the person asking.
+        bot: Optional Discord bot client.
+
+    Returns:
+        The Indio's cleaned text response.
+    """
+    prompt = (prompt or "").strip()
+    if not prompt:
+        return ""
+
+    _evict_stale_indio()
+    lt_key = f"guild-{guild_id}"
+    hist_key = f"guild-{guild_id}-channel-telegram"
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
+
+    guild = bot.get_guild(guild_id) if bot else None
+
+    async with lock:
+        history_snapshot = list(_indio_history.get(hist_key, []))
+        long_term_snapshot = dict(_indio_long_term.get(lt_key, {}))
+
+    await _maybe_refresh_current_members(lt_key, guild_id)
+    current_members = list(_indio_current_members.get(lt_key, []))
+    lt_block = _format_long_term(long_term_snapshot, current_members)
+    emoji_block = _format_guild_emojis(guild) if guild else ""
+    player_block = _format_player_state(bot, guild_id) if bot else ""
+
+    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
+    system_instruction = INDIO_SYSTEM + (
+        f"\n\n{stable_extras}" if stable_extras else ""
+    )
+    system_instruction = _inject_image_catalog(system_instruction)
+    recent_block = _format_recent_stories(guild_id)
+    if recent_block:
+        system_instruction += "\n\n" + recent_block
+
+    tagged_message = f"{speaker}: {prompt}"
+
+    try:
+        reply = await geminiClient.generate(
+            user_message=tagged_message,
+            system_instruction=system_instruction,
+            history=_stamp_history_for_prompt(history_snapshot, time.time()),
+            tools=None,
+            volatile_context=player_block or None,
+        )
+        clean_reply = _strip_speaker_prefix(reply.text)
+    except Exception as e:
+        logger.exception("generate_indio_telegram_response failed")
+        return "❌ Ocurrió un error al consultar a Indio."
+
+    ts = time.time()
+    sanitized_prompt = _sanitize_for_history(tagged_message)
+    sanitized_reply = _sanitize_for_history(clean_reply)
+
+    user_turn = {
+        "role": "user",
+        "parts": [{"text": sanitized_prompt[:_STORED_MSG_MAX_CHARS]}],
+        "ts": ts,
+    }
+    model_turn = {
+        "role": "model",
+        "parts": [{"text": sanitized_reply[:_STORED_MSG_MAX_CHARS]}],
+        "ts": ts,
+    }
+
+    async with lock:
+        history = list(_indio_history.get(hist_key, []))
+        history.append(user_turn)
+        history.append(model_turn)
+        if len(history) > _HISTORY_HARD_CAP:
+            history = history[-_HISTORY_HARD_CAP:]
+        _indio_history[hist_key] = history
+        _indio_last_seen[hist_key] = ts
+        size = len(history)
+
+    await _persist_indio_state()
+
+    if size >= _HISTORY_COMPRESS_THRESHOLD:
+        _spawn(_maybe_compress(hist_key, lt_key))
+
+    return clean_reply
+
+
 # Cargar el estado persistido al final, cuando todas las funciones helpers
 # (incluida _sanitize_for_history) ya estan definidas — sino la sanitizacion
 # de history al startup falla con NameError.
 _load_indio_state()
 _load_pending_sessions()
+
