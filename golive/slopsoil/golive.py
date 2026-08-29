@@ -359,6 +359,16 @@ class GoLiveConnection:
             try:
                 await self._bot.ws.send_as_json(
                     {
+                        "op": _OP_STREAM_SET_PAUSED,
+                        "d": {
+                            "stream_key": self._stream_key,
+                            "paused": True,
+                        },
+                    }
+                )
+                await asyncio.sleep(0.1)
+                await self._bot.ws.send_as_json(
+                    {
                         "op": _OP_STREAM_DELETE,
                         "d": {"stream_key": self._stream_key},
                     }

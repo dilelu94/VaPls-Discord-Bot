@@ -363,6 +363,16 @@ class GoLiveConnection:
         """Stop the go-live stream and release all resources."""
         if self._stream_key:
             try:
+                await self._bot.ws.send_as_json(
+                    {
+                        "op": _OP_STREAM_SET_PAUSED,
+                        "d": {
+                            "stream_key": self._stream_key,
+                            "paused": True,
+                        },
+                    }
+                )
+                await asyncio.sleep(0.1)
                 await asyncio.wait_for(
                     self._bot.ws.send_as_json(
                         {
