@@ -112,6 +112,11 @@ def patch_video(gateway_module) -> None:
         import golive.video_compat as vc
         vc.patch_video(discord.gateway)
     """
+    if not hasattr(gateway_module, "DiscordVoiceWebSocket"):
+        ws_cls = getattr(gateway_module, "VoiceWebSocket", None)
+        if ws_cls is None:
+            ws_cls = type("DiscordVoiceWebSocket", (), {})
+        gateway_module.DiscordVoiceWebSocket = ws_cls
     gateway_module.DiscordVoiceWebSocket.identify = _patched_identify
     gateway_module.DiscordVoiceWebSocket.select_protocol = _patched_select_protocol
     gateway_module.DiscordVoiceWebSocket.client_connect = _patched_client_connect

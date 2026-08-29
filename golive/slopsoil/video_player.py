@@ -504,7 +504,6 @@ def _detect_encoder() -> _EncoderConfig | None:
     vaapi_pre = ["-vaapi_device", "/dev/dri/renderD128"]
     res = _stream_resolution()
     br = _stream_bitrate()
-    pad_str = f"force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black"
     vaapi_vf = f"format=nv12,hwupload,scale_vaapi={res}"
 
     # Hardware encoders are preferred over software, so a working GPU is always
@@ -536,7 +535,7 @@ def _detect_encoder() -> _EncoderConfig | None:
                     "-bufsize",
                     br,
                 ],
-                vf=f"scale={res}:{pad_str}",
+                vf=f"scale={res}",
             )
         log.info(
             "h264_nvenc is compiled in but unavailable (no usable NVIDIA GPU/driver) "
@@ -573,7 +572,29 @@ def _detect_encoder() -> _EncoderConfig | None:
 
     if "libx264" in available and _test_encoder("libx264", []):
         log.info("video encoder: libx264 (software)")
-        return _libx264_config()
+        return _EncoderConfig(
+            name="libx264",
+            pre_input=[],
+            post_codec=[
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "zerolatency",
+                "-profile:v",
+                "high",
+                "-level:v",
+                "4.2",
+                "-x264-params",
+                "aud=1",
+                "-b:v",
+                br,
+                "-maxrate",
+                br,
+                "-bufsize",
+                br,
+            ],
+            vf=f"scale={res}",
+        )
 
     if "libopenh264" in available and _test_encoder("libopenh264", []):
         log.info("video encoder: libopenh264 (software)")
@@ -581,58 +602,29 @@ def _detect_encoder() -> _EncoderConfig | None:
 
     log.warning(
         "no working H.264 encoder found — video streaming disabled. "
-        "Ensure ffmpeg (or equivalent) is installed with libx264 or libopenh264, "
+        "Ensure ffmpeg-free (or equivalent) is installed with libopenh264, "
         "or that VA-API/NVENC drivers are functional."
     )
     return None
 
 
-def _libx264_config() -> _EncoderConfig:
-    """libx264 software encoder config."""
-    res = _stream_resolution()
-    br = _stream_bitrate()
-    return _EncoderConfig(
-        name="libx264",
-        pre_input=[],
-        post_codec=[
-            "-preset",
-            "ultrafast",
-            "-tune",
-            "zerolatency",
-            "-profile:v",
-            "high",
-            "-level:v",
-            "4.2",
-            "-x264-params",
-            "aud=1",
-            "-b:v",
-            br,
-            "-maxrate",
-            br,
-            "-bufsize",
-            br,
-        ],
-        vf=f"scale={res}",
-    )
-
-
 def _libopenh264_config() -> _EncoderConfig:
-    """libopenh264 software encoder config fallback when libx264 is unavailable."""
+    """libopenh264 software encoder config — the primary on machines without a
+    working GPU encoder, and the runtime fallback (see _SW_ENCODER) when a
+    hardware encoder accepts no frames (e.g. VA-API on large MPEG-2 keyframes)."""
     res = _stream_resolution()
     br = _stream_bitrate()
-    threads = str(os.cpu_count() or 2)
     return _EncoderConfig(
         name="libopenh264",
-        pre_input=["-threads", threads],
+        pre_input=[],
         post_codec=[
             "-profile:v", "constrained_baseline",
             "-level:v", "4.2",
             "-b:v", br,
             "-maxrate", br,
             "-bufsize", br,
-            "-threads", threads,
         ],
-        vf=f"scale={res}:force_original_aspect_ratio=decrease,pad={res}:(ow-iw)/2:(oh-ih)/2:black",
+        vf=f"scale={res}",
     )
 
 
@@ -797,24 +789,19 @@ class H264VideoPlayer(threading.Thread):
         live: bool | None = True,
         audio: bool = True,
         probe_size: int = 2_000_000,
-        original_url: str | None = None,
-        initial_seq: int = 0,
-        initial_ts: int = 0,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
-        self._original_url = original_url
         self._vc = voice_client
         self._fps = fps
         self._end = threading.Event()
         self._proc: subprocess.Popen | None = None
-        self._yt_proc: subprocess.Popen | None = None
 
         self._live = live
         self._audio = audio
         self._probe_size = probe_size
-        self._seq: int = initial_seq & 0xFFFF
-        self._ts: int = initial_ts & 0xFFFF_FFFF
+        self._seq: int = 0
+        self._ts: int = 0
         self._ts_inc: int = round(_CLOCK / fps)
         self._ssrc: int = voice_client.ssrc + 1  # VIDEO_SSRC_OFFSET = 1
         self._packets_sent: int = 0
@@ -834,44 +821,17 @@ class H264VideoPlayer(threading.Thread):
         self._audio_fifo: str = f"/tmp/slopsoil_{self._ssrc}_audio.fifo"
         self._ensure_fifo()
 
-        # Playback control state
-        self._paused: threading.Event = threading.Event()
-        self._paused.set()  # Initial state is playing
-        self._start_time: float = 0.0
-        self._seeking: bool = False
-
     # ── Public API ────────────────────────────────────────────────────────────
 
     @property
     def audio_fifo(self) -> str:
         return self._audio_fifo
 
-    def pause(self) -> None:
-        self._paused.clear()
-
-    def resume(self) -> None:
-        self._paused.set()
-
-    def seek(self, target_sec: float) -> None:
-        self._start_time = max(0.0, target_sec)
-        self._seeking = True
-        self._paused.set()  # wake if paused
-        proc = self._proc
-        if proc is not None and proc.poll() is None:
-            self._kill_proc(proc)
-        yt_proc = self._yt_proc
-        if yt_proc is not None and yt_proc.poll() is None:
-            self._kill_proc(yt_proc)
-
     def stop(self) -> None:
         self._end.set()
-        self._paused.set()  # wake if paused
         proc = self._proc
         if proc is not None and proc.poll() is None:
             proc.terminate()
-        yt_proc = self._yt_proc
-        if yt_proc is not None and yt_proc.poll() is None:
-            yt_proc.terminate()
 
     def is_source_active(self) -> bool:
         """True while the player may still produce output, including the brief
@@ -895,37 +855,29 @@ class H264VideoPlayer(threading.Thread):
 
     def run(self) -> None:
         try:
-            while not self._end.is_set():
-                self._seeking = False
+            self._stream()
+            # If a hardware encoder produced no frames at all (e.g. VA-API
+            # "Access unit too large" on large MPEG-2 keyframes), retry once on
+            # the software encoder so the stream still plays.
+            if (
+                not self._end.is_set()
+                and self._frames_emitted == 0
+                and _SW_ENCODER is not None
+                and self._enc is not _SW_ENCODER
+            ):
+                log.warning(
+                    "video encoder %s produced no output — retrying with software "
+                    "encoder %s",
+                    self._enc.name if self._enc else "?", _SW_ENCODER.name,
+                )
+                self._enc = _SW_ENCODER
+                self._proc = None
                 self._stream()
-                
-                if self._seeking and not self._end.is_set():
-                    log.info("Seeking to %.2fs, restarting stream loop", self._start_time)
-                    continue
-
-                if (
-                    not self._end.is_set()
-                    and self._frames_emitted == 0
-                    and _SW_ENCODER is not None
-                    and self._enc is not _SW_ENCODER
-                ):
-                    log.warning(
-                        "video encoder %s produced no output — retrying with software "
-                        "encoder %s",
-                        self._enc.name if self._enc else "?", _SW_ENCODER.name,
-                    )
-                    self._enc = _SW_ENCODER
-                    self._proc = None
-                    continue
-                
-                break
         except Exception:
             log.exception("H264VideoPlayer error")
         finally:
             if self._proc is not None:
                 self._kill_proc(self._proc)
-            if self._yt_proc is not None:
-                self._kill_proc(self._yt_proc)
             self._cleanup_fifo()
         log.info("H264VideoPlayer stopped")
 
@@ -949,32 +901,33 @@ class H264VideoPlayer(threading.Thread):
     def _ffmpeg_cmd(self) -> list[str]:
         enc = self._enc
         assert enc is not None, "H264VideoPlayer started with no encoder available"
+        pre_input = enc.pre_input
 
         probe_args = [
             "-probesize", str(self._probe_size),
             "-analyzeduration", str(self._probe_size),
         ]
-        pre_input = list(enc.pre_input)
-        if self._start_time > 0:
-            pre_input.extend(["-ss", str(self._start_time)])
-        
-        input_args = []
         if isinstance(self._url, (tuple, list)):
+            primary_url = self._url[0]
+            is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+            input_args = []
             for u in self._url:
-                if u.startswith(("http://", "https://")) and "googlevideo.com" not in u:
+                is_u = u.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+                if is_u and "googlevideo.com" not in u:
                     input_args += ["-http_persistent", "0"]
                 input_args += ["-i", u]
-            is_url = True
-            audio_map_idx = 1
+            audio_map = "1:a:0"
         else:
-            is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
-            if is_url and "googlevideo.com" not in self._url:
+            primary_url = self._url
+            is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+            input_args = []
+            if is_url and "googlevideo.com" not in primary_url:
                 input_args += ["-http_persistent", "0"]
-            input_args += ["-i", self._url]
-            audio_map_idx = 0
+            input_args += ["-i", primary_url]
+            audio_map = "0:a:0"
+
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"
-        # -reconnect flags are HTTP-only; FFmpeg rejects them for local files or pipes.
         reconnect_args = (
             ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
             if is_url
@@ -996,9 +949,6 @@ class H264VideoPlayer(threading.Thread):
             "-y",  # overwrite FIFO without interactive prompt
             "-loglevel",
             "warning",
-            # Tolerate initial decode errors (mpeg2video frames before the first
-            # sequence header have unknown dimensions; let FFmpeg keep going until
-            # it finds a valid GOP rather than aborting the pipeline)
             "-max_error_rate",
             "1",
             *pre_input,
@@ -1009,18 +959,13 @@ class H264VideoPlayer(threading.Thread):
             *reconnect_args,
             *input_args,
             *video_out_args,
-            # Audio → FIFO consumed by _AudioPipeSource in stream.py.
-            # If the source has no audio track (some IPTV streams are video-only,
-            # or audio lives in a separate HLS rendition FFmpeg doesn't auto-select),
-            # inject a lavfi silence source as input so the FIFO writer always
-            # exists and GoLiveAudioSender doesn't hang waiting for data.
             *(
                 []
                 if self._audio
                 else ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
             ),
             "-map",
-            f"{audio_map_idx}:a:0" if self._audio else f"{len(self._url) if isinstance(self._url, (tuple, list)) else 1}:a:0",
+            audio_map if self._audio else (f"{len(self._url)}:a:0" if isinstance(self._url, (tuple, list)) else "1:a:0"),
             "-c:a",
             "pcm_s16le",
             "-ar",
@@ -1155,20 +1100,26 @@ class H264VideoPlayer(threading.Thread):
         cmd = self._ffmpeg_cmd()
         from urllib.parse import urlparse, urlunparse
 
-        _log_url = self._url[0] if isinstance(self._url, (tuple, list)) else self._url
-        _p = urlparse(_log_url)
-        _safe = urlunparse(
-            _p._replace(netloc=(_p.hostname or "") + (f":{_p.port}" if _p.port else ""))
-        )
-        _pace = _packet_pace_fraction()
-        if _pace > 0:
-            log.info("packet pacing active: spreading each frame's pkts across %.0f%% of frame interval", _pace * 100)
+        def _redact(u: str) -> str:
+            try:
+                _p = urlparse(u)
+                return urlunparse(
+                    _p._replace(netloc=(_p.hostname or "") + (f":{_p.port}" if _p.port else ""))
+                )
+            except Exception:
+                return str(u)[:80]
 
-        log.info("Starting H.264 video stream from %s", _safe)
-        # Log the encoder and full FFmpeg command (URL redacted) so the active
-        # encoder is verifiable from the logs, including after a fallback retry.
-        _urls = self._url if isinstance(self._url, (tuple, list)) else [self._url]
-        _safe_cmd = [_safe if arg in _urls else arg for arg in cmd]
+        if isinstance(self._url, (tuple, list)):
+            _safe = f"({_redact(self._url[0])}, {_redact(self._url[1])})"
+            _safe_cmd = []
+            for arg in cmd:
+                if arg in self._url:
+                    _safe_cmd.append(_redact(arg))
+                else:
+                    _safe_cmd.append(arg)
+        else:
+            _safe = _redact(self._url)
+            _safe_cmd = [_safe if arg == self._url else arg for arg in cmd]
         log.info(
             "FFmpeg encoder=%s command: %s",
             self._enc.name if self._enc else "?", " ".join(_safe_cmd),
@@ -1183,8 +1134,6 @@ class H264VideoPlayer(threading.Thread):
         # If stop() was called before Popen completed, terminate immediately.
         if self._end.is_set():
             self._kill_proc(self._proc)
-            if self._yt_proc is not None:
-                self._kill_proc(self._yt_proc)
             return
         threading.Thread(
             target=self._drain_stderr, daemon=True, name="ffmpeg-stderr"
@@ -1220,30 +1169,21 @@ class H264VideoPlayer(threading.Thread):
         _stats_read_block = 0.0
         _stats_pkts0 = 0
 
-        pace = _packet_pace_fraction()
-
-        _STATS_INTERVAL = 5.0  # flush stats every 5s for faster diagnostic feedback
-
         def _flush_stats(now: float) -> None:
             nonlocal _stats_t0, _stats_frames, _stats_late, _stats_late_total
             nonlocal _stats_late_max, _stats_read_block, _stats_pkts0
             window = now - _stats_t0
             if window <= 0:
                 return
-            pct = f" | pace {pace*100:.0f}%" if pace > 0 else ""
-            conn = getattr(self._vc, "_connection", None)
-            dave_ready = getattr(getattr(conn, "dave_session", None), "ready", False)
-            dave_ver = getattr(conn, "dave_protocol_version", 0)
             log.info(
-                "video stats: %.1f fps (target %.0f) | DAVE ready=%s (v%d) | late %d/%d frames "
+                "video stats: %.1f fps (target %.0f) | late %d/%d frames "
                 "(max %.0f ms, total %.0f ms) | ffmpeg read-block %.0f ms / %.1fs "
-                "| %d pkts%s",
+                "| %d pkts",
                 _stats_frames / window, self._fps,
-                dave_ready, dave_ver,
                 _stats_late, _stats_frames,
                 _stats_late_max * 1000, _stats_late_total * 1000,
                 _stats_read_block * 1000, window,
-                self._packets_sent - _stats_pkts0, pct,
+                self._packets_sent - _stats_pkts0,
             )
             _stats_t0 = now
             _stats_frames = 0
@@ -1283,10 +1223,6 @@ class H264VideoPlayer(threading.Thread):
             return self._end.is_set()
 
         while not self._end.is_set():
-            self._paused.wait()
-            if self._seeking or self._end.is_set():
-                break
-
             _read_t0 = time.monotonic()
             chunk = self._proc.stdout.read(65_536)
             _stats_read_block += time.monotonic() - _read_t0
@@ -1347,64 +1283,3 @@ class H264VideoPlayer(threading.Thread):
             self._proc.kill()
             rc = self._proc.wait()
         log.info("H.264 video stream ended (exit code %d)", rc)
-
-
-class HeadbanzPlayer(H264VideoPlayer):
-    """Streams a static composite image for the Headbanz/Adivinador game indefinitely
-    with silent audio.
-    """
-    def __init__(self, image_path: str, voice_client, fps: float = 15.0) -> None:
-        super().__init__(
-            url=image_path,
-            voice_client=voice_client,
-            fps=fps,
-            live=False,
-            audio=False,
-        )
-        self._image_path = image_path
-
-    def _ffmpeg_cmd(self) -> list[str]:
-        enc = self._enc
-        assert enc is not None, "HeadbanzPlayer started with no encoder available"
-
-        br = _stream_bitrate()
-
-        return [
-            "ffmpeg",
-            "-y",
-            "-loglevel",
-            "warning",
-            "-re",
-            "-loop",
-            "1",
-            "-i",
-            self._image_path,
-            "-f",
-            "lavfi",
-            "-i",
-            "anullsrc=r=48000:cl=stereo",
-            "-map",
-            "0:v:0",
-            "-c:v",
-            enc.name,
-            *enc.post_codec,
-            "-r",
-            str(int(self._fps)),
-            "-g",
-            str(int(self._fps)),
-            "-f",
-            "h264",
-            "pipe:1",
-            "-map",
-            "1:a:0",
-            "-c:a",
-            "pcm_s16le",
-            "-ar",
-            "48000",
-            "-ac",
-            "2",
-            "-f",
-            "s16le",
-            self._audio_fifo,
-        ]
-

@@ -31,10 +31,16 @@ import discord
 import discord.opus as _opus
 import nacl.secret
 import nacl.utils
-from discord.gateway import DiscordVoiceWebSocket
+try:
+    from discord.gateway import DiscordVoiceWebSocket
+except ImportError:
+    DiscordVoiceWebSocket = getattr(discord.gateway, "DiscordVoiceWebSocket", None)
 from discord.voice_state import SocketReader
 
 import davey_compat
+
+if TYPE_CHECKING:
+    from bot import SlopSoil
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +86,7 @@ class GoLiveConnection:
 
     def __init__(
         self,
-        bot: discord.Client,
+        bot: SlopSoil,
         guild_id: int,
         channel_id: int,
         vc: discord.VoiceClient,
@@ -114,7 +120,6 @@ class GoLiveConnection:
 
         self._poll_task: asyncio.Task | None = None
         self._socket_reader: SocketReader | None = None
-        self._ws_healthy = True
 
     # ── VoiceConnectionState-compatible properties ────────────────────────────
     # DiscordVoiceWebSocket.identify() (patched by video_compat) reads these.
@@ -150,11 +155,11 @@ class GoLiveConnection:
         )
 
     async def reinit_dave_session(self, force: bool = False) -> None:
-        log.info("GoLive: reinit_dave_session (version=%d, server_id=%s, force=%s)", self.dave_protocol_version, self.server_id, force)
         if self.dave_protocol_version > 0:
             if not force and self.dave_session is not None and getattr(self.dave_session, "ready", False):
-                log.info("GoLive: DaveSession already ready, ignoring redundant reinit_dave_session")
+                log.info("SlopSoilVoiceConnection: DaveSession already ready, ignoring redundant reinit_dave_session")
                 return
+            # channel_id for go-live DAVE group is server_id - 1
             dave_channel_id = self.server_id - 1  # type: ignore[operator]
             if self.dave_session is not None:
                 self.dave_session.reinit(
@@ -177,7 +182,6 @@ class GoLiveConnection:
             self.dave_session.set_passthrough_mode(True, 10)
 
     async def _recover_from_invalid_commit(self, transition_id: int) -> None:
-        log.warning("GoLive: _recover_from_invalid_commit called for transition_id=%d", transition_id)
         await self.ws.send_as_json(  # type: ignore[union-attr]
             {
                 "op": DiscordVoiceWebSocket.MLS_INVALID_COMMIT_WELCOME,
@@ -299,9 +303,6 @@ class GoLiveConnection:
             await self.ws.poll_event()  # type: ignore[union-attr]
         log.info("GoLive: IP discovery complete (%s:%s)", self.ip, self.port)
 
-        # Connect the UDP socket to the stream voice server endpoint
-        self.socket.connect((self.endpoint_ip, self.voice_port))
-
         # Poll until SESSION_DESCRIPTION arrives (ws.secret_key is set)
         while self.ws.secret_key is None:
             await self.ws.poll_event()
@@ -336,7 +337,6 @@ class GoLiveConnection:
             pass
         except Exception as exc:
             log.warning("GoLive WS poller ended: %s", exc)
-            self._ws_healthy = False
 
     def add_socket_listener(self, callback) -> None:
         if self._socket_reader is not None:
@@ -345,12 +345,6 @@ class GoLiveConnection:
     def remove_socket_listener(self, callback) -> None:
         if self._socket_reader is not None:
             self._socket_reader.unregister(callback)
-
-    @property
-    def healthy(self) -> bool:
-        if not self._ws_healthy or not self.ws or not getattr(self.ws, "ws", None):
-            return False
-        return not self.ws.ws.closed
 
     def send_packet(self, packet: bytes) -> None:
         """Send a raw RTP packet to the go-live stream server."""
@@ -363,14 +357,11 @@ class GoLiveConnection:
         """Stop the go-live stream and release all resources."""
         if self._stream_key:
             try:
-                await asyncio.wait_for(
-                    self._bot.ws.send_as_json(
-                        {
-                            "op": _OP_STREAM_DELETE,
-                            "d": {"stream_key": self._stream_key},
-                        }
-                    ),
-                    timeout=2.0,
+                await self._bot.ws.send_as_json(
+                    {
+                        "op": _OP_STREAM_DELETE,
+                        "d": {"stream_key": self._stream_key},
+                    }
                 )
                 log.info("Sent STREAM_DELETE for %s", self._stream_key)
             except Exception:
@@ -379,13 +370,13 @@ class GoLiveConnection:
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
             try:
-                await asyncio.wait_for(self._poll_task, timeout=2.0)
-            except (asyncio.CancelledError, Exception):
+                await self._poll_task
+            except asyncio.CancelledError:
                 pass
 
         try:
             if self.ws:
-                await asyncio.wait_for(self.ws.close(), timeout=2.0)
+                await self.ws.close()
         except Exception:
             pass
 
@@ -444,8 +435,6 @@ class GoLiveAudioSender(threading.Thread):
         file_obj,
         conn: GoLiveConnection,
         is_source_active: Callable[[], bool] | None = None,
-        initial_seq: int = 0,
-        initial_ts: int = 0,
     ) -> None:
         super().__init__(name="GoLiveAudio", daemon=True)
         self._f = file_obj
@@ -456,8 +445,8 @@ class GoLiveAudioSender(threading.Thread):
         # read is treated as that gap (wait for the new writer) rather than EOF.
         self._is_source_active = is_source_active
 
-        self._seq: int = initial_seq & 0xFFFF
-        self._ts: int = initial_ts & 0xFFFF_FFFF
+        self._seq: int = 0
+        self._ts: int = 0
         self._nonce: int = 0  # running nonce counter for lite/rtpsize modes
 
     def stop(self) -> None:
