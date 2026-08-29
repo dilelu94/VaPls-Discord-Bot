@@ -17,8 +17,8 @@ CONFIG_PATH = os.path.join(VOICE_DIR, f"{MODEL_NAME}.onnx.json")
 MODEL_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx"
 CONFIG_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx.json"
 
-# Voice filter: none (raw DaveFX male model)
-FFMPEG_FILTER = ""
+# Audio filter to add a subtle old man vocal texture (slightly lower pitch, warm bass, soft treble, subtle tremor)
+FFMPEG_FILTER = "asetrate=22050*0.90,aresample=22050,atempo=1.111,equalizer=f=160:g=3.5:width_type=h:width=120,equalizer=f=3000:g=-3.5:width_type=h:width=400,tremolo=f=4.5:d=0.10,volume=1.8,dynaudnorm=p=0.95:f=150"
 
 
 def ensure_model_exists() -> bool:

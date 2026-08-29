@@ -152,8 +152,9 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 4. El userbot capta el audio (con VAD por RMS), lo encodea en OGG y hace `POST replyCallbackUrl` con el blob.
 5. El bot de Telegram lo recibe y lo publica del lado Telegram.
 
-**Indio relay (texto del Indio → Telegram via userbot):**
-Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad del **userbot real** (no con la del bot vapls), llama `POST 127.0.0.1:8081/say` del userbot con `INDIO_RELAY_SECRET`. Útil para que las respuestas autom. en chat parezcan venir del Indio "real".
+**Indio relay (texto e interacción del Indio via userbot):**
+- **Chat:** Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad del **userbot real**, llama `POST 127.0.0.1:8081/say` del userbot con `INDIO_RELAY_SECRET`.
+- **Voz TTS:** Toda la síntesis de voz (Piper TTS `es_ES-davefx-medium` con filtro de voz madura) y su reproducción en canal de voz es responsabilidad **exclusiva del userbot** a través del endpoint `POST 127.0.0.1:8081/speak`. El bot principal VaPls no posee comando `/say` ni reproduce voz TTS.
 
 ## 🛠️ Comandos de Discord (Slash Commands)
 
@@ -167,7 +168,6 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 - `/sensibilidad` `1|2|3`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
 - `/stream <canal>`: busca en iptv-org y transmite en Go Live dentro del canal de voz del invocador. Requiere el proceso `golive/bot.py` corriendo.
 - `/stopstream`: detiene el stream activo en el servidor.
-- `/say <texto>`: sintetiza texto usando Piper TTS y procesado de voz FFmpeg para reproducirlo en el canal de voz.
 - `/banana` (Pausado/Inactivo): genera una imagen con Gemini (gratis, sin API key, usando Playwright). Actualmente en pausa por bloqueos de autenticación de Google.
 
 ## 📺 GoLive / IPTV (`/stream`)

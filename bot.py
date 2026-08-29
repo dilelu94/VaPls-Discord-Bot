@@ -23,7 +23,6 @@ from playCommand import playLogic
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
-from sayCommand import sayLogic
 from suggestionsCommand import (
     sugerenciasLogic,
     migrate_existing_suggestions,
@@ -1512,13 +1511,6 @@ async def sugerencias(
         log.warning("sugerencias defer failed: %s", e)
     _track_command(ctx, "sugerencias", {"idea_length": len(idea or "")})
     await sugerenciasLogic(ctx, idea)
-
-
-@bot.slash_command(name="say", description="Sintetiza texto en voz TTS y lo reproduce en el canal de voz")
-async def say(ctx, texto: discord.Option(str, "Texto a decir en voz alta", required=True)):
-    """Slash command: speak text using Piper TTS and FFmpeg filter."""
-    _track_command(ctx, "say", {"text_length": len(texto or "")})
-    await sayLogic(ctx, texto)
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
