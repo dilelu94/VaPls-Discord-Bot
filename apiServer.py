@@ -185,6 +185,7 @@ async def authMiddleware(request: web.Request, handler):
         or request.path.startswith("/privacy")
         or request.path.startswith("/delete-data")
         or request.path.startswith("/audio")
+        or request.path.startswith("/debug-idle")
     ):
         return await handler(request)
     err = _checkAuth(request)
