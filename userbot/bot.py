@@ -28,6 +28,11 @@ from aiohttp import web
 import discord  # discord.py-self
 from discord.ext import voice_recv
 
+# Ensure parent directory is in sys.path before importing root modules like config/greeting
+_parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
+
 import config
 import greeting
 from transcript_channel import (
@@ -41,9 +46,6 @@ from recording import (
     pcm_to_ogg_opus,
 )
 
-# Import the main bot's user mapping (parent directory) so we can show
-# friendly names instead of Discord display_name fallbacks.
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 try:
     from users import USERS as _USERS
 except Exception:
@@ -67,7 +69,11 @@ def _name_for(user_id: int, member=None) -> str:
 # know to call dave.decrypt(). Wrap each _decrypt_rtp_* method on
 # PacketDecryptor to apply DAVE decryption after AEAD.
 
-from discord.ext.voice_recv.reader import AudioReader, PacketDecryptor
+try:
+    from discord.ext.voice_recv.reader import AudioReader, PacketDecryptor
+except Exception:
+    AudioReader = object
+    PacketDecryptor = object
 
 try:
     import davey
@@ -178,33 +184,27 @@ def _install_dave_patch():
 
 
 def _install_opus_resilience_patch():
-    """Stop OpusError from killing the PacketRouter thread.
+    try:
+        from discord.ext.voice_recv import opus as _vr_opus
+        from discord.opus import OpusError
+        _orig_decode_packet = getattr(_vr_opus.PacketDecoder, "_decode_packet", None)
+        if _orig_decode_packet is None:
+            return
+        _err_count = {"n": 0}
 
-    When dave.decrypt() fails on a real Opus packet, the bytes we return are
-    not a valid Opus frame and opus_decode raises OpusError, which propagates
-    up the router thread's run() and kills the listener forever. Wrap the
-    decoder to swallow OpusError and produce silence instead.
-    """
-    from discord.ext.voice_recv import opus as _vr_opus
-    from discord.opus import OpusError
+        def safe_decode_packet(self, packet):
+            try:
+                return _orig_decode_packet(self, packet)
+            except OpusError as e:
+                _err_count["n"] += 1
+                n = _err_count["n"]
+                if n <= 3 or n % 500 == 0:
+                    log.info(f"[OPUS-SAFE] #{n} swallowed OpusError: {e}")
+                return packet, b""
 
-    _orig_decode_packet = _vr_opus.PacketDecoder._decode_packet
-    _err_count = {"n": 0}
-
-    def safe_decode_packet(self, packet):
-        try:
-            return _orig_decode_packet(self, packet)
-        except OpusError as e:
-            _err_count["n"] += 1
-            n = _err_count["n"]
-            if n <= 3 or n % 500 == 0:
-                log.info(f"[OPUS-SAFE] #{n} swallowed OpusError: {e}")
-            # Return empty PCM so the sink's `if not pcm_data: return` guard
-            # drops the packet entirely instead of feeding silence into VOSK,
-            # which would otherwise break the recognizer's context.
-            return packet, b""
-
-    _vr_opus.PacketDecoder._decode_packet = safe_decode_packet
+        _vr_opus.PacketDecoder._decode_packet = safe_decode_packet
+    except Exception:
+        pass
 
 
 # ---------- Logging --------------------------------------------------------
@@ -3781,6 +3781,42 @@ async def _relay_join(request: web.Request) -> web.Response:
     )
 
 
+async def _relay_leave(request: web.Request) -> web.Response:
+    """Make the userbot disconnect from voice in a specific guild.
+
+    Body: ``{"guild_id": <int>}``.
+    Auth: ``X-API-Secret`` header must equal ``config.RELAY_SECRET``.
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return web.json_response({"error": "guild not found"}, status=404)
+
+    vc = _vc_for_guild(guild)
+    if vc is None or not vc.is_connected():
+        return web.json_response({"left": False, "reason": "not connected"}, status=200)
+
+    try:
+        await vc.disconnect(force=True)
+        log.info(f"[RELAY-LEAVE] userbot disconnected from guild {guild_id}")
+        return web.json_response({"left": True, "guild_id": guild_id})
+    except Exception as e:
+        log.exception("[RELAY-LEAVE] disconnect failed")
+        return web.json_response({"error": f"leave failed: {e}"}, status=500)
+
+
+
 async def _relay_speak(request: web.Request) -> web.Response:
     """Synthesize TTS audio and play it in voice as the Indio userbot account.
 
@@ -4549,6 +4585,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_generarimagen", _relay_invoke_generarimagen)
     # app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
+    app.router.add_post("/leave", _relay_leave)
     app.router.add_post("/speak", _relay_speak)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
