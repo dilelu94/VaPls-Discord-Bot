@@ -53,35 +53,20 @@ async def test_golive_stream_initial_state():
 
 @pytest.mark.asyncio
 async def test_golive_stream_first_reel_delay():
-    """First Reel stream connect applies a 5-second initial connect sleep."""
+    """First Reel stream connect initializes stream via slopsoil."""
     mock_vc = MagicMock()
     mock_vc.ssrc = 100
+    mock_vc.move_to = AsyncMock()
 
     stream = GoLiveStream(None, 123, 456, mock_vc, "https://instagram.com/reel/123")
     
-    mock_connect = AsyncMock()
-    mock_start_players = AsyncMock()
-    mock_sleep = AsyncMock()
     mock_extract = AsyncMock(return_value=("https://instagram.com/reel/123", "Reel Title", False))
-
     ytdlp_module = sys.modules.get('ytdlp')
 
-    with patch("golive.bot.GoLiveConnection") as mock_golive_conn_class, \
-         patch.object(stream, "_start_players", mock_start_players), \
-         patch.object(ytdlp_module, "_yt_extract_url", mock_extract), \
-         patch("asyncio.sleep", mock_sleep), \
-         patch("asyncio.create_task") as mock_create_task:
-
-        mock_conn_inst = MagicMock()
-        mock_conn_inst.connect = mock_connect
-        mock_conn_inst.ssrc = 100
-        mock_golive_conn_class.return_value = mock_conn_inst
-
+    with patch("golive.bot.slopsoil_start_live_stream", AsyncMock()), \
+         patch.object(ytdlp_module, "_yt_extract_url", mock_extract):
         await stream.start()
-        
-        # Verify 5 second connect delay was applied
-        mock_sleep.assert_called_once_with(5.0)
-        assert stream.is_first_reel is False
+        assert stream.target_url == "https://instagram.com/reel/123"
 
 
 @pytest.mark.asyncio

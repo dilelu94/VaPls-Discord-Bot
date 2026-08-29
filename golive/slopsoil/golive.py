@@ -238,13 +238,19 @@ class GoLiveConnection:
             predicate=lambda d: d.get("stream_key", "") == stream_key,
         )
 
+async def _send_json_safe(ws, data):
+    res = ws.send_as_json(data)
+    if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+        await res
+
         log.info(
             "Sending STREAM_CREATE for guild=%s channel=%s user=%s",
             self.guild_id,
             self.channel_id,
             user_id,
         )
-        await main_ws.send_as_json(
+        await _send_json_safe(
+            main_ws,
             {
                 "op": _OP_STREAM_CREATE,
                 "d": {
@@ -253,16 +259,17 @@ class GoLiveConnection:
                     "channel_id": str(self.channel_id),
                     "preferred_region": None,
                 },
-            }
+            },
         )
-        await main_ws.send_as_json(
+        await _send_json_safe(
+            main_ws,
             {
                 "op": _OP_STREAM_SET_PAUSED,
                 "d": {
                     "stream_key": stream_key,
                     "paused": False,
                 },
-            }
+            },
         )
 
         # Wait for Discord to respond with stream server credentials

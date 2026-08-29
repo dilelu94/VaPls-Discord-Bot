@@ -393,6 +393,7 @@ _FALLBACK_USERS: dict[int, dict] = {
             "tiene contactos, nunca le van a hacer nada no importa que juicio le hagan",
             "siempre resuelve lo que sea pidiéndole a bibi unos bonbons",
             "estuvo presente en el momento en que nació la hija de Magote (Daniel)",
+            "tuvo una cirugía por cáncer de laringe (cáncer laríngeo) que salió bien, pero le afectó un poco las cuerdas vocales",
         ],
     },
 }

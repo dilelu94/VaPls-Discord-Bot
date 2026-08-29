@@ -331,6 +331,41 @@ textual description, then injects the description into Indio's history as
 }
 ```
 
+### POST `/indio/ask`
+
+Asks the Indio persona a question (with per-guild short-term memory and long-term lore) and optionally returns a Piper TTS voice reply URL for Telegram voice responses.
+
+**Body (JSON)**
+
+```json
+{
+  "guild_id": 451575911704428554,
+  "question": "¿Qué opina del fernet?",
+  "speaker": "Mati",
+  "voice_reply": true
+}
+```
+
+- `guild_id` (required) — the Discord guild ID whose Indio memory bucket to use.
+- `question` (required) — the text prompt / question.
+- `speaker` (optional) — display name of the requester.
+- `voice_reply` (optional, default `false`) — when `true`, synthesizes an OGG audio response via Piper TTS and returns an `audio_url`.
+
+**Response**
+
+```json
+{
+  "answer": "El fernet se toma con coca y hielo, che.",
+  "audio_url": "http://141.148.84.55/audio/indio_178798299.ogg"
+}
+```
+
+### GET `/audio/{filename}`
+
+Public static audio serving endpoint used by Telegram bridge to fetch generated TTS voice replies.
+
+- Serves OGG audio files with `Content-Type: audio/ogg`.
+
 The description is truncated to 200 characters in the response for display
 purposes; the full description is stored in Indio's memory.
 

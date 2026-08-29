@@ -249,9 +249,11 @@ def mock_golive_infra(monkeypatch):
 
 def _make_stream(url="https://youtube.com/watch?v=test"):
     from golive.bot import GoLiveStream
+    vc = MagicMock()
+    vc.move_to = AsyncMock()
     return GoLiveStream(
         bot=MagicMock(), guild_id=1, channel_id=2,
-        vc=MagicMock(), url=url,
+        vc=vc, url=url,
     )
 
 

@@ -1,5 +1,6 @@
 # Discord Bot
 .env
+*.env
 *.pyc
 __pycache__/
 

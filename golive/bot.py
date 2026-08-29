@@ -113,17 +113,49 @@ class GoLiveStream:
         self.title = title
 
         log.info("[STREAM] Establishing GoLive connection...")
-        self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
-        await self.conn.connect(timeout=30.0)
-        self.video_ssrc = self.conn.ssrc + 1
+        
+        async def _dummy_send(msg, **kwargs):
+            log.info("[STREAM_STATUS] %s", msg)
+
+        guild = client.get_guild(self.guild_id)
+        channel = guild.get_channel(self.channel_id) if guild else None
+        if guild and not self.vc:
+            self.vc = _vc_for_guild(guild)
 
         if self.is_first_reel:
             log.info("[STREAM] First Instagram Reel detected. Pausing 5 seconds for viewers to connect...")
             await asyncio.sleep(5.0)
-            # Reset is_first_reel so subsequent queued items in this stream don't delay
             self.is_first_reel = False
-        
-        await self._start_players()
+
+        try:
+            await slopsoil_start_live_stream(
+                bot=client,
+                send=_dummy_send,
+                guild=guild,
+                voice_channel=channel,
+                vc=self.vc,
+                title=self.title,
+                url=self.target_url,
+                live=self.is_live,
+                audio=True,
+            )
+            self.conn = getattr(client, "live_connections", {}).get(self.guild_id)
+            self.video_player = getattr(client, "video_players", {}).get(self.guild_id)
+            self.video_ssrc = (self.conn.ssrc + 1) if (self.conn and hasattr(self.conn, "ssrc")) else 101
+        except Exception as e:
+            log.warning("[STREAM] slopsoil_start_live_stream fallback to direct connection: %s", e)
+            try:
+                from golive_connection import GoLiveConnection
+            except ModuleNotFoundError:
+                from golive.slopsoil.golive import GoLiveConnection
+            self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
+            conn_res = self.conn.connect(timeout=30.0)
+            if asyncio.iscoroutine(conn_res) or hasattr(conn_res, "__await__"):
+                await conn_res
+            self.video_ssrc = self.conn.ssrc + 1
+            
+            await self._start_players()
+
         self._inactivity_task = asyncio.create_task(self._inactivity_loop())
 
     async def _start_players(self):
@@ -650,6 +682,26 @@ async def _relay_stream(request: web.Request) -> web.Response:
     if not client.is_ready():
         return web.json_response({"error": "client not ready"}, status=503)
 
+    existing = _active_streams.get(guild_id)
+    if existing and not getattr(existing, "_stopped", True):
+        is_existing_reel = "instagram.com" in (getattr(existing, "url", "") or "")
+        is_new_reel = "instagram.com" in url
+        if is_existing_reel or is_new_reel or hasattr(existing, "queue"):
+            if not hasattr(existing, "queue"):
+                existing.queue = []
+            if not hasattr(existing, "queue_titles"):
+                existing.queue_titles = []
+            existing.queue.append(url)
+            existing.queue_titles.append(stream_title)
+            log.info("[STREAM] Queued reel for guild=%s: %s (pos %d)", guild_id, url, len(existing.queue))
+            if len(existing.queue) == 1 and hasattr(existing, "_prefetch_next"):
+                asyncio.create_task(existing._prefetch_next())
+            return web.json_response({
+                "queued": True,
+                "position": len(existing.queue),
+                "guild_id": guild_id
+            })
+
     guild = client.get_guild(guild_id)
     if guild is None:
         log.warning("[STREAM] guild not found: %s", guild_id)
@@ -675,51 +727,30 @@ async def _relay_stream(request: web.Request) -> web.Response:
     await _join_channel(channel)
     vc = _vc_for_guild(guild)
 
-    target_url = url
-    is_live = True
-    if target_url.startswith(("http://", "https://")):
-        from urllib.parse import urlparse
-        _path = urlparse(target_url).path.lower()
-        if _path.endswith((".m3u8", ".mpd", ".m3u")) or ".m3u8" in target_url.lower():
-            log.info("[STREAM] Direct stream URL detected — skipping yt-dlp")
-        else:
-            from ytdlp import _yt_extract_url
-            try:
-                res = await _yt_extract_url(target_url)
-                if res:
-                    extracted_url, extracted_title, extracted_live = res
-                    target_url = extracted_url
-                    if extracted_title:
-                        stream_title = extracted_title
-                    is_live = extracted_live
-            except Exception as exc:
-                log.warning("[STREAM] yt-dlp extraction failed: %s", exc)
+    if stream_title:
+        task = _nick_restore_tasks.pop(guild_id, None)
+        if task:
+            task.cancel()
+        await _set_nickname(guild, f"GoLive - {stream_title}")
 
-    async def _dummy_send(msg, **kwargs):
-        log.info("[STREAM_STATUS] %s", msg)
-
+    stream = GoLiveStream(client, guild_id, channel_id, vc, url)
     try:
-        await slopsoil_start_live_stream(
-            bot=client,
-            send=_dummy_send,
-            guild=guild,
-            voice_channel=channel,
-            vc=vc,
-            title=stream_title,
-            url=target_url,
-            live=is_live,
-            audio=True,
-        )
-        log.info("[STREAM] started via Slopsoil engine guild=%s channel=%s", guild_id, channel.name)
-        return web.json_response({
-            "started": True,
-            "guild_id": guild_id,
-            "channel_name": channel.name,
-            "engine": "slopsoil_native"
-        })
+        await stream.start()
     except Exception as e:
         log.exception("[STREAM] failed to start stream via Slopsoil engine")
+        await stream.stop()
         return web.json_response({"error": str(e)}, status=500)
+
+    _active_streams[guild_id] = stream
+    log.info("[STREAM] started guild=%s channel=%s engine=slopsoil", guild_id, channel.name)
+    return web.json_response({
+        "started": True,
+        "guild_id": guild_id,
+        "channel_name": channel.name,
+        "video_ssrc": stream.video_ssrc,
+        "is_live": stream.is_live,
+        "engine": "slopsoil_native"
+    })
 
 
 async def _relay_headbanz(request: web.Request) -> web.Response:
@@ -741,7 +772,7 @@ async def _relay_headbanz(request: web.Request) -> web.Response:
         return web.json_response({"error": "client not ready"}, status=503)
 
     existing = _active_streams.get(guild_id)
-    if existing and not existing._stopped:
+    if existing and not getattr(existing, "_stopped", True):
         log.warning("[HEADBANZ] already streaming for guild=%s", guild_id)
         return web.json_response({"error": "busy", "message": "Already streaming"}, status=409)
 
@@ -798,12 +829,15 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
 
     try:
         slopsoil_cancel_live_stream(client, guild_id)
-        existing = _active_streams.pop(guild_id, None)
-        if existing:
-            await existing.stop()
     except Exception as e:
-        log.exception("[STOPSTREAM] stop failed")
-        return web.json_response({"error": str(e)}, status=500)
+        log.warning("[STOPSTREAM] slopsoil_cancel_live_stream error: %s", e)
+
+    stream = _active_streams.pop(guild_id, None)
+    if stream:
+        try:
+            await stream.stop()
+        except Exception as e:
+            log.warning("[STOPSTREAM] stream stop failed: %s", e)
 
     log.info("[STOPSTREAM] stopped guild=%s", guild_id)
     return web.json_response({"stopped": True, "guild_id": guild_id})
@@ -822,30 +856,54 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid body"}, status=400)
 
     stream = _active_streams.get(guild_id)
-    if stream is None:
+    vp = getattr(client, "video_players", {}).get(guild_id)
+    conn = getattr(client, "live_connections", {}).get(guild_id)
+
+    if stream is None and vp is None and conn is None:
         return web.json_response({"error": "no active stream"}, status=404)
 
     if action == "pause":
-        stream.pause()
+        if stream and hasattr(stream, "pause"):
+            stream.pause()
+        elif vp and hasattr(vp, "pause"):
+            vp.pause()
+        return web.json_response({"status": "paused", "guild_id": guild_id})
     elif action == "resume":
-        stream.resume()
+        if stream and hasattr(stream, "resume"):
+            stream.resume()
+        elif vp and hasattr(vp, "resume"):
+            vp.resume()
+        return web.json_response({"status": "resumed", "guild_id": guild_id})
     elif action == "seek":
         try:
             target_sec = float(data.get("timestamp", 0))
-            stream.seek(target_sec)
+            if stream and hasattr(stream, "seek"):
+                stream.seek(target_sec)
+            elif vp and hasattr(vp, "seek"):
+                vp.seek(target_sec)
+            return web.json_response({"status": "seeked", "timestamp": target_sec, "guild_id": guild_id})
         except ValueError:
             return web.json_response({"error": "invalid timestamp"}, status=400)
     elif action == "status":
         if stream:
             return web.json_response({
                 "exists": True,
-                "stopped": stream._stopped,
-                "is_live": stream.is_live,
-                "video_player": str(stream.video_player),
-                "video_player_alive": stream.video_player.is_alive() if stream.video_player else None,
-                "audio_sender": str(stream.audio_sender),
-                "audio_sender_alive": stream.audio_sender.is_alive() if stream.audio_sender else None,
-                "conn_healthy": stream.conn.healthy if stream.conn else None,
+                "stopped": getattr(stream, "_stopped", False),
+                "is_live": getattr(stream, "is_live", True),
+                "video_player": str(getattr(stream, "video_player", None)),
+                "video_player_alive": stream.video_player.is_alive() if getattr(stream, "video_player", None) else None,
+                "audio_sender": str(getattr(stream, "audio_sender", None)),
+                "audio_sender_alive": stream.audio_sender.is_alive() if getattr(stream, "audio_sender", None) else None,
+                "conn_healthy": stream.conn.healthy if getattr(stream, "conn", None) and hasattr(stream.conn, "healthy") else None,
+            })
+        elif vp or conn:
+            return web.json_response({
+                "exists": True,
+                "stopped": False,
+                "is_live": True,
+                "video_player": str(vp),
+                "video_player_alive": vp.is_alive() if vp else False,
+                "conn_healthy": conn.healthy if conn and hasattr(conn, "healthy") else True,
             })
         return web.json_response({"exists": False})
 
@@ -862,7 +920,7 @@ async def _idle_watcher(guild_id: int):
             await asyncio.sleep(2)
 
             # Check if there is an active stream in this guild
-            has_stream = guild_id in _active_streams
+            has_stream = (guild_id in _active_streams) or (hasattr(client, "live_connections") and guild_id in client.live_connections) or (hasattr(client, "video_players") and guild_id in client.video_players)
 
             # Find the voice client
             vc = None

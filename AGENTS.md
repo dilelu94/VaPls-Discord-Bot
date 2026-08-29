@@ -144,6 +144,8 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 - `POST /message` — publica texto en un canal de Discord.
 - `POST /play-audio` — descarga un audio de Telegram y lo reproduce en el canal de voz de Discord. Auto-elige canal (preferencia: donde está el Indio; fallback: el más poblado). Acepta un `replyCallbackUrl` opcional.
 - `POST /indio` — invoca al Indio con una pregunta (memoria corta + lore destilado).
+- `POST /indio/ask` — invoca al Indio desde Telegram con opción `voice_reply: true` para obtener respuesta textual y URL de audio TTS.
+- `GET /audio/{filename}` — sirve archivos de audio OGG generados para respuestas de voz de Telegram.
 - `GET /status` `GET /members` `GET /user/{id}` `GET /queue` `GET /playing` — read-only.
 
 **Voice-reply flow (Discord → Telegram):**

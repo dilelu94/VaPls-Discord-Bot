@@ -27,10 +27,17 @@ from .video_player import _ENCODER as _VIDEO_ENCODER
 from .video_player import H264VideoPlayer, _AudioPipeSource, _stream_fps
 
 async def ensure_voice(voice_channel, vc):
-    if vc is None or not vc.is_connected():
-        return await voice_channel.connect(reconnect=True, timeout=20.0)
-    if vc.channel.id != voice_channel.id:
-        await vc.move_to(voice_channel)
+    if voice_channel is None:
+        return vc
+    if vc is None or not (callable(getattr(vc, "is_connected", None)) and vc.is_connected()):
+        res = voice_channel.connect(reconnect=True, timeout=20.0)
+        if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+            return await res
+        return res
+    if hasattr(vc, "channel") and hasattr(vc.channel, "id") and hasattr(voice_channel, "id") and vc.channel.id != voice_channel.id:
+        res = vc.move_to(voice_channel)
+        if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+            await res
     return vc
 
 log = logging.getLogger("golive.slopsoil.engine")
