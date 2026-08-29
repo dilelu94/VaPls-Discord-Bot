@@ -264,7 +264,10 @@ import re
 import threading
 from collections import defaultdict, deque
 
-import numpy as np
+try:
+    import numpy as np
+except Exception:
+    np = None
 from faster_whisper import WhisperModel
 
 if getattr(config, "WHISPER_ENABLED", False):

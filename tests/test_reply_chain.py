@@ -11,11 +11,14 @@ if repo_root not in sys.path:
 if userbot_dir not in sys.path:
     sys.path.append(userbot_dir)
 
-if "discord.ext.voice_recv" not in sys.modules:
-    sys.modules["discord.ext.voice_recv"] = MagicMock()
+for _mod in ("discord.ext.voice_recv", "faster_whisper", "vosk", "davey"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
 
-if "faster_whisper" not in sys.modules:
-    sys.modules["faster_whisper"] = MagicMock()
+if "numpy" not in sys.modules:
+    mock_np = MagicMock()
+    mock_np.bool_ = bool
+    sys.modules["numpy"] = mock_np
 
 import pytest
 import config
