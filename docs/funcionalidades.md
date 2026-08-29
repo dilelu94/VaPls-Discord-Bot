@@ -240,8 +240,7 @@ El proceso más técnico. Funciones clave:
   `is_voice=True`); el main bot prefija el texto con `[voz] ` antes de
   pasárselo al Indio.
 
-**Auto-reply en chat de texto:** si alguien escribe "indio" en un canal, reenvía
-el mensaje al `/indio` (cooldown de 3 s por canal y tope horario por guild).
+**Auto-reply en chat de texto:** si alguien escribe "indio" o le responde a un mensaje en un canal (soporta cadenas de respuestas anidadas multinivel $A \rightarrow B \rightarrow C$), reenvía el mensaje y su cadena de contexto de respuestas al `/indio` (cooldown de 3 s por canal y tope horario por guild).
 
 **DMs con keys:** reenvía keys de Gemini al endpoint `/gemini-key` del main bot.
 

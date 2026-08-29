@@ -72,8 +72,10 @@ def _name_for(user_id: int, member=None) -> str:
 try:
     from discord.ext.voice_recv.reader import AudioReader, PacketDecryptor
 except Exception:
-    AudioReader = object
-    PacketDecryptor = object
+    class AudioReader:
+        pass
+    class PacketDecryptor:
+        pass
 
 try:
     import davey
@@ -265,7 +267,7 @@ from collections import defaultdict, deque
 import numpy as np
 from faster_whisper import WhisperModel
 
-if config.WHISPER_ENABLED:
+if getattr(config, "WHISPER_ENABLED", False):
     log.info(
         f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
         f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
@@ -2730,6 +2732,95 @@ async def _handle_indio_image_dm(message) -> bool:
     return True
 
 
+async def _extract_reply_chain(message, max_depth: int = 4):
+    """Traverse nested Discord message replies up to ``max_depth`` levels.
+
+    Returns:
+        tuple[Optional[str], Optional[str], bool, Optional[list[dict]]]:
+          - replied_content: parent message text (or multiline string of nested reply chain)
+          - replied_author: display name of direct parent message author
+          - is_reply_to_indio: True if ANY message in the ancestor chain was authored by Indio/VaPls
+          - attachment_urls: media attachments extracted from nearest parent that has attachments
+    """
+    chain = []
+    current = message
+    attachment_urls = None
+    is_reply_to_indio = False
+
+    for _ in range(max_depth):
+        ref = getattr(current, "reference", None)
+        if ref is None:
+            break
+        ref_msg = getattr(current, "referenced_message", None)
+        if ref_msg is None and ref.message_id is not None:
+            try:
+                ref_msg = await current.channel.fetch_message(ref.message_id)
+            except Exception:
+                log.warning("[AUTOREPLY] fetch_message failed for reply reference")
+                break
+        if ref_msg is None or ref_msg.author is None:
+            break
+
+        vapls_id = getattr(config, "VAPLS_BOT_ID", None)
+        if ref_msg.author.id in {client.user.id, vapls_id}:
+            is_reply_to_indio = True
+
+        author_name = _name_for(ref_msg.author.id, ref_msg.author)
+        content = (ref_msg.content or "").strip()[:500]
+
+        if attachment_urls is None:
+            images = [
+                a
+                for a in (ref_msg.attachments or [])
+                if a.content_type and a.content_type.startswith("image/")
+            ][:3]
+            if images:
+                attachment_urls = [
+                    {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
+                    for a in images
+                ]
+            else:
+                videos = [
+                    a
+                    for a in (ref_msg.attachments or [])
+                    if a.content_type and a.content_type.startswith("video/")
+                ]
+                if videos:
+                    attachment_urls = [
+                        {
+                            "url": a.url,
+                            "mime_type": a.content_type,
+                            "filename": a.filename,
+                        }
+                        for a in videos[:1]
+                    ]
+
+        chain.append({"author": author_name, "content": content})
+        current = ref_msg
+
+    if not chain:
+        return None, None, False, None
+
+    chain.reverse()
+
+    replied_author = chain[-1]["author"]
+    if len(chain) == 1:
+        replied_content = chain[0]["content"]
+    else:
+        formatted_items = []
+        for i, item in enumerate(chain):
+            if i == 0:
+                formatted_items.append(f"{item['author']}: {item['content']}")
+            else:
+                prev_author = chain[i - 1]["author"]
+                formatted_items.append(
+                    f"{item['author']} (respondiendo a {prev_author}): {item['content']}"
+                )
+        replied_content = "\n".join(formatted_items)
+
+    return replied_content, replied_author, is_reply_to_indio, attachment_urls
+
+
 @client.event
 async def on_message(message):
     """Auto-reply trigger: when any human (not the userbot, not other bots,
@@ -2763,49 +2854,9 @@ async def on_message(message):
         return
 
     # ---- Extract replied-to message context for the indio ----
-    replied_content = None
-    replied_author = None
-    attachment_urls = None
-    ref = message.reference
-    ref_msg = None
-    is_reply_to_indio = False
-    if ref is not None:
-        ref_msg = getattr(message, "referenced_message", None)
-        if ref_msg is None and ref.message_id is not None:
-            try:
-                ref_msg = await message.channel.fetch_message(ref.message_id)
-            except Exception:
-                log.warning("[AUTOREPLY] fetch_message failed for autoreply reference")
-        if ref_msg is not None and ref_msg.author is not None:
-            if ref_msg.author.id in {client.user.id, config.VAPLS_BOT_ID}:
-                is_reply_to_indio = True
-            replied_content = (ref_msg.content or "")[:500]
-            replied_author = _name_for(ref_msg.author.id, ref_msg.author)
-            images = [
-                a
-                for a in (ref_msg.attachments or [])
-                if a.content_type and a.content_type.startswith("image/")
-            ][:3]
-            if images:
-                attachment_urls = [
-                    {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
-                    for a in images
-                ]
-            else:
-                videos = [
-                    a
-                    for a in (ref_msg.attachments or [])
-                    if a.content_type and a.content_type.startswith("video/")
-                ]
-                if videos:
-                    attachment_urls = [
-                        {
-                            "url": a.url,
-                            "mime_type": a.content_type,
-                            "filename": a.filename,
-                        }
-                        for a in videos[:1]
-                    ]
+    replied_content, replied_author, is_reply_to_indio, attachment_urls = (
+        await _extract_reply_chain(message)
+    )
 
     if not (is_reply_to_indio or _INDIO_TEXT_WAKE_RE.search(content)):
         return

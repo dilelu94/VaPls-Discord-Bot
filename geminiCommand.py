@@ -5577,7 +5577,10 @@ async def indioFromVoice(
                 image_parts = downloaded
 
     if replied_content is not None and replied_author is not None:
-        ctx_lines = [f"[contexto: {replied_author} dijo: {replied_content}]"]
+        if "\n" in replied_content:
+            ctx_lines = [f"[contexto: {replied_author} dijo:\n{replied_content}]"]
+        else:
+            ctx_lines = [f"[contexto: {replied_author} dijo: {replied_content}]"]
         if attachment_urls:
             videos = [
                 u
