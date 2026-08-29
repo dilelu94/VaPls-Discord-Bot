@@ -19,7 +19,7 @@ if "faster_whisper" not in sys.modules:
 
 import pytest
 import config
-from userbot.bot import _extract_reply_chain
+from userbot.bot import _extract_reply_chain, _extract_media_from_message
 
 
 def _make_msg(
@@ -28,11 +28,15 @@ def _make_msg(
     author_name: str,
     ref_msg=None,
     attachments=None,
+    snapshots=None,
+    embeds=None,
 ):
     msg = MagicMock()
     msg.content = content
     msg.author = SimpleNamespace(id=author_id, display_name=author_name, bot=False)
     msg.attachments = attachments or []
+    msg.message_snapshots = snapshots or []
+    msg.embeds = embeds or []
     if ref_msg:
         msg.reference = SimpleNamespace(message_id=999)
         msg.referenced_message = ref_msg
@@ -100,3 +104,38 @@ async def test_extract_reply_chain_respects_max_depth():
 
     assert "User4" in author or "User4" in content
     assert "User1" not in content  # Truncated by max_depth
+
+
+def test_extract_media_from_message_forwarded_snapshot():
+    """Forwarded message snapshot attachments are extracted properly."""
+    attach = MagicMock()
+    attach.url = "https://cdn.discordapp.com/attachments/1/2/photo.jpg"
+    attach.content_type = "image/jpeg"
+    attach.filename = "photo.jpg"
+
+    snap = MagicMock()
+    snap.message = MagicMock()
+    snap.message.attachments = [attach]
+
+    msg = _make_msg("Mirá esto", 101, "User1", snapshots=[snap])
+
+    media = _extract_media_from_message(msg)
+    assert media is not None
+    assert len(media) == 1
+    assert media[0]["url"] == "https://cdn.discordapp.com/attachments/1/2/photo.jpg"
+    assert media[0]["mime_type"] == "image/jpeg"
+
+
+def test_extract_media_from_message_content_url():
+    """Image URLs in message content are extracted as fallback media."""
+    msg = _make_msg(
+        "Miren esta foto https://cdn.discordapp.com/attachments/123/456/meme.png",
+        101,
+        "User1",
+    )
+
+    media = _extract_media_from_message(msg)
+    assert media is not None
+    assert len(media) == 1
+    assert media[0]["url"] == "https://cdn.discordapp.com/attachments/123/456/meme.png"
+    assert media[0]["mime_type"] == "image/png"

@@ -2732,6 +2732,109 @@ async def _handle_indio_image_dm(message) -> bool:
     return True
 
 
+_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+_VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv")
+_IMAGE_URL_RE = re.compile(
+    r"https?://\S+\.(?:png|jpg|jpeg|webp|gif)(?:\?\S*)?", re.IGNORECASE
+)
+
+
+def _guess_mime_type(url: str, default: str = "image/jpeg") -> str:
+    lower = url.lower().split("?")[0]
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".gif"):
+        return "image/gif"
+    if lower.endswith(".webp"):
+        return "image/webp"
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        return "image/jpeg"
+    if lower.endswith(".mp4"):
+        return "video/mp4"
+    if lower.endswith(".webm"):
+        return "video/webm"
+    return default
+
+
+def _extract_media_from_message(msg) -> Optional[list[dict]]:
+    """Extract image or video attachment dicts from a message object.
+
+    Handles:
+    - Direct attachments (msg.attachments)
+    - Discord Native Forward snapshots (msg.message_snapshots)
+    - Embedded images/thumbnails (msg.embeds)
+    - Image URLs in msg.content (e.g. cdn.discordapp.com links)
+    """
+    out: list[dict] = []
+    seen_urls: set[str] = set()
+
+    def _add(url: str, mime_type: str, filename: str = "image.jpg"):
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            out.append({"url": url, "mime_type": mime_type, "filename": filename})
+
+    # 1. Direct attachments
+    for a in getattr(msg, "attachments", []) or []:
+        ctype = getattr(a, "content_type", "") or ""
+        fname = getattr(a, "filename", "") or ""
+        url = getattr(a, "url", "") or ""
+        if ctype.startswith("image/"):
+            _add(url, ctype, fname)
+        elif not ctype and any(fname.lower().endswith(ext) for ext in _IMAGE_EXTS):
+            _add(url, _guess_mime_type(fname), fname)
+
+    # 2. Forwarded message snapshots (Discord Native Forwarding)
+    snapshots = getattr(msg, "message_snapshots", []) or []
+    for snap in snapshots:
+        snap_msg = getattr(snap, "message", snap)
+        for a in getattr(snap_msg, "attachments", []) or []:
+            ctype = getattr(a, "content_type", "") or ""
+            fname = getattr(a, "filename", "") or ""
+            url = getattr(a, "url", "") or ""
+            if ctype.startswith("image/"):
+                _add(url, ctype, fname)
+            elif not ctype and any(
+                fname.lower().endswith(ext) for ext in _IMAGE_EXTS
+            ):
+                _add(url, _guess_mime_type(fname), fname)
+
+    # 3. Embeds (embedded images, forward link previews)
+    for embed in getattr(msg, "embeds", []) or []:
+        image = getattr(embed, "image", None)
+        if image and getattr(image, "url", None):
+            _add(image.url, _guess_mime_type(image.url), "embed.jpg")
+        thumbnail = getattr(embed, "thumbnail", None)
+        if thumbnail and getattr(thumbnail, "url", None):
+            _add(thumbnail.url, _guess_mime_type(thumbnail.url), "thumb.jpg")
+
+    # 4. Image URLs in text content (e.g. cdn.discordapp.com forwarded links)
+    content = getattr(msg, "content", "") or ""
+    if content:
+        for match_url in _IMAGE_URL_RE.findall(content):
+            _add(match_url, _guess_mime_type(match_url), "link_image.jpg")
+
+    if out:
+        return out[:3]
+
+    # Fallback to video if no images found
+    for a in getattr(msg, "attachments", []) or []:
+        ctype = getattr(a, "content_type", "") or ""
+        url = getattr(a, "url", "") or ""
+        fname = getattr(a, "filename", "") or ""
+        if ctype.startswith("video/") or any(
+            fname.lower().endswith(ext) for ext in _VIDEO_EXTS
+        ):
+            return [
+                {
+                    "url": url,
+                    "mime_type": ctype or "video/mp4",
+                    "filename": fname or "video.mp4",
+                }
+            ]
+
+    return None
+
+
 async def _extract_reply_chain(message, max_depth: int = 4):
     """Traverse nested Discord message replies up to ``max_depth`` levels.
 
@@ -2768,32 +2871,18 @@ async def _extract_reply_chain(message, max_depth: int = 4):
         author_name = _name_for(ref_msg.author.id, ref_msg.author)
         content = (ref_msg.content or "").strip()[:500]
 
+        # Forwarded snapshot content
+        snapshots = getattr(ref_msg, "message_snapshots", []) or []
+        if snapshots:
+            snap_text = (
+                getattr(getattr(snapshots[0], "message", snapshots[0]), "content", "")
+                or ""
+            ).strip()[:500]
+            if snap_text:
+                content = f"{content} [reenviado: {snap_text}]".strip() if content else f"[reenviado: {snap_text}]"
+
         if attachment_urls is None:
-            images = [
-                a
-                for a in (ref_msg.attachments or [])
-                if a.content_type and a.content_type.startswith("image/")
-            ][:3]
-            if images:
-                attachment_urls = [
-                    {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
-                    for a in images
-                ]
-            else:
-                videos = [
-                    a
-                    for a in (ref_msg.attachments or [])
-                    if a.content_type and a.content_type.startswith("video/")
-                ]
-                if videos:
-                    attachment_urls = [
-                        {
-                            "url": a.url,
-                            "mime_type": a.content_type,
-                            "filename": a.filename,
-                        }
-                        for a in videos[:1]
-                    ]
+            attachment_urls = _extract_media_from_message(ref_msg)
 
         chain.append({"author": author_name, "content": content})
         current = ref_msg
@@ -2879,29 +2968,9 @@ async def on_message(message):
         f" by {speaker_name}: {content[:100]!r}"
     )
 
-    # Si no hay adjuntos del reply, usar los del mensaje actual (wake-word directa)
-    if attachment_urls is None and message.attachments:
-        images = [
-            a
-            for a in message.attachments
-            if a.content_type and a.content_type.startswith("image/")
-        ][:3]
-        if images:
-            attachment_urls = [
-                {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
-                for a in images
-            ]
-        else:
-            videos = [
-                a
-                for a in message.attachments
-                if a.content_type and a.content_type.startswith("video/")
-            ]
-            if videos:
-                attachment_urls = [
-                    {"url": a.url, "mime_type": a.content_type, "filename": a.filename}
-                    for a in videos[:1]
-                ]
+    # Si no hay adjuntos del reply, usar los del mensaje actual (wake-word directa o reenviados)
+    if attachment_urls is None:
+        attachment_urls = _extract_media_from_message(message)
     asyncio.create_task(
         _dispatch_to_indio(
             guild_id=guild.id,
