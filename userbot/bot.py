@@ -3781,6 +3781,91 @@ async def _relay_join(request: web.Request) -> web.Response:
     )
 
 
+async def _relay_speak(request: web.Request) -> web.Response:
+    """Synthesize TTS audio and play it in voice as the Indio userbot account.
+
+    Body: ``{"guild_id": <int>, "text": <str>, "channel_id": <int opcional>, "user_id": <int opcional>}``
+    """
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        text = str(data["text"])
+        channel_id = data.get("channel_id")
+        user_id = data.get("user_id")
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        return web.json_response({"error": "guild not found"}, status=404)
+
+    vc = _vc_for_guild(guild)
+    if vc is None or not vc.is_connected():
+        target_channel = None
+        if channel_id:
+            ch = guild.get_channel(int(channel_id))
+            if isinstance(ch, discord.VoiceChannel):
+                target_channel = ch
+        if target_channel is None and user_id:
+            m = guild.get_member(int(user_id))
+            if m and getattr(m, "voice", None):
+                target_channel = getattr(m.voice, "channel", None)
+        if target_channel is None:
+            for ch in guild.voice_channels:
+                if any(not getattr(mem, "bot", False) for mem in ch.members):
+                    target_channel = ch
+                    break
+        if target_channel is not None:
+            try:
+                await _join_channel(target_channel)
+                vc = _vc_for_guild(guild)
+            except Exception as e:
+                log.exception("[RELAY-SPEAK] failed to join voice channel: %s", e)
+                return web.json_response({"error": f"voice join failed: {e}"}, status=500)
+        else:
+            return web.json_response({"error": "no active voice channel found"}, status=400)
+
+    if vc is None or not vc.is_connected():
+        return web.json_response({"error": "userbot not connected to voice"}, status=400)
+
+    import tts
+    try:
+        wav_path = await asyncio.to_thread(tts.generate_tts_wav, text)
+        if not wav_path or not os.path.exists(wav_path):
+            return web.json_response({"error": "tts generation failed"}, status=500)
+    except Exception as e:
+        log.exception("[RELAY-SPEAK] tts generation exception: %s", e)
+        return web.json_response({"error": f"tts generation error: {e}"}, status=500)
+
+    def _after(_err):
+        try:
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+        except Exception:
+            pass
+
+    try:
+        source = discord.FFmpegOpusAudio(wav_path, options=greeting.FFMPEG_NORMALIZE_OPTS)
+        vc.play(source, after=_after)
+        log.info(
+            "[RELAY-SPEAK] userbot speaking TTS text (length=%d) in %s",
+            len(text),
+            getattr(vc.channel, "name", "?"),
+        )
+        return web.json_response({"spoken": True, "channel_id": getattr(vc.channel, "id", None)})
+    except Exception as e:
+        log.exception("[RELAY-SPEAK] vc.play failed: %s", e)
+        _after(None)
+        return web.json_response({"error": f"play failed: {e}"}, status=500)
+
+
 async def _relay_edit(request: web.Request) -> web.Response:
     """Edit a message that the userbot previously posted in a text channel.
 
@@ -4464,6 +4549,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/invoke_generarimagen", _relay_invoke_generarimagen)
     # app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
+    app.router.add_post("/speak", _relay_speak)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
     app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)

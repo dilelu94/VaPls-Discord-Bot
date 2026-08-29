@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import aiohttp
 import geminiCommand
-import tts
 
 
 def test_clean_text_for_speech():
@@ -20,24 +20,38 @@ def test_clean_text_for_speech():
 
 
 @pytest.mark.asyncio
-async def test_speak_indio_reply_plays_audio(monkeypatch, tmp_path):
-    bot = MagicMock(name="Bot")
-    guild = MagicMock(name="Guild")
-    fake_vc = MagicMock(name="VoiceClient")
-    fake_vc.is_connected.return_value = True
-    fake_vc.play = MagicMock()
-    guild.voice_client = fake_vc
-    bot.get_guild.return_value = guild
+async def test_speak_indio_reply_posts_to_userbot_relay(monkeypatch):
+    posted_payload = {}
+
+    class MockResponse:
+        status = 200
+        async def text(self):
+            return "OK"
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs):
+            pass
+        def post(self, url, json=None, headers=None, timeout=None):
+            nonlocal posted_payload
+            posted_payload = json
+            return MockResponse()
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+
+    monkeypatch.setattr(aiohttp, "ClientSession", MockSession)
 
     member = MagicMock(name="Member")
+    member.id = 999
     member.voice = SimpleNamespace(channel=MagicMock(id=100))
 
-    fake_wav = str(tmp_path / "indio_reply.wav")
-    with open(fake_wav, "wb") as f:
-        f.write(b"RIFF....WAVEfmt ....data....")
+    await geminiCommand._speak_indio_reply(None, 12345, member, "Hola che, respondiendo en voz.")
 
-    monkeypatch.setattr(tts, "generate_tts_wav", lambda text, output_path=None: fake_wav)
-
-    await geminiCommand._speak_indio_reply(bot, 12345, member, "Hola che, respondiendo en voz.")
-
-    assert fake_vc.play.called
+    assert posted_payload.get("guild_id") == 12345
+    assert "respondiendo en voz" in posted_payload.get("text", "")
+    assert posted_payload.get("user_id") == 999

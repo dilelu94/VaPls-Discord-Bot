@@ -4368,8 +4368,8 @@ async def _speak_indio_reply(
     member: Optional[discord.Member],
     text: str,
 ) -> None:
-    """Synthesize and play the Indio's response text in the voice channel."""
-    if not text or not guild_id or not bot:
+    """Send text to the Userbot (Indio) HTTP relay so the Userbot account speaks the response in voice."""
+    if not text or not guild_id:
         return
     spoken = _clean_text_for_speech(text)
     if not spoken:
@@ -4377,37 +4377,41 @@ async def _speak_indio_reply(
     if len(spoken) > 250:
         spoken = spoken[:250] + "..."
 
-    guild = bot.get_guild(int(guild_id))
-    if not guild:
-        return
+    relay_url = getattr(config, "INDIO_RELAY_URL", None) or "http://127.0.0.1:8081"
+    relay_secret = getattr(config, "INDIO_RELAY_SECRET", "")
 
-    vc = guild.voice_client
-    if vc is None or not vc.is_connected():
-        target_channel = getattr(getattr(member, "voice", None), "channel", None)
-        if target_channel is not None:
-            try:
-                vc = await target_channel.connect(reconnect=True, timeout=5.0)
-            except Exception as e:
-                logger.warning("Failed to connect to voice channel for indio reply: %s", e)
-                return
-        else:
-            return
+    base = relay_url.rstrip("/")
+    if base.endswith("/say"):
+        base = base[:-4]
+    endpoint = f"{base}/speak"
 
-    if vc and vc.is_connected():
-        try:
-            wav_path = await asyncio.to_thread(tts.generate_tts_wav, spoken)
-            if not wav_path or not os.path.exists(wav_path):
-                return
-            loop = asyncio.get_running_loop()
-            def _after(_err):
-                try:
-                    if os.path.exists(wav_path):
-                        os.remove(wav_path)
-                except Exception:
-                    pass
-            vc.play(discord.FFmpegOpusAudio(wav_path), after=_after)
-        except Exception as e:
-            logger.warning("Error playing spoken indio reply: %s", e)
+    channel_id = getattr(getattr(getattr(member, "voice", None), "channel", None), "id", None)
+    user_id = getattr(member, "id", None)
+
+    payload = {
+        "guild_id": int(guild_id),
+        "text": spoken,
+        "channel_id": channel_id,
+        "user_id": user_id,
+    }
+
+    headers = {}
+    if relay_secret:
+        headers["X-API-Secret"] = relay_secret
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    logger.warning("[INDIO-SPEAK] relay HTTP %s: %s", resp.status, body[:200])
+    except Exception as e:
+        logger.warning("[INDIO-SPEAK] relay HTTP POST failed: %s", e)
 
 
 async def _relay_to_userbot(
