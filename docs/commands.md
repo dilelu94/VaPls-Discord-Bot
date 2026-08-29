@@ -82,6 +82,15 @@ El botón 🚫 busca otro **del mismo artista**.
 - Si se va todo el mundo del canal de voz → cancela lo pendiente y sigue el
   camino normal de fin de cola.
 
-**Filtros:** nunca propone temas de más de 10 minutos ni algo que ya sonó en la
-sesión. El motor normal es el Mix/radio de YouTube (respeta el mood); el veto
-cae a búsqueda del mismo artista.
+- Filtros: nunca propone temas de más de 10 minutos ni algo que ya sonó en la
+  sesión. El motor normal es el Mix/radio de YouTube (respeta el mood); el veto
+  cae a búsqueda del mismo artista.
+
+## 🎭 Acciones de Rolplay y Reacción del Indio
+
+El Indio cuenta con herramientas dinámicas de Gemini para reaccionar dramáticamente o jugar con los miembros del grupo durante una conversación de chat o voz:
+
+- **`disconnect_indio` (Desconexión temporal / Mic Drop)**:
+  Cuando el Indio se enoja, indigna o hace un mic drop en roleplay (ej: _"me re pudrí", "me voy"_), puede desconectarse temporalmente del canal de voz por una duración en segundos (de 5 a 30 s, por defecto 10 s) y reconectarse automáticamente al terminar la pausa.
+- **`troll_move_user` (Mover usuario adentro y afuera)**:
+  Cuando un usuario lo molesta o para hacer una broma de roleplay, el Indio puede mover al usuario objetivo a otro canal de voz del servidor y devolverlo a su canal original un par de veces, asegurando que quede en su canal de inicio al finalizar la secuencia. Reacciona informando en el chat el resultado de la acción.

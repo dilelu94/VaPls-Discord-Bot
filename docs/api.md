@@ -338,10 +338,27 @@ purposes; the full description is stored in Indio's memory.
 
 ---
 
-## Userbot relay API
+### POST `/leave`
 
-These endpoints are served by the **userbot** (`apiServer` on `127.0.0.1:8081`).
-All requests must include `X-API-Secret: <RELAY_SECRET>`.
+Make the userbot disconnect from voice in a specific guild.
+
+**Body (JSON)**
+
+```json
+{ "guild_id": 451575911704428554 }
+```
+
+**Response**
+
+```json
+{ "left": true, "guild_id": 451575911704428554 }
+```
+
+When the userbot is not connected to voice in that guild, returns:
+
+```json
+{ "left": false, "reason": "not connected" }
+```
 
 ### POST `/sensibilidad`
 

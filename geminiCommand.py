@@ -158,6 +158,8 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("dj_mode")} → `dj_mode`
 - {_fmt_trigger("spacewar_guide")} → `spacewar_guide` \
 - {_fmt_trigger("use_image")} → `use_image` \
+- {_fmt_trigger("disconnect_indio")} → `disconnect_indio` \
+- {_fmt_trigger("troll_move_user")} → `troll_move_user` \
 
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
@@ -441,6 +443,46 @@ _INDIO_TOOLS = [
                 },
             },
             "required": ["image_id"],
+        },
+    },
+    {
+        "name": "disconnect_indio",
+        "description": (
+            "Desconectarse (el Indio) temporalmente del canal de voz por unos segundos "
+            "como reacción dramática, indignación, enojo o roleplay (ej: 'me re pudrí', "
+            "'me voy', mic drop). Te desconectarás unos segundos y luego te reconectarás "
+            "automáticamente al canal de voz."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "duration_seconds": {
+                    "type": "INTEGER",
+                    "description": (
+                        "Segundos que estarás desconectado (entre 5 y 30, por defecto 10)."
+                    ),
+                },
+            },
+        },
+    },
+    {
+        "name": "troll_move_user",
+        "description": (
+            "Mover a un usuario adentro y afuera de su canal de voz (cambiarlo de canal "
+            "y devolverlo al original un par de veces) como broma, castigo o reacción "
+            "de roleplay cuando te enojás con él o te está molestando."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "target_user": {
+                    "type": "STRING",
+                    "description": (
+                        "Nombre o apodo del usuario a mover. Si querés mover al que "
+                        "te acaba de hablar, usá 'requester' o dejalo en blanco."
+                    ),
+                },
+            },
         },
     },
 ]
@@ -2726,6 +2768,8 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "edit_image": ("EDIT_IMAGE", "prompt"),
     "spacewar_guide": ("SPACEWAR_GUIDE", None),
     "use_image": ("USE_IMAGE", None),
+    "disconnect_indio": ("DISCONNECT_INDIO", None),
+    "troll_move_user": ("TROLL_MOVE_USER", "target_user"),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -2739,6 +2783,8 @@ _ACTION_FALLBACK_TEXT = {
     "EDIT_IMAGE": "🎨 Editando imagen...",
     "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
     "USE_IMAGE": "",
+    "DISCONNECT_INDIO": "🚪 Me voy un rato",
+    "TROLL_MOVE_USER": "🔀 A dar una vuelta",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
@@ -3052,6 +3098,11 @@ _ACTION_FAILURE_MESSAGES = {
     "resume: nothing to resume": "no me acuerdo qué estaba sonando, decime qué pongo",
     "pause: not playing": "no estaba sonando nada, no tengo qué pausar",
     "sound: fail — music playing": "no se puede, hay música sonando",
+    "disconnect: not in voice": "no estoy en ningún canal de voz para irme",
+    "move: target not in voice": "el usuario no está en ningún canal de voz para moverlo",
+    "move: no other channel": "no hay otro canal de voz en el servidor para moverlo",
+    "move: missing permissions": "no tengo permisos para mover miembros de voz",
+    "move: target not found": "no encontré a ese usuario en el servidor",
 }
 
 
@@ -3110,6 +3161,8 @@ _ACTION_SUCCESS_SUFFIX = {
     "USE_IMAGE": "",
     "SPACEWAR_GUIDE": "",
     "DJ_MODE": "",
+    "DISCONNECT_INDIO": "listo 🚪",
+    "TROLL_MOVE_USER": "listo 🔀",
 }
 
 # When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
@@ -3668,6 +3721,125 @@ async def _dispatch_indio_actions(
                             e, properties={"action": "indio_dj_mode_failed"}
                         )
                         statuses.append("dj_mode: fail — exception")
+                elif action == "DISCONNECT_INDIO":
+                    duration_secs = 10
+                    if arg:
+                        try:
+                            if isinstance(arg, str) and arg.startswith("{"):
+                                import json as _json
+
+                                data = _json.loads(arg)
+                                duration_secs = int(data.get("duration_seconds", 10))
+                            else:
+                                duration_secs = int(arg)
+                        except Exception:
+                            duration_secs = 10
+                    duration_secs = max(5, min(30, duration_secs))
+
+                    voice_ch = None
+                    if bot and guild_id:
+                        guild = bot.get_guild(int(guild_id))
+                        if guild:
+                            bot_user_id = getattr(getattr(bot, "user", None), "id", 0)
+                            for ch in guild.voice_channels:
+                                if any(m.id == bot_user_id for m in ch.members) or (
+                                    requester_member
+                                    and getattr(getattr(requester_member, "voice", None), "channel", None) == ch
+                                ):
+                                    voice_ch = ch
+                                    break
+
+                    left_relay = await _relay_leave_to_userbot(int(guild_id))
+                    left_main = False
+                    if bot and guild_id:
+                        for v in bot.voice_clients:
+                            if getattr(v, "guild", None) and v.guild.id == int(guild_id):
+                                await v.disconnect(force=True)
+                                left_main = True
+
+                    if left_relay or left_main or voice_ch is not None:
+                        statuses.append("disconnect: ok")
+                        logger.info("indio DISCONNECT_INDIO → left voice, duration=%ds", duration_secs)
+                        target_ch_id = getattr(voice_ch, "id", None)
+                        if target_ch_id:
+
+                            async def _rejoin_later():
+                                await asyncio.sleep(duration_secs)
+                                await _relay_join_to_userbot(target_ch_id)
+
+                            _spawn(_rejoin_later())
+                    else:
+                        statuses.append("disconnect: not in voice")
+
+                elif action == "TROLL_MOVE_USER":
+                    if not bot or not guild_id:
+                        statuses.append("move: fail — no bot or guild")
+                    else:
+                        guild = bot.get_guild(int(guild_id))
+                        target_member = None
+                        if arg:
+                            target_str = str(arg).strip().lower()
+                            if target_str in ("requester", "el usuario", "usuario", "") or (
+                                requester_member
+                                and (
+                                    target_str in requester_member.name.lower()
+                                    or target_str in (requester_member.display_name or "").lower()
+                                )
+                            ):
+                                target_member = requester_member
+                            elif guild:
+                                for m in guild.members:
+                                    if (
+                                        target_str in m.name.lower()
+                                        or target_str in (m.display_name or "").lower()
+                                    ):
+                                        target_member = m
+                                        break
+                        if target_member is None:
+                            target_member = requester_member
+
+                        if target_member is None:
+                            statuses.append("move: target not found")
+                        else:
+                            voice_state = getattr(target_member, "voice", None)
+                            orig_vc = getattr(voice_state, "channel", None) if voice_state else None
+                            if orig_vc is None:
+                                statuses.append("move: target not in voice")
+                            else:
+                                other_vcs = [ch for ch in guild.voice_channels if ch.id != orig_vc.id]
+                                if not other_vcs:
+                                    statuses.append("move: no other channel")
+                                else:
+                                    alt_vc = other_vcs[0]
+                                    me = getattr(guild, "me", None)
+                                    perms = orig_vc.permissions_for(me) if me and hasattr(orig_vc, "permissions_for") else None
+                                    if perms and not getattr(perms, "move_members", True):
+                                        statuses.append("move: missing permissions")
+                                    else:
+                                        statuses.append("move: ok")
+                                        logger.info(
+                                            "indio TROLL_MOVE_USER → moving %s (%s) between %s and %s",
+                                            getattr(target_member, "display_name", target_member.name),
+                                            target_member.id,
+                                            orig_vc.name,
+                                            alt_vc.name,
+                                        )
+
+                                        async def _do_move_sequence(mem, ch1, ch2):
+                                            try:
+                                                for _ in range(2):
+                                                    if not getattr(getattr(mem, "voice", None), "channel", None):
+                                                        break
+                                                    await mem.move_to(ch2)
+                                                    await asyncio.sleep(0.7)
+                                                    if not getattr(getattr(mem, "voice", None), "channel", None):
+                                                        break
+                                                    await mem.move_to(ch1)
+                                                    await asyncio.sleep(0.7)
+                                            except Exception as e:
+                                                logger.warning("troll_move_user error: %s", e)
+
+                                        _spawn(_do_move_sequence(target_member, orig_vc, alt_vc))
                 elif action in (
                     "SKIP_MUSIC",
                     "PAUSE_MUSIC",
@@ -4504,6 +4676,48 @@ async def _edit_via_userbot(channel_id: int, message_id: int, content: str) -> b
     except Exception:
         logger.warning("indio relay edit failed: %s", "see traceback", exc_info=True)
         return False
+
+
+async def _relay_leave_to_userbot(guild_id: int) -> bool:
+    """Ask the userbot to disconnect from voice in a given guild via POST /leave."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+    leave_url = urljoin(url, "/leave")
+    payload = {"guild_id": int(guild_id)}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(leave_url, json=payload, headers=headers) as resp:
+                if resp.status < 400:
+                    data = await resp.json(content_type=None)
+                    return bool((data or {}).get("left"))
+                return False
+    except Exception as e:
+        logger.warning("indio relay leave failed: %s", e)
+        return False
+
+
+async def _relay_join_to_userbot(channel_id: int) -> bool:
+    """Ask the userbot to join voice in a given channel via POST /join."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+    join_url = urljoin(url, "/join")
+    payload = {"channel_id": int(channel_id)}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(join_url, json=payload, headers=headers) as resp:
+                return resp.status < 400
+    except Exception as e:
+        logger.warning("indio relay join failed: %s", e)
+        return False
+
 
 
 def _format_contributors_line() -> str:
