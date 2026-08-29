@@ -964,118 +964,13 @@ except ModuleNotFoundError:
 
 
 async def _relay_stream2(request: web.Request) -> web.Response:
-    log.info("[STREAM2] request from %s", request.remote)
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        log.warning("[STREAM2] 401 auth mismatch: header=%r vs config=%r", request.headers.get("X-API-Secret"), config.RELAY_SECRET)
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-        channel_id = int(data["channel_id"])
-        url = str(data["url"]).strip()
-    except Exception as e:
-        log.warning("[STREAM2] invalid body: %s", e)
-        return web.json_response({"error": "invalid body"}, status=400)
-    if not url:
-        return web.json_response({"error": "empty url"}, status=400)
-
-    stream_title = str(data.get("channel_name", "")).strip() or "Stream2"
-
-    if not client.is_ready():
-        return web.json_response({"error": "client not ready"}, status=503)
-
-    guild = client.get_guild(guild_id)
-    if guild is None:
-        return web.json_response({"error": "guild not found"}, status=404)
-
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.VoiceChannel):
-        try:
-            channel = await client.fetch_channel(channel_id)
-        except Exception as e:
-            return web.json_response({"error": f"channel not found: {e}"}, status=404)
-
-    if not isinstance(channel, discord.VoiceChannel):
-        return web.json_response({"error": "not a voice channel"}, status=400)
-
-    if not hasattr(client, "stream_tasks"):
-        client.stream_tasks = {}
-    if not hasattr(client, "video_players"):
-        client.video_players = {}
-    if not hasattr(client, "live_connections"):
-        client.live_connections = {}
-
-    vc = _vc_for_guild(guild)
-
-    target_url = url
-    is_live = True
-    if target_url.startswith(("http://", "https://")):
-        from urllib.parse import urlparse
-        _path = urlparse(target_url).path.lower()
-        if _path.endswith((".m3u8", ".mpd", ".m3u")) or ".m3u8" in target_url.lower():
-            log.info("[STREAM2] Direct stream URL detected — skipping yt-dlp")
-        else:
-            from ytdlp import _yt_extract_url
-            log.info("[STREAM2] Resolving stream URL via yt-dlp for %s", target_url)
-            try:
-                res = await _yt_extract_url(target_url)
-                if res:
-                    extracted_url, extracted_title, extracted_live = res
-                    target_url = extracted_url
-                    if extracted_title:
-                        stream_title = extracted_title
-                    is_live = extracted_live
-                    log.info("[STREAM2] Extracted stream: %s -> %s (live=%s)", stream_title, target_url, is_live)
-                else:
-                    log.warning("[STREAM2] yt-dlp extraction returned None for %s", target_url)
-            except Exception as exc:
-                log.warning("[STREAM2] yt-dlp extraction failed for %s: %s", target_url, exc)
-
-    async def _dummy_send(msg, **kwargs):
-        log.info("[STREAM2_STATUS] %s", msg)
-
-    try:
-        await slopsoil_start_live_stream(
-            bot=client,
-            send=_dummy_send,
-            guild=guild,
-            voice_channel=channel,
-            vc=vc,
-            title=stream_title,
-            url=target_url,
-            live=is_live,
-            audio=True,
-        )
-        log.info("[STREAM2] started via Slopsoil engine guild=%s channel=%s", guild_id, channel.name)
-        return web.json_response({
-            "started": True,
-            "guild_id": guild_id,
-            "channel_name": channel.name,
-            "engine": "slopsoil_native"
-        })
-    except Exception as e:
-        log.exception("[STREAM2] failed to start stream via Slopsoil engine")
-        return web.json_response({"error": str(e)}, status=500)
+    log.info("[STREAM2] delegating to main _relay_stream")
+    return await _relay_stream(request)
 
 
 async def _relay_stopstream2(request: web.Request) -> web.Response:
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-    except Exception as e:
-        return web.json_response({"error": "invalid body"}, status=400)
-
-    if hasattr(client, "live_connections"):
-        slopsoil_cancel_live_stream(client, guild_id)
-
-    log.info("[STOPSTREAM2] stopped guild=%s", guild_id)
-    return web.json_response({"stopped": True, "guild_id": guild_id})
+    log.info("[STOPSTREAM2] delegating to main _relay_stopstream")
+    return await _relay_stopstream(request)
 
 
 async def _start_relay() -> Optional[web.AppRunner]:

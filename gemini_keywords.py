@@ -129,6 +129,16 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "acordate de la imagen de",
         "mostrá esa imagen",
     ],
+    "disconnect_indio": [
+        "desconectate",
+        "andate del canal",
+        "chao indio",
+    ],
+    "troll_move_user": [
+        "movelo a",
+        "sacalo del canal",
+        "sacudilo",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────
