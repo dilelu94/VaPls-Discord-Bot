@@ -41,7 +41,9 @@ VaPls runs as two cooperating processes:
 - **greeting.py**: Greeting trigger + throttling. Uses `users.py` and config.
 - **users.py**: Per-user greeting audio mapping.
 - **config.py / userbot/config.py**: Environment-driven configuration.
+- **baseView.py**: `BaseView` base class for interactive Discord UI views (`discord.ui.View`). Automatically strips buttons/components (`view=None`) on timeout.
 - **tests/testSoundpad.py**: Soundpad UI and pagination tests.
+- **tests/test_views_timeout.py**: Behavioral and enforcement tests for `BaseView` and button timeouts.
 
 ## Data flows
 

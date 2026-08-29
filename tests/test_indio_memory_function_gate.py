@@ -183,21 +183,20 @@ async def test_indioFromVoice_text_normal_saves_history(
 
 
 # ---------------------------------------------------------------------------
-# indioFromVoice voice path (from_voice=True) — already excluded
+# indioFromVoice voice path (from_voice=True) — smart filtering
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.slow
-async def test_indioFromVoice_voice_skips_history(
+async def test_indioFromVoice_voice_function_call_skips_history(
     indio, patch_generate, reply_factory, monkeypatch
 ):
-    """Voz (from_voice=True): no se guarda nunca, tenga o no function call."""
+    """Voz (from_voice=True): mensaje que dispara una funcion (play_music) no se guarda."""
     import config
 
     monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
     monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
 
-    # Con function call — no se guarda
     patch_generate(
         reply=reply_factory(
             text="dale",
@@ -218,10 +217,10 @@ async def test_indioFromVoice_voice_skips_history(
     assert len(history(indio, channel_id=111)) == 0
 
 
-async def test_indioFromVoice_voice_no_function_still_no_history(
+async def test_indioFromVoice_voice_trivial_skips_history(
     indio, patch_generate, reply_factory, monkeypatch
 ):
-    """Voz (from_voice=True): sin function call tampoco se guarda."""
+    """Voz (from_voice=True): mensaje trivial o corto (hola, ok, etc.) no se guarda para evitar ruido."""
     import config
 
     monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
@@ -234,9 +233,34 @@ async def test_indioFromVoice_voice_no_function_still_no_history(
         user_id=42,
         guild_id=100,
         channel_id=111,
-        pregunta="che indio como va",
+        pregunta="hola",
         speaker_name="Tobi",
         from_voice=True,
     )
 
     assert len(history(indio, channel_id=111)) == 0
+
+
+async def test_indioFromVoice_voice_conversational_saves_history(
+    indio, patch_generate, reply_factory, monkeypatch
+):
+    """Voz (from_voice=True): charla conversacional con contenido real se guarda en memoria."""
+    import config
+
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+
+    patch_generate(reply=reply_factory(text="Un guachiturro le dice al otro..."))
+    bot, _ = _make_bot_and_channel()
+    await indioFromVoice(
+        bot,
+        user_id=42,
+        guild_id=100,
+        channel_id=111,
+        pregunta="Contame un chiste de humor negro",
+        speaker_name="Tobi",
+        from_voice=True,
+    )
+
+    assert len(history(indio, channel_id=111)) == 2
+

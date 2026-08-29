@@ -20,6 +20,7 @@ from typing import NamedTuple, Optional
 from urllib.parse import urljoin
 
 import aiohttp
+from baseView import BaseView
 
 
 
@@ -701,7 +702,7 @@ def _autodj_next_generic_query() -> str:
     return q
 
 
-class AutoDJSuggestionView(discord.ui.View):
+class AutoDJSuggestionView(BaseView):
     """Shown during the grace period after an Auto-DJ suggestion.
 
     Three buttons: veto the suggestion, play it immediately, or shut Auto-DJ off.
@@ -741,7 +742,7 @@ class AutoDJSuggestionView(discord.ui.View):
         await self.player.autodj_deactivate(reason="button")
 
 
-class AutodjHistoryView(discord.ui.View):
+class AutodjHistoryView(BaseView):
     """View for the Auto-DJ history message.
 
     A single toggle button that swaps between showing just the last song
@@ -774,7 +775,7 @@ class AutodjHistoryView(discord.ui.View):
             pass
 
 
-class DjMenuView(discord.ui.View):
+class DjMenuView(BaseView):
     """Interactive menu posted by /dj (and by the Indio when he detects the request
     in the text chat). Buttons wire directly to the GuildPlayer Auto-DJ API.
 
@@ -889,7 +890,7 @@ async def openDjMenu(bot, guild_id: int, channel_id: Optional[int] = None) -> tu
     return True, "modo DJ activado"
 
 
-class CancelDownloadView(discord.ui.View):
+class CancelDownloadView(BaseView):
     """UI view that lets a user cancel the initial yt-dlp download."""
 
     def __init__(self, player, videoId: str, videoTitle: str):
@@ -1298,6 +1299,8 @@ class GuildPlayer:
                 self.autodj_suggestion_msg = await self.textChannel.send(
                     content, view=view
                 )
+                if view:
+                    view.message = self.autodj_suggestion_msg
             except Exception:
                 pass
         self.autodj_grace_task = self.bot.loop.create_task(self._autodj_grace_timer())
@@ -1760,6 +1763,8 @@ class GuildPlayer:
         if self.indioProgressMessage:
             try:
                 await self.indioProgressMessage.edit(content=msg_content, view=view)
+                if view:
+                    view.message = self.indioProgressMessage
             except Exception:
                 pass
             if isFirst:
@@ -1772,6 +1777,11 @@ class GuildPlayer:
                 }
         elif isFirst:
             await ctx.interaction.edit_original_response(content=msg_content, view=view)
+            if view:
+                try:
+                    view.message = await ctx.interaction.original_response()
+                except Exception:
+                    pass
         else:
             await safeEdit(ctx, msg_content)
         await self._enqueueAndMaybeStart(songs)
@@ -2752,7 +2762,7 @@ def build_queue_embed(player: Optional["GuildPlayer"]) -> discord.Embed:
     return embed
 
 
-class PlayerControlView(discord.ui.View):
+class PlayerControlView(BaseView):
     """Playback control buttons for the GuildPlayer UI."""
 
     def __init__(self, player: GuildPlayer):
@@ -2838,7 +2848,7 @@ class PlayerControlView(discord.ui.View):
         )
 
 
-class InterruptedView(discord.ui.View):
+class InterruptedView(BaseView):
     """Minimal view shown when playback is interrupted mid-stream.
 
     Shows a ▶️ Reconectar button that resumes the full GuildPlayer (current
@@ -2976,7 +2986,7 @@ class InterruptedView(discord.ui.View):
             pass
 
 
-class DisconnectedControlView(discord.ui.View):
+class DisconnectedControlView(BaseView):
     """Dead control panel shown after an idle disconnect.
 
     Mirrors the playback controls greyed-out (so the panel still reads as a

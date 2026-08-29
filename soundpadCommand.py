@@ -8,6 +8,7 @@ import discord
 import config
 import analytics
 import geminiKeys
+from baseView import BaseView
 
 
 _log = logging.getLogger("bot.soundpad")
@@ -59,11 +60,10 @@ async def disable_panels(guild_id: int) -> None:
     """
     views = _active_panels.pop(guild_id, [])
     for v in views:
-        for item in v.children:
-            item.disabled = True
+        v.clear_items()
         if v.message is not None:
             try:
-                await v.message.edit(view=v)
+                await v.message.edit(view=None)
             except Exception:
                 pass
 
@@ -351,7 +351,7 @@ async def play_clip_by_query(
     return path
 
 
-class SoundpadView(discord.ui.View):
+class SoundpadView(BaseView):
     """Interactive UI for browsing and playing soundpad audio files."""
 
     def __init__(self, output_dir: str, guild_id: "int | None" = None):
@@ -369,7 +369,6 @@ class SoundpadView(discord.ui.View):
         """
         super().__init__(timeout=60)
         self.output_dir = output_dir
-        self.message = None
         self.guild_id = guild_id
         self.is_playing = False
 
@@ -401,17 +400,10 @@ class SoundpadView(discord.ui.View):
         if self.guild_id is not None:
             _register_panel(self)
 
-    async def on_timeout(self):
-        """Remove this panel from registry and disable UI components when it expires."""
+    async def on_timeout_extra(self):
+        """Remove this panel from registry when it expires."""
         if self.guild_id is not None:
             _unregister_panel(self.guild_id, self)
-        for item in self.children:
-            item.disabled = True
-        if self.message is not None:
-            try:
-                await self.message.edit(view=self)
-            except Exception:
-                pass
 
     def get_subfolders(self, category: str):
         """Return the list of subfolders for a category.
@@ -1000,7 +992,7 @@ class SoundpadView(discord.ui.View):
             await interaction.response.defer()
 
 
-class SoundpadStopView(discord.ui.View):
+class SoundpadStopView(BaseView):
     """One-button view shown while a /soundpad query-mode clip is playing.
 
     Pressing the button stops playback. ``play_clip_by_query`` is awaiting the
@@ -1011,7 +1003,6 @@ class SoundpadStopView(discord.ui.View):
     def __init__(self, guild: discord.Guild):
         super().__init__(timeout=600)
         self.guild = guild
-        self.message = None
 
     @discord.ui.button(
         label="⏹️ Parar", style=discord.ButtonStyle.danger, custom_id="sp_query_stop"

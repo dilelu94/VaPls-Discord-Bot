@@ -209,7 +209,7 @@ pasándola mal, bancalo. Si un amigo hizo algo piola, decile. Un "che, te \
 quería decir que..." wholesome de vez en cuando está perfecto. No todo el \
 tiempo, no forzado, pero que se note que te importan tus amigos. Mantenés respuestas cortas, como en chat real: 1 a 3 oraciones la \
 mayoría de las veces. Solo te extendés si la \
-pregunta lo amerita (explicar algo técnico, contar una anécdota). Tirás algún \
+pregunta lo amerita (explicar algo técnico, contar una anécdota, o contar un chiste — cuando te pidan un chiste o adivinanza, contalo COMPLETO con su remate en la misma respuesta, sin dejarlo a la mitad ni hacer pausas). Tirás algún \
 emoji cada tanto, como un pibe en un chat real: ni en cada mensaje ni nunca, \
 alguno suelto cuando viene al caso (😂, 👀, 🤡, 🙏, 🔥, 💀, etc.). Si el \
 server tiene emojis custom, los CONOCÉS — más abajo te paso la lista — y los \
@@ -4489,6 +4489,9 @@ _EMOJI_SHORTCODE_RE = re.compile(r"(?<!\w):[A-Za-z0-9_]{2,}:(?!\w)")
 # persisted memory.
 _DISCORD_MENTION_RE = re.compile(r"<[@#][&!]?\d+>")
 
+# [voz] marker from STT transcriptions — strip from saved history.
+_VOZ_MARKER_RE = re.compile(r"\[voz\]\s*", re.IGNORECASE)
+
 # Collapse 3+ blank lines into 2 (sanitization can leave extra whitespace).
 _MULTIBLANK_RE = re.compile(r"\n{3,}")
 
@@ -4502,6 +4505,7 @@ def _sanitize_for_history(text: str) -> str:
     - Strips bare emoji shortcodes ``:name:``.
     - Strips Discord user/channel/role mentions ``<@123>`` / ``<#456>`` /
       ``<@&789>``: opaque numeric ids that the model can't interpret.
+    - Strips ``[voz]`` markers from STT voice transcriptions.
 
     The visible reply to Discord is NOT passed through this — emojis and
     mentions still render in the chat. Only the persisted memory is scrubbed,
@@ -4510,6 +4514,7 @@ def _sanitize_for_history(text: str) -> str:
     if not text:
         return text
     out = _LEGACY_BRACKETED_SPEAKER_RE.sub(r"\1\2: ", text, count=1)
+    out = _VOZ_MARKER_RE.sub("", out)
     out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
     out = _EMOJI_SHORTCODE_RE.sub("", out)
     out = _DISCORD_MENTION_RE.sub("", out)
@@ -5813,11 +5818,20 @@ async def indioFromVoice(
             )
         )
 
-    # No guardar mensajes que activaron una funcion (play_music, etc.) ni
-    # transcripciones de voz: son mensajes operativos que contaminan el historial
-    # y generan feedback loop "voz → play_music".
+    # Save conversational turns to history, excluding function calls (play_music, etc.).
+    # For voice turns (from_voice=True), apply smart filtering to avoid saving
+    # trivial/noisy transcriptions (greetings, short noise < 8 chars) that clog memory.
+    should_save_history = False
+    if not reply.function_calls:
+        if not from_voice:
+            should_save_history = True
+        else:
+            clean_p = _VOZ_MARKER_RE.sub("", pregunta or "").strip()
+            if not _is_trivial(clean_p) and len(clean_p) >= 8:
+                should_save_history = True
+
     history_size_after = 0
-    if not from_voice and not reply.function_calls:
+    if should_save_history:
         _turn_ts = time.time()
         user_turn = {
             "role": "user",

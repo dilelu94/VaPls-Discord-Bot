@@ -20,6 +20,7 @@ import discord
 from discord.ext import commands, tasks
 
 from playCommand import playLogic
+from baseView import BaseView
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
 from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
@@ -1780,7 +1781,7 @@ class StreamSeekModal(discord.ui.Modal):
             await interaction.response.send_message("❌ Error de comunicación con el stream.", ephemeral=True)
 
 
-class StreamControlView(discord.ui.View):
+class StreamControlView(BaseView):
     def __init__(self, guild_id: int):
         super().__init__(timeout=None)
         self.guild_id = guild_id
@@ -1860,7 +1861,7 @@ class IptvSearchModal(discord.ui.Modal):
         await self.parent_view.update_message(interaction)
 
 
-class IptvSearchView(discord.ui.View):
+class IptvSearchView(BaseView):
     """Interactive UI for browsing and filtering IPTV channels.
 
     Supports pagination (25 channels per page with ◀️ ▶️ buttons) and
@@ -2087,9 +2088,12 @@ class IptvSearchView(discord.ui.View):
 
     async def update_message(self, interaction: discord.Interaction, status_text: str = None):
         embed = self._build_embed(status_text)
+        self.bound_interaction = interaction
         try:
             if interaction.response.is_done():
-                await interaction.edit_original_response(embed=embed, view=self)
+                res = await interaction.edit_original_response(embed=embed, view=self)
+                if res:
+                    self.message = res
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
         except discord.NotFound:
@@ -2180,7 +2184,7 @@ class IptvSearchView(discord.ui.View):
             await self.update_message(interaction, status_text=f"🔴 Error: {status_msg}")
 
 
-class IptvMultiSourceView(discord.ui.View):
+class IptvMultiSourceView(BaseView):
     """Shows numbered buttons for multiple IPTV sources with the same name."""
 
     def __init__(self, results: list[iptv.Channel], voice_channel: discord.VoiceChannel, redirect_ch=None):
@@ -2204,16 +2208,6 @@ class IptvMultiSourceView(discord.ui.View):
             )
             btn.callback = self._make_callback(i)
             self.add_item(btn)
-
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        try:
-            msg = self._last_interaction
-            if msg:
-                await msg.edit_original_response(view=self)
-        except Exception:
-            pass
 
     def _make_callback(self, idx: int):
         async def callback(interaction: discord.Interaction):
@@ -2272,7 +2266,7 @@ class IptvMultiSourceView(discord.ui.View):
         return callback
 
 
-class JkanimeEpisodeView(discord.ui.View):
+class JkanimeEpisodeView(BaseView):
     """View for selecting an episode from a JKAnime anime."""
 
     PAGE_SIZE = 25
@@ -2364,9 +2358,12 @@ class JkanimeEpisodeView(discord.ui.View):
         self, interaction: discord.Interaction, status_text: str = None
     ):
         embed = self.build_embed(status_text)
+        self.bound_interaction = interaction
         try:
             if interaction.response.is_done():
-                await interaction.edit_original_response(embed=embed, view=self)
+                res = await interaction.edit_original_response(embed=embed, view=self)
+                if res:
+                    self.message = res
             else:
                 await interaction.response.edit_message(embed=embed, view=self)
         except Exception:
@@ -2450,7 +2447,7 @@ class JkanimeEpisodeView(discord.ui.View):
             )
 
 
-class JkanimeSearchView(discord.ui.View):
+class JkanimeSearchView(BaseView):
     """View displaying search results from JKAnime."""
 
     def __init__(
@@ -3577,7 +3574,7 @@ def _build_pet_msg(pet, formatted, evo_tag, pts=None):
     return "\n".join(lines)
 
 
-class InfoView(discord.ui.View):
+class InfoView(BaseView):
     def __init__(self, mascota_view):
         super().__init__(timeout=60)
         self.mascota_view = mascota_view
@@ -3598,16 +3595,15 @@ class InfoView(discord.ui.View):
         )
         self.stop()
 
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        try:
-            await self.message.edit(content="⏰ Menú expirado.", view=None, delete_after=1)
-        except Exception:
-            pass
+    async def on_timeout_extra(self):
+        if self.message:
+            try:
+                await self.message.edit(content="⏰ Menú expirado.")
+            except Exception:
+                pass
 
 
-class MascotaView(discord.ui.View):
+class MascotaView(BaseView):
     def __init__(self, pet, formatted, evo_tag, pts, channel, uid, ctx):
         super().__init__(timeout=60)
         self.pet = pet
@@ -3754,13 +3750,12 @@ class MascotaView(discord.ui.View):
         await interaction.response.edit_message(content="✖ Menú cerrado.", view=None, delete_after=1)
         self.stop()
 
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        try:
-            await self.message.edit(content="⏰ Menú expirado.", view=None, delete_after=1)
-        except Exception:
-            pass
+    async def on_timeout_extra(self):
+        if self.message:
+            try:
+                await self.message.edit(content="⏰ Menú expirado.")
+            except Exception:
+                pass
 
     async def on_error(self, error, item, interaction):
         log.error("MascotaView on_error item=%s err=%s", item.custom_id if item else "?", error)
