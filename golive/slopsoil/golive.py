@@ -553,7 +553,20 @@ class GoLiveAudioSender(threading.Thread):
                 continue
             self._nonce = (self._nonce + 1) & 0xFFFFFFFF
 
-            self._conn.send_packet(packet)
+            if hasattr(self._conn, "send_packet"):
+                self._conn.send_packet(packet)
+            elif hasattr(self._conn, "_connection") and hasattr(self._conn._connection, "send_packet"):
+                self._conn._connection.send_packet(packet)
+            elif hasattr(self._conn, "socket") and self._conn.socket:
+                try:
+                    self._conn.socket.sendall(packet)
+                except OSError:
+                    pass
+            elif hasattr(self._conn, "_connection") and hasattr(self._conn._connection, "socket") and self._conn._connection.socket:
+                try:
+                    self._conn._connection.socket.sendall(packet)
+                except OSError:
+                    pass
 
             self._seq = (self._seq + 1) & 0xFFFF
             self._ts = (self._ts + self._SAMPLES_PER_FRAME) & 0xFFFFFFFF

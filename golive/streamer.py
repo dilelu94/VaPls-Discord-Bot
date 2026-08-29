@@ -1096,7 +1096,20 @@ class H264VideoPlayer(threading.Thread):
             hdr = _rtp_header(self._seq, self._ts, self._ssrc, marker=marker)
             try:
                 packet = _encrypt(bytes(hdr), payload, mode, key, self._nonce)
-                self._vc._connection.send_packet(packet)
+                if hasattr(self._vc, "send_packet"):
+                    self._vc.send_packet(packet)
+                elif hasattr(self._vc, "_connection") and hasattr(self._vc._connection, "send_packet"):
+                    self._vc._connection.send_packet(packet)
+                elif hasattr(self._vc, "socket") and self._vc.socket:
+                    try:
+                        self._vc.socket.sendall(packet)
+                    except OSError:
+                        pass
+                elif hasattr(self._vc, "_connection") and hasattr(self._vc._connection, "socket") and self._vc._connection.socket:
+                    try:
+                        self._vc._connection.socket.sendall(packet)
+                    except OSError:
+                        pass
                 self._packets_sent += 1
             except OSError:
                 log.debug("Video packet dropped (seq=%d)", self._seq)
