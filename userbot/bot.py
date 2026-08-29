@@ -108,6 +108,15 @@ def _install_dave_patch():
             return
 
         def wrapped(self, packet):
+            vc = getattr(self, "_voice_client", None)
+            if vc is not None:
+                ssrc_map = getattr(vc, "_ssrc_to_id", None)
+                if not ssrc_map:
+                    ssrc_map = getattr(vc, "ssrc_user_map", {}) or {}
+                uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
+                if uid and uid in config.IGNORE_USER_IDS:
+                    return _OPUS_SILENCE
+
             raw = original(self, packet)
             _dave_stats["total"] += 1
             n = _dave_stats["total"]
