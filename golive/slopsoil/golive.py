@@ -238,10 +238,10 @@ class GoLiveConnection:
             predicate=lambda d: d.get("stream_key", "") == stream_key,
         )
 
-async def _send_json_safe(ws, data):
-    res = ws.send_as_json(data)
-    if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-        await res
+        async def _send_json_safe(ws, data):
+            res = ws.send_as_json(data)
+            if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+                await res
 
         log.info(
             "Sending STREAM_CREATE for guild=%s channel=%s user=%s",
@@ -309,6 +309,10 @@ async def _send_json_safe(ws, data):
         while not self.ip:
             await self.ws.poll_event()  # type: ignore[union-attr]
         log.info("GoLive: IP discovery complete (%s:%s)", self.ip, self.port)
+
+        # Connect the UDP socket to the stream voice server endpoint
+        if self.endpoint_ip and self.voice_port:
+            self.socket.connect((self.endpoint_ip, self.voice_port))
 
         # Poll until SESSION_DESCRIPTION arrives (ws.secret_key is set)
         while self.ws.secret_key is None:
