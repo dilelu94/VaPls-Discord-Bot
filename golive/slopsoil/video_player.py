@@ -707,7 +707,9 @@ def _encrypt(
 ) -> bytes:
     if not mode or mode not in ("aead_xchacha20_poly1305_rtpsize", "xsalsa20_poly1305", "xsalsa20_poly1305_suffix", "xsalsa20_poly1305_lite"):
         mode = "aead_xchacha20_poly1305_rtpsize"
-    key = bytes(secret_key)
+    key = bytes(secret_key) if secret_key else b""
+    if len(key) != 32:
+        return b""
 
     if mode == "aead_xchacha20_poly1305_rtpsize":
         aead_box = nacl.secret.Aead(key)
@@ -985,8 +987,10 @@ class H264VideoPlayer(threading.Thread):
             return
 
         conn = self._vc._connection
-        mode = self._vc.mode
-        key = self._vc.secret_key
+        mode = self._vc.mode or getattr(conn, "mode", "") or "aead_xchacha20_poly1305_rtpsize"
+        key = self._vc.secret_key or getattr(conn, "secret_key", None) or getattr(getattr(conn, "ws", None), "secret_key", None)
+        if not key or len(key) != 32:
+            return
 
         # DAVE access-unit-level encryption: encrypt the complete Annex B frame
         # once, then split the encrypted output back using input NAL sizes.

@@ -534,13 +534,21 @@ class GoLiveAudioSender(threading.Thread):
             struct.pack_into(">I", hdr, 8, self._conn.ssrc & 0xFFFFFFFF)
 
             audio_mode = self._conn.mode or getattr(self._conn.ws, "mode", "") or getattr(self._conn._regular_vc, "mode", "aead_xchacha20_poly1305_rtpsize")
+            secret_key = self._conn.secret_key or getattr(self._conn.ws, "secret_key", None) or getattr(self._conn._regular_vc, "secret_key", None)
+            if not secret_key or len(secret_key) != 32:
+                if self._end.wait(timeout=0.02):
+                    break
+                continue
+
             packet = _encrypt_audio(
                 bytes(hdr),
                 encoded,
                 audio_mode,
-                self._conn.secret_key,
+                secret_key,
                 self._nonce,
             )
+            if not packet:
+                continue
             self._nonce = (self._nonce + 1) & 0xFFFFFFFF
 
             self._conn.send_packet(packet)
@@ -573,7 +581,9 @@ def _encrypt_audio(
     """
     if not mode or mode not in ("aead_xchacha20_poly1305_rtpsize", "xsalsa20_poly1305", "xsalsa20_poly1305_suffix", "xsalsa20_poly1305_lite"):
         mode = "aead_xchacha20_poly1305_rtpsize"
-    key = bytes(secret_key)
+    key = bytes(secret_key) if secret_key else b""
+    if len(key) != 32:
+        return b""
 
     if mode == "aead_xchacha20_poly1305_rtpsize":
         box = nacl.secret.Aead(key)  # type: ignore[assignment]
