@@ -313,6 +313,8 @@ async def _send_json_safe(ws, data):
         # Poll until SESSION_DESCRIPTION arrives (ws.secret_key is set)
         while self.ws.secret_key is None:
             await self.ws.poll_event()
+        self.mode = getattr(self.ws, "mode", "") or getattr(self._regular_vc, "mode", "aead_xchacha20_poly1305_rtpsize")
+        self.secret_key = getattr(self.ws, "secret_key", None) or getattr(self._regular_vc, "secret_key", [])
         log.info(
             "GoLive: session established (mode=%s, audio_ssrc=%d, video_ssrc=%d)",
             self.mode,
@@ -425,11 +427,11 @@ class _GoLiveVCProxy:
 
     @property
     def mode(self) -> str:
-        return self._connection.mode
+        return self._connection.mode or getattr(self._connection.ws, "mode", "") or getattr(self._connection._regular_vc, "mode", "aead_xchacha20_poly1305_rtpsize")
 
     @property
     def secret_key(self):
-        return self._connection.secret_key
+        return self._connection.secret_key or getattr(self._connection.ws, "secret_key", None) or getattr(self._connection._regular_vc, "secret_key", None)
 
 
 # ── GoLiveAudioSender ─────────────────────────────────────────────────────────
