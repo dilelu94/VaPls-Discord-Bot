@@ -1697,40 +1697,6 @@ async def start_iptv_stream_logic(
     return True, f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\nUsá **/stopstream** para cortar.", is_live
 
 
-async def start_iptv_stream2_logic(
-    guild_id: int,
-    voice_channel: discord.VoiceChannel,
-    stream_url: str,
-    channel_name: str,
-) -> tuple[bool, str]:
-    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-        return False, "❌ El relay GoLive no está configurado."
-
-    relay_base = config.GOLIVE_RELAY_URL
-    url = urljoin(relay_base, "/stream2")
-    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
-    payload = {
-        "guild_id": guild_id,
-        "channel_id": voice_channel.id,
-        "url": stream_url,
-        "channel_name": channel_name,
-    }
-    log.info("[STREAM2_LOGIC] POST %s guild=%s channel=%s url=%s", url, guild_id, voice_channel.id, stream_url)
-    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async with sess.post(url, json=payload, headers=headers) as resp:
-                if resp.status >= 400:
-                    err_msg = await resp.text()
-                    log.warning("stream2 relay HTTP %s: %s", resp.status, err_msg[:100])
-                    return False, f"⚠️ No pude iniciar stream2 (HTTP {resp.status})."
-    except Exception as e:
-        log.exception("stream2 relay failed")
-        return False, f"⚠️ Error iniciando stream2: {e}"
-
-    ch_name = getattr(voice_channel, "name", str(getattr(voice_channel, "id", "voz")))
-    return True, f"📺 [Slopsoil Nativo] Transmitiendo **{channel_name}** en **{ch_name}**.\nUsá **/stopstream2** para cortar."
-
 
 async def _send_stream_control(guild_id: int, action: str, timestamp: float = 0.0) -> bool:
     if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
@@ -2837,77 +2803,6 @@ async def stopstream(ctx):
 
     await safe_respond(ctx, "🛑 Stream detenido.")
 
-
-@bot.slash_command(
-    name="stream2",
-    description="[Slopsoil Nativo] Transmite IPTV o una URL usando el motor de Slopsoil",
-)
-async def stream2(
-    ctx,
-    canal: discord.Option(
-        str,
-        description="Nombre del canal IPTV o URL directa (ej: ESPN, TN, o https://...)",
-        required=True,
-    ),
-):
-    await safe_defer(ctx)
-    _track_command(ctx, "stream2")
-
-    voice_state = getattr(ctx.author, "voice", None)
-    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
-    if voice_channel is None:
-        await safe_respond(
-            ctx, "❌ Tenés que estar en un canal de voz para iniciar un stream."
-        )
-        return
-
-    raw_canal = canal.strip()
-    is_url = raw_canal.startswith(("http://", "https://", "rtsp://", "rtmp://"))
-
-    if is_url:
-        stream_url = raw_canal
-        channel_name = "Stream Directo"
-    else:
-        results = await iptv.search(raw_canal, limit=1)
-        if not results:
-            await safe_respond(ctx, f'❌ No encontré el canal "{raw_canal}".')
-            return
-        stream_url = results[0].url
-        channel_name = results[0].name
-
-    success, status_msg = await start_iptv_stream2_logic(
-        ctx.guild_id, voice_channel, stream_url, channel_name
-    )
-    await safe_respond(ctx, status_msg)
-
-
-@bot.slash_command(
-    name="stopstream2",
-    description="[Slopsoil Nativo] Detiene la transmisión de stream2",
-)
-async def stopstream2(ctx):
-    await safe_defer(ctx)
-    _track_command(ctx, "stopstream2")
-
-    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
-        return
-
-    url = urljoin(config.GOLIVE_RELAY_URL, "/stopstream2")
-    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
-    payload = {"guild_id": ctx.guild_id}
-    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
-    try:
-        async with aiohttp.ClientSession(timeout=timeout) as sess:
-            async with sess.post(url, json=payload, headers=headers) as resp:
-                if resp.status >= 400:
-                    await safe_respond(ctx, f"⚠️ No pude detener stream2 (HTTP {resp.status}).")
-                    return
-    except Exception as e:
-        await safe_respond(ctx, f"⚠️ Error deteniendo stream2: {e}")
-        return
-
-    await safe_respond(ctx, "🛑 Stream2 detenido.")
 
 
 @bot.slash_command(

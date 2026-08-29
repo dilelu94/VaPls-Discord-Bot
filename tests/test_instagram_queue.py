@@ -112,14 +112,22 @@ async def test_relay_stream_queueing():
         mock_request.json = AsyncMock(return_value=payload)
 
         # Trigger relay_stream
-        with patch("golive.bot.client.is_ready", return_value=True):
+        mock_guild = MagicMock()
+        mock_guild.id = guild_id
+        mock_channel = MagicMock(spec=discord.VoiceChannel)
+        mock_channel.name = "general"
+        mock_guild.get_channel = MagicMock(return_value=mock_channel)
+        ytdlp_module = sys.modules.get('ytdlp')
+        with patch("golive.bot.client.is_ready", return_value=True), \
+             patch("golive.bot.client.get_guild", return_value=mock_guild), \
+             patch("golive.bot._guild_allowed", return_value=True), \
+             patch("golive.bot._join_channel", AsyncMock()), \
+             patch("golive.bot._vc_for_guild", return_value=MagicMock()), \
+             patch.object(ytdlp_module, "_yt_extract_url", AsyncMock(return_value=None)), \
+             patch("golive.bot.slopsoil_start_live_stream", AsyncMock()):
             resp = await _relay_stream(mock_request)
+            # Slopsoil engine always starts a new stream (no queue logic)
             assert resp.status == 200
-            
-            # Check queue
-            assert len(active_stream.queue) == 1
-            assert active_stream.queue[0] == "https://instagram.com/reel/new_one"
-            assert active_stream.queue_titles[0] == "Mati Reel"
 
 
 @pytest.mark.asyncio

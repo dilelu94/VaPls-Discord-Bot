@@ -644,100 +644,82 @@ async def _relay_stream(request: web.Request) -> web.Response:
     if not url:
         log.warning("[STREAM] empty url")
         return web.json_response({"error": "empty url"}, status=400)
-    stream_title = str(data.get("channel_name", "")).strip() or None
+    stream_title = str(data.get("channel_name", "")).strip() or "Stream"
     log.info("[STREAM] guild=%s channel=%s url=%s title=%s", guild_id, channel_id, url[:120], stream_title)
 
     if not client.is_ready():
-        log.info("[STREAM] client not ready, waiting up to 30s...")
-        for _ in range(30):
-            if client.is_ready():
-                break
-            await asyncio.sleep(1)
-        if not client.is_ready():
-            log.warning("[STREAM] client still not ready after 30s")
-            return web.json_response({"error": "client not ready"}, status=503)
-
-    existing = _active_streams.get(guild_id)
-    if existing and not existing._stopped:
-        is_existing_reel = "instagram.com" in (existing.url or "")
-        is_new_reel = "instagram.com" in url
-        if is_existing_reel or is_new_reel:
-            existing.queue.append(url)
-            existing.queue_titles.append(stream_title or "Reel")
-            log.info("[STREAM] Queued URL in active GoLiveStream: %s (pos=%s)", url, len(existing.queue))
-            if existing.idle_event and not existing.idle_event.is_set():
-                existing.idle_event.set()
-            # Prefetch the next queued reel's stream URL in the background so the
-            # reel-to-reel transition doesn't stall on yt-dlp extraction.
-            asyncio.create_task(existing._prefetch_next())
-            return web.json_response({
-                "status": "queued",
-                "position": len(existing.queue)
-            })
-        log.warning("[STREAM] already streaming for guild=%s", guild_id)
-        return web.json_response({"error": "busy", "message": "Already streaming"}, status=409)
+        return web.json_response({"error": "client not ready"}, status=503)
 
     guild = client.get_guild(guild_id)
     if guild is None:
         log.warning("[STREAM] guild not found: %s", guild_id)
         return web.json_response({"error": "guild not found"}, status=404)
-    log.info("[STREAM] guild=%s resolved", guild_id)
     channel = guild.get_channel(channel_id)
     if not isinstance(channel, discord.VoiceChannel):
         try:
             channel = await client.fetch_channel(channel_id)
-            log.info("[STREAM] channel fetched via API: %s", channel_id)
         except Exception as e:
-            log.warning("[STREAM] channel fetch failed: %s", e)
             return web.json_response({"error": f"channel not found: {e}"}, status=404)
     if not isinstance(channel, discord.VoiceChannel):
-        log.warning("[STREAM] channel=%s is not voice", channel_id)
         return web.json_response({"error": "not a voice channel"}, status=400)
     if not _guild_allowed(guild.id):
-        log.warning("[STREAM] guild=%s not allowed", guild_id)
         return web.json_response({"error": "guild not allowed"}, status=403)
 
-    log.info("[STREAM] joining channel=%s", channel_id)
-    try:
-        await _join_channel(channel)
-        log.info("[STREAM] join OK")
-    except Exception as e:
-        log.exception("[STREAM] join failed")
-        return web.json_response({"error": f"join failed: {e}"}, status=500)
+    if not hasattr(client, "stream_tasks"):
+        client.stream_tasks = {}
+    if not hasattr(client, "video_players"):
+        client.video_players = {}
+    if not hasattr(client, "live_connections"):
+        client.live_connections = {}
 
+    await _join_channel(channel)
     vc = _vc_for_guild(guild)
-    if vc is None or not vc.is_connected():
-        log.warning("[STREAM] not connected after join (vc=%s)", vc)
-        return web.json_response({"error": "not connected"}, status=500)
-    log.info("[STREAM] vc=%s", type(vc).__name__)
 
-    if stream_title:
-        task = _nick_restore_tasks.pop(guild_id, None)
-        if task:
-            task.cancel()
-        await _set_nickname(guild, f"GoLive - {stream_title}")
+    target_url = url
+    is_live = True
+    if target_url.startswith(("http://", "https://")):
+        from urllib.parse import urlparse
+        _path = urlparse(target_url).path.lower()
+        if _path.endswith((".m3u8", ".mpd", ".m3u")) or ".m3u8" in target_url.lower():
+            log.info("[STREAM] Direct stream URL detected — skipping yt-dlp")
+        else:
+            from ytdlp import _yt_extract_url
+            try:
+                res = await _yt_extract_url(target_url)
+                if res:
+                    extracted_url, extracted_title, extracted_live = res
+                    target_url = extracted_url
+                    if extracted_title:
+                        stream_title = extracted_title
+                    is_live = extracted_live
+            except Exception as exc:
+                log.warning("[STREAM] yt-dlp extraction failed: %s", exc)
 
-    log.info("[STREAM] creating GoLiveStream url=%s", url[:80])
-    stream = GoLiveStream(client, guild_id, channel_id, vc, url)
+    async def _dummy_send(msg, **kwargs):
+        log.info("[STREAM_STATUS] %s", msg)
+
     try:
-        await stream.start()
-        log.info("[STREAM] stream start OK")
-    except Exception as e:
-        log.exception("[STREAM] stream start failed")
-        await stream.stop()
-        return web.json_response({"error": str(e)}, status=500)
-
-    _active_streams[guild_id] = stream
-    log.info("[STREAM] started guild=%s channel=%s", guild_id, channel.name)
-    return web.json_response(
-        {
+        await slopsoil_start_live_stream(
+            bot=client,
+            send=_dummy_send,
+            guild=guild,
+            voice_channel=channel,
+            vc=vc,
+            title=stream_title,
+            url=target_url,
+            live=is_live,
+            audio=True,
+        )
+        log.info("[STREAM] started via Slopsoil engine guild=%s channel=%s", guild_id, channel.name)
+        return web.json_response({
             "started": True,
             "guild_id": guild_id,
             "channel_name": channel.name,
-            "video_ssrc": stream.video_ssrc,
-            "is_live": stream.is_live,
-        }
-    )
+            "engine": "slopsoil_native"
+        })
+    except Exception as e:
+        log.exception("[STREAM] failed to start stream via Slopsoil engine")
+        return web.json_response({"error": str(e)}, status=500)
 
 
 async def _relay_headbanz(request: web.Request) -> web.Response:
@@ -814,13 +796,11 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
         log.warning("[STOPSTREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
 
-    stream = _active_streams.pop(guild_id, None)
-    if stream is None:
-        log.info("[STOPSTREAM] no active stream for guild=%s", guild_id)
-        return web.json_response({"error": "no active stream"}, status=404)
-
     try:
-        await stream.stop()
+        slopsoil_cancel_live_stream(client, guild_id)
+        existing = _active_streams.pop(guild_id, None)
+        if existing:
+            await existing.stop()
     except Exception as e:
         log.exception("[STOPSTREAM] stop failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -963,16 +943,6 @@ except ModuleNotFoundError:
     from golive.slopsoil.engine import start_live_stream as slopsoil_start_live_stream, cancel_live_stream as slopsoil_cancel_live_stream
 
 
-async def _relay_stream2(request: web.Request) -> web.Response:
-    log.info("[STREAM2] delegating to main _relay_stream")
-    return await _relay_stream(request)
-
-
-async def _relay_stopstream2(request: web.Request) -> web.Response:
-    log.info("[STOPSTREAM2] delegating to main _relay_stopstream")
-    return await _relay_stopstream(request)
-
-
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — HTTP relay disabled.")
@@ -980,8 +950,6 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app = web.Application()
     app.router.add_post("/stream", _relay_stream)
     app.router.add_post("/stopstream", _relay_stopstream)
-    app.router.add_post("/stream2", _relay_stream2)
-    app.router.add_post("/stopstream2", _relay_stopstream2)
     app.router.add_post("/stream/control", _relay_stream_control)
     app.router.add_post("/headbanz", _relay_headbanz)
     runner = web.AppRunner(app)
