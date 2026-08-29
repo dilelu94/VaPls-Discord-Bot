@@ -705,6 +705,8 @@ def _encrypt(
     secret_key: list[int],
     nonce_counter: list[int],  # mutable single-element list so we can increment
 ) -> bytes:
+    if not mode or mode not in ("aead_xchacha20_poly1305_rtpsize", "xsalsa20_poly1305", "xsalsa20_poly1305_suffix", "xsalsa20_poly1305_lite"):
+        mode = "aead_xchacha20_poly1305_rtpsize"
     key = bytes(secret_key)
 
     if mode == "aead_xchacha20_poly1305_rtpsize":

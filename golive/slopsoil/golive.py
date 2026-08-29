@@ -533,10 +533,11 @@ class GoLiveAudioSender(threading.Thread):
             struct.pack_into(">I", hdr, 4, self._ts & 0xFFFFFFFF)
             struct.pack_into(">I", hdr, 8, self._conn.ssrc & 0xFFFFFFFF)
 
+            audio_mode = self._conn.mode or getattr(self._conn.ws, "mode", "") or getattr(self._conn._regular_vc, "mode", "aead_xchacha20_poly1305_rtpsize")
             packet = _encrypt_audio(
                 bytes(hdr),
                 encoded,
-                self._conn.mode,
+                audio_mode,
                 self._conn.secret_key,
                 self._nonce,
             )
@@ -570,6 +571,8 @@ def _encrypt_audio(
     Mirrors _encrypt() in video_player.py but takes the nonce as an int
     (caller increments it).
     """
+    if not mode or mode not in ("aead_xchacha20_poly1305_rtpsize", "xsalsa20_poly1305", "xsalsa20_poly1305_suffix", "xsalsa20_poly1305_lite"):
+        mode = "aead_xchacha20_poly1305_rtpsize"
     key = bytes(secret_key)
 
     if mode == "aead_xchacha20_poly1305_rtpsize":
