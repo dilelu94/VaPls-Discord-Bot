@@ -433,6 +433,15 @@ class _GoLiveVCProxy:
     def secret_key(self):
         return self._connection.secret_key or getattr(self._connection.ws, "secret_key", None) or getattr(self._connection._regular_vc, "secret_key", None)
 
+    def send_packet(self, packet: bytes) -> None:
+        if hasattr(self._connection, "send_packet"):
+            self._connection.send_packet(packet)
+        elif hasattr(self._connection, "socket") and self._connection.socket:
+            try:
+                self._connection.socket.sendall(packet)
+            except OSError:
+                pass
+
 
 # ── GoLiveAudioSender ─────────────────────────────────────────────────────────
 
