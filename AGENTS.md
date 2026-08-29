@@ -74,6 +74,8 @@ que un cambio roto llegue siquiera al servidor remoto.
 
 **Migrado desde** `ubuntu@129.80.59.99` (Oracle Linux amd64, instancia E2.1.Micro) el 2026-05-30. El server viejo quedó wipe-eado del bot pero sigue prendido para otros usos.
 
+**Servidor de Backup (`free-02`):** `ubuntu@193.122.210.127` (SSH key local: `/var/home/dilelu/.ssh/free-02`). Mantiene un backup de respaldo del repositorio y de los archivos de configuración/secretos de producción (`.env`, `userbot/.env`, `golive/.env`).
+
 **Deploy workflow (automático):** push a `master` → CI (Python 3.10, la versión
 de prod) → job `deploy` que SSHea al server y corre `scripts/deploy.sh` (`git reset --hard
 origin/master`, reinstala deps si cambiaron, reinicia ambos servicios y verifica
