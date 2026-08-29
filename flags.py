@@ -22,6 +22,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "generarimagen": "text",
     # "banana": "text",
     "sugerencias": "text",
+    "say": "text",
     "quit": "text",
     "entraindio": "text",
     "sensibilidad": "text",
@@ -37,8 +38,11 @@ COMMAND_FLAGS: dict[str, str] = {
     "alert-test": "text",
     "stream": "text",
     "stopstream": "text",
+    "stream2": "text",
+    "stopstream2": "text",
     "adivinador": "text",
     "mascota": "text",
+    "say": "music",
     "restart": "text",
 }
 

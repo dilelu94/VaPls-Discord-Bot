@@ -95,6 +95,7 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 - **Discord bot:** `py-cord`
 - **Userbot:** `discord.py-self` + `discord-ext-voice-recv`
 - **STT:** `faster-whisper` (CTranslate2, offline, modelo `small` int8 en el server ARM 4/24)
+- **TTS:** `piper-tts` (modelo `es_AR-daniela-high` + filtro de voz FFmpeg para tono masculino maduro)
 - **Audio:** `FFmpeg`, `audioop`
 - **HTTP:** `aiohttp`
 - **Configuración:** `python-dotenv`
@@ -166,6 +167,7 @@ Cuando el main bot quiere que la respuesta del `/indio` salga con la identidad d
 - `/sensibilidad` `1|2|3`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
 - `/stream <canal>`: busca en iptv-org y transmite en Go Live dentro del canal de voz del invocador. Requiere el proceso `golive/bot.py` corriendo.
 - `/stopstream`: detiene el stream activo en el servidor.
+- `/say <texto>`: sintetiza texto usando Piper TTS y procesado de voz FFmpeg para reproducirlo en el canal de voz.
 - `/banana` (Pausado/Inactivo): genera una imagen con Gemini (gratis, sin API key, usando Playwright). Actualmente en pausa por bloqueos de autenticación de Google.
 
 ## 📺 GoLive / IPTV (`/stream`)

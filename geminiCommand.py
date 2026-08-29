@@ -33,6 +33,7 @@ from geminiClient import GeminiError as _GeminiError
 import gemini_keywords as _kw
 import geminiKeys
 import imageManager
+import tts
 
 try:
     from users import USERS as _USERS
@@ -4344,6 +4345,71 @@ def _sanitize_for_history(text: str) -> str:
     return out.strip()
 
 
+_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_MARKDOWN_RE = re.compile(r"[*_~`#>]")
+
+
+def _clean_text_for_speech(text: str) -> str:
+    """Clean a response string for TTS voice playback."""
+    if not text:
+        return ""
+    out = _URL_RE.sub("", text)
+    out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
+    out = _EMOJI_SHORTCODE_RE.sub("", out)
+    out = _DISCORD_MENTION_RE.sub("", out)
+    out = _MARKDOWN_RE.sub("", out)
+    out = _MULTIBLANK_RE.sub(" ", out)
+    return out.strip()
+
+
+async def _speak_indio_reply(
+    bot: Optional[discord.Bot],
+    guild_id: Optional[int],
+    member: Optional[discord.Member],
+    text: str,
+) -> None:
+    """Synthesize and play the Indio's response text in the voice channel."""
+    if not text or not guild_id or not bot:
+        return
+    spoken = _clean_text_for_speech(text)
+    if not spoken:
+        return
+    if len(spoken) > 250:
+        spoken = spoken[:250] + "..."
+
+    guild = bot.get_guild(int(guild_id))
+    if not guild:
+        return
+
+    vc = guild.voice_client
+    if vc is None or not vc.is_connected():
+        target_channel = getattr(getattr(member, "voice", None), "channel", None)
+        if target_channel is not None:
+            try:
+                vc = await target_channel.connect(reconnect=True, timeout=5.0)
+            except Exception as e:
+                logger.warning("Failed to connect to voice channel for indio reply: %s", e)
+                return
+        else:
+            return
+
+    if vc and vc.is_connected():
+        try:
+            wav_path = await asyncio.to_thread(tts.generate_tts_wav, spoken)
+            if not wav_path or not os.path.exists(wav_path):
+                return
+            loop = asyncio.get_running_loop()
+            def _after(_err):
+                try:
+                    if os.path.exists(wav_path):
+                        os.remove(wav_path)
+                except Exception:
+                    pass
+            vc.play(discord.FFmpegOpusAudio(wav_path), after=_after)
+        except Exception as e:
+            logger.warning("Error playing spoken indio reply: %s", e)
+
+
 async def _relay_to_userbot(
     channel_id: int,
     content: str,
@@ -5116,6 +5182,8 @@ async def indioLogic(
             if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
                 _spawn(_maybe_compress(hist_key, lt_key))
 
+    _spawn(_speak_indio_reply(ctx.bot, getattr(ctx.guild, "id", None), ctx.author, clean_reply))
+
     analytics.capture(
         "indio invoked",
         user=ctx.author,
@@ -5609,6 +5677,8 @@ async def indioFromVoice(
         else:
             dm_text = f"te respondi en <#{channel_id}>"
         _spawn(_relay_dm_user(int(user_id), dm_text))
+
+    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply))
 
     analytics.capture(
         "indio voice invoked",
