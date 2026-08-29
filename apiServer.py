@@ -2013,6 +2013,30 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/queue", queue)
     app.router.add_post("/indio", indioVoice)
 
+    async def debugIdle(request: web.Request) -> web.Response:
+        from idleWatchdog import _watchdogs
+        from soundpadCommand import _active_panels, has_active_panel
+        from playCommand import guildPlayers
+        res = {}
+        for vc in bot.voice_clients:
+            gid = vc.guild.id
+            player = guildPlayers.get(gid)
+            res[str(gid)] = {
+                "channel": vc.channel.name if getattr(vc, "channel", None) else None,
+                "is_playing": vc.is_playing(),
+                "is_paused": vc.is_paused(),
+                "has_active_panel": has_active_panel(gid),
+                "active_panels_count": len(_active_panels.get(gid, [])),
+                "player_exists": player is not None,
+                "isDownloading": getattr(player, "isDownloading", False) if player else False,
+                "isStartingPlayback": getattr(player, "isStartingPlayback", False) if player else False,
+                "autodj_active": getattr(player, "autodj_active", False) if player else False,
+                "watchdog_task_exists": gid in _watchdogs,
+                "watchdog_task_done": _watchdogs[gid].done() if gid in _watchdogs else None,
+            }
+        return web.json_response(res)
+
+    app.router.add_get("/debug-idle", debugIdle)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
     app.router.add_post("/indio-image", submitIndioImage)
