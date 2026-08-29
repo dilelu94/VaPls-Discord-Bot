@@ -2,6 +2,8 @@
 
 import os
 import sys
+import re
+import time
 import hashlib
 import logging
 import subprocess
@@ -13,6 +15,48 @@ VOICE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "pi
 MODEL_NAME = "es_ES-davefx-medium"
 MODEL_PATH = os.path.join(VOICE_DIR, f"{MODEL_NAME}.onnx")
 CONFIG_PATH = os.path.join(VOICE_DIR, f"{MODEL_NAME}.onnx.json")
+
+# Regex patterns for cleaning text prior to TTS synthesis
+_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_CUSTOM_EMOJI_MARKUP_RE = re.compile(r"<a?:[A-Za-z0-9_]+:\d+>")
+_EMOJI_SHORTCODE_RE = re.compile(r"(?<!\w):[A-Za-z0-9_]{2,}:(?!\w)")
+_DISCORD_MENTION_RE = re.compile(r"<[@#][&!]?\d+>")
+_MARKDOWN_RE = re.compile(r"[*_~`#>]")
+_UNICODE_EMOJI_RE = re.compile(
+    r"["
+    r"\U0001F600-\U0001F64F"  # Emoticons
+    r"\U0001F300-\U0001F5FF"  # Misc Symbols & Pictographs
+    r"\U0001F680-\U0001F6FF"  # Transport & Map Symbols
+    r"\U0001F1E0-\U0001F1FF"  # Regional Indicator Symbols / Flags
+    r"\U0001F900-\U0001F9FF"  # Supplemental Symbols & Pictographs
+    r"\U0001FA70-\U0001FAFF"  # Symbols & Pictographs Extended-A
+    r"\U00002702-\U000027B0"  # Dingbats
+    r"\U000024C2-\U0001F251"  # Enclosed Characters
+    r"\u2600-\u26FF"         # Misc Symbols
+    r"\u2700-\u27BF"         # Dingbats
+    r"\u2300-\u23FF"         # Misc Technical
+    r"\u2B50\u2B55\u200D\uFE0F\u20E3"  # Stars, selectors, keycaps
+    r"\U0001F000-\U0010FFFF"  # High plane emojis
+    r"]+",
+    flags=re.UNICODE,
+)
+_MULTIBLANK_RE = re.compile(r"\s+")
+_PUNCTUATION_SPACE_RE = re.compile(r"\s+([,.!?:;])")
+
+
+def clean_text_for_tts(text: str) -> str:
+    """Clean text before TTS synthesis by stripping emojis, URLs, mentions, markdown, and excess spaces."""
+    if not text:
+        return ""
+    out = _URL_RE.sub("", text)
+    out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
+    out = _EMOJI_SHORTCODE_RE.sub("", out)
+    out = _DISCORD_MENTION_RE.sub("", out)
+    out = _UNICODE_EMOJI_RE.sub("", out)
+    out = _MARKDOWN_RE.sub("", out)
+    out = _MULTIBLANK_RE.sub(" ", out)
+    out = _PUNCTUATION_SPACE_RE.sub(r"\1", out)
+    return out.strip()
 
 MODEL_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx"
 CONFIG_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx.json"
@@ -90,7 +134,7 @@ def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
     Returns:
         Absolute path to the resulting WAV file, or None if generation failed.
     """
-    cleaned_text = (text or "").strip()
+    cleaned_text = clean_text_for_tts(text)
     if not cleaned_text:
         log.warning("Empty text passed to generate_tts_wav")
         return None
@@ -171,7 +215,7 @@ def generate_indio_tts(text: str, output_dir: str = "/tmp/tts_audios") -> str | 
     Returns:
         The generated audio filename (e.g. 'indio_resp_abc123.ogg'), or None on failure.
     """
-    cleaned_text = (text or "").strip()
+    cleaned_text = clean_text_for_tts(text)
     if not cleaned_text:
         log.warning("Empty text passed to generate_indio_tts")
         return None

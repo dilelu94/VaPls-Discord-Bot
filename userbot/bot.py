@@ -419,6 +419,8 @@ class TranscriberSink(voice_recv.AudioSink):
         )
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
+        if _SENSITIVITY_PRESET == 0:
+            return
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
@@ -643,7 +645,10 @@ _vosk_load_lock = threading.Lock()
 # 1 on userbot restart.
 # ---------------------------------------------------------------------------
 
-# Preset 1: all invocation particles + all command verbs (current behavior).
+# Preset 0: disabled — turns off all live voice listening in the userbot.
+_PRESET_0_PATTERNS: tuple[tuple[str, str], ...] = ()
+
+# Preset 1: all invocation particles + all command verbs (default).
 _PRESET_1_PATTERNS: tuple[tuple[str, str], ...] = (
     ("che", "indio"),
     ("que", "indio"),  # VOSK-small often hears "che" as "que"
@@ -687,22 +692,19 @@ _PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 _PRESET_4_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_2_PATTERNS
 
 _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
+    0: _PRESET_0_PATTERNS,
     1: _PRESET_1_PATTERNS,
     2: _PRESET_2_PATTERNS,
     3: _PRESET_3_PATTERNS,
     4: _PRESET_4_PATTERNS,
 }
 
-# Active sensitivity preset. Default 2: only "che indio" invokes (the "que"/"eh"
-# variants were the dominant false-positive source). Preset 1 is more sensitive
-# (adds "que indio"/"eh indio"); preset 3 re-enables those variants but uses a
-# large decoy grammar pool to reduce false positives. Preset 4 uses the same
-# VOSK gating as preset 2 (only "che indio" + command-verb patterns, small
-# grammar pool) and adds a post-VOSK Whisper confirmation layer: after VOSK
-# fires, a short Whisper pass over the prebuffer must detect "indio"; if not,
-# the event is discarded. In-memory only — resets to this default (4) on
-# userbot restart.
-_SENSITIVITY_PRESET: int = 4
+# Active sensitivity preset. Default 1: maximum sensitivity (responds to
+# "che/que/eh indio" + command verbs). Preset 0 disables listening entirely.
+# Preset 2 drops "que/eh indio". Preset 3 re-enables those variants with a
+# large decoy grammar pool. Preset 4 adds a post-VOSK Whisper confirmation layer.
+# In-memory only — resets to this default (1) on userbot restart.
+_SENSITIVITY_PRESET: int = 1
 
 # Generation counter — incremented by _set_sensitivity so that live per-user
 # VOSK recognizers (which embed the old grammar) are detected and rebuilt.
@@ -794,6 +796,8 @@ def _build_vosk_grammar() -> str:
     tokens we actually care about.
     """
     preset = _SENSITIVITY_PRESET
+    if preset == 0:
+        return json.dumps(["[unk]"])
     # Base phrase set shared by all presets.
     phrases = [
         # Command-verb wake phrases (always active).
@@ -974,17 +978,17 @@ def _new_vosk_recognizer():
 def _set_sensitivity(preset: int) -> None:
     """Switch the VOSK wake-word sensitivity preset at runtime.
 
-    Validates preset is in _PRESETS (1-4), updates the module-level
+    Validates preset is in _PRESETS (0-4), updates the module-level
     ``_SENSITIVITY_PRESET``, rebuilds ``_VOSK_GRAMMAR``, and bumps
     ``_vosk_grammar_generation`` so that live per-user recognizers are
     detected as stale and rebuilt on next use.
 
-    The preset is in-memory only — it resets to the default (2) on userbot restart.
+    The preset is in-memory only — it resets to the default (1) on userbot restart.
     """
     global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
     if preset not in _PRESETS:
         raise ValueError(
-            f"Invalid sensitivity preset {preset!r}; must be 1, 2, 3, or 4."
+            f"Invalid sensitivity preset {preset!r}; must be 0, 1, 2, 3, or 4."
         )
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
@@ -1177,6 +1181,8 @@ class WakeWordSink(voice_recv.AudioSink):
     # ---- packet ingestion -------------------------------------------------
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
+        if _SENSITIVITY_PRESET == 0:
+            return
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
@@ -1366,6 +1372,8 @@ class WakeWordSink(voice_recv.AudioSink):
             buf.popleft()
 
     def _recognizer_for(self, user_id: int):
+        if _SENSITIVITY_PRESET == 0:
+            return None
         rec = self.recognizers.get(user_id)
         # Discard recognizer if it was built with a different grammar generation
         # (i.e. the sensitivity preset was switched via /sensibilidad).

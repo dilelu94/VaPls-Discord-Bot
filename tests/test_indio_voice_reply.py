@@ -7,16 +7,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import aiohttp
 import geminiCommand
+import tts
 
 
 def test_clean_text_for_speech():
-    raw = "Hola **amigo** <@12345> https://example.com <:smile:999> :joy: #encabezado `codigo`"
+    raw = "Hola **amigo** 😊 <@12345> https://example.com <:smile:999> :joy: #encabezado `codigo` 😂👍 🇦🇷"
     cleaned = geminiCommand._clean_text_for_speech(raw)
     assert "amigo" in cleaned
     assert "https://" not in cleaned
     assert "<@" not in cleaned
     assert "<:smile:" not in cleaned
     assert "`codigo`" not in cleaned
+    assert "😊" not in cleaned
+    assert "😂" not in cleaned
+    assert "👍" not in cleaned
+    assert "🇦🇷" not in cleaned
+
+    direct_cleaned = tts.clean_text_for_tts("Buenas... 😊 ¿cómo va? 😂")
+    assert direct_cleaned == "Buenas... ¿cómo va?"
 
 
 @pytest.mark.asyncio

@@ -4523,15 +4523,7 @@ _MARKDOWN_RE = re.compile(r"[*_~`#>]")
 
 def _clean_text_for_speech(text: str) -> str:
     """Clean a response string for TTS voice playback."""
-    if not text:
-        return ""
-    out = _URL_RE.sub("", text)
-    out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
-    out = _EMOJI_SHORTCODE_RE.sub("", out)
-    out = _DISCORD_MENTION_RE.sub("", out)
-    out = _MARKDOWN_RE.sub("", out)
-    out = _MULTIBLANK_RE.sub(" ", out)
-    return out.strip()
+    return tts.clean_text_for_tts(text)
 
 
 async def _speak_indio_reply(
