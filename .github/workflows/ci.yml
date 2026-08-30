@@ -39,7 +39,7 @@ jobs:
       - name: Run test suite
         shell: bash
         run: |
-          python -m pytest -q --tb=short
+          python -m pytest -v --tb=short --durations=10
 
   # ── Continuous deployment ──────────────────────────────────────────────────
   # Runs only on pushes to master, only after all matrix test jobs pass.
