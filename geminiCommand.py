@@ -164,9 +164,9 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("stop_music")} → `stop_music` \
 - {_fmt_trigger("dj_mode")} → `dj_mode`
 - {_fmt_trigger("spacewar_guide")} → `spacewar_guide` \
-- {_fmt_trigger("use_image")} → `use_image` \
 - {_fmt_trigger("disconnect_indio")} → `disconnect_indio` \
 - {_fmt_trigger("troll_move_user")} → `troll_move_user` \
+- {_fmt_trigger("comment_stream")} → `comment_stream` \
 
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
@@ -424,9 +424,10 @@ _INDIO_TOOLS = [
     {
         "name": "troll_move_user",
         "description": (
-            "Mover a un usuario adentro y afuera de su canal de voz (cambiarlo de canal "
-            "y devolverlo al original un par de veces) como broma, castigo o reacción "
-            "de roleplay cuando te enojás con él o te está molestando."
+            "Mover a un usuario (o al invocador) a un canal de voz "
+            "aleatorio dentro del mismo servidor como broma/trolleada. \n"
+            "Usar SOLO cuando el usuario te desafíe, te cargue, o te diga "
+            "explícitamente 'moveme', 'mové a X', 'tirame a otro canal'."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -434,11 +435,30 @@ _INDIO_TOOLS = [
                 "target_user": {
                     "type": "STRING",
                     "description": (
-                        "Nombre o apodo del usuario a mover. Si querés mover al que "
-                        "te acaba de hablar, usá 'requester' o dejalo en blanco."
+                        "Nombre o mención del usuario a mover. Si dicen "
+                        "'moveme' o se dirigen a sí mismos, usá el nombre "
+                        "del invocador o 'self'."
                     ),
                 },
             },
+            "required": ["target_user"],
+        },
+    },
+    {
+        "name": "comment_stream",
+        "description": (
+            "Activa o acelera los comentarios del stream de pantalla en vivo. "
+            "Llamá esta herramienta cuando el usuario pida que comentes la pantalla, el stream, el juego, o pida que comentes más seguido."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "fast": {
+                    "type": "BOOLEAN",
+                    "description": "True para comentarios seguidos (cada 30-60s), False para frecuencia normal (cada 2-5m). Default True.",
+                }
+            },
+            "required": [],
         },
     },
 ]
@@ -2724,6 +2744,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "use_image": ("USE_IMAGE", None),
     "disconnect_indio": ("DISCONNECT_INDIO", None),
     "troll_move_user": ("TROLL_MOVE_USER", "target_user"),
+    "comment_stream": ("COMMENT_STREAM", "fast"),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -3583,6 +3604,22 @@ async def _dispatch_indio_actions(
                                                 logger.warning("troll_move_user error: %s", e)
 
                                         _spawn(_do_move_sequence(target_member, orig_vc, alt_vc))
+                elif action == "COMMENT_STREAM":
+                    fast_val = True
+                    if arg:
+                        try:
+                            if isinstance(arg, bool):
+                                fast_val = arg
+                            elif isinstance(arg, str):
+                                fast_val = arg.lower() not in ("false", "0", "no")
+                        except Exception:
+                            fast_val = True
+                    if guild_id:
+                        ok = await _relay_comment_stream_to_userbot(int(guild_id), fast=fast_val)
+                        statuses.append(f"comment_stream: {'ok' if ok else 'fail'}")
+                        logger.info("indio COMMENT_STREAM → ok=%s fast=%s", ok, fast_val)
+                    else:
+                        statuses.append("comment_stream: fail — no guild")
                 elif action in (
                     "SKIP_MUSIC",
                     "PAUSE_MUSIC",
@@ -4458,6 +4495,26 @@ async def _relay_join_to_userbot(channel_id: int) -> bool:
     except Exception as e:
         logger.warning("indio relay join failed: %s", e)
         return False
+
+
+async def _relay_comment_stream_to_userbot(guild_id: int, fast: bool = True) -> bool:
+    """Ask the userbot to set fast stream spectator mode and do an immediate comment."""
+    url = config.INDIO_RELAY_URL
+    secret = config.INDIO_RELAY_SECRET
+    if not url or not secret:
+        return False
+    spectate_url = urljoin(url, "/stream-spectator/mode")
+    payload = {"guild_id": int(guild_id), "fast": fast}
+    headers = {"X-API-Secret": secret}
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(spectate_url, json=payload, headers=headers) as resp:
+                return resp.status < 400
+    except Exception as e:
+        logger.warning("indio relay comment stream failed: %s", e)
+        return False
+
 
 
 

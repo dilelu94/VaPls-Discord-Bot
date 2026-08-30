@@ -139,6 +139,11 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "sacalo del canal",
         "sacudilo",
     ],
+    "comment_stream": [
+        "comentá el stream",
+        "comentá la pantalla",
+        "comentá más seguido",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────

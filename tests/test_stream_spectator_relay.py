@@ -3,7 +3,7 @@ stream spectator session."""
 import pytest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -29,18 +29,33 @@ def _load_relay_handlers():
     mock_spectator_mgr = SimpleNamespace(
         start_watching=AsyncMock(return_value={"watching": True}),
         stop_watching=AsyncMock(return_value=True),
+        set_fast_mode=MagicMock(),
+        inspect_now=AsyncMock(return_value="commentary"),
     )
+    mock_client = SimpleNamespace(get_guild=lambda gid: None)
+
+    async def mock_sync(g):
+        pass
 
     ns: dict = {
         "config": config_stub,
         "_spectator_mgr": mock_spectator_mgr,
+        "client": mock_client,
+        "_sync_stream_spectator": mock_sync,
+        "asyncio": __import__("asyncio"),
         "web": web,
     }
     exec(block, ns)
-    return ns["_relay_stream_watch"], ns["_relay_stream_unwatch"], config_stub, mock_spectator_mgr
+    return (
+        ns["_relay_stream_watch"],
+        ns["_relay_stream_unwatch"],
+        ns.get("_relay_stream_spectator_mode"),
+        config_stub,
+        mock_spectator_mgr,
+    )
 
 
-_watch_handler, _unwatch_handler, _cfg, _mock_spectator = _load_relay_handlers()
+_watch_handler, _unwatch_handler, _mode_handler, _cfg, _mock_spectator = _load_relay_handlers()
 
 
 async def test_relay_stream_watch_and_unwatch():
@@ -76,3 +91,26 @@ async def test_relay_stream_watch_and_unwatch():
         _mock_spectator.stop_watching.assert_called_once()
     finally:
         await tc.close()
+
+
+async def test_relay_stream_spectator_mode():
+    app = web.Application()
+    app.router.add_post("/stream-spectator/mode", _mode_handler)
+
+    tc = TestClient(TestServer(app))
+    await tc.start_server()
+
+    try:
+        resp = await tc.post(
+            "/stream-spectator/mode",
+            headers={"X-API-Secret": RELAY_SECRET},
+            json={"guild_id": 5555, "fast": True},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert data["status"] == "ok"
+        assert data["fast"] is True
+        _mock_spectator.set_fast_mode.assert_called_with(5555, fast=True)
+    finally:
+        await tc.close()
+

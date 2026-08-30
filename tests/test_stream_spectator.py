@@ -65,3 +65,41 @@ async def test_inspect_now_generates_commentary(spectator_mgr, gemini_http, monk
     assert mock_vc.play.called
 
     await spectator_mgr.stop_watching(12345)
+
+
+async def test_inspect_now_posts_to_text_channel(gemini_http, monkeypatch):
+    gemini_http(status=200, payload={
+        "candidates": [{
+            "finishReason": "STOP",
+            "content": {"parts": [{"text": "Tremendo stream che!"}]},
+        }],
+    })
+
+    posted_texts = []
+    async def fake_post(text):
+        posted_texts.append(text)
+
+    mgr = StreamSpectatorManager(
+        voice_client_getter=lambda gid: None,
+        post_text_fn=fake_post,
+    )
+
+    await mgr.start_watching(guild_id=999, streamer_name="Diego", immediate_check=False)
+    comment = await mgr.inspect_now(999)
+
+    assert comment == "Tremendo stream che!"
+    assert posted_texts == ["Tremendo stream che!"]
+    await mgr.stop_watching(999)
+
+
+async def test_set_fast_mode(spectator_mgr):
+    await spectator_mgr.start_watching(guild_id=777, streamer_name="Test", immediate_check=False)
+    session = spectator_mgr.get_session(777)
+    assert session["fast_mode"] is False
+
+    ok = spectator_mgr.set_fast_mode(777, True)
+    assert ok is True
+    assert session["fast_mode"] is True
+
+    await spectator_mgr.stop_watching(777)
+

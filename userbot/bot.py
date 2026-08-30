@@ -73,8 +73,19 @@ def _get_vc_for_guild_id(guild_id: int):
     return None
 
 
+async def _post_stream_commentary_text(text: str):
+    chan = _resolve_transcript_channel()
+    if chan is not None:
+        speaker_name = getattr(getattr(client, "user", None), "display_name", "Indio")
+        try:
+            await chan.send(f"👁️ **{speaker_name} (stream):** {text}")
+        except Exception as e:
+            log.warning("Failed to send stream commentary to transcript channel: %s", e)
+
+
 _spectator_mgr = stream_spectator.StreamSpectatorManager(
-    voice_client_getter=_get_vc_for_guild_id
+    voice_client_getter=_get_vc_for_guild_id,
+    post_text_fn=_post_stream_commentary_text,
 )
 
 
@@ -2057,6 +2068,16 @@ async def on_transcript(
         speaker_name = _name_for(user_id, member)
         posted_channel_id = chan.id
         posted_guild_id = guild.id if guild else None
+
+    # Direct voice trigger for stream commenting
+    lower_text = text.lower()
+    if any(k in lower_text for k in ("comenta el stream", "comentá el stream", "comenta la pantalla", "comentá la pantalla", "comentá el juego", "comenta el juego", "comentá más seguido", "comenta mas seguido")):
+        if posted_guild_id:
+            guild = client.get_guild(posted_guild_id)
+            if guild:
+                asyncio.create_task(_sync_stream_spectator(guild))
+            _spectator_mgr.set_fast_mode(posted_guild_id, True)
+            asyncio.create_task(_spectator_mgr.inspect_now(posted_guild_id))
 
     # Wake word: when this transcript came from the WakeWordSink (VOSK already
     # matched a restrictive _WAKE_PATTERNS pair upstream), hand the entire raw
@@ -4768,6 +4789,27 @@ async def _relay_stream_unwatch(request: web.Request) -> web.Response:
     return web.json_response({"stopped": stopped, "guild_id": guild_id})
 
 
+async def _relay_stream_spectator_mode(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        fast = bool(data.get("fast", True))
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    guild = client.get_guild(guild_id)
+    if guild:
+        await _sync_stream_spectator(guild)
+
+    _spectator_mgr.set_fast_mode(guild_id, fast=fast)
+    asyncio.create_task(_spectator_mgr.inspect_now(guild_id))
+    return web.json_response({"status": "ok", "guild_id": guild_id, "fast": fast})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4786,6 +4828,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/speak", _relay_speak)
     app.router.add_post("/stream-watch", _relay_stream_watch)
     app.router.add_post("/stream-unwatch", _relay_stream_unwatch)
+    app.router.add_post("/stream-spectator/mode", _relay_stream_spectator_mode)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
 
     app.router.add_post("/sensibilidad", _relay_sensibilidad)

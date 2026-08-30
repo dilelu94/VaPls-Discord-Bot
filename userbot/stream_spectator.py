@@ -19,12 +19,20 @@ logger = logging.getLogger("bot.userbot.stream_spectator")
 MIN_COMMENT_INTERVAL_SEC = 120.0  # 2 minutes
 MAX_COMMENT_INTERVAL_SEC = 300.0  # 5 minutes
 
+FAST_MIN_COMMENT_INTERVAL_SEC = 30.0  # 30 seconds
+FAST_MAX_COMMENT_INTERVAL_SEC = 60.0  # 60 seconds
+
 
 class StreamSpectatorManager:
     """Manages stream watching sessions per guild for the Indio userbot."""
 
-    def __init__(self, voice_client_getter: Callable[[int], Optional[object]]):
+    def __init__(
+        self,
+        voice_client_getter: Callable[[int], Optional[object]],
+        post_text_fn: Optional[Callable[[str], Optional[Callable]]] = None,
+    ):
         self._get_vc = voice_client_getter
+        self._post_text_fn = post_text_fn
         # guild_id -> session dict
         self._sessions: dict[int, dict] = {}
 
@@ -33,6 +41,18 @@ class StreamSpectatorManager:
 
     def get_session(self, guild_id: int) -> Optional[dict]:
         return self._sessions.get(guild_id)
+
+    def set_fast_mode(self, guild_id: int, fast: bool = True) -> bool:
+        """Set or unset fast commenting mode (every 30-60s) for a guild."""
+        session = self._sessions.get(guild_id)
+        if not session:
+            return False
+        session["fast_mode"] = fast
+        wake = session.get("wake_event")
+        if wake and isinstance(wake, asyncio.Event):
+            wake.set()
+        logger.info("Set stream spectator fast_mode=%s for guild=%s", fast, guild_id)
+        return True
 
     async def start_watching(
         self,
@@ -53,6 +73,8 @@ class StreamSpectatorManager:
             "start_ts": time.time(),
             "last_comment_ts": 0.0,
             "sample_frame_fn": sample_frame_fn,
+            "fast_mode": False,
+            "wake_event": asyncio.Event(),
             "active": True,
         }
         self._sessions[guild_id] = session
@@ -91,7 +113,11 @@ class StreamSpectatorManager:
         if not session:
             return None
 
-        return await self._run_single_inspection(session)
+        commentary = await self._run_single_inspection(session)
+        wake = session.get("wake_event")
+        if wake and isinstance(wake, asyncio.Event):
+            wake.set()
+        return commentary
 
     async def _run_single_inspection(self, session: dict) -> Optional[str]:
         guild_id = session["guild_id"]
@@ -144,7 +170,16 @@ class StreamSpectatorManager:
             commentary,
         )
 
-        # 3. Speak via Voice Client if connected
+        # 3. Post to text channel if callback registered
+        if self._post_text_fn is not None:
+            try:
+                res = self._post_text_fn(commentary)
+                if asyncio.iscoroutine(res):
+                    await res
+            except Exception as e:
+                logger.warning("Failed to post stream commentary to text channel: %s", e)
+
+        # 4. Speak via Voice Client if connected
         vc = self._get_vc(guild_id)
         if vc is not None and getattr(vc, "is_connected", lambda: False)():
             await self._speak_commentary(vc, commentary)
@@ -182,7 +217,6 @@ class StreamSpectatorManager:
         except Exception as e:
             logger.warning("Failed to play stream commentary TTS: %s", e)
 
-
     async def _spectator_loop(self, guild_id: int, immediate_check: bool = True) -> None:
         """Periodic loop that checks the stream at random intervals."""
         session = self._sessions.get(guild_id)
@@ -193,10 +227,26 @@ class StreamSpectatorManager:
             await self._run_single_inspection(session)
 
         while session.get("active", False) and guild_id in self._sessions:
-            interval = random.uniform(MIN_COMMENT_INTERVAL_SEC, MAX_COMMENT_INTERVAL_SEC)
-            await asyncio.sleep(interval)
+            if session.get("fast_mode", False):
+                min_i = FAST_MIN_COMMENT_INTERVAL_SEC
+                max_i = FAST_MAX_COMMENT_INTERVAL_SEC
+            else:
+                min_i = MIN_COMMENT_INTERVAL_SEC
+                max_i = MAX_COMMENT_INTERVAL_SEC
+
+            interval = random.uniform(min_i, max_i)
+            wake = session.get("wake_event")
+            if wake and isinstance(wake, asyncio.Event):
+                wake.clear()
+                try:
+                    await asyncio.wait_for(wake.wait(), timeout=interval)
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(interval)
 
             if not session.get("active", False) or guild_id not in self._sessions:
                 break
 
             await self._run_single_inspection(session)
+
