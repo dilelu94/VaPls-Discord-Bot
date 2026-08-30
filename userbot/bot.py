@@ -124,6 +124,14 @@ def _install_dave_patch():
             return
 
         def wrapped(self, packet):
+            raw_data = getattr(packet, "data", None)
+            if raw_data:
+                try:
+                    from golive.golive_watcher import dispatch_rtp_packet
+                    dispatch_rtp_packet(raw_data)
+                except Exception:
+                    pass
+
             vc = getattr(self, "_voice_client", None)
             if vc is not None:
                 ssrc_map = getattr(vc, "_ssrc_to_id", None)

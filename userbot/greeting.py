@@ -278,6 +278,10 @@ def resolve_wake_sound_path() -> Optional[str]:
         return None
     if os.path.isabs(rel):
         return rel
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    repo_rel = os.path.join(repo_root, rel)
+    if os.path.exists(repo_rel):
+        return repo_rel
     return os.path.join(config.CUSTOM_AUDIO_PATH, rel)
 
 

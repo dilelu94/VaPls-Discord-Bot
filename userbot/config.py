@@ -208,7 +208,7 @@ GREETING_RARE_THRESHOLD = float(os.getenv("GREETING_RARE_THRESHOLD", "0.05"))
 WAKE_SOUND_ENABLED = os.getenv("WAKE_SOUND_ENABLED", "true").lower() == "true"
 # Path al audio. Si es relativo se resuelve contra CUSTOM_AUDIO_PATH. Vacío
 # = feature inactivo aunque WAKE_SOUND_ENABLED esté en true.
-WAKE_SOUND_PATH = os.getenv("WAKE_SOUND_PATH", "")
+WAKE_SOUND_PATH = os.getenv("WAKE_SOUND_PATH", "userbot/assets/wake.ogg")
 # Mínimo de segundos entre dos sonidos en el mismo canal. Default 0 = sin
 # throttle (cada detección suena), útil mientras se calibra la wake word.
 # Subir si en producción molesta el spam.

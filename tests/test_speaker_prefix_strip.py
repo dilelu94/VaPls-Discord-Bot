@@ -53,8 +53,24 @@ def test_leading_whitespace_is_consumed():
     assert _strip_speaker_prefix("   [Miles]: hola") == "hola"
 
 
+def test_strips_other_speaker_unbracketed_prefix():
+    """The model imitates unbracketed 'Name:' format and emits 'Enrique:' or 'Miles:'. Strip it."""
+    assert _strip_speaker_prefix("Enrique: Perdón, Enrique, ¿cómo?") == "Perdón, Enrique, ¿cómo?"
+    assert _strip_speaker_prefix("Miles: jaja boludo") == "jaja boludo"
+    assert _strip_speaker_prefix("Viny: te escucho", speaker_name="Viny") == "te escucho"
+
+
+def test_leaves_non_speaker_colon_words_alone():
+    """Common Spanish words before a colon (e.g. 'Ojo:', 'Nota:') are not speaker tags."""
+    assert _strip_speaker_prefix("Ojo: tené cuidado") == "Ojo: tené cuidado"
+    assert _strip_speaker_prefix("Nota: importante") == "Nota: importante"
+
+
 def test_does_not_overrun_into_second_line():
     """The regex must stop at the first newline so a multi-line reply keeps
     its body intact."""
     out = _strip_speaker_prefix("[Miles]: primera\nsegunda")
     assert out == "primera\nsegunda"
+    out_unbracketed = _strip_speaker_prefix("Enrique: primera\nsegunda")
+    assert out_unbracketed == "primera\nsegunda"
+

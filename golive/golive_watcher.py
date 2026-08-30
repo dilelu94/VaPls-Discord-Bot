@@ -31,6 +31,24 @@ log = logging.getLogger(__name__)
 _OP_STREAM_WATCH = 20
 _OP_STREAM_SET_PAUSED = 22
 
+_rtp_listeners: set = set()
+
+
+def register_rtp_listener(callback) -> None:
+    _rtp_listeners.add(callback)
+
+
+def unregister_rtp_listener(callback) -> None:
+    _rtp_listeners.discard(callback)
+
+
+def dispatch_rtp_packet(data: bytes) -> None:
+    for cb in list(_rtp_listeners):
+        try:
+            cb(data)
+        except Exception:
+            pass
+
 
 class GoLiveWatcherConnection:
     """Manages a discrete stream watcher connection for taking video snapshots."""
@@ -137,7 +155,8 @@ class GoLiveWatcherConnection:
             if not ok:
                 return None
 
-        # Bind listener to VoiceClient's socket reader if available
+        # Bind listener to global RTP dispatcher and VoiceClient's socket reader if available
+        register_rtp_listener(self._on_udp_packet)
         vc_conn = getattr(self._regular_vc, "_connection", None) or self._regular_vc
         socket_reader = getattr(vc_conn, "_socket_reader", None) or getattr(self._regular_vc, "ws", None)
 
@@ -152,6 +171,7 @@ class GoLiveWatcherConnection:
         self.receiver.stop_capture()
 
         # Unregister listener
+        unregister_rtp_listener(self._on_udp_packet)
         if hasattr(vc_conn, "remove_socket_listener"):
             vc_conn.remove_socket_listener(self._on_udp_packet)
         elif socket_reader and hasattr(socket_reader, "unregister"):

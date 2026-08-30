@@ -64,6 +64,7 @@ logger = logging.getLogger("bot.gemini")
 # reference). Symptom seen in the wild: indio dispatches PLAY_MUSIC, the task
 # vanishes mid-flight, and no music plays without any error in the logs.
 _background_tasks: set[asyncio.Task] = set()
+_LITERAL_CMD_RE = re.compile(r"^\s*/?(play|soundpad)\s+(.+)", re.IGNORECASE)
 
 
 def _spawn(coro) -> asyncio.Task:
@@ -4262,18 +4263,76 @@ _LEADING_SPEAKER_PREFIX_RE = re.compile(
 
 _LITERAL_CMD_RE = re.compile(r"/(play|soundpad)\s+(.+)$", re.MULTILINE | re.IGNORECASE)
 
+# Generic unbracketed "Name:" / "Name -" speaker tag at the very start of a reply.
+_UNBRACKETED_SPEAKER_PREFIX_RE = re.compile(
+    r"^\s*([A-Za-z0-9_ÁÉÍÓÚáéíóúÑñ\.\s]{1,30})\s*[:\-—]\s*"
+)
 
-def _strip_speaker_prefix(text: str) -> str:
-    """Drop a leading "[indio]:" / "Indio:" / "[Miles]:" / "(el indio) -" style
-    prefix from a model reply. The model sometimes mirrors the speaker tag
+_NON_SPEAKER_WORDS = {
+    "ojo", "nota", "posta", "atencion", "atención", "resultado", "pd", "música",
+    "musica", "respuesta", "ejemplo", "importante", "tip", "dato", "error", "warning",
+    "p.d", "spoiler", "aclaracion", "aclaración"
+}
+
+_known_speaker_names_cache: Optional[set[str]] = None
+
+
+def _get_known_speaker_names() -> set[str]:
+    global _known_speaker_names_cache
+    if _known_speaker_names_cache is not None:
+        return _known_speaker_names_cache
+
+    names = {"indio", "el indio", "usuario", "user", "grupo", "bot", "voz", "speaker"}
+    try:
+        from users import USERS, NON_DISCORD_MEMBERS
+        for udata in USERS.values():
+            if "name" in udata and isinstance(udata["name"], str):
+                names.add(udata["name"].lower())
+            for trait in udata.get("traits", []):
+                if isinstance(trait, str):
+                    if trait.startswith("nombre real:"):
+                        names.add(trait.split(":", 1)[1].strip().lower())
+                    elif trait.startswith("apodos:"):
+                        for ap in trait.split(":", 1)[1].split(","):
+                            names.add(ap.strip().lower())
+        for member in NON_DISCORD_MEMBERS:
+            if "name" in member and isinstance(member["name"], str):
+                names.add(member["name"].lower())
+    except Exception:
+        pass
+    _known_speaker_names_cache = names
+    return names
+
+
+def _strip_speaker_prefix(text: str, speaker_name: Optional[str] = None) -> str:
+    """Drop a leading "[indio]:" / "Indio:" / "[Miles]:" / "Enrique:" / "(el indio) -"
+    style prefix from a model reply. The model sometimes mirrors the speaker tag
     format it sees in user turns even though INDIO_SYSTEM tells it not to.
 
     Applies first the indio-specific stripper (also catches bareword "Indio:"
-    without brackets), then the generic bracketed-name stripper."""
+    without brackets), then the generic bracketed-name stripper, then the
+    unbracketed speaker tag stripper."""
     if not text:
         return text
     out = _INDIO_PREFIX_RE.sub("", text, count=1)
     out = _LEADING_SPEAKER_PREFIX_RE.sub("", out, count=1)
+
+    m = _UNBRACKETED_SPEAKER_PREFIX_RE.match(out)
+    if m:
+        candidate_name = m.group(1).strip()
+        cand_lower = candidate_name.lower()
+        if cand_lower not in _NON_SPEAKER_WORDS:
+            should_strip = False
+            if speaker_name and cand_lower == speaker_name.strip().lower():
+                should_strip = True
+            elif cand_lower in _get_known_speaker_names():
+                should_strip = True
+            elif candidate_name and candidate_name[0].isupper() and len(candidate_name.split()) <= 3:
+                should_strip = True
+
+            if should_strip:
+                out = out[m.end():]
+
     return out.lstrip()
 
 
@@ -5014,7 +5073,7 @@ async def indioLogic(
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
-    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     relayed_via_userbot = False
     import playCommand
@@ -5484,7 +5543,7 @@ async def indioFromVoice(
     # pending_actions for single-match direct plays (returns []), which would
     # make the redirect check below miss the music action.
     _had_music = any(a in _MUSIC_ACTIONS for a, _ in pending_actions)
-    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     # Music action redirect: cuando el Indio responde con una accion de
     # musica desde wake-word de texto (sin reply contextual), redirigir
@@ -5955,7 +6014,7 @@ async def indioInstagramCommentLogic(
         return
 
     # Strip prefixes and literal commands
-    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
     
     # Strip Discord custom emoji markup (e.g. <:name:id>) which Instagram cannot render
@@ -6202,7 +6261,7 @@ async def indioInstagramScraperLogic(
         logger.error(f"[INSTAGRAM-INDIO-SCRAPER] Gemini generation error: {e}")
         return {"reply": "...", "react": None}
 
-    clean_reply = _strip_speaker_prefix(reply.text)
+    clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     clean_reply = _LITERAL_CMD_RE.sub("", clean_reply).strip()
     clean_reply = _CUSTOM_EMOJI_MARKUP_RE.sub("", clean_reply).strip()
     
@@ -6323,7 +6382,7 @@ async def generate_indio_telegram_response(
             tools=None,
             volatile_context=player_block or None,
         )
-        clean_reply = _strip_speaker_prefix(reply.text)
+        clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     except Exception as e:
         logger.exception("generate_indio_telegram_response failed")
         return "❌ Ocurrió un error al consultar a Indio."
