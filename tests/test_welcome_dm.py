@@ -33,7 +33,10 @@ async def test_on_member_join_handles_forbidden_dm():
     member.display_name = "BlockedMember"
     member.guild = MagicMock()
     member.guild.name = "TestGuild"
-    member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(), "DMs disabled"))
+    mock_resp = MagicMock()
+    mock_resp.status = 403
+    mock_resp.reason = "Forbidden"
+    member.send = AsyncMock(side_effect=discord.Forbidden(mock_resp, "DMs disabled"))
 
     with patch("os.path.exists", return_value=True), patch("discord.File"):
         # Should not raise exception
