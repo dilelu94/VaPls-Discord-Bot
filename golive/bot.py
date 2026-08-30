@@ -1031,6 +1031,95 @@ except ModuleNotFoundError:
     from golive.slopsoil.engine import start_live_stream as slopsoil_start_live_stream, cancel_live_stream as slopsoil_cancel_live_stream
 
 
+async def _relay_watchstream_snapshot(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+        target_user_id = int(data["target_user_id"])
+        duration = float(data.get("duration", 3.0))
+    except Exception as e:
+        log.warning("[WATCHSTREAM] invalid body: %s", e)
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not client.is_ready():
+        return web.json_response({"error": "client not ready"}, status=503)
+
+    guild = client.get_guild(guild_id)
+    if not guild:
+        return web.json_response({"error": "guild not found"}, status=404)
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.VoiceChannel):
+        return web.json_response({"error": "not a voice channel"}, status=400)
+
+    vc = _vc_for_guild(guild)
+    if not vc or not vc.is_connected():
+        await _join_channel(channel)
+        vc = _vc_for_guild(guild)
+    if not vc:
+        return web.json_response({"error": "could not join channel"}, status=500)
+
+    try:
+        from golive.golive_watcher import GoLiveWatcherConnection
+    except ModuleNotFoundError:
+        from golive_watcher import GoLiveWatcherConnection
+
+    watcher = GoLiveWatcherConnection(
+        bot=client,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        target_user_id=target_user_id,
+        vc=vc,
+    )
+
+    try:
+        jpg_path = await watcher.capture_snapshot(duration_sec=duration)
+        await watcher.disconnect()
+        if jpg_path and os.path.exists(jpg_path):
+            return web.json_response({
+                "success": True,
+                "snapshot_path": jpg_path,
+                "guild_id": guild_id,
+                "target_user_id": target_user_id,
+            })
+        else:
+            return web.json_response({"success": False, "error": "snapshot extraction failed"}, status=500)
+    except Exception as e:
+        log.exception("[WATCHSTREAM] snapshot failed")
+        await watcher.disconnect()
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_watchstream_stop(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+        target_user_id = int(data["target_user_id"])
+    except Exception as e:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    guild = client.get_guild(guild_id)
+    vc = _vc_for_guild(guild) if guild else None
+    if vc:
+        try:
+            from golive.golive_watcher import GoLiveWatcherConnection
+        except ModuleNotFoundError:
+            from golive_watcher import GoLiveWatcherConnection
+        watcher = GoLiveWatcherConnection(client, guild_id, channel_id, target_user_id, vc)
+        await watcher.disconnect()
+
+    return web.json_response({"stopped": True, "guild_id": guild_id})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — HTTP relay disabled.")
@@ -1040,6 +1129,8 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/stopstream", _relay_stopstream)
     app.router.add_post("/stream/control", _relay_stream_control)
     app.router.add_post("/headbanz", _relay_headbanz)
+    app.router.add_post("/watchstream/snapshot", _relay_watchstream_snapshot)
+    app.router.add_post("/watchstream/stop", _relay_watchstream_stop)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host=config.RELAY_HOST, port=config.RELAY_PORT)

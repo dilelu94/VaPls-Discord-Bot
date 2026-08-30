@@ -40,6 +40,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "adivinador": "text",
     "mascota": "text",
     "restart": "text",
+    "verstream": "text",
 }
 
 VALID_FLAGS: frozenset[str] = frozenset({"music", "text", "response"})

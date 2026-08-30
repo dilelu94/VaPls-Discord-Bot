@@ -1639,6 +1639,98 @@ async def entraindio(ctx):
     await safe_respond(ctx, f"🪶 El indio va para **{voice_channel.name}**.")
 
 
+@bot.slash_command(
+    name="verstream",
+    description="Captura tu transmisión de video en vivo y le pide al Indio que la comente",
+)
+async def verstream(
+    ctx,
+    duracion: discord.Option(
+        float,
+        description="Duración de la muestra en segundos (por defecto 3.0s)",
+        required=False,
+        default=3.0,
+    ) = 3.0,
+):
+    """Slash command: captures a snapshot of the caller's live stream and asks Gemini to comment."""
+    await safe_defer(ctx)
+    _track_command(ctx, "verstream")
+
+    voice_state = getattr(ctx.author, "voice", None)
+    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+    if voice_channel is None:
+        await safe_respond(
+            ctx, "❌ Tenés que estar transmitiendo en un canal de voz para que pueda ver tu stream."
+        )
+        return
+
+    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
+        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
+        return
+
+    url = urljoin(config.GOLIVE_RELAY_URL, "/watchstream/snapshot")
+    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
+    payload = {
+        "guild_id": ctx.guild.id,
+        "channel_id": voice_channel.id,
+        "target_user_id": ctx.author.id,
+        "duration": duracion,
+    }
+    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT + duracion + 5.0)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    err_msg = ""
+                    try:
+                        data = await resp.json()
+                        err_msg = data.get("error", "")
+                    except Exception:
+                        pass
+                    await safe_respond(ctx, f"⚠️ No pude capturar el stream (HTTP {resp.status}): {err_msg}")
+                    return
+                data = await resp.json()
+    except Exception as e:
+        log.exception("verstream relay failed")
+        await safe_respond(ctx, f"⚠️ Error capturando stream: {e}")
+        return
+
+    snapshot_path = data.get("snapshot_path")
+    if not snapshot_path or not os.path.exists(snapshot_path):
+        await safe_respond(ctx, "⚠️ No se pudo extraer la imagen del stream.")
+        return
+
+    try:
+        import base64
+        with open(snapshot_path, "rb") as f:
+            img_bytes = f.read()
+        b64_data = base64.b64encode(img_bytes).decode("utf-8")
+        image_parts = [{"inlineData": {"mimeType": "image/jpeg", "data": b64_data}}]
+
+        system_instruction = (
+            "Sos el Indio, un integrante del grupo de Discord. "
+            "Estás viendo una captura de pantalla en vivo de lo que tu compañero está transmitiendo en Discord. "
+            "Comentá de forma graciosa, corta y directa lo que ves en la imagen."
+        )
+        reply = await geminiClient.generate(
+            user_message="¿Qué ves en mi stream? Comentá al respecto.",
+            system_instruction=system_instruction,
+            image_parts=image_parts,
+            distinct_id=str(ctx.author.id),
+            guild_id=str(ctx.guild.id),
+        )
+
+        file = discord.File(snapshot_path, filename="stream_snapshot.jpg")
+        await ctx.followup.send(
+            content=f"📸 **Captura de stream de {ctx.author.display_name}:**\n> {reply.text}",
+            file=file,
+        )
+    except Exception as e:
+        log.exception("verstream gemini call failed")
+        await safe_respond(ctx, f"⚠️ Error procesando la imagen con Gemini: {e}")
+
+
 
 async def start_iptv_stream_logic(
     guild_id: int,

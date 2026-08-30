@@ -101,6 +101,9 @@ class DaveSession:
         self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
         self._encryptor.set_passthrough_mode(True)  # passthrough until key ready
 
+        self._decryptor = dave.Decryptor()
+        self._decryptor.transition_to_passthrough_mode(True)
+
         self._ready = False
         self._epoch: int | None = None
         self.status = SessionStatus.inactive
@@ -150,11 +153,16 @@ class DaveSession:
         return users
 
     def _refresh_key(self) -> None:
-        """Pull our own key ratchet from the MLS session → give it to Encryptor."""
+        """Pull key ratchets from the MLS session → give them to Encryptor and Decryptor."""
         ratchet = self._session.get_key_ratchet(str(self._user_id))
         if ratchet is not None:
             self._encryptor.set_key_ratchet(ratchet)
             self._encryptor.set_passthrough_mode(False)
+            try:
+                self._decryptor.transition_to_key_ratchet(ratchet)
+                self._decryptor.transition_to_passthrough_mode(False)
+            except Exception as exc:
+                log.warning("[DAVE] decryptor ratchet transition warning: %s", exc)
             if not self._ready:
                 log.info("[DAVE] Key ratchet established — session READY")
             self._ready = True
@@ -174,6 +182,7 @@ class DaveSession:
         self.status = SessionStatus.inactive
         self._encryptor.set_key_ratchet(None)
         self._encryptor.set_passthrough_mode(True)
+        self._decryptor.transition_to_passthrough_mode(True)
         self._do_init()
 
     def reset(self) -> None:
@@ -183,6 +192,7 @@ class DaveSession:
         self.status = SessionStatus.inactive
         self._encryptor.set_key_ratchet(None)
         self._encryptor.set_passthrough_mode(True)
+        self._decryptor.transition_to_passthrough_mode(True)
 
     def get_serialized_key_package(self) -> bytes:
         """Returns the MLS key package to send to Discord (opcode MLS_KEY_PACKAGE)."""
@@ -193,6 +203,7 @@ class DaveSession:
 
     def set_passthrough_mode(self, passthrough: bool, transition_expiry=None) -> None:
         self._encryptor.set_passthrough_mode(passthrough)
+        self._decryptor.transition_to_passthrough_mode(passthrough)
 
     def process_proposals(self, optype, proposals: bytes):
         """
@@ -264,29 +275,33 @@ class DaveSession:
             return data  # passthrough (no key yet)
         return result
 
-    # ── Properties ────────────────────────────────────────────────────────────
-
-    @property
-    def ready(self) -> bool:
-        return self._ready
-
-    @property
-    def epoch(self):
-        return self._epoch
-
-    # ── Diagnostic helpers ────────────────────────────────────────────────────
-
-    def get_user_ids(self) -> list:
-        return []
-
-    def get_encryption_stats(self):
-        try:
-            return _EncryptionStats(self._encryptor.get_stats(dave.MediaType.audio))
-        except Exception:
-            return type("_S", (), {"attempts": 0, "successes": 0, "failures": 0})()
-
     def decrypt(self, user_id: int, media_type, packet: bytes) -> bytes:
-        raise RuntimeError("DaveSession.decrypt() not implemented in davey_compat")
+        """DAVE-decrypt an incoming media packet for a specific user ID."""
+        ratchet = self._session.get_key_ratchet(str(user_id))
+        if ratchet is not None:
+            try:
+                self._decryptor.transition_to_key_ratchet(ratchet)
+            except Exception:
+                pass
+        m_type = dave.MediaType.video if media_type in (1, dave.MediaType.video) else dave.MediaType.audio
+        res = self._decryptor.decrypt(m_type, packet)
+        if res is None:
+            return packet
+        return res
+
+    def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
+        """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
+        if user_id is not None:
+            ratchet = self._session.get_key_ratchet(str(user_id))
+            if ratchet is not None:
+                try:
+                    self._decryptor.transition_to_key_ratchet(ratchet)
+                except Exception:
+                    pass
+        res = self._decryptor.decrypt(dave.MediaType.video, data)
+        if res is None:
+            return data
+        return res
 
     def __repr__(self) -> str:
         return (
