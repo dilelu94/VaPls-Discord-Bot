@@ -3628,8 +3628,6 @@ async def _dispatch_indio_actions(
                         except Exception:
                             fast_val = True
                     if guild_id:
-                        if requester_member and getattr(requester_member, "voice", None) and requester_member.voice.channel:
-                            await _relay_join_to_userbot(int(guild_id), requester_member.voice.channel.id)
                         ok = await _relay_comment_stream_to_userbot(int(guild_id), fast=fast_val)
                         statuses.append(f"comment_stream: {'ok' if ok else 'fail'}")
                         logger.info("indio COMMENT_STREAM → ok=%s fast=%s", ok, fast_val)

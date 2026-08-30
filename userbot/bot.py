@@ -2592,6 +2592,19 @@ async def _leave_if_empty(guild: discord.Guild):
 
 
 
+async def _auto_stream_sync_loop():
+    """Background task: periodically check for active GoLive streams across allowed guilds."""
+    await asyncio.sleep(5)
+    while not client.is_closed():
+        try:
+            for guild in client.guilds:
+                if _guild_allowed(guild.id):
+                    await _sync_stream_spectator(guild)
+        except Exception as e:
+            log.warning("[STREAM-SPECTATOR] _auto_stream_sync_loop exception: %s", e)
+        await asyncio.sleep(15)
+
+
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
@@ -2601,17 +2614,50 @@ async def on_ready():
             "will not be able to identify the VaPls bot's slash commands; "
             "indio playback will not work until this is configured.",
         )
+    asyncio.create_task(_auto_stream_sync_loop())
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):
             continue
-        for channel in guild.voice_channels:
-            humans = [
-                m for m in channel.members if not m.bot and m.id != client.user.id
-            ]
-            if humans:
-                await _join_channel(channel)
-                break
+        await _sync_stream_spectator(guild)
+        if not _vc_for_guild(guild):
+            for channel in guild.voice_channels:
+                humans = [
+                    m for m in channel.members if not m.bot and m.id != client.user.id
+                ]
+                if humans:
+                    await _join_channel(channel)
+                    break
+
+
+@client.event
+async def on_socket_raw_receive(msg):
+    """Raw Gateway listener to capture STREAM_CREATE and STREAM_DELETE immediately."""
+    if isinstance(msg, (str, bytes)):
+        try:
+            if isinstance(msg, bytes):
+                msg = msg.decode("utf-8")
+            data = json.loads(msg)
+            op = data.get("op")
+            t = data.get("t")
+            if op == 0 and t in ("STREAM_CREATE", "STREAM_DELETE", "VOICE_STATE_UPDATE"):
+                d = data.get("d", {})
+                guild_id = d.get("guild_id")
+                if not guild_id and "stream_key" in d:
+                    parts = str(d["stream_key"]).split(":")
+                    if len(parts) >= 2 and parts[0] == "guild":
+                        guild_id = parts[1]
+                if guild_id:
+                    try:
+                        gid = int(guild_id)
+                        guild = client.get_guild(gid)
+                        if guild and _guild_allowed(gid):
+                            log.info("[STREAM-EVENT] Raw %s received for guild %s — syncing spectator", t, guild.name)
+                            asyncio.create_task(_sync_stream_spectator(guild))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
 
 @client.event
