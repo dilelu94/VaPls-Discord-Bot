@@ -83,6 +83,8 @@ async def test_extract_reply_chain_indio_in_ancestors(monkeypatch):
     """is_reply_to_indio is True if any ancestor was authored by Indio/VaPls bot."""
     indio_id = 999111
     monkeypatch.setattr(config, "VAPLS_BOT_ID", indio_id, raising=False)
+    from userbot.bot import config as userbot_cfg
+    monkeypatch.setattr(userbot_cfg, "VAPLS_BOT_ID", indio_id, raising=False)
 
     msg_a = _make_msg("Que opinan?", indio_id, "Indio")
     msg_b = _make_msg("yo opino que no", 102, "Viny", ref_msg=msg_a)

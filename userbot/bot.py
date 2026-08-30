@@ -28,14 +28,18 @@ from aiohttp import web
 import discord  # discord.py-self
 from discord.ext import voice_recv
 
+import importlib.util
+
 _userbot_dir = os.path.dirname(os.path.abspath(__file__))
-if _userbot_dir not in sys.path:
-    sys.path.insert(0, _userbot_dir)
 _parent_dir = os.path.dirname(_userbot_dir)
 if _parent_dir not in sys.path:
     sys.path.append(_parent_dir)
 
-import config
+_config_path = os.path.join(_userbot_dir, "config.py")
+_spec = importlib.util.spec_from_file_location("userbot_config", _config_path)
+config = importlib.util.module_from_spec(_spec)
+sys.modules["userbot_config"] = config
+_spec.loader.exec_module(config)
 import greeting
 from transcript_channel import (
     resolve_transcript_channel as _resolve_transcript_channel_impl,
