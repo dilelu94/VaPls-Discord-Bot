@@ -7,7 +7,8 @@ triggering telemetry flags.
 
 from __future__ import annotations
 
-import asyncio
+import inspect
+import json
 import logging
 import socket
 import struct
@@ -49,6 +50,49 @@ def dispatch_rtp_packet(data: bytes) -> None:
             cb(data)
         except Exception:
             pass
+
+
+async def _send_gateway_json(ws, data: dict) -> bool:
+    """Safely sends a JSON opcode dictionary over any Discord Gateway WebSocket type."""
+    if ws is None:
+        return False
+    payload_str = json.dumps(data)
+
+    # Check for send_as_json first
+    send_as_json_fn = getattr(ws, "send_as_json", None)
+    if send_as_json_fn is not None and callable(send_as_json_fn):
+        try:
+            res = send_as_json_fn(data)
+            if inspect.isawaitable(res):
+                await res
+            return True
+        except Exception as exc:
+            log.debug("[WATCHER] send_as_json failed: %s", exc)
+
+    # Check for send method
+    send_fn = getattr(ws, "send", None)
+    if send_fn is not None and callable(send_fn):
+        try:
+            res = send_fn(payload_str)
+            if inspect.isawaitable(res):
+                await res
+            return True
+        except Exception as exc:
+            log.debug("[WATCHER] send failed: %s", exc)
+
+    # Check for send_str method (aiohttp)
+    send_str_fn = getattr(ws, "send_str", None)
+    if send_str_fn is not None and callable(send_str_fn):
+        try:
+            res = send_str_fn(payload_str)
+            if inspect.isawaitable(res):
+                await res
+            return True
+        except Exception:
+            pass
+
+    log.error("[WATCHER] Unable to send JSON payload over websocket %s", type(ws))
+    return False
 
 
 class GoLiveWatcherConnection:
@@ -94,11 +138,6 @@ class GoLiveWatcherConnection:
             log.warning("[WATCHER] Main bot websocket is not connected")
             return False
 
-        async def _send_json_safe(ws, data):
-            res = ws.send_as_json(data)
-            if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-                await res
-
         log.info(
             "[WATCHER] Requesting STREAM_WATCH for stream_key=%s",
             self._stream_key,
@@ -106,7 +145,7 @@ class GoLiveWatcherConnection:
 
         try:
             # 1. Send Opcode 20 (STREAM_WATCH)
-            await _send_json_safe(
+            ok1 = await _send_gateway_json(
                 main_ws,
                 {
                     "op": _OP_STREAM_WATCH,
@@ -117,7 +156,7 @@ class GoLiveWatcherConnection:
             )
 
             # 2. Send Opcode 22 (STREAM_SET_PAUSED: false)
-            await _send_json_safe(
+            ok2 = await _send_gateway_json(
                 main_ws,
                 {
                     "op": _OP_STREAM_SET_PAUSED,
@@ -128,11 +167,11 @@ class GoLiveWatcherConnection:
                 },
             )
 
-            self._connected = True
-            log.info("[WATCHER] STREAM_WATCH signal sent successfully")
-            return True
+            self._connected = ok1 or ok2
+            log.info("[WATCHER] STREAM_WATCH signal sent (status=%s)", self._connected)
+            return self._connected
         except Exception as exc:
-            log.error("[WATCHER] Failed to send STREAM_WATCH: %s", exc)
+            log.error("[WATCHER] Failed to send STREAM_WATCH: %s", exc, exc_info=True)
             return False
 
     def _on_udp_packet(self, data: bytes) -> None:
@@ -212,17 +251,16 @@ class GoLiveWatcherConnection:
         main_ws = self._bot.ws
         if main_ws:
             try:
-                res = main_ws.send_as_json(
+                await _send_gateway_json(
+                    main_ws,
                     {
                         "op": _OP_STREAM_SET_PAUSED,
                         "d": {
                             "stream_key": self._stream_key,
                             "paused": True,
                         },
-                    }
+                    },
                 )
-                if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-                    await res
                 log.info("[WATCHER] Sent STREAM_SET_PAUSED: true for %s", self._stream_key)
             except Exception as exc:
                 log.warning("[WATCHER] Error disconnecting watcher: %s", exc)
