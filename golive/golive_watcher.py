@@ -120,7 +120,8 @@ class GoLiveWatcherConnection:
         self.ws: Optional[DiscordVoiceWebSocket] = None
         self._socket_reader: Optional[SocketReader] = None
 
-        self.dave_session = getattr(vc, "dave_session", None)
+        state = getattr(vc, "_connection", None)
+        self.dave_session = getattr(state, "dave_session", None) if state else getattr(vc, "dave_session", None)
         self.receiver = StreamSnapshotReceiver()
         self._connected = False
 

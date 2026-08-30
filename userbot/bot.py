@@ -134,13 +134,6 @@ def _install_dave_patch():
             elif isinstance(packet, tuple) and len(packet) >= 2:
                 raw_data = bytes(packet[0]) + bytes(packet[1])
 
-            if raw_data:
-                try:
-                    from golive.golive_watcher import dispatch_rtp_packet
-                    dispatch_rtp_packet(raw_data)
-                except Exception:
-                    pass
-
             vc = getattr(self, "_voice_client", None)
             if vc is not None:
                 ssrc_map = getattr(vc, "_ssrc_to_id", None)
@@ -151,6 +144,14 @@ def _install_dave_patch():
                     return _OPUS_SILENCE
 
             raw = original(self, packet)
+
+            if raw:
+                try:
+                    from golive.golive_watcher import dispatch_rtp_packet
+                    dispatch_rtp_packet(raw)
+                except Exception:
+                    pass
+
             _dave_stats["total"] += 1
             n = _dave_stats["total"]
 
