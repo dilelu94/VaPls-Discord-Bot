@@ -50,7 +50,7 @@ class H264RTPDepacketizer:
             offset += 4 + (ext_len * 4)
 
         payload = rtp_packet[offset:]
-        if not payload:
+        if not payload or len(payload) < 4:
             return
 
         # Sequence continuity check

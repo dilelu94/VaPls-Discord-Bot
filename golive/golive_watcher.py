@@ -153,6 +153,7 @@ class GoLiveWatcherConnection:
                     "op": _OP_STREAM_WATCH,
                     "d": {
                         "stream_key": self._stream_key,
+                        "video_codec": "H264",
                     },
                 },
             )
