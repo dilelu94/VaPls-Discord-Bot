@@ -283,7 +283,10 @@ class DaveSession:
                 self._decryptor.transition_to_key_ratchet(ratchet)
             except Exception:
                 pass
-        m_type = dave.MediaType.video if media_type in (1, dave.MediaType.video) else dave.MediaType.audio
+        if media_type == 1 or media_type == dave.MediaType.video or str(media_type).lower() == "video":
+            m_type = dave.MediaType.video
+        else:
+            m_type = dave.MediaType.audio
         res = self._decryptor.decrypt(m_type, packet)
         if res is None:
             return packet

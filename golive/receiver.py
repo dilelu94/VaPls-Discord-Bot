@@ -26,12 +26,14 @@ class StreamSnapshotReceiver:
         self._raw_nal_buffer: bytearray = bytearray()
         self._sample_start_time: Optional[float] = None
         self._is_capturing: bool = False
+        self._seen_keyframe: bool = False
 
     def start_capture(self) -> None:
         self.depacketizer.reset()
         self._raw_nal_buffer.clear()
         self._sample_start_time = time.monotonic()
         self._is_capturing = True
+        self._seen_keyframe = False
         log.info("[RECEIVER] Started video snapshot sample capture")
 
     def stop_capture(self) -> None:
@@ -46,7 +48,7 @@ class StreamSnapshotReceiver:
         user_id: Optional[int] = None,
     ) -> None:
         """Process an incoming video RTP packet: DAVE decrypt -> Depacketize -> Buffer."""
-        if len(rtp_data) < 12:
+        if not self._is_capturing or not rtp_data or len(rtp_data) < 12:
             return
 
         # Parse RTP header offset
@@ -75,15 +77,26 @@ class StreamSnapshotReceiver:
                     log.warning("[RECEIVER] DAVE decrypt_h264 warning: %s", exc)
             elif hasattr(dave_session, "decrypt"):
                 try:
-                    decrypted_payload = dave_session.decrypt(user_id or 0, 1, raw_payload)
+                    try:
+                        import dave
+                        m_type = dave.MediaType.video
+                    except ImportError:
+                        m_type = 1
+                    decrypted_payload = dave_session.decrypt(user_id or 0, m_type, raw_payload)
                 except Exception as exc:
                     log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
 
         decrypted_rtp = header + decrypted_payload
 
-        # 2. Depacketize RTP -> Annex-B NAL units
+        # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 5, 7, 8)
         for nal in self.depacketizer.depacketize(decrypted_rtp):
-            self._raw_nal_buffer.extend(nal)
+            if not self._seen_keyframe and len(nal) > 4:
+                nal_type = nal[4] & 0x1F
+                if nal_type in (5, 7, 8):
+                    self._seen_keyframe = True
+                    log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
+            if self._seen_keyframe:
+                self._raw_nal_buffer.extend(nal)
 
     def extract_snapshot(
         self,
