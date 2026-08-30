@@ -82,10 +82,13 @@ class StreamSnapshotReceiver:
             elif hasattr(dave_session, "decrypt"):
                 try:
                     try:
-                        import dave
-                        m_type = dave.MediaType.video
+                        import davey as dave
                     except ImportError:
-                        m_type = 1
+                        try:
+                            import dave
+                        except ImportError:
+                            dave = None
+                    m_type = getattr(dave, "MediaType", None).video if (dave and hasattr(dave, "MediaType")) else 1
                     decrypted_payload = dave_session.decrypt(user_id or 0, m_type, raw_payload)
                 except Exception as exc:
                     log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
