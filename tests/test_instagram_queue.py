@@ -64,7 +64,8 @@ async def test_golive_stream_first_reel_delay():
     ytdlp_module = sys.modules.get('ytdlp')
 
     with patch("golive.bot.slopsoil_start_live_stream", AsyncMock()), \
-         patch.object(ytdlp_module, "_yt_extract_url", mock_extract):
+         patch.object(ytdlp_module, "_yt_extract_url", mock_extract), \
+         patch("asyncio.sleep", AsyncMock()):
         await stream.start()
         assert stream.target_url == "https://instagram.com/reel/123"
 
