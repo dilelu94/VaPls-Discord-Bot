@@ -447,8 +447,8 @@ _INDIO_TOOLS = [
     {
         "name": "comment_stream",
         "description": (
-            "Activa o acelera los comentarios del stream de pantalla en vivo. "
-            "Llamá esta herramienta cuando el usuario pida que comentes la pantalla, el stream, el juego, o pida que comentes más seguido."
+            "Activa o acelera el modo espectador de stream para mirar y comentar la pantalla/transmisión GoLive en vivo. "
+            "Llamá esta herramienta cuando el usuario pida 'entra al stream', 'mirá el stream', 'mirá la pantalla', 'comentá el stream', 'comentá el juego', o pida que comentes más seguido."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -466,7 +466,8 @@ _INDIO_TOOLS = [
         "description": (
             "Unirse o entrar al canal de voz donde está el usuario/invocador. "
             "Llamá esta herramienta cuando el usuario pida 'entra indio', 'metete a voz', "
-            "'sumate al canal', 'vení a voz', 'entra al stream', 'entra a la llamada', 'metete'."
+            "'sumate al canal', 'vení a voz', 'entra a la llamada', 'metete'. "
+            "NO la uses para transmisiones/pantalla/stream (para eso usá comment_stream)."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },

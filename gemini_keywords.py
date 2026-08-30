@@ -140,9 +140,13 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "sacudilo",
     ],
     "comment_stream": [
+        "entra al stream",
+        "mirá el stream",
+        "mirá la pantalla",
         "comentá el stream",
         "comentá la pantalla",
         "comentá más seguido",
+        "comentá el juego",
     ],
     "join_voice": [
         "entra indio",
@@ -150,7 +154,6 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "metete a voz",
         "sumate a voz",
         "vení a voz",
-        "entra al stream",
         "entra a la llamada",
     ],
 }
