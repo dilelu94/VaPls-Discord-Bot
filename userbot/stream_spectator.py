@@ -61,6 +61,7 @@ class StreamSpectatorManager:
         streamer_id: Optional[int] = None,
         immediate_check: bool = True,
         sample_frame_fn: Optional[Callable[[], Optional[bytes]]] = None,
+        stream_key: Optional[str] = None,
     ) -> dict:
         """Start or update a stream spectator session for a guild."""
         if guild_id in self._sessions:
@@ -70,6 +71,7 @@ class StreamSpectatorManager:
             "guild_id": guild_id,
             "streamer_name": streamer_name,
             "streamer_id": streamer_id,
+            "stream_key": stream_key,
             "start_ts": time.time(),
             "last_comment_ts": 0.0,
             "sample_frame_fn": sample_frame_fn,
@@ -131,13 +133,20 @@ class StreamSpectatorManager:
         streamer_id = session.get("streamer_id")
         sample_fn = session.get("sample_frame_fn")
 
+        logger.info(
+            "[STREAM-SPECTATOR] Iniciando inspección de stream para guild=%s, streamer=%s (id=%s)",
+            guild_id,
+            streamer_name,
+            streamer_id,
+        )
+
         # 1. Obtain image snapshot bytes
         image_bytes: Optional[bytes] = None
         if sample_fn is not None:
             try:
                 image_bytes = sample_fn()
             except Exception as e:
-                logger.warning("sample_frame_fn failed: %s", e)
+                logger.warning("[STREAM-SPECTATOR] sample_frame_fn falló: %s", e)
 
         # Fallback dummy 1x1 JPEG if no frame provider available (or during testing/mock)
         if not image_bytes:
@@ -152,6 +161,13 @@ class StreamSpectatorManager:
                 b"\x08\x01\x01\x00\x00?\x00\xbf\x00\xff\xd9"
             )
 
+        logger.info(
+            "[STREAM-SPECTATOR] Cuadro de stream capturado (%d bytes) para streamer %s (id=%s). Consultando a Gemini...",
+            len(image_bytes),
+            streamer_name,
+            streamer_id,
+        )
+
         # 2. Call Gemini Vision
         try:
             commentary = await geminiCommand.ask_indio_stream_vision(
@@ -161,18 +177,23 @@ class StreamSpectatorManager:
                 guild_id=guild_id,
             )
         except Exception as e:
-            logger.warning("ask_indio_stream_vision exception: %s", e)
+            logger.warning("[STREAM-SPECTATOR] ask_indio_stream_vision excepción: %s", e)
             commentary = None
 
         if not commentary:
-            logger.info("Stream inspection for guild=%s returned SKIP/None", guild_id)
+            logger.info(
+                "[STREAM-SPECTATOR] Inspección de stream para guild=%s (streamer=%s) devolvió SKIP/None",
+                guild_id,
+                streamer_name,
+            )
             return None
 
         session["last_comment_ts"] = time.time()
         logger.info(
-            "Stream commentary generated for guild=%s, streamer=%s: %s",
+            "[STREAM-SPECTATOR] Comentario generado para guild=%s, streamer=%s (id=%s): '%s'",
             guild_id,
             streamer_name,
+            streamer_id,
             commentary,
         )
 

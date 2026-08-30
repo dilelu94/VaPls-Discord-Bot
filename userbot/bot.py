@@ -2445,6 +2445,57 @@ def _find_active_streamer(channel: Optional[discord.VoiceChannel]) -> Optional[d
     return None
 
 
+async def _watch_stream_gateway(guild_id: int, channel_id: int, streamer_id: int):
+    """Send Gateway Opcode 18 (STREAM_WATCH) and Opcode 22 (STREAM_SET_PAUSED) to subscribe to stream."""
+    stream_key = f"guild:{guild_id}:{channel_id}:{streamer_id}"
+    ws = getattr(client, "ws", None)
+    if ws is not None:
+        try:
+            await ws.send_as_json({
+                "op": 18,
+                "d": {
+                    "type": "guild",
+                    "guild_id": str(guild_id),
+                    "channel_id": str(channel_id),
+                    "preferred_region": None,
+                    "stream_key": stream_key,
+                }
+            })
+            await ws.send_as_json({
+                "op": 22,
+                "d": {
+                    "stream_key": stream_key,
+                    "paused": False,
+                }
+            })
+            log.info("[STREAM-SPECTATOR] Sent Gateway op 18 STREAM_WATCH for stream_key=%s", stream_key)
+        except Exception as e:
+            log.warning("[STREAM-SPECTATOR] Failed to send STREAM_WATCH op 18: %s", e)
+
+
+async def _unwatch_stream_gateway(stream_key: str):
+    """Send Gateway Opcode 19 (STREAM_DELETE) and Opcode 22 (STREAM_SET_PAUSED) to unsubscribe from stream."""
+    ws = getattr(client, "ws", None)
+    if ws is not None:
+        try:
+            await ws.send_as_json({
+                "op": 22,
+                "d": {
+                    "stream_key": stream_key,
+                    "paused": True,
+                }
+            })
+            await ws.send_as_json({
+                "op": 19,
+                "d": {
+                    "stream_key": stream_key,
+                }
+            })
+            log.info("[STREAM-SPECTATOR] Sent Gateway op 19 STREAM_DELETE for stream_key=%s", stream_key)
+        except Exception as e:
+            log.warning("[STREAM-SPECTATOR] Failed to send STREAM_DELETE op 19: %s", e)
+
+
 async def _sync_stream_spectator(guild: discord.Guild):
     """Automatically start or stop stream spectator depending on active GoLive streams."""
     vc = _vc_for_guild(guild)
@@ -2465,6 +2516,9 @@ async def _sync_stream_spectator(guild: discord.Guild):
             vc = _vc_for_guild(guild)
 
     if vc is None or not getattr(vc, "channel", None):
+        session = _spectator_mgr.get_session(guild.id)
+        if session and session.get("stream_key"):
+            await _unwatch_stream_gateway(session["stream_key"])
         await _spectator_mgr.stop_watching(guild.id)
         return
 
@@ -2480,11 +2534,14 @@ async def _sync_stream_spectator(guild: discord.Guild):
                 streamer.id,
                 vc.channel.name,
             )
+            stream_key = f"guild:{guild.id}:{vc.channel.id}:{streamer.id}"
+            await _watch_stream_gateway(guild.id, vc.channel.id, streamer.id)
             await _spectator_mgr.start_watching(
                 guild.id,
                 streamer_name=streamer.display_name,
                 streamer_id=streamer.id,
                 immediate_check=True,
+                stream_key=stream_key,
             )
     else:
         found_ch = None
@@ -2499,11 +2556,14 @@ async def _sync_stream_spectator(guild: discord.Guild):
             if new_vc and getattr(new_vc, "channel", None):
                 new_streamer = _find_active_streamer(new_vc.channel)
                 if new_streamer:
+                    stream_key = f"guild:{guild.id}:{new_vc.channel.id}:{new_streamer.id}"
+                    await _watch_stream_gateway(guild.id, new_vc.channel.id, new_streamer.id)
                     await _spectator_mgr.start_watching(
                         guild.id,
                         streamer_name=new_streamer.display_name,
                         streamer_id=new_streamer.id,
                         immediate_check=True,
+                        stream_key=stream_key,
                     )
                     return
         if session:
@@ -2511,6 +2571,8 @@ async def _sync_stream_spectator(guild: discord.Guild):
                 "[STREAM-SPECTATOR] No active stream in %s — stopping spectator",
                 vc.channel.name,
             )
+            if session.get("stream_key"):
+                await _unwatch_stream_gateway(session["stream_key"])
             await _spectator_mgr.stop_watching(guild.id)
 
 
