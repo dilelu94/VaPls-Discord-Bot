@@ -5543,7 +5543,7 @@ async def indioFromVoice(
     # pending_actions for single-match direct plays (returns []), which would
     # make the redirect check below miss the music action.
     _had_music = any(a in _MUSIC_ACTIONS for a, _ in pending_actions)
-    clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
+    clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker_name)
     clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     # Music action redirect: cuando el Indio responde con una accion de
     # musica desde wake-word de texto (sin reply contextual), redirigir
