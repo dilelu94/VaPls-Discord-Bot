@@ -461,6 +461,15 @@ _INDIO_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "join_voice",
+        "description": (
+            "Unirse o entrar al canal de voz donde está el usuario/invocador. "
+            "Llamá esta herramienta cuando el usuario pida 'entra indio', 'metete a voz', "
+            "'sumate al canal', 'vení a voz', 'entra al stream', 'entra a la llamada', 'metete'."
+        ),
+        "parameters": {"type": "OBJECT", "properties": {}},
+    },
 ]
 
 
@@ -2745,6 +2754,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "disconnect_indio": ("DISCONNECT_INDIO", None),
     "troll_move_user": ("TROLL_MOVE_USER", "target_user"),
     "comment_stream": ("COMMENT_STREAM", "fast"),
+    "join_voice": ("JOIN_VOICE", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -2758,6 +2768,8 @@ _ACTION_FALLBACK_TEXT = {
     "USE_IMAGE": "",
     "DISCONNECT_INDIO": "🚪 Me voy un rato",
     "TROLL_MOVE_USER": "🔀 A dar una vuelta",
+    "COMMENT_STREAM": "📺 Mirando el stream",
+    "JOIN_VOICE": "🎤 Ahí voy al canal de voz",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
@@ -3620,6 +3632,23 @@ async def _dispatch_indio_actions(
                         logger.info("indio COMMENT_STREAM → ok=%s fast=%s", ok, fast_val)
                     else:
                         statuses.append("comment_stream: fail — no guild")
+                elif action == "JOIN_VOICE":
+                    target_ch = None
+                    if requester_member and getattr(requester_member, "voice", None) and requester_member.voice.channel:
+                        target_ch = requester_member.voice.channel
+                    elif bot and guild_id:
+                        guild = bot.get_guild(int(guild_id))
+                        if guild:
+                            for ch in guild.voice_channels:
+                                if ch.members:
+                                    target_ch = ch
+                                    break
+                    if target_ch:
+                        ok = await _relay_join_to_userbot(target_ch.id)
+                        statuses.append(f"join_voice: {'ok' if ok else 'fail'}")
+                        logger.info("indio JOIN_VOICE target_ch=%s → ok=%s", getattr(target_ch, "name", target_ch.id), ok)
+                    else:
+                        statuses.append("join_voice: fail — no user in voice")
                 elif action in (
                     "SKIP_MUSIC",
                     "PAUSE_MUSIC",

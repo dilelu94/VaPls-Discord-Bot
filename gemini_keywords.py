@@ -144,6 +144,15 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "comentá la pantalla",
         "comentá más seguido",
     ],
+    "join_voice": [
+        "entra indio",
+        "entra al canal",
+        "metete a voz",
+        "sumate a voz",
+        "vení a voz",
+        "entra al stream",
+        "entra a la llamada",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────
