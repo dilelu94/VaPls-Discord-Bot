@@ -39,7 +39,7 @@ jobs:
       - name: Run test suite
         shell: bash
         run: |
-          python -m pytest -v --tb=short --durations=10
+          python -m pytest -q --tb=short || { echo "=== FAILED TESTS TRACEBACK ==="; python -m pytest --last-failed --tb=long; exit 1; }
 
   # ── Continuous deployment ──────────────────────────────────────────────────
   # Runs only on pushes to master, only after all matrix test jobs pass.
