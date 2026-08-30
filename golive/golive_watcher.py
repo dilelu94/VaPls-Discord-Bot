@@ -7,6 +7,7 @@ triggering telemetry flags.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -187,6 +188,15 @@ class GoLiveWatcherConnection:
         # Extract SSRC from 12-byte RTP header (bytes 8..11)
         ssrc = struct.unpack("!I", data[8:12])[0]
 
+        if not hasattr(self, "_packet_count"):
+            self._packet_count = 0
+        self._packet_count += 1
+        if self._packet_count == 1 or self._packet_count % 100 == 0:
+            log.info(
+                "[WATCHSTREAM] Video RTP packet #%d received (PT=%d, SSRC=%d, len=%d)",
+                self._packet_count, pt, ssrc, len(data)
+            )
+
         self.receiver.process_rtp_packet(
             rtp_data=data,
             dave_session=self.dave_session,
@@ -201,6 +211,11 @@ class GoLiveWatcherConnection:
         max_wait_sec: float = 8.0,
     ) -> Optional[str]:
         """Captures a burst of RTP video packets for duration_sec seconds after waiting for stream handshake."""
+        log.info(
+            "[WATCHSTREAM] Initiating stream snapshot capture for target_user=%s (stream_key=%s)",
+            self.target_user_id,
+            self._stream_key,
+        )
         # Bind listener to global RTP dispatcher and VoiceClient's socket reader BEFORE connect
         register_rtp_listener(self._on_udp_packet)
         vc_conn = getattr(self._regular_vc, "_connection", None) or self._regular_vc
@@ -214,17 +229,22 @@ class GoLiveWatcherConnection:
         if not self._connected:
             ok = await self.connect()
             if not ok:
+                log.warning("[WATCHSTREAM] connect() failed — aborting capture_snapshot")
                 unregister_rtp_listener(self._on_udp_packet)
                 return None
 
         self.receiver.start_capture()
-        log.info("[WATCHER] Waiting for initial stream packets (up to %.1fs)...", max_wait_sec)
+        log.info("[WATCHSTREAM] Waiting for initial stream packets (up to %.1fs)...", max_wait_sec)
 
         # Wait until video packets start arriving from Discord Gateway (handshake sync)
         start_wait = time.monotonic()
         while time.monotonic() - start_wait < max_wait_sec:
             if len(self.receiver._raw_nal_buffer) > 0:
-                log.info("[WATCHER] Stream video packets detected! Collecting sample burst for %.1fs...", duration_sec)
+                log.info(
+                    "[WATCHSTREAM] Stream video packets detected! Initial buffer: %d bytes. Collecting sample burst for %.1fs...",
+                    len(self.receiver._raw_nal_buffer),
+                    duration_sec,
+                )
                 break
             await asyncio.sleep(0.2)
 
@@ -239,8 +259,14 @@ class GoLiveWatcherConnection:
         elif socket_reader and hasattr(socket_reader, "unregister"):
             socket_reader.unregister(self._on_udp_packet)
 
+        log.info(
+            "[WATCHSTREAM] Sample burst finished. Collected %d bytes of raw NAL data. Extracting snapshot...",
+            len(self.receiver._raw_nal_buffer),
+        )
+
         # Extract snapshot JPEG
         jpg_path = self.receiver.extract_snapshot(duration_sec=duration_sec, filename=filename)
+        log.info("[WATCHSTREAM] Snapshot extraction result: %s", jpg_path)
         return jpg_path
 
     async def disconnect(self) -> None:
