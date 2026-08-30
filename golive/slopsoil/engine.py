@@ -317,6 +317,13 @@ async def start_live_stream(
                     await live_conn.disconnect()
                 except Exception:
                     pass
+            try:
+                import golive.bot as golive_bot
+                stream = golive_bot._active_streams.pop(guild.id, None)
+                if stream is not None:
+                    stream._stopped = True
+            except Exception:
+                pass
             log.debug("go-live cleanup done for guild %s", guild.id)
 
     live_task = asyncio.create_task(_run_live())

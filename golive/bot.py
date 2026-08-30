@@ -933,6 +933,22 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
 _idle_watchdogs: dict[int, asyncio.Task] = {}
 
 
+def _has_active_stream(guild_id: int) -> bool:
+    """Return True if an active video/live stream is currently running for guild_id."""
+    if hasattr(client, "stream_tasks") and guild_id in client.stream_tasks:
+        task = client.stream_tasks[guild_id]
+        if not task.done():
+            return True
+    if hasattr(client, "live_connections") and guild_id in client.live_connections:
+        return True
+    if hasattr(client, "video_players") and guild_id in client.video_players:
+        return True
+    stream = _active_streams.get(guild_id)
+    if stream is not None and not getattr(stream, "_stopped", True):
+        return True
+    return False
+
+
 async def _idle_watcher(guild_id: int):
     log.info("[WATCHDOG] Started idle watchdog for guild=%s", guild_id)
     idle_since = time.monotonic()
@@ -941,7 +957,7 @@ async def _idle_watcher(guild_id: int):
             await asyncio.sleep(2)
 
             # Check if there is an active stream in this guild
-            has_stream = (guild_id in _active_streams) or (hasattr(client, "live_connections") and guild_id in client.live_connections) or (hasattr(client, "video_players") and guild_id in client.video_players)
+            has_stream = _has_active_stream(guild_id)
 
             # Find the voice client
             vc = None
@@ -964,14 +980,7 @@ async def _idle_watcher(guild_id: int):
                 if elapsed >= timeout:
                     log.info("[WATCHDOG] Guild=%s idle for %.0fs, disconnecting voice client...", guild_id, elapsed)
                     try:
-                        if hasattr(vc, "_connection"):
-                            await asyncio.wait_for(
-                                vc._connection.disconnect(force=True, wait=False),
-                                timeout=5.0
-                            )
-                            vc.cleanup()
-                        else:
-                            await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
+                        await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
                     except Exception as e:
                         log.warning("[WATCHDOG] Disconnect failed: %s", e)
                     break

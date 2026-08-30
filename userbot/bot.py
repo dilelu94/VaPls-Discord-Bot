@@ -2405,6 +2405,58 @@ def _make_voice_sink() -> voice_recv.AudioSink:
     return TranscriberSink(client)
 
 
+def _find_active_streamer(channel: Optional[discord.VoiceChannel]) -> Optional[discord.Member]:
+    """Return the first human member currently GoLive streaming in channel."""
+    if not channel or not hasattr(channel, "members"):
+        return None
+    for member in channel.members:
+        if member.bot or member.id in config.IGNORE_USER_IDS:
+            continue
+        voice = getattr(member, "voice", None)
+        if voice is not None:
+            is_streaming = (
+                getattr(voice, "self_stream", False)
+                or getattr(voice, "stream", False)
+            )
+            if is_streaming:
+                return member
+    return None
+
+
+async def _sync_stream_spectator(guild: discord.Guild):
+    """Automatically start or stop stream spectator depending on active GoLive streams."""
+    vc = _vc_for_guild(guild)
+    if vc is None or not getattr(vc, "channel", None):
+        await _spectator_mgr.stop_watching(guild.id)
+        return
+
+    streamer = _find_active_streamer(vc.channel)
+    session = _spectator_mgr.get_session(guild.id)
+
+    if streamer is not None:
+        current_streamer_id = session.get("streamer_id") if session else None
+        if not session or current_streamer_id != streamer.id:
+            log.info(
+                "[STREAM-SPECTATOR] Auto-detected active stream by %s (id=%s) in %s",
+                streamer.display_name,
+                streamer.id,
+                vc.channel.name,
+            )
+            await _spectator_mgr.start_watching(
+                guild.id,
+                streamer_name=streamer.display_name,
+                streamer_id=streamer.id,
+                immediate_check=True,
+            )
+    else:
+        if session:
+            log.info(
+                "[STREAM-SPECTATOR] No active stream in %s — stopping spectator",
+                vc.channel.name,
+            )
+            await _spectator_mgr.stop_watching(guild.id)
+
+
 async def _join_channel(channel: discord.VoiceChannel):
     """Join or move to a voice channel and start listening.
 
@@ -2448,6 +2500,7 @@ async def _join_channel(channel: discord.VoiceChannel):
         analytics.capture_exception(e, properties={"action": "voice_join_failed"})
         return
     await _start_listening(vc)
+    asyncio.create_task(_sync_stream_spectator(channel.guild))
 
 
 async def _leave_if_empty(guild: discord.Guild):
@@ -2461,6 +2514,8 @@ async def _leave_if_empty(guild: discord.Guild):
     vc = _vc_for_guild(guild)
     if vc is None:
         _cancel_idle_leave(guild.id)
+        if _spectator_mgr is not None:
+            await _spectator_mgr.stop_watching(guild.id)
         return
     if _guild_has_humans(guild):
         _cancel_idle_leave(guild.id)
@@ -2470,16 +2525,15 @@ async def _leave_if_empty(guild: discord.Guild):
         f"{config.IDLE_LEAVE_SECONDS:.0f}s"
     )
     _schedule_idle_leave(guild)
+    if _spectator_mgr is not None:
+        await _spectator_mgr.stop_watching(guild.id)
+
 
 
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
     if not config.VAPLS_BOT_ID:
-        # Without this id, _pick_vapls_command can't disambiguate /play and
-        # /soundpad from other bots in the guild and every relay invocation
-        # silently 404s. Surface it loudly so operators don't spend hours
-        # wondering why the indio's music never plays.
         log.error(
             "VAPLS_BOT_ID is unset (0) — userbot relay /invoke_* endpoints "
             "will not be able to identify the VaPls bot's slash commands; "
@@ -2509,11 +2563,10 @@ async def on_voice_state_update(member, before, after):
     if not _guild_allowed(guild.id):
         return
 
+    asyncio.create_task(_sync_stream_spectator(guild))
+
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
         _cancel_idle_leave(guild.id)
-        # Don't follow the moving user if the userbot is already sitting in a
-        # different channel of this guild that still has humans. Following
-        # would abandon the people still in the original channel.
         current_vc = _vc_for_guild(guild)
         current_channel = current_vc.channel if current_vc is not None else None
         if not _should_follow_user(current_channel, after.channel):
@@ -2526,8 +2579,6 @@ async def on_voice_state_update(member, before, after):
             )
         else:
             await _join_channel(after.channel)
-            # After the userbot is in the channel, play the per-user greeting
-            # (only for users with an explicit `greeting` in users.py — no default).
             try:
                 vc = _vc_for_guild(guild)
                 if vc is not None and vc.channel.id == after.channel.id:
@@ -2546,6 +2597,7 @@ async def on_voice_state_update(member, before, after):
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
+
 
 
 # ---------- Auto-reply when someone says "indio" in chat -------------------
