@@ -184,8 +184,11 @@ class GoLiveWatcherConnection:
 
         # 0. Apply Discord RTP transport decryption if key/mode is present
         vc = self._regular_vc
-        mode = getattr(vc, "mode", None)
-        secret_key = getattr(vc, "secret_key", None)
+        mode = getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
+        secret_key = getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
+        if secret_key and isinstance(secret_key, (list, tuple)):
+            secret_key = bytes(secret_key)
+
         if mode and secret_key:
             if not hasattr(self, "_decryptor") or getattr(self, "_decryptor_mode", None) != mode:
                 try:
@@ -197,14 +200,14 @@ class GoLiveWatcherConnection:
                     self._decryptor = None
 
             if getattr(self, "_decryptor", None):
-                decrypt_fn = getattr(self._decryptor, f"_decrypt_rtp_{mode}", None)
-                if decrypt_fn:
-                    try:
-                        decrypted_data = decrypt_fn(data)
-                        if decrypted_data:
-                            data = decrypted_data
-                    except Exception as e:
-                        log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
+                try:
+                    from discord.ext.voice_recv.rtp import RTPPacket
+                    rtp_pkt = RTPPacket(data)
+                    decrypted_payload = self._decryptor.decrypt_rtp(rtp_pkt)
+                    if decrypted_payload:
+                        data = rtp_pkt.header + decrypted_payload
+                except Exception as e:
+                    log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
 
         # Check payload type — skip Opus audio packets (typically PT 120 or 111)
         pt = data[1] & 0x7F
