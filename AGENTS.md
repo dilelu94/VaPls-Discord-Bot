@@ -824,9 +824,8 @@ Las imágenes viven en `indio_images/pool/` (relativo a `POOL_DIR`). Se llenan c
 alguien manda imágenes por DM al Indio y las rechaza (cancelar) o cuando falla la
 descripción — vuelven al pool como candidatas para historias.
 
-- `init_pool()`: escanea el directorio una vez, cachea la lista.
-- `get_random_image(mgr)`: elige una al azar, excluyendo las que ya están en el
-  manifiesto (dedup por `original_filename`).
+- `init_pool()`: crea automáticamente la carpeta `indio_images/pool/` si no existe, escanea el directorio y cachea la lista.
+- `get_random_image(mgr)`: elige una al azar de `indio_images/pool/` excluyendo las ya guardadas en el manifiesto. Si el pool está vacío, cae en **fallback** utilizando el catálogo de imágenes guardadas (`indio_images/`) para que el sistema continúe funcionando sin interrupción.
 - `remove_from_pool(rel_path)`: borra la imagen del pool cuando se aprueba.
 
 ### Pipeline de historia
@@ -848,15 +847,20 @@ del Indio (amigos, anécdotas, chistes internos del grupo).
 ### Flujo de review y aprobación
 
 1. **Post**: `_post_review()` relayea el chiste + imagen y el texto de voto
-   (`✅ · ❌ · respondé con otra idea`) vía userbot (el Indio real).
-2. **✅ alguien reacciona** → el Indio **te manda DM** con la imagen + chiste.
+   (`✅ · ❌ · respondé con otra idea`) vía userbot (el Indio real). Si el canal
+   configurado (`INDIO_STORY_CHANNEL_ID`) no se encuentra en el servidor (ej. tras mudanza),
+   cae en fallback automático a otros canales de texto disponibles.
+2. **Recitado en voz alta 🎙️**: Al postear (o regenerar) una historia, `_post_review()`
+   invoca `_speak_indio_reply` (vía Piper TTS del userbot) para que el Indio recite el
+   chiste en el canal de voz activo.
+3. **✅ alguien reacciona** → el Indio **te manda DM** con la imagen + chiste.
    Respondés **"sí"** para guardar definitivamente o **"no"** para descartar.
    Sin timeout, sin condiciones.
    - Al decir "sí", `_save_approved_story()` describe la imagen con Gemini
      (detecta famosos, genera tags) y la guarda en `indio_images/manifest.json`.
    - Se borran los mensajes del review.
-3. **❌ reacción** → el chiste se rechaza, la imagen vuelve al pool.
-4. **Reply con feedback** → `handle_first_msg_after_story()` evalúa si el
+4. **❌ reacción** → el chiste se rechaza, la imagen vuelve al pool.
+5. **Reply con feedback** → `handle_first_msg_after_story()` evalúa si el
    comentario se relaciona con el chiste (`_evaluate_reply_context()` con Gemini).
    - **Relacionado**: regenera el chiste con el feedback como contexto.
    - **No relacionado**: el Indio manda DM con la imagen original + chiste, y
