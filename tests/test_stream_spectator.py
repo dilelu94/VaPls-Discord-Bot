@@ -51,7 +51,9 @@ async def test_inspect_now_generates_commentary(spectator_mgr, gemini_http, monk
     mock_vc.is_connected.return_value = True
     spectator_mgr._vcs[12345] = mock_vc
 
-    # Mock TTS wav generation
+    # Mock TTS wav generation & FFmpegOpusAudio (so tests don't require system ffmpeg)
+    import discord
+    monkeypatch.setattr(discord, "FFmpegOpusAudio", lambda *a, **k: MagicMock())
     monkeypatch.setattr("tts.generate_tts_wav", lambda text: "/tmp/fake.wav")
     monkeypatch.setattr("os.path.exists", lambda path: True)
 
