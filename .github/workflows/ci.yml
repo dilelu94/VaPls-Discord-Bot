@@ -39,7 +39,7 @@ jobs:
       - name: Run test suite
         shell: bash
         run: |
-          python -m pytest -q --tb=short || { echo "=== FAILED TESTS TRACEBACK ==="; python -m pytest --last-failed --tb=long; exit 1; }
+          pytest -q --tb=short
 
   # ── Continuous deployment ──────────────────────────────────────────────────
   # Runs only on pushes to master, only after all matrix test jobs pass.
@@ -96,6 +96,6 @@ jobs:
 
           ssh -i ~/.ssh/deploy_key \
               -p "$SSH_PORT" \
-              -o StrictHostKeyChecking=yes \
+              -o StrictHostKeyChecking=accept-new \
               "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
               'bash -s' < scripts/deploy.sh
