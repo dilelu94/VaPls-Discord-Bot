@@ -117,10 +117,12 @@ def _extract_wake_ns():
     import unicodedata as _unicodedata
     import logging as _logging
     import json as _json
+    import os as _os
     import threading as _threading
     from types import SimpleNamespace as _SimpleNamespace
 
     ns: dict = {
+        "os": _os,
         "unicodedata": _unicodedata,
         "json": _json,
         # _set_sensitivity uses log.info; supply a no-op logger.
@@ -294,6 +296,20 @@ def test_invalid_sensitivity_preset_raises():
         set_sensitivity(5)
     with pytest.raises(ValueError):
         set_sensitivity(-1)
+
+
+def test_sensitivity_preset_persistence(tmp_path):
+    """Sensitivity preset is saved to disk and reloaded on startup."""
+    from types import SimpleNamespace
+    state_file = tmp_path / "sensitivity_preset.json"
+    dummy_config = SimpleNamespace(SENSITIVITY_STATE_PATH=str(state_file))
+    _NS["config"] = dummy_config
+    try:
+        _NS["_save_persisted_sensitivity"](3)
+        assert state_file.is_file()
+        assert _NS["_load_persisted_sensitivity"]() == 3
+    finally:
+        _NS["config"] = None
 
 
 # ---------------------------------------------------------------------------

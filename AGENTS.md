@@ -325,8 +325,7 @@ wake-word que cuentan como hit (`_WAKE_PATTERNS` / `_active_wake_patterns`) y
 **(b)** el pool de frases del grammar (`_build_vosk_grammar`).
 
 Se cambia con `/sensibilidad` (main bot) o `POST /sensibilidad` (relay del
-userbot). **El preset es in-memory y se resetea al default (1) al reiniciar el
-userbot.** Implementación en `userbot/bot.py` (`_PRESETS`, `_build_vosk_grammar`,
+userbot). **El preset se persiste en disco (`data/sensitivity_preset.json`) para mantener la configuración elegida al reiniciar el userbot.** Implementación en `userbot/bot.py` (`_PRESETS`, `_build_vosk_grammar`,
 `_set_sensitivity`, `_active_wake_patterns`); comando en `bot.py`.
 
 | Preset          | Invocación                                                                          | Grammar pool                                                                                      | Idea                                                                                                                                                                                                                                                                                                                                                                                                                                         |

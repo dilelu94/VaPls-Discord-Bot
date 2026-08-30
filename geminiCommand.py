@@ -346,58 +346,7 @@ _INDIO_TOOLS = [
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
     },
-    {
-        "name": "generate_image",
-        "description": (
-            "Generar una imagen a pedido del usuario. "
-            "Úsala únicamente cuando el usuario ordene explícitamente generar o hacer una imagen "
-            "(ej: 'generá una imagen de...', 'haceme una imagen de...'). "
-            "Debes redactar un prompt en español muy descriptivo y detallado para la generación, "
-            "incorporando de forma inteligente y detallada los rasgos físicos, descripción o aspecto "
-            "de las personas del grupo de amigos si son nombradas en el pedido (por ejemplo, si piden "
-            "una imagen de 'Viny' y en tu memoria sabes que es pelado, flaco y de cara graciosa, "
-            "describe a un hombre joven con esas características)."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "prompt": {
-                    "type": "STRING",
-                    "description": (
-                        "El prompt detallado en español para generar la imagen. "
-                        "Debe incorporar los rasgos físicos y aspecto del usuario/amigo del lore si es mencionado."
-                    ),
-                },
-            },
-            "required": ["prompt"],
-        },
-    },
-    {
-        "name": "edit_image",
-        "description": (
-            "Crear una imagen parecida o editar la imagen proporcionada por el usuario según sus indicaciones. "
-            "Úsala únicamente cuando el usuario responda a una imagen existente (que tú puedes ver) "
-            "y ordene explícitamente editarla, modificarla, o hacer una imagen parecida a esa "
-            "(ej: 'haceme una imagen como esta pero con...', 'editame esta foto...'). "
-            "Debes redactar un prompt en español enfocado principalmente en los cambios, agregados o el estilo deseado "
-            "para la nueva imagen (ej: 'un hombre usando un gorrito de lana'). IMPORTANTE: NO describas de forma detallada "
-            "los rasgos físicos del sujeto original o del fondo que no deben cambiar (como si es pelado, su sonrisa, etc.), "
-            "ya que el modelo de edición de imagen-a-imagen los deformará si se especifican textualmente."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "prompt": {
-                    "type": "STRING",
-                    "description": (
-                        "El prompt en español enfocado únicamente en los cambios, agregados o estilo solicitado "
-                        "(ej: 'un hombre con un gorrito de lana'). No repitas descripciones físicas de lo que no cambia."
-                    ),
-                },
-            },
-            "required": ["prompt"],
-        },
-    },
+
     {
         "name": "spacewar_guide",
         "description": (
@@ -2764,8 +2713,6 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "resume_music": ("RESUME_MUSIC", None),
     "stop_music": ("STOP_MUSIC", None),
     "dj_mode": ("DJ_MODE", None),
-    "generate_image": ("GENERATE_IMAGE", "prompt"),
-    "edit_image": ("EDIT_IMAGE", "prompt"),
     "spacewar_guide": ("SPACEWAR_GUIDE", None),
     "use_image": ("USE_IMAGE", None),
     "disconnect_indio": ("DISCONNECT_INDIO", None),
@@ -2779,8 +2726,6 @@ _ACTION_FALLBACK_TEXT = {
     "RESUME_MUSIC": "▶️ Dale, va",
     "STOP_MUSIC": "⏹️ Listo",
     "DJ_MODE": "🎧 Modo DJ",
-    "GENERATE_IMAGE": "🎨 Generando imagen...",
-    "EDIT_IMAGE": "🎨 Editando imagen...",
     "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
     "USE_IMAGE": "",
     "DISCONNECT_INDIO": "🚪 Me voy un rato",
@@ -3156,8 +3101,6 @@ _ACTION_SUCCESS_SUFFIX = {
     "PAUSE_MUSIC": "listo ✅",
     "RESUME_MUSIC": "listo ✅",
     "STOP_MUSIC": "listo ✅",
-    "GENERATE_IMAGE": "listo 🎨",
-    "EDIT_IMAGE": "listo 🎨",
     "USE_IMAGE": "",
     "SPACEWAR_GUIDE": "",
     "DJ_MODE": "",
@@ -3175,8 +3118,6 @@ _ACTION_SUCCESS_SUFFIX = {
 _ACTION_RELAY_SUCCESS_SUFFIX = {
     "PLAY_MUSIC": "le pasé el tema al /play 🎵",
     "PLAY_SOUND": "le pasé el clip al /soundpad 🔊",
-    "GENERATE_IMAGE": "le pasé el prompt al /generarimagen 🎨",
-    "EDIT_IMAGE": "listo 🎨",
 }
 
 
@@ -3220,8 +3161,6 @@ _MUSIC_STATUS_PREFIX = {
     "RESUME_MUSIC": "resume",
     "STOP_MUSIC": "stop",
     "DJ_MODE": "dj_mode",
-    "GENERATE_IMAGE": "image",
-    "EDIT_IMAGE": "image_edit",
 }
 
 
@@ -3389,210 +3328,7 @@ async def _dispatch_indio_actions(
                         msg = played_path or "no match"
                     statuses.append(f"sound: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio PLAY_SOUND '%s' → ok=%s msg=%s", arg, ok, msg)
-                elif action == "GENERATE_IMAGE":
-                    target_cid = (
-                        getattr(reply_handle, "channel_id", None)
-                        or config.INDIO_REPLY_CHANNEL_ID
-                        or 1490008278275461280
-                    )
-                    ok, msg = await _invoke_slash_via_userbot(
-                        "invoke_generarimagen",
-                        channel_id=target_cid,
-                        query=arg,
-                    )
-                    if ok:
-                        relayed_success.add("GENERATE_IMAGE")
-                    else:
-                        logger.warning(
-                            "indio GENERATE_IMAGE relay failed (%s); falling back to direct HF image generation",
-                            msg,
-                        )
-                        try:
-                            import huggingfaceImage
 
-                            path = await huggingfaceImage.generate(
-                                arg, config.HUGGINGFACE_API_TOKEN
-                            )
-                            if path:
-                                target_channel_id = (
-                                    config.INDIO_REPLY_CHANNEL_ID or 1490008278275461280
-                                )
-                                target_channel = bot.get_channel(target_channel_id)
-                                if target_channel is None:
-                                    target_channel = await bot.fetch_channel(
-                                        target_channel_id
-                                    )
-                                author_mention = (
-                                    f"<@{requester_member.id}>"
-                                    if requester_member
-                                    else "Alguien"
-                                )
-                                await target_channel.send(
-                                    content=f"{author_mention}, acá está la imagen que me pediste para: **{arg}**",
-                                    file=discord.File(path, filename="imagen.png"),
-                                )
-                                try:
-                                    os.unlink(path)
-                                except Exception:
-                                    pass
-                                ok = True
-                                msg = "direct success"
-                            else:
-                                msg = "generation failed"
-                        except Exception as e:
-                            logger.exception(
-                                "direct HF image generation fallback failed"
-                            )
-                            msg = f"fallback error: {e}"
-                    statuses.append(f"image: {'ok' if ok else 'fail'} — {msg}")
-                    logger.info(
-                        "indio GENERATE_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg
-                    )
-                elif action == "EDIT_IMAGE":
-                    target_cid = (
-                        getattr(reply_handle, "channel_id", None)
-                        or config.INDIO_REPLY_CHANNEL_ID
-                        or 1490008278275461280
-                    )
-
-                    if not attachment_urls:
-                        ok = False
-                        msg = "no image to edit"
-                        try:
-                            target_channel = bot.get_channel(target_cid)
-                            if target_channel is None:
-                                target_channel = await bot.fetch_channel(target_cid)
-                            await target_channel.send(
-                                "❌ Tenés que responder a un mensaje con una imagen para que la pueda editar."
-                            )
-                        except Exception:
-                            pass
-                    else:
-                        images = [
-                            u
-                            for u in attachment_urls
-                            if u.get("mime_type", "").startswith("image/")
-                        ]
-                        if not images:
-                            ok = False
-                            msg = "no image in attachments"
-                            try:
-                                target_channel = bot.get_channel(target_cid)
-                                if target_channel is None:
-                                    target_channel = await bot.fetch_channel(target_cid)
-                                await target_channel.send(
-                                    "❌ El mensaje al que respondiste no tiene ninguna imagen válida."
-                                )
-                            except Exception:
-                                pass
-                        else:
-                            img = images[0]
-                            os.makedirs("image_cache", exist_ok=True)
-
-                            suffix = (
-                                os.path.splitext(img.get("filename", "input.png"))[1]
-                                or ".png"
-                            )
-                            input_path = f"image_cache/input_{source_message_id or 'temp'}{suffix}"
-
-                            download_ok = False
-                            try:
-                                async with aiohttp.ClientSession() as sess:
-                                    async with sess.get(
-                                        img["url"],
-                                        timeout=aiohttp.ClientTimeout(total=15),
-                                    ) as resp:
-                                        if resp.status == 200:
-                                            with open(input_path, "wb") as f:
-                                                f.write(await resp.read())
-                                            download_ok = True
-                            except Exception as e:
-                                logger.exception(
-                                    "Failed to download replied image for editing"
-                                )
-                                ok = False
-                                msg = f"download failed: {e}"
-
-                            if download_ok:
-                                try:
-                                    import huggingfaceImage
-
-                                    output_path = (
-                                        await huggingfaceImage.generate_img2img(
-                                            arg, input_path
-                                        )
-                                    )
-                                    if output_path:
-                                        target_channel = bot.get_channel(target_cid)
-                                        if target_channel is None:
-                                            target_channel = await bot.fetch_channel(
-                                                target_cid
-                                            )
-                                        author_mention = (
-                                            f"<@{requester_member.id}>"
-                                            if requester_member
-                                            else "Alguien"
-                                        )
-
-                                        await target_channel.send(
-                                            content=f"{author_mention}, acá está la imagen editada para: **{arg}**",
-                                            file=discord.File(
-                                                output_path,
-                                                filename="imagen_editada.png",
-                                            ),
-                                        )
-
-                                        try:
-                                            os.unlink(output_path)
-                                        except Exception:
-                                            pass
-                                        ok = True
-                                        msg = "success"
-                                    else:
-                                        ok = False
-                                        msg = "generation failed"
-                                        try:
-                                            target_channel = bot.get_channel(target_cid)
-                                            if target_channel is None:
-                                                target_channel = (
-                                                    await bot.fetch_channel(target_cid)
-                                                )
-                                            await target_channel.send(
-                                                f"❌ No se pudo generar la imagen editada para: **{arg}**"
-                                            )
-                                        except Exception:
-                                            pass
-                                except Exception as e:
-                                    logger.exception(
-                                        "Cloudflare image-to-image generation failed"
-                                    )
-                                    ok = False
-                                    msg = str(e)
-                                    try:
-                                        target_channel = bot.get_channel(target_cid)
-                                        if target_channel is None:
-                                            target_channel = await bot.fetch_channel(
-                                                target_cid
-                                            )
-                                        error_detail = str(e)
-                                        if (
-                                            "402" in error_detail
-                                            or "Pago Requerido" in error_detail
-                                        ):
-                                            await target_channel.send(error_detail)
-                                        else:
-                                            await target_channel.send(
-                                                f"❌ Error al editar la imagen: {e}"
-                                            )
-                                    except Exception:
-                                        pass
-                                finally:
-                                    try:
-                                        os.unlink(input_path)
-                                    except Exception:
-                                        pass
-                    statuses.append(f"image_edit: {'ok' if ok else 'fail'} — {msg}")
-                    logger.info("indio EDIT_IMAGE '%s' → ok=%s msg=%s", arg, ok, msg)
                 elif action == "SPACEWAR_GUIDE":
                     target_cid = (
                         getattr(reply_handle, "channel_id", None)
@@ -6309,7 +6045,7 @@ async def indioInstagramScraperLogic(
         if recent_block:
             system_instruction += "\n\n" + recent_block
         # Los DMs de Instagram no pueden despachar tools de Discord (play_music,
-        # generate_image, etc.): pasarlas hace que Gemini a veces responda solo
+        # etc.): pasarlas hace que Gemini a veces responda solo
         # con un functionCall sin texto y el DM quede en "..." silencioso.
         tools_to_use = None
     else:

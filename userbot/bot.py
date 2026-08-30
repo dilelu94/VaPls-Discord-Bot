@@ -713,12 +713,36 @@ _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
     4: _PRESET_4_PATTERNS,
 }
 
-# Active sensitivity preset. Default 1: maximum sensitivity (responds to
-# "che/que/eh indio" + command verbs). Preset 0 disables listening entirely.
-# Preset 2 drops "que/eh indio". Preset 3 re-enables those variants with a
-# large decoy grammar pool. Preset 4 adds a post-VOSK Whisper confirmation layer.
-# In-memory only — resets to this default (1) on userbot restart.
-_SENSITIVITY_PRESET: int = 1
+def _load_persisted_sensitivity() -> int:
+    """Load the persisted sensitivity preset from disk, defaulting to 1."""
+    try:
+        path = getattr(config, "SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json") if "config" in globals() else "data/sensitivity_preset.json"
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                preset = int(data.get("preset", 1))
+                if preset in (0, 1, 2, 3, 4):
+                    return preset
+    except Exception:
+        pass
+    return 1
+
+
+def _save_persisted_sensitivity(preset: int) -> None:
+    """Save the chosen sensitivity preset to disk so it survives restarts."""
+    try:
+        path = getattr(config, "SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json") if "config" in globals() else "data/sensitivity_preset.json"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"preset": preset}, f)
+    except Exception as e:
+        if "log" in globals() and hasattr(log, "warning"):
+            log.warning("[VOSK] failed to save sensitivity preset %d to disk: %s", preset, e)
+
+
+# Active sensitivity preset. Default 1: maximum sensitivity. Persisted to disk
+# so that switches via /sensibilidad survive userbot restarts.
+_SENSITIVITY_PRESET: int = _load_persisted_sensitivity()
 
 # Generation counter — incremented by _set_sensitivity so that live per-user
 # VOSK recognizers (which embed the old grammar) are detected and rebuilt.
@@ -993,11 +1017,9 @@ def _set_sensitivity(preset: int) -> None:
     """Switch the VOSK wake-word sensitivity preset at runtime.
 
     Validates preset is in _PRESETS (0-4), updates the module-level
-    ``_SENSITIVITY_PRESET``, rebuilds ``_VOSK_GRAMMAR``, and bumps
+    ``_SENSITIVITY_PRESET``, rebuilds ``_VOSK_GRAMMAR``, bumps
     ``_vosk_grammar_generation`` so that live per-user recognizers are
-    detected as stale and rebuilt on next use.
-
-    The preset is in-memory only — it resets to the default (1) on userbot restart.
+    detected as stale and rebuilt on next use, and persists the setting to disk.
     """
     global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
     if preset not in _PRESETS:
@@ -1007,6 +1029,7 @@ def _set_sensitivity(preset: int) -> None:
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
     _vosk_grammar_generation += 1
+    _save_persisted_sensitivity(preset)
     log.info(
         "[VOSK] sensitivity preset set to %d (grammar generation %d)",
         preset,
@@ -3700,92 +3723,7 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
-async def _relay_invoke_generarimagen(request: web.Request) -> web.Response:
-    """Ask the userbot to invoke VaPls's /generarimagen slash command with a
-    ``query`` (used as prompt) argument so the image is generated under the
-    real user account. Mirrors :func:`_relay_invoke_play`."""
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        channel_id = int(data["channel_id"])
-        query = str(data["query"]).strip()
-    except Exception as e:
-        log.warning("[RELAY-GENIMAGEN] rejected invalid body: %s", e)
-        return web.json_response({"error": "invalid body"}, status=400)
-    if not query:
-        return web.json_response({"error": "empty query"}, status=400)
-    if not client.is_ready():
-        return web.json_response({"error": "userbot not ready"}, status=503)
 
-    channel = client.get_channel(channel_id)
-    if channel is None:
-        try:
-            channel = await client.fetch_channel(channel_id)
-        except Exception as e:
-            return web.json_response({"error": f"channel not found: {e}"}, status=404)
-    if not (
-        hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
-    ):
-        return web.json_response(
-            {"error": "channel has no slash command API"}, status=400
-        )
-
-    try:
-        cmds = await _resolve_slash_commands(
-            channel,
-            "generarimagen",
-            timeout=config.INDIO_RELAY_TIMEOUT,
-        )
-    except asyncio.TimeoutError:
-        log.warning(
-            "[RELAY-GENIMAGEN] slash_commands() timed out for channel %s", channel_id
-        )
-        return web.json_response({"error": "slash_commands() timed out"}, status=504)
-    except Exception as e:
-        log.exception("[RELAY-GENIMAGEN] slash_commands() failed")
-        analytics.capture_exception(
-            e, properties={"action": "relay_genimagen_slash_commands_failed"}
-        )
-        return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
-
-    gen_cmd = _pick_vapls_command(cmds, "generarimagen")
-    if gen_cmd is None:
-        log.warning(
-            "[RELAY-GENIMAGEN] VaPls /generarimagen not found in channel %s (saw %d candidates)",
-            channel_id,
-            len(cmds),
-        )
-        return web.json_response(
-            {"error": "generarimagen command not found in channel"}, status=404
-        )
-
-    try:
-        await gen_cmd(prompt=query)
-        log.info(
-            f"[RELAY-GENIMAGEN] invoked /generarimagen prompt={query!r} in channel={channel_id}"
-        )
-        return web.json_response({"invoked": True, "query": query})
-    except discord.HTTPException as e:
-        if getattr(e, "status", None) == 429:
-            log.warning(
-                "[RELAY-GENIMAGEN] Discord rate-limited /generarimagen invocation: %s",
-                e,
-            )
-            return web.json_response({"error": f"rate-limited: {e}"}, status=429)
-        log.exception("[RELAY-GENIMAGEN] invocation failed")
-        analytics.capture_exception(
-            e, properties={"action": "relay_genimagen_invocation_failed"}
-        )
-        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
-    except Exception as e:
-        log.exception("[RELAY-GENIMAGEN] invocation failed")
-        analytics.capture_exception(
-            e, properties={"action": "relay_genimagen_invocation_failed"}
-        )
-        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
 # async def _relay_invoke_banana(request: web.Request) -> web.Response:
@@ -4722,7 +4660,6 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
-    app.router.add_post("/invoke_generarimagen", _relay_invoke_generarimagen)
     # app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/leave", _relay_leave)
