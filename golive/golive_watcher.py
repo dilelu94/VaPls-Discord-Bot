@@ -205,7 +205,9 @@ class GoLiveWatcherConnection:
                     rtp_pkt = RTPPacket(data)
                     decrypted_payload = self._decryptor.decrypt_rtp(rtp_pkt)
                     if decrypted_payload:
-                        data = rtp_pkt.header + decrypted_payload
+                        hdr = bytearray(rtp_pkt.header)
+                        hdr[0] &= ~0x10  # Clear extension bit since decrypt_rtp already processed ext headers
+                        data = bytes(hdr) + decrypted_payload
                 except Exception as e:
                     log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
 
