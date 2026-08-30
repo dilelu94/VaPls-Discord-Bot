@@ -39,8 +39,7 @@ jobs:
       - name: Run test suite
         shell: bash
         run: |
-          pytest -q --tb=short --color=no > pytest.log 2>&1 || { cat pytest.log; exit 1; }
-          cat pytest.log
+          pytest -v --tb=short
       - name: Upload pytest log
         if: always()
         uses: actions/upload-artifact@v4
