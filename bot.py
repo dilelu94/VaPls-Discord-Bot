@@ -1690,7 +1690,9 @@ async def verstream(
                         err_msg = data.get("error", "")
                     except Exception:
                         pass
-                    await safe_respond(ctx, f"⚠️ No pude capturar el stream (HTTP {resp.status}): {err_msg}")
+                    if not err_msg or "snapshot extraction failed" in err_msg:
+                        err_msg = "Asegurate de estar transmitiendo pantalla en vivo (Go Live) y probá de nuevo."
+                    await safe_respond(ctx, f"⚠️ No pude capturar el stream: {err_msg}")
                     return
                 data = await resp.json()
     except Exception as e:

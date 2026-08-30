@@ -1087,7 +1087,12 @@ async def _relay_watchstream_snapshot(request: web.Request) -> web.Response:
                 "target_user_id": target_user_id,
             })
         else:
-            return web.json_response({"success": False, "error": "snapshot extraction failed"}, status=500)
+            buf_len = len(watcher.receiver._raw_nal_buffer) if hasattr(watcher, "receiver") else 0
+            if buf_len == 0:
+                reason = "No se recibieron paquetes de video (asegurate de estar transmitiendo pantalla en Go Live)"
+            else:
+                reason = "Error al decodificar cuadro de video del stream"
+            return web.json_response({"success": False, "error": reason}, status=500)
     except Exception as e:
         log.exception("[WATCHSTREAM] snapshot failed")
         await watcher.disconnect()

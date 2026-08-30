@@ -194,18 +194,19 @@ def resolve_greeting_path(
         return None
 
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    custom_audio_dir = getattr(config, "CUSTOM_AUDIO_PATH", "/home/ubuntu/vapls-discord-bot/audio_output")
     candidates = [
-        os.path.join(config.CUSTOM_AUDIO_PATH, rel),
+        os.path.join(custom_audio_dir, rel),
         os.path.join(repo_root, "audio_output", rel),
         os.path.join(repo_root, rel),
     ]
     if rel.startswith("Audios/") or rel.startswith("Audios\\"):
-        candidates.append(os.path.join(config.CUSTOM_AUDIO_PATH, rel[7:]))
+        candidates.append(os.path.join(custom_audio_dir, rel[7:]))
         candidates.append(os.path.join(repo_root, "audio_output", rel[7:]))
 
     basename = os.path.basename(rel)
     if basename and basename != rel:
-        candidates.append(os.path.join(config.CUSTOM_AUDIO_PATH, basename))
+        candidates.append(os.path.join(custom_audio_dir, basename))
         candidates.append(os.path.join(repo_root, "audio_output", basename))
         candidates.append(os.path.join(repo_root, "audio_output", "Audios", basename))
 
@@ -249,9 +250,10 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
     now = time.time()
     last_chan = _last_greeting.get(channel_id, 0.0)
     last_user = _last_user_greeting.get((channel_id, user_id), 0.0)
+    throttle_sec = float(getattr(config, "GREETING_THROTTLE_SECONDS", 15.0))
 
     # Per-user throttle (default 15s) and per-channel inter-clip buffer (2.0s)
-    if now - last_user < config.GREETING_THROTTLE_SECONDS or now - last_chan < 2.0:
+    if now - last_user < throttle_sec or now - last_chan < 2.0:
         logger.info(
             "[GREETING] throttled (channel=%s, user=%s, %.1fs since last chan, %.1fs since last user)",
             channel_id, user_id, now - last_chan, now - last_user,
@@ -317,7 +319,8 @@ def resolve_wake_sound_path() -> Optional[str]:
     repo_rel = os.path.join(repo_root, rel)
     if os.path.exists(repo_rel):
         return repo_rel
-    return os.path.join(config.CUSTOM_AUDIO_PATH, rel)
+    custom_audio_dir = getattr(config, "CUSTOM_AUDIO_PATH", "/home/ubuntu/vapls-discord-bot/audio_output")
+    return os.path.join(custom_audio_dir, rel)
 
 
 def _find_vc_with_user(client, user_id: int):
@@ -358,7 +361,8 @@ async def play_wake_sound(client, *, user_id: int) -> bool:
         return False
     now = time.time()
     last = _last_wake_sound.get(channel_id, 0.0)
-    if now - last < config.WAKE_SOUND_THROTTLE_SECONDS:
+    wake_throttle = float(getattr(config, "WAKE_SOUND_THROTTLE_SECONDS", 0.0))
+    if now - last < wake_throttle:
         logger.info(
             "[WAKE-SOUND] throttled (channel=%s, %.1fs since last)",
             channel_id, now - last,
