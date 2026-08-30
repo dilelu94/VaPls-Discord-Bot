@@ -28,8 +28,10 @@ from aiohttp import web
 import discord  # discord.py-self
 from discord.ext import voice_recv
 
-# Ensure parent directory is in sys.path before importing root modules like config/greeting
-_parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_userbot_dir = os.path.dirname(os.path.abspath(__file__))
+if _userbot_dir not in sys.path:
+    sys.path.insert(0, _userbot_dir)
+_parent_dir = os.path.dirname(_userbot_dir)
 if _parent_dir not in sys.path:
     sys.path.append(_parent_dir)
 
