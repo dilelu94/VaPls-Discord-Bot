@@ -74,6 +74,7 @@ def _state_flush() -> None:
         "last_chat_activity": {str(k): v for k, v in _last_chat_activity.items()},
         "messages_since_story": {str(k): v for k, v in _messages_since_story.items()},
         "last_voice_trigger": {str(k): v for k, v in _last_voice_trigger.items()},
+        "last_attempt_at": {str(k): v for k, v in _last_attempt_at.items()},
         "recent_stories": {str(k): v for k, v in _recent_stories.items()},
     }
     p = Path(_STATE_FILE)
@@ -111,6 +112,7 @@ def _recover_state() -> None:
     _load_int_dict(data.get("last_chat_activity", {}), _last_chat_activity, float)
     _load_int_dict(data.get("messages_since_story", {}), _messages_since_story, int)
     _load_int_dict(data.get("last_voice_trigger", {}), _last_voice_trigger, float)
+    _load_int_dict(data.get("last_attempt_at", {}), _last_attempt_at, float)
 
     rs = data.get("recent_stories", {})
     for k, v in rs.items():
@@ -748,6 +750,9 @@ async def trigger_story(
             )
             return False
 
+    _last_attempt_at[guild_id] = time.time()
+    _state_flush()
+
     pool_count = await imagePool.init_pool()
     logger.info(
         "story trigger(%s): pool has %d images",
@@ -933,6 +938,7 @@ async def handle_story_reaction(payload, bot) -> None:
         _pending_reviews.pop(review["story_msg_id"], None)
         _stories_today.pop(guild_id, None)
         _last_story_at.pop(guild_id, None)
+        _last_attempt_at[guild_id] = time.time()
         _messages_since_story.pop(guild_id, None)
         for mid in (review["vote_msg_id"], review["story_msg_id"]):
             if mid:
@@ -1235,6 +1241,9 @@ async def _watch_loop(bot) -> None:
         if not _can_post_story(gid):
             continue
 
+        if time.time() - _last_attempt_at.get(gid, 0.0) < 3600:
+            continue
+
         last_activity = _last_chat_activity.get(gid, 0.0)
         if last_activity == 0.0:
             continue
@@ -1245,9 +1254,8 @@ async def _watch_loop(bot) -> None:
 
         # Min 1/day: if no story today and idle > daily_min, trigger now
         if not has_story_today and idle_secs >= daily_min:
-            if time.time() - _last_attempt_at.get(gid, 0.0) < 3600:
-                continue
             _last_attempt_at[gid] = time.time()
+            _state_flush()
             _spawn(
                 trigger_story(
                     bot, gid, config.INDIO_STORY_CHANNEL_ID, trigger_type="daily_min"
@@ -1272,31 +1280,32 @@ async def _watch_loop(bot) -> None:
 async def _delayed_idle_story(bot, guild_id: int, delay_sec: int) -> None:
     try:
         await asyncio.sleep(delay_sec)
+        if guild_id in _idle_scheduled:
+            _idle_scheduled.remove(guild_id)
+        await trigger_story(
+            bot, guild_id, config.INDIO_STORY_CHANNEL_ID, trigger_type="idle"
+        )
     except asyncio.CancelledError:
-        return
-
-    _idle_scheduled.discard(guild_id)
-
-    if not _can_post_story(guild_id):
-        return
-
-    await trigger_story(
-        bot, guild_id, config.INDIO_STORY_CHANNEL_ID, trigger_type="idle"
-    )
+        pass
+    except Exception:
+        logger.exception("delayed idle story error for guild %s", guild_id)
 
 
 def record_chat_activity(guild_id: int) -> None:
-    now = time.time()
-    _last_chat_activity[guild_id] = now
+    _last_chat_activity[guild_id] = time.time()
     _idle_scheduled.discard(guild_id)
-    if _last_story_at.get(guild_id, 0) > 0:
+    if guild_id in _messages_since_story:
         _messages_since_story[guild_id] = _messages_since_story.get(guild_id, 0) + 1
     _state_flush()
 
 
 def check_voice_trigger(guild_id: int, channel) -> bool:
+    if not _can_post_story(guild_id):
+        return False
     now = time.time()
     if now - _last_voice_trigger.get(guild_id, 0.0) < 1800:
+        return False
+    if now - _last_attempt_at.get(guild_id, 0.0) < 3600:
         return False
     if channel is None:
         return False
