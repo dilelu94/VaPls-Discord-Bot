@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Slash command logic for /vapls and /indio.
 
 Both commands ask Google Gemini for a reply. /vapls is stateless (no memory).
@@ -11,6 +13,7 @@ Depends on geminiClient and analytics.
 """
 
 import asyncio
+
 import json
 import logging
 import os
@@ -19,12 +22,16 @@ import re
 import tempfile
 import time
 import unicodedata
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import urljoin
 
 import base64 as _b64
 import aiohttp
 import discord
+
+if not hasattr(discord, "ApplicationContext"):
+    discord.ApplicationContext = Any  # type: ignore
+
 
 import analytics
 import config
