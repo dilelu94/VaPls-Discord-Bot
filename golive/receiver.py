@@ -24,6 +24,8 @@ class StreamSnapshotReceiver:
         os.makedirs(self.output_dir, exist_ok=True)
         self.depacketizer = H264RTPDepacketizer()
         self._raw_nal_buffer: bytearray = bytearray()
+        self._sps_nal: Optional[bytes] = None
+        self._pps_nal: Optional[bytes] = None
         self._sample_start_time: Optional[float] = None
         self._is_capturing: bool = False
         self._seen_keyframe: bool = False
@@ -31,6 +33,8 @@ class StreamSnapshotReceiver:
     def start_capture(self) -> None:
         self.depacketizer.reset()
         self._raw_nal_buffer.clear()
+        self._sps_nal = None
+        self._pps_nal = None
         self._sample_start_time = time.monotonic()
         self._is_capturing = True
         self._seen_keyframe = False
@@ -90,11 +94,17 @@ class StreamSnapshotReceiver:
 
         # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 5, 7, 8)
         for nal in self.depacketizer.depacketize(decrypted_rtp):
-            if not self._seen_keyframe and len(nal) > 4:
+            if len(nal) > 4:
                 nal_type = nal[4] & 0x1F
-                if nal_type in (5, 7, 8):
+                if nal_type == 7:
+                    self._sps_nal = bytes(nal)
+                elif nal_type == 8:
+                    self._pps_nal = bytes(nal)
+
+                if not self._seen_keyframe and nal_type in (5, 7, 8):
                     self._seen_keyframe = True
                     log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
+
             if self._seen_keyframe:
                 self._raw_nal_buffer.extend(nal)
 
@@ -115,9 +125,16 @@ class StreamSnapshotReceiver:
         jpg_path = os.path.join(self.output_dir, filename)
 
         try:
+            final_buffer = bytearray()
+            if self._sps_nal and not self._raw_nal_buffer.startswith(self._sps_nal):
+                final_buffer.extend(self._sps_nal)
+            if self._pps_nal and self._pps_nal not in final_buffer and self._pps_nal not in self._raw_nal_buffer:
+                final_buffer.extend(self._pps_nal)
+            final_buffer.extend(self._raw_nal_buffer)
+
             with open(h264_path, "wb") as f:
-                f.write(self._raw_nal_buffer)
-            log.info("[RECEIVER] Saved %d bytes of H.264 data to %s", len(self._raw_nal_buffer), h264_path)
+                f.write(final_buffer)
+            log.info("[RECEIVER] Saved %d bytes of H.264 data to %s", len(final_buffer), h264_path)
 
             # Invoke FFmpeg to decode the H.264 stream sample and save the first keyframe as JPEG
             cmd = [
@@ -125,6 +142,8 @@ class StreamSnapshotReceiver:
                 "-y",
                 "-loglevel",
                 "error",
+                "-err_detect",
+                "ignore_err",
                 "-probesize",
                 "10M",
                 "-analyzeduration",
