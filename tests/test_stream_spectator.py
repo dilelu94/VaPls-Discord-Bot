@@ -6,14 +6,15 @@ from userbot.stream_spectator import StreamSpectatorManager
 
 
 @pytest.fixture
-def spectator_mgr():
+async def spectator_mgr():
     vcs = {}
     def get_vc(guild_id):
         return vcs.get(guild_id)
 
     mgr = StreamSpectatorManager(voice_client_getter=get_vc)
     mgr._vcs = vcs
-    return mgr
+    yield mgr
+    await mgr.stop_all()
 
 
 async def test_start_and_stop_watching_session(spectator_mgr, gemini_http):

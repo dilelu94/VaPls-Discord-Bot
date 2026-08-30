@@ -107,6 +107,12 @@ class StreamSpectatorManager:
             return True
         return False
 
+    async def stop_all(self) -> None:
+        """Stop all active spectator sessions and cancel background tasks."""
+        guild_ids = list(self._sessions.keys())
+        for gid in guild_ids:
+            await self.stop_watching(gid)
+
     async def inspect_now(self, guild_id: int) -> Optional[str]:
         """Trigger an immediate stream inspection and commentary for a guild."""
         session = self._sessions.get(guild_id)
