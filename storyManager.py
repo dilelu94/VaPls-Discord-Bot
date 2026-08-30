@@ -225,6 +225,10 @@ que todos conocen. Sin insultos, sin malas palabras. \
 Chiste respetuoso, como una joda entre amigos que se tienen cariño. \
 Inventá chistes frescos basados en la imagen, no te apoyes siempre en la memoria estática.
 
+REGLA CLAVE DE NOMBRES:
+- Si se te especifica el nombre de la persona ("La imagen es de X"), usá ese nombre para el chiste.
+- Si NO se especifica el nombre (o la imagen proviene de la carpeta Varios/general), NO adivines ni le inventes el nombre de ningún amigo del grupo (no digas Tobi, Viny, Fox, Mati, etc. si no fue especificado). Hacé el chiste enfocado en la situación.
+
 Max 2-3 oraciones. Español rioplatense, con voseo, informal, de barrio. \
 Sin comillas, sin formato, solo el chiste."""
 
@@ -351,7 +355,9 @@ async def _generate_story(
     system = _STORY_PROMPT
     name = _person_name(rel_path)
     if name:
-        system += f"\n\nLa imagen es de {name}. Si ves a {name} en la imagen, usá su nombre para el chiste."
+        system += f"\n\nLa imagen es de {name}. Usá a {name} como la persona de la foto para el chiste."
+    else:
+        system += "\n\nEsta imagen proviene de una carpeta general sin nombre asignado (Varios/general). NO adivines ni le asignes el nombre de ningún amigo del grupo (no digas Tobi, Viny, Fox, etc.). Hacé el chiste enfocado únicamente en la situación visual."
     mem_key = f"guild-{guild_id}"
     lt = geminiCommand._indio_long_term.get(mem_key, {})
     members = geminiCommand._indio_current_members.get(mem_key, [])
