@@ -28,11 +28,14 @@ _SKIP_DIRS = {
     "__pycache__",
     ".git",
     "venv",
-    "userbot/venv",
+    ".venv",
+    "env",
     "migration",
     ".bun",
     "node_modules",
     ".env",
+    "build",
+    "dist",
 }
 
 # Files that are allowed to contain print() calls (e.g. CLI tools, scripts).
@@ -60,13 +63,7 @@ _ALLOW_SILENT_EXCEPT_RE = re.compile(
 def _iter_py_files(root: Path):
     """Yield all ``.py`` files under ``root``, skipping vendor dirs."""
     for dirpath, dirnames, filenames in os.walk(root):
-        rel = Path(dirpath).relative_to(root)
-        parts = set(rel.parts)
-        if parts & _SKIP_DIRS:
-            dirnames.clear()
-            continue
-        # prune hidden dirs
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in _SKIP_DIRS]
         for fn in filenames:
             if fn.endswith(".py"):
                 yield Path(dirpath) / fn
