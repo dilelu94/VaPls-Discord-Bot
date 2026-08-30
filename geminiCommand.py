@@ -4536,6 +4536,7 @@ async def _speak_indio_reply(
     guild_id: Optional[int],
     member: Optional[discord.Member],
     text: str,
+    max_chars: int = 500,
 ) -> None:
     """Send text to the Userbot (Indio) HTTP relay so the Userbot account speaks the response in voice."""
     if not text or not guild_id:
@@ -4543,8 +4544,8 @@ async def _speak_indio_reply(
     spoken = _clean_text_for_speech(text)
     if not spoken:
         return
-    if len(spoken) > 250:
-        spoken = spoken[:250] + "..."
+    if len(spoken) > max_chars:
+        spoken = spoken[:max_chars] + "..."
 
     relay_url = getattr(config, "INDIO_RELAY_URL", None) or "http://127.0.0.1:8081"
     relay_secret = getattr(config, "INDIO_RELAY_SECRET", "")

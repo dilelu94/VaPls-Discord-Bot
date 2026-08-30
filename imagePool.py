@@ -68,6 +68,7 @@ async def init_pool() -> int:
     async with _pool_init_lock:
         if _pool_initialized:
             return len(_pool_images)
+        Path(POOL_DIR).mkdir(parents=True, exist_ok=True)
         _pool_images = _scan_pool_dir()
         _pool_initialized = True
         logger.info("pool initialised with %d images", len(_pool_images))
@@ -82,7 +83,7 @@ def get_random_image(mgr: imageManager.ImageManager) -> Optional[dict]:
 
     Returns:
         A dict with ``rel_path``, ``subfolder``, ``filename``, or ``None``
-        when the pool is exhausted.
+        when both pool and saved catalog are exhausted.
     """
     available = [e for e in _pool_images if Path(POOL_DIR, e["rel_path"]).exists()]
     if available:
@@ -90,6 +91,20 @@ def get_random_image(mgr: imageManager.ImageManager) -> Optional[dict]:
     used = _manifest_original_filenames(mgr)
     candidates = [e for e in _pool_images if e["rel_path"] not in used]
     if not candidates:
+        # Fallback: pick a saved image from imageManager catalog if pool is empty
+        saved = [
+            {
+                "rel_path": img["filename"],
+                "subfolder": "",
+                "filename": img["filename"],
+                "basename_no_ext": Path(img["filename"]).stem,
+            }
+            for img in mgr.images
+            if Path(config.INDIO_IMAGES_DIR, img["filename"]).exists()
+        ]
+        if saved:
+            logger.info("pool empty, using saved image catalog fallback (%d images)", len(saved))
+            return random.choice(saved)
         return None
     return random.choice(candidates)
 

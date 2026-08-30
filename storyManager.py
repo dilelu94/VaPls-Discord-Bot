@@ -313,6 +313,8 @@ def get_recent_stories(guild_id: int) -> list[str]:
 def _read_image_as_part(rel_path: str) -> Optional[dict]:
     full = Path(imagePool.POOL_DIR, rel_path)
     if not full.exists():
+        full = Path(config.INDIO_IMAGES_DIR, rel_path)
+    if not full.exists():
         return None
     raw = full.read_bytes()
     ext = full.suffix.lower()
@@ -486,12 +488,32 @@ async def _post_review(
         try:
             ch = await bot.fetch_channel(channel_id)
         except Exception:
-            logger.error("[STORY] review channel %d not found", channel_id)
-            return False
-    if not hasattr(ch, "send"):
+            ch = None
+
+    if ch is None and guild_id:
+        guild = bot.get_guild(guild_id)
+        if guild:
+            for fallback_cid in (config.INDIO_REPLY_CHANNEL_ID, config.INDIO_PLAY_CHANNEL_ID):
+                if fallback_cid:
+                    ch = guild.get_channel(fallback_cid)
+                    if ch:
+                        channel_id = fallback_cid
+                        break
+            if ch is None:
+                for tc in guild.text_channels:
+                    if tc.permissions_for(guild.me).send_messages:
+                        ch = tc
+                        channel_id = tc.id
+                        break
+
+    if ch is None or not hasattr(ch, "send"):
+        logger.error("[STORY] review channel %d not found for guild %d", channel_id, guild_id)
         return False
 
-    full = Path(imagePool.POOL_DIR, rel_path).resolve()
+    full = Path(imagePool.POOL_DIR, rel_path)
+    if not full.exists():
+        full = Path(config.INDIO_IMAGES_DIR, rel_path)
+    full = full.resolve()
     if not full.exists():
         logger.error("[STORY] review image not found: %s", rel_path)
         return False
@@ -501,6 +523,10 @@ async def _post_review(
     if story_msg_id is None:
         logger.warning("[STORY] relay failed for story text, will retry later")
         return False
+
+    # Speak story aloud in voice channel via TTS
+    if guild_id:
+        _spawn(geminiCommand._speak_indio_reply(bot, guild_id, None, story_text, max_chars=600))
 
     state = {
         "story_msg_id": story_msg_id,
@@ -667,8 +693,15 @@ async def _describe_image(rel_path: str) -> tuple[str, list[str]]:
 async def _save_approved_story(rel_path: str, story_text: str) -> Optional[str]:
     full = Path(imagePool.POOL_DIR, rel_path)
     if not full.exists():
+        full = Path(config.INDIO_IMAGES_DIR, rel_path)
+    if not full.exists():
         return None
     mgr = _init_image_mgr()
+    for existing in mgr.images:
+        if existing.get("filename") == rel_path or existing.get("original_filename") == rel_path:
+            existing["gemini_description"] = story_text
+            mgr._save()
+            return existing["id"]
     ext = full.suffix.lstrip(".").lower()
     raw = full.read_bytes()
 
