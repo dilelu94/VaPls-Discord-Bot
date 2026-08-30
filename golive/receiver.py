@@ -46,19 +46,43 @@ class StreamSnapshotReceiver:
         user_id: Optional[int] = None,
     ) -> None:
         """Process an incoming video RTP packet: DAVE decrypt -> Depacketize -> Buffer."""
-        if not self._is_capturing or not rtp_data:
+        if len(rtp_data) < 12:
             return
 
-        # 1. DAVE E2EE video decryption if session is present
-        payload = rtp_data
-        if dave_session and hasattr(dave_session, "decrypt_h264"):
-            try:
-                payload = dave_session.decrypt_h264(ssrc or 0, rtp_data, user_id=user_id)
-            except Exception as exc:
-                log.warning("[RECEIVER] DAVE video decrypt warning: %s", exc)
+        # Parse RTP header offset
+        byte0 = rtp_data[0]
+        csrc_count = byte0 & 0x0F
+        has_extension = bool((byte0 >> 4) & 0x01)
+        offset = 12 + (csrc_count * 4)
+
+        if has_extension and len(rtp_data) >= offset + 4:
+            ext_len = struct.unpack("!H", rtp_data[offset + 2 : offset + 4])[0]
+            offset += 4 + (ext_len * 4)
+
+        if len(rtp_data) <= offset:
+            return
+
+        header = rtp_data[:offset]
+        raw_payload = rtp_data[offset:]
+
+        # 1. DAVE E2EE video decryption on payload if session is present
+        decrypted_payload = raw_payload
+        if dave_session:
+            if hasattr(dave_session, "decrypt_h264"):
+                try:
+                    decrypted_payload = dave_session.decrypt_h264(ssrc or 0, raw_payload, user_id=user_id)
+                except Exception as exc:
+                    log.warning("[RECEIVER] DAVE decrypt_h264 warning: %s", exc)
+            elif hasattr(dave_session, "decrypt"):
+                try:
+                    decrypted_payload = dave_session.decrypt(user_id or 0, 1, raw_payload)
+                except Exception as exc:
+                    log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
+
+        decrypted_rtp = header + decrypted_payload
 
         # 2. Depacketize RTP -> Annex-B NAL units
-        for nal in self.depacketizer.depacketize(payload):
+        for nal in self.depacketizer.depacketize(decrypted_rtp):
             self._raw_nal_buffer.extend(nal)
 
     def extract_snapshot(
