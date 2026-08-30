@@ -217,6 +217,8 @@ WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "0.
 # --- Activity/MMR tracking database ---------------------------------------
 # Path to the SQLite database for the Glicko-based MMR system. Created
 # automatically on first use.
+ACTIVITY_DB_PATH = os.getenv("ACTIVITY_DB_PATH", "data/activity.db")
+
 # Path to persist the chosen sensitivity preset across userbot restarts.
 SENSITIVITY_STATE_PATH = os.getenv("SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json")
 
