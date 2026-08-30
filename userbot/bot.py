@@ -2438,6 +2438,7 @@ def _find_active_streamer(channel: Optional[discord.VoiceChannel]) -> Optional[d
             is_streaming = (
                 getattr(voice, "self_stream", False)
                 or getattr(voice, "stream", False)
+                or getattr(voice, "self_video", False)
             )
             if is_streaming:
                 return member
@@ -2447,6 +2448,22 @@ def _find_active_streamer(channel: Optional[discord.VoiceChannel]) -> Optional[d
 async def _sync_stream_spectator(guild: discord.Guild):
     """Automatically start or stop stream spectator depending on active GoLive streams."""
     vc = _vc_for_guild(guild)
+    if vc is None or not getattr(vc, "channel", None):
+        target_ch = None
+        for ch in guild.voice_channels:
+            if _find_active_streamer(ch):
+                target_ch = ch
+                break
+        if not target_ch:
+            for ch in guild.voice_channels:
+                if any(not m.bot for m in ch.members if m.id not in config.IGNORE_USER_IDS):
+                    target_ch = ch
+                    break
+        if target_ch:
+            log.info("[STREAM-SPECTATOR] Auto-joining channel %s to watch stream", target_ch.name)
+            await _join_channel(target_ch)
+            vc = _vc_for_guild(guild)
+
     if vc is None or not getattr(vc, "channel", None):
         await _spectator_mgr.stop_watching(guild.id)
         return
@@ -2470,6 +2487,25 @@ async def _sync_stream_spectator(guild: discord.Guild):
                 immediate_check=True,
             )
     else:
+        found_ch = None
+        for ch in guild.voice_channels:
+            if ch.id != vc.channel.id and _find_active_streamer(ch):
+                found_ch = ch
+                break
+        if found_ch:
+            log.info("[STREAM-SPECTATOR] Moving to channel %s with active stream", found_ch.name)
+            await _join_channel(found_ch)
+            new_vc = _vc_for_guild(guild)
+            if new_vc and getattr(new_vc, "channel", None):
+                new_streamer = _find_active_streamer(new_vc.channel)
+                if new_streamer:
+                    await _spectator_mgr.start_watching(
+                        guild.id,
+                        streamer_name=new_streamer.display_name,
+                        streamer_id=new_streamer.id,
+                        immediate_check=True,
+                    )
+                    return
         if session:
             log.info(
                 "[STREAM-SPECTATOR] No active stream in %s — stopping spectator",
