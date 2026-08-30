@@ -124,7 +124,16 @@ def _install_dave_patch():
             return
 
         def wrapped(self, packet):
-            raw_data = getattr(packet, "data", None)
+            raw_data = None
+            if isinstance(packet, (bytes, bytearray)):
+                raw_data = bytes(packet)
+            elif hasattr(packet, "data") and isinstance(packet.data, (bytes, bytearray)):
+                raw_data = bytes(packet.data)
+            elif hasattr(packet, "raw_data") and isinstance(packet.raw_data, (bytes, bytearray)):
+                raw_data = bytes(packet.raw_data)
+            elif isinstance(packet, tuple) and len(packet) >= 2:
+                raw_data = bytes(packet[0]) + bytes(packet[1])
+
             if raw_data:
                 try:
                     from golive.golive_watcher import dispatch_rtp_packet

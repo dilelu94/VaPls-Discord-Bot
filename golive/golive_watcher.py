@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import struct
 import time
 from typing import Optional
 
@@ -139,14 +140,20 @@ class GoLiveWatcherConnection:
         if not data or len(data) < 12:
             return
 
-        # Check payload type (101 / 102 are standard H.264 video PTs)
+        # Check payload type — skip Opus audio packets (typically PT 120 or 111)
         pt = data[1] & 0x7F
-        if pt in (101, 102, 96, 125):
-            self.receiver.process_rtp_packet(
-                rtp_data=data,
-                dave_session=self.dave_session,
-                user_id=self.target_user_id,
-            )
+        if pt in (120, 111):
+            return
+
+        # Extract SSRC from 12-byte RTP header (bytes 8..11)
+        ssrc = struct.unpack("!I", data[8:12])[0]
+
+        self.receiver.process_rtp_packet(
+            rtp_data=data,
+            dave_session=self.dave_session,
+            ssrc=ssrc,
+            user_id=self.target_user_id,
+        )
 
     async def capture_snapshot(self, duration_sec: float = 3.0, filename: str = "latest_snapshot.jpg") -> Optional[str]:
         """Captures a burst of RTP video packets for duration_sec seconds and extracts a JPEG snapshot."""
