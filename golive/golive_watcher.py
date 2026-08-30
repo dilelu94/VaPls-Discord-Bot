@@ -207,9 +207,9 @@ class GoLiveWatcherConnection:
 
     async def capture_snapshot(
         self,
-        duration_sec: float = 3.0,
+        duration_sec: float = 4.0,
         filename: str = "latest_snapshot.jpg",
-        max_wait_sec: float = 8.0,
+        max_wait_sec: float = 12.0,
     ) -> Optional[str]:
         """Captures a burst of RTP video packets for duration_sec seconds after waiting for stream handshake."""
         log.info(
@@ -239,15 +239,23 @@ class GoLiveWatcherConnection:
 
         # Wait until video packets start arriving from Discord Gateway (handshake sync)
         start_wait = time.monotonic()
+        video_started = False
         while time.monotonic() - start_wait < max_wait_sec:
-            if len(self.receiver._raw_nal_buffer) > 0:
+            if len(self.receiver._raw_nal_buffer) >= 2000:
+                video_started = True
                 log.info(
                     "[WATCHSTREAM] Stream video packets detected! Initial buffer: %d bytes. Collecting sample burst for %.1fs...",
                     len(self.receiver._raw_nal_buffer),
                     duration_sec,
                 )
                 break
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.3)
+
+        if not video_started and len(self.receiver._raw_nal_buffer) > 0:
+            log.info(
+                "[WATCHSTREAM] Proceeding with available buffer (%d bytes) after wait...",
+                len(self.receiver._raw_nal_buffer),
+            )
 
         # Collect sample burst for duration_sec
         await asyncio.sleep(duration_sec)
