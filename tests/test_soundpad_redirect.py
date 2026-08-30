@@ -72,9 +72,10 @@ async def test_soundpad_panel_goes_to_redirect_channel(
 
     redirect_ch = _fake_redirect_channel()
 
-    # Block music-vote gate
+    # Block music-vote gate and clear global guildPlayers state
     import playCommand
     monkeypatch.setattr(playCommand, "get_active_vote", lambda gid: None)
+    monkeypatch.setattr(playCommand, "guildPlayers", {})
 
     await soundpadLogic(ctx, query=None, redirect_channel=redirect_ch)
 
@@ -115,6 +116,7 @@ async def test_soundpad_panel_uses_followup_without_redirect(
 
     import playCommand
     monkeypatch.setattr(playCommand, "get_active_vote", lambda gid: None)
+    monkeypatch.setattr(playCommand, "guildPlayers", {})
 
     await soundpadLogic(ctx, query=None, redirect_channel=None)
 

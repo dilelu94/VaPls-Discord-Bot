@@ -38,12 +38,9 @@ async def _client_for_bot(bot) -> TestClient:
 
 async def _drain_tasks():
     """indioVoice spawnea un asyncio.create_task — esperar a que corra."""
-    current = asyncio.current_task()
-    for _ in range(5):
+    for _ in range(10):
         await asyncio.sleep(0)
-    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
-    if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+
 
 
 async def _post_indio(monkeypatch, body):
