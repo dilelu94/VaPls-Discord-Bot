@@ -4806,6 +4806,97 @@ async def _start_relay() -> Optional[web.AppRunner]:
     return runner
 
 
+_last_auto_stream_comment_time: dict[int, float] = {}
+
+
+async def _auto_stream_watcher_loop():
+    """Periodically checks voice channels where the Indio is connected for active screen shares / streams
+
+    and automatically captures snapshots to ask the Indio for comments.
+    """
+    await client.wait_until_ready()
+    log.info("[AUTO_STREAM] Automatic stream watcher loop started")
+    while not client.is_closed():
+        try:
+            await asyncio.sleep(15.0)
+            now = time.monotonic()
+            for vc in list(client.voice_clients):
+                if not vc or not vc.is_connected() or not vc.channel:
+                    continue
+                guild_id = vc.guild.id
+                channel_id = vc.channel.id
+
+                # Cooldown per guild (comment at most once every 45 seconds per stream)
+                last_time = _last_auto_stream_comment_time.get(guild_id, 0.0)
+                if now - last_time < 45.0:
+                    continue
+
+                target_member = None
+                for member in vc.channel.members:
+                    if member.id == client.user.id:
+                        continue
+                    voice_state = getattr(member, "voice", None)
+                    is_streaming = getattr(voice_state, "self_stream", False) or getattr(voice_state, "self_video", False)
+                    if is_streaming:
+                        target_member = member
+                        break
+
+                if target_member is None:
+                    continue
+
+                log.info(
+                    "[AUTO_STREAM] Detected active live stream from user %s (%s) in guild %s channel %s",
+                    target_member.id, target_member.display_name, guild_id, channel_id
+                )
+
+                try:
+                    from golive.golive_watcher import GoLiveWatcherConnection
+                except ModuleNotFoundError:
+                    from golive_watcher import GoLiveWatcherConnection
+
+                watcher = GoLiveWatcherConnection(
+                    bot=client,
+                    guild_id=guild_id,
+                    channel_id=channel_id,
+                    target_user_id=target_member.id,
+                    vc=vc,
+                )
+
+                jpg_path = await watcher.capture_snapshot(duration_sec=3.0, max_wait_sec=6.0)
+                await watcher.disconnect()
+
+                if jpg_path and os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
+                    _last_auto_stream_comment_time[guild_id] = time.monotonic()
+                    log.info("[AUTO_STREAM] Snapshot captured successfully (%s). Asking Indio to comment...", jpg_path)
+
+                    prompt = "Estás viendo la transmisión en vivo de tu amigo en el canal de voz. Comentá brevemente y de forma natural sobre lo que ves en la pantalla como un amigo más."
+                    if config.RELAY_SECRET and _http_session:
+                        try:
+                            headers = {"X-API-Secret": config.RELAY_SECRET}
+                            url = f"http://127.0.0.1:8080/indio"
+                            with open(jpg_path, "rb") as f:
+                                b64_img = base64.b64encode(f.read()).decode()
+                            payload = {
+                                "guild_id": guild_id,
+                                "channel_id": channel_id,
+                                "user_id": target_member.id,
+                                "speaker_name": target_member.display_name,
+                                "pregunta": prompt,
+                                "attachment_urls": [
+                                    {
+                                        "mime_type": "image/jpeg",
+                                        "data": b64_img,
+                                    }
+                                ],
+                            }
+                            async with _http_session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=20.0)) as resp:
+                                log.info("[AUTO_STREAM] Main bot response status: %s", resp.status)
+                        except Exception as exc:
+                            log.warning("[AUTO_STREAM] Failed to dispatch auto comment to main bot: %s", exc)
+        except Exception as exc:
+            log.exception("[AUTO_STREAM] Error in auto stream watcher loop: %s", exc)
+
+
 async def main():
     """Start the userbot client and clean up HTTP resources on exit.
 
@@ -4817,6 +4908,7 @@ async def main():
         sys.exit(1)
     adb.init_db(config.ACTIVITY_DB_PATH)
     relay_runner = await _start_relay()
+    asyncio.create_task(_auto_stream_watcher_loop())
     try:
         await client.start(config.USER_TOKEN)
     finally:
