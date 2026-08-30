@@ -1664,19 +1664,21 @@ async def verstream(
         )
         return
 
-    if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
+    relay_url = config.INDIO_RELAY_URL or config.GOLIVE_RELAY_URL
+    relay_secret = config.INDIO_RELAY_SECRET or config.GOLIVE_RELAY_SECRET
+    if not (relay_url and relay_secret):
+        await safe_respond(ctx, "❌ El relay del Indio no está configurado.")
         return
 
-    url = urljoin(config.GOLIVE_RELAY_URL, "/watchstream/snapshot")
-    headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
+    url = urljoin(relay_url, "/watchstream/snapshot")
+    headers = {"X-API-Secret": relay_secret}
     payload = {
         "guild_id": ctx.guild.id,
         "channel_id": voice_channel.id,
         "target_user_id": ctx.author.id,
         "duration": duracion,
     }
-    timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT + duracion + 5.0)
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT + duracion + 5.0)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:

@@ -4666,6 +4666,84 @@ async def _relay_voice_summary(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def _relay_watchstream_snapshot(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+        target_user_id = int(data["target_user_id"])
+        duration = float(data.get("duration", 3.0))
+    except Exception as e:
+        log.warning("[WATCHSTREAM] invalid body: %s", e)
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    vc = _get_vc_for_guild_id(guild_id)
+    if not vc:
+        return web.json_response({"error": "el indio no esta en voz en este servidor"}, status=400)
+
+    try:
+        from golive.golive_watcher import GoLiveWatcherConnection
+    except ModuleNotFoundError:
+        try:
+            from golive_watcher import GoLiveWatcherConnection
+        except ModuleNotFoundError:
+            return web.json_response({"error": "GoLiveWatcherConnection module not found"}, status=500)
+
+    watcher = GoLiveWatcherConnection(
+        bot=client,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        target_user_id=target_user_id,
+        vc=vc,
+    )
+
+    try:
+        jpg_path = await watcher.capture_snapshot(duration_sec=duration)
+        await watcher.disconnect()
+        if jpg_path and os.path.exists(jpg_path):
+            return web.json_response({
+                "success": True,
+                "snapshot_path": jpg_path,
+                "guild_id": guild_id,
+                "target_user_id": target_user_id,
+            })
+        else:
+            return web.json_response({"success": False, "error": "snapshot extraction failed"}, status=500)
+    except Exception as e:
+        log.exception("[WATCHSTREAM] snapshot failed in userbot")
+        await watcher.disconnect()
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def _relay_watchstream_stop(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+        target_user_id = int(data["target_user_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    vc = _get_vc_for_guild_id(guild_id)
+    if vc:
+        try:
+            from golive.golive_watcher import GoLiveWatcherConnection
+        except ModuleNotFoundError:
+            from golive_watcher import GoLiveWatcherConnection
+        watcher = GoLiveWatcherConnection(client, guild_id, channel_id, target_user_id, vc)
+        await watcher.disconnect()
+
+    return web.json_response({"stopped": True, "guild_id": guild_id})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4686,6 +4764,8 @@ async def _start_relay() -> Optional[web.AppRunner]:
 
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
     app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)
+    app.router.add_post("/watchstream/snapshot", _relay_watchstream_snapshot)
+    app.router.add_post("/watchstream/stop", _relay_watchstream_stop)
     app.router.add_post("/activity/log", _relay_activity_log)
     app.router.add_get("/activity", _relay_activity_list)
     app.router.add_get("/activity/user", _relay_activity_user)
