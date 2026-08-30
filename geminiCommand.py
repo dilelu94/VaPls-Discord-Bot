@@ -6267,9 +6267,70 @@ async def generate_indio_telegram_response(
     return clean_reply
 
 
+async def ask_indio_stream_vision(
+    *,
+    image_bytes: bytes,
+    streamer_name: str,
+    streamer_id: Optional[int] = None,
+    guild_id: Optional[int] = None,
+    mime_type: str = "image/jpeg",
+) -> Optional[str]:
+    """Generate a short Indio commentary on a stream screenshot.
+
+    Args:
+        image_bytes: Raw JPEG/PNG image data of the stream snapshot.
+        streamer_name: Display name or apodo of the streamer.
+        streamer_id: Optional Discord user ID to pull user traits.
+        guild_id: Optional Discord guild ID.
+        mime_type: MIME type of the image (default "image/jpeg").
+
+    Returns:
+        Commentary string if Indio has something to say, or ``None`` if
+        the model replied 'SKIP' / empty or failed.
+    """
+    if not image_bytes:
+        return None
+
+    encoded_img = _b64.b64encode(image_bytes).decode("ascii")
+    image_parts = [{"inlineData": {"mimeType": mime_type, "data": encoded_img}}]
+
+    user_info_str = ""
+    if streamer_id and streamer_id in _USERS:
+        u_data = _USERS[streamer_id]
+        traits = u_data.get("traits", [])
+        if traits:
+            user_info_str = f" Contexto sobre {streamer_name}: " + ", ".join(traits) + "."
+
+    prompt = (
+        f"Estás viendo la transmisión en vivo de GoLive de {streamer_name}.{user_info_str}\n"
+        f"Analizá la captura de pantalla adjunta de su stream. Comportate como el Indio: gaucho argentino, "
+        f"sarcástico, observador, cercano a tus amigos y con sentido del humor criollo.\n"
+        f"Si ves algo gracioso, una mancada en un juego, un detalle llamativo o algo de qué opinar, "
+        f"hacé un comentario CORTO (máximo 1 o 2 oraciones) para decir en voz alta.\n"
+        f"SI LA PANTALLA ES ESTÁTICA, ABURRIDA, O NO MUESTRA NADA RELEVANTE PARA COMENTAR, RESPONDÉ ÚNICAMENTE 'SKIP'."
+    )
+
+    try:
+        reply = await geminiClient.generate(
+            user_message=prompt,
+            system_instruction=INDIO_SYSTEM,
+            image_parts=image_parts,
+            max_output_tokens=256,
+            guild_id=str(guild_id) if guild_id else None,
+        )
+        clean_text = _strip_speaker_prefix(reply.text).strip()
+        if not clean_text or clean_text.upper() == "SKIP" or clean_text.upper().startswith("SKIP"):
+            return None
+        return clean_text
+    except Exception as e:
+        logger.warning("ask_indio_stream_vision failed: %s", e)
+        return None
+
+
 # Cargar el estado persistido al final, cuando todas las funciones helpers
 # (incluida _sanitize_for_history) ya estan definidas — sino la sanitizacion
 # de history al startup falla con NameError.
 _load_indio_state()
 _load_pending_sessions()
+
 

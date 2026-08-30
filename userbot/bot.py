@@ -58,6 +58,24 @@ except Exception:
     _USERS = {}
 import activity_db as adb
 
+try:
+    from . import stream_spectator
+except ImportError:
+    import stream_spectator  # type: ignore[no-redef]
+
+
+def _get_vc_for_guild_id(guild_id: int):
+    for vc in client.voice_clients:
+        if getattr(getattr(vc, "guild", None), "id", None) == guild_id:
+            return vc
+    return None
+
+
+_spectator_mgr = stream_spectator.StreamSpectatorManager(
+    voice_client_getter=_get_vc_for_guild_id
+)
+
+
 
 def _name_for(user_id: int, member=None) -> str:
     info = _USERS.get(user_id)
@@ -4654,6 +4672,48 @@ async def _relay_voice_summary(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def _relay_stream_watch(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        streamer_name = str(data["streamer_name"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+    streamer_id = data.get("streamer_id")
+    if streamer_id is not None:
+        try:
+            streamer_id = int(streamer_id)
+        except Exception:
+            streamer_id = None
+
+    session = await _spectator_mgr.start_watching(
+        guild_id=guild_id,
+        streamer_name=streamer_name,
+        streamer_id=streamer_id,
+        immediate_check=True,
+    )
+    return web.json_response({"watching": True, "guild_id": guild_id, "streamer": streamer_name})
+
+
+async def _relay_stream_unwatch(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    stopped = await _spectator_mgr.stop_watching(guild_id)
+    return web.json_response({"stopped": stopped, "guild_id": guild_id})
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4670,7 +4730,10 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/leave", _relay_leave)
     app.router.add_post("/speak", _relay_speak)
+    app.router.add_post("/stream-watch", _relay_stream_watch)
+    app.router.add_post("/stream-unwatch", _relay_stream_unwatch)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
+
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
     app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)
     app.router.add_post("/activity/log", _relay_activity_log)
