@@ -93,7 +93,9 @@ class StreamSnapshotReceiver:
                 except Exception as exc:
                     log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
 
-        decrypted_rtp = header + decrypted_payload
+        clean_hdr = bytearray(rtp_data[:12])
+        clean_hdr[0] &= ~0x10  # Clear extension bit since extension headers were already stripped in raw_payload
+        decrypted_rtp = bytes(clean_hdr) + decrypted_payload
 
         # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 5, 7, 8)
         for nal in self.depacketizer.depacketize(decrypted_rtp):
