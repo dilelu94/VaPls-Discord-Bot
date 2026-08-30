@@ -384,3 +384,28 @@ async def test_play_user_greeting_detects_channel_member_count(fake_users, _audi
     assert captured_member_counts == [10]
 
 
+async def test_different_users_in_same_channel_both_play(fake_users, _audio_dir, monkeypatch):
+    ( _audio_dir / "user1.mp3" ).write_bytes(b"fake")
+    ( _audio_dir / "user2.mp3" ).write_bytes(b"fake")
+    fake_users({
+        101: {"greeting": "user1.mp3"},
+        102: {"greeting": "user2.mp3"},
+    })
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+
+    vc = _make_vc()
+
+    # User 101 joins channel 50 -> plays
+    p1 = await greeting.play_user_greeting(vc, user_id=101, channel_id=50)
+    assert p1 is True
+
+    # Fast forward 2.5 seconds (more than 2s channel inter-clip buffer, within 15s window)
+    t0 = time.time()
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 2.5)
+
+    # User 102 joins channel 50 -> plays too because it's a different user!
+    p2 = await greeting.play_user_greeting(vc, user_id=102, channel_id=50)
+    assert p2 is True
+
+
+

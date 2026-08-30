@@ -168,7 +168,8 @@ def resolve_greeting_path(
     """
     if user_id is None:
         return None
-    info = _users_map().get(user_id) or {}
+    users = _users_map()
+    info = users.get(user_id) or (users.get(int(user_id)) if str(user_id).isdigit() else None) or users.get(str(user_id)) or {}
     rel = info.get("greeting")
     if not rel:
         return None
@@ -189,16 +190,29 @@ def resolve_greeting_path(
                     user_counts[r_path] = user_counts.get(r_path, 0) + 1
             save_pity_state()
         rel = chosen_path
-    if not isinstance(rel, str):
+    if not isinstance(rel, str) or not rel.strip():
         return None
-    primary = os.path.join(config.CUSTOM_AUDIO_PATH, rel)
-    if os.path.exists(primary):
-        return primary
+
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [
+        os.path.join(config.CUSTOM_AUDIO_PATH, rel),
+        os.path.join(repo_root, "audio_output", rel),
+        os.path.join(repo_root, rel),
+    ]
     if rel.startswith("Audios/") or rel.startswith("Audios\\"):
-        alt = os.path.join(config.CUSTOM_AUDIO_PATH, rel[7:])
-        if os.path.exists(alt):
-            return alt
-    return primary
+        candidates.append(os.path.join(config.CUSTOM_AUDIO_PATH, rel[7:]))
+        candidates.append(os.path.join(repo_root, "audio_output", rel[7:]))
+
+    basename = os.path.basename(rel)
+    if basename and basename != rel:
+        candidates.append(os.path.join(config.CUSTOM_AUDIO_PATH, basename))
+        candidates.append(os.path.join(repo_root, "audio_output", basename))
+        candidates.append(os.path.join(repo_root, "audio_output", "Audios", basename))
+
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    return candidates[0]
 
 
 async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:
@@ -216,6 +230,9 @@ async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:
     return False
 
 
+_last_user_greeting: dict[tuple[int, int], float] = {}
+
+
 async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
     """Play the per-user greeting on ``vc`` if eligible.
 
@@ -225,26 +242,37 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
     """
     if not getattr(config, "GREETING_ENABLED", True):
         return False
-    info = _users_map().get(user_id) or {}
+    users = _users_map()
+    info = users.get(user_id) or (users.get(int(user_id)) if str(user_id).isdigit() else None) or users.get(str(user_id)) or {}
     if not info.get("greeting"):
         return False
     now = time.time()
-    last = _last_greeting.get(channel_id, 0.0)
-    if now - last < config.GREETING_THROTTLE_SECONDS:
+    last_chan = _last_greeting.get(channel_id, 0.0)
+    last_user = _last_user_greeting.get((channel_id, user_id), 0.0)
+
+    # Per-user throttle (default 15s) and per-channel inter-clip buffer (2.0s)
+    if now - last_user < config.GREETING_THROTTLE_SECONDS or now - last_chan < 2.0:
         logger.info(
-            "[GREETING] throttled (channel=%s, %.1fs since last)",
-            channel_id, now - last,
+            "[GREETING] throttled (channel=%s, user=%s, %.1fs since last chan, %.1fs since last user)",
+            channel_id, user_id, now - last_chan, now - last_user,
         )
         return False
+
     if not await _wait_until_ready(vc):
         logger.info("[GREETING] vc never ready (channel=%s)", channel_id)
         return False
+
+    # If VC is currently playing (e.g. a 0.5s wake sound finishing), wait up to 3s
     try:
+        deadline = time.monotonic() + 3.0
+        while vc.is_playing() and time.monotonic() < deadline:
+            await asyncio.sleep(0.2)
         if vc.is_playing():
             logger.info("[GREETING] vc already playing (channel=%s)", channel_id)
             return False
     except Exception:
         return False
+
     member_count = 1
     try:
         channel = getattr(vc, "channel", None)
@@ -253,15 +281,22 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
             member_count = len(humans) if humans else len(channel.members)
     except Exception:
         member_count = 1
+
     path = resolve_greeting_path(user_id, member_count=member_count)
     if path is None:
         return False
     if not os.path.exists(path):
         logger.warning("[GREETING] file missing: %s", path)
         return False
+
     _last_greeting[channel_id] = now
+    _last_user_greeting[(channel_id, user_id)] = now
+
     try:
-        source = discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS)
+        try:
+            source = discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS)
+        except Exception:
+            source = discord.FFmpegOpusAudio(path)
         vc.play(source)
         logger.info("[GREETING] playing %s (user=%s, channel=%s)",
                     path, user_id, channel_id)
