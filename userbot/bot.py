@@ -32,14 +32,9 @@ import importlib.util
 
 _userbot_dir = os.path.dirname(os.path.abspath(__file__))
 _parent_dir = os.path.dirname(_userbot_dir)
-if _parent_dir not in sys.path:
-    sys.path.insert(0, _parent_dir)
-
-try:
-    import golive.video_compat as vc_compat
-    vc_compat.patch_video(discord.gateway)
-except Exception as _patch_err:
-    logging.warning("Failed to apply video_compat patch in userbot: %s", _patch_err)
+if _parent_dir in sys.path:
+    sys.path.remove(_parent_dir)
+sys.path.insert(0, _parent_dir)
 
 _config_path = os.path.join(_userbot_dir, "config.py")
 _spec = importlib.util.spec_from_file_location("userbot_config", _config_path)
@@ -65,33 +60,12 @@ except Exception:
     _USERS = {}
 import activity_db as adb
 
-try:
-    from . import stream_spectator
-except ImportError:
-    import stream_spectator  # type: ignore[no-redef]
-
 
 def _get_vc_for_guild_id(guild_id: int):
     for vc in client.voice_clients:
         if getattr(getattr(vc, "guild", None), "id", None) == guild_id:
             return vc
     return None
-
-
-async def _post_stream_commentary_text(text: str):
-    chan = _resolve_transcript_channel()
-    if chan is not None:
-        speaker_name = getattr(getattr(client, "user", None), "display_name", "Indio")
-        try:
-            await chan.send(f"👁️ **{speaker_name} (stream):** {text}")
-        except Exception as e:
-            log.warning("Failed to send stream commentary to transcript channel: %s", e)
-
-
-_spectator_mgr = stream_spectator.StreamSpectatorManager(
-    voice_client_getter=_get_vc_for_guild_id,
-    post_text_fn=_post_stream_commentary_text,
-)
 
 
 
@@ -2431,94 +2405,6 @@ def _make_voice_sink() -> voice_recv.AudioSink:
     return TranscriberSink(client)
 
 
-def _find_active_streamer(channel: Optional[discord.VoiceChannel]) -> Optional[discord.Member]:
-    """Return the first human member currently GoLive streaming in channel."""
-    if not channel or not hasattr(channel, "members"):
-        return None
-    for member in channel.members:
-        if member.bot or member.id in config.IGNORE_USER_IDS:
-            continue
-        voice = getattr(member, "voice", None)
-        if voice is not None:
-            is_streaming = (
-                getattr(voice, "self_stream", False)
-                or getattr(voice, "stream", False)
-                or getattr(voice, "self_video", False)
-            )
-            if is_streaming:
-                return member
-    return None
-
-
-async def _sync_stream_spectator(guild: discord.Guild):
-    """Automatically start or stop stream spectator depending on active GoLive streams."""
-    vc = _vc_for_guild(guild)
-    if vc is None or not getattr(vc, "channel", None):
-        target_ch = None
-        for ch in guild.voice_channels:
-            if _find_active_streamer(ch):
-                target_ch = ch
-                break
-        if not target_ch:
-            for ch in guild.voice_channels:
-                if any(not m.bot for m in ch.members if m.id not in config.IGNORE_USER_IDS):
-                    target_ch = ch
-                    break
-        if target_ch:
-            log.info("[STREAM-SPECTATOR] Auto-joining channel %s to watch stream", target_ch.name)
-            await _join_channel(target_ch)
-            vc = _vc_for_guild(guild)
-
-    if vc is None or not getattr(vc, "channel", None):
-        await _spectator_mgr.stop_watching(guild.id)
-        return
-
-    streamer = _find_active_streamer(vc.channel)
-    session = _spectator_mgr.get_session(guild.id)
-
-    if streamer is not None:
-        current_streamer_id = session.get("streamer_id") if session else None
-        if not session or current_streamer_id != streamer.id:
-            log.info(
-                "[STREAM-SPECTATOR] Auto-detected active stream by %s (id=%s) in %s",
-                streamer.display_name,
-                streamer.id,
-                vc.channel.name,
-            )
-            await _spectator_mgr.start_watching(
-                guild.id,
-                streamer_name=streamer.display_name,
-                streamer_id=streamer.id,
-                immediate_check=True,
-            )
-    else:
-        found_ch = None
-        for ch in guild.voice_channels:
-            if ch.id != vc.channel.id and _find_active_streamer(ch):
-                found_ch = ch
-                break
-        if found_ch:
-            log.info("[STREAM-SPECTATOR] Moving to channel %s with active stream", found_ch.name)
-            await _join_channel(found_ch)
-            new_vc = _vc_for_guild(guild)
-            if new_vc and getattr(new_vc, "channel", None):
-                new_streamer = _find_active_streamer(new_vc.channel)
-                if new_streamer:
-                    await _spectator_mgr.start_watching(
-                        guild.id,
-                        streamer_name=new_streamer.display_name,
-                        streamer_id=new_streamer.id,
-                        immediate_check=True,
-                    )
-                    return
-        if session:
-            log.info(
-                "[STREAM-SPECTATOR] No active stream in %s — stopping spectator",
-                vc.channel.name,
-            )
-            await _spectator_mgr.stop_watching(guild.id)
-
-
 async def _join_channel(channel: discord.VoiceChannel):
     """Join or move to a voice channel and start listening.
 
@@ -2562,7 +2448,6 @@ async def _join_channel(channel: discord.VoiceChannel):
         analytics.capture_exception(e, properties={"action": "voice_join_failed"})
         return
     await _start_listening(vc)
-    asyncio.create_task(_sync_stream_spectator(channel.guild))
 
 
 async def _leave_if_empty(guild: discord.Guild):
@@ -2576,8 +2461,6 @@ async def _leave_if_empty(guild: discord.Guild):
     vc = _vc_for_guild(guild)
     if vc is None:
         _cancel_idle_leave(guild.id)
-        if _spectator_mgr is not None:
-            await _spectator_mgr.stop_watching(guild.id)
         return
     if _guild_has_humans(guild):
         _cancel_idle_leave(guild.id)
@@ -2587,22 +2470,6 @@ async def _leave_if_empty(guild: discord.Guild):
         f"{config.IDLE_LEAVE_SECONDS:.0f}s"
     )
     _schedule_idle_leave(guild)
-    if _spectator_mgr is not None:
-        await _spectator_mgr.stop_watching(guild.id)
-
-
-
-async def _auto_stream_sync_loop():
-    """Background task: periodically check for active GoLive streams across allowed guilds."""
-    await asyncio.sleep(5)
-    while not client.is_closed():
-        try:
-            for guild in client.guilds:
-                if _guild_allowed(guild.id):
-                    await _sync_stream_spectator(guild)
-        except Exception as e:
-            log.warning("[STREAM-SPECTATOR] _auto_stream_sync_loop exception: %s", e)
-        await asyncio.sleep(15)
 
 
 @client.event
@@ -2614,50 +2481,17 @@ async def on_ready():
             "will not be able to identify the VaPls bot's slash commands; "
             "indio playback will not work until this is configured.",
         )
-    asyncio.create_task(_auto_stream_sync_loop())
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):
             continue
-        await _sync_stream_spectator(guild)
-        if not _vc_for_guild(guild):
-            for channel in guild.voice_channels:
-                humans = [
-                    m for m in channel.members if not m.bot and m.id != client.user.id
-                ]
-                if humans:
-                    await _join_channel(channel)
-                    break
-
-
-@client.event
-async def on_socket_raw_receive(msg):
-    """Raw Gateway listener to capture STREAM_CREATE and STREAM_DELETE immediately."""
-    if isinstance(msg, (str, bytes)):
-        try:
-            if isinstance(msg, bytes):
-                msg = msg.decode("utf-8")
-            data = json.loads(msg)
-            op = data.get("op")
-            t = data.get("t")
-            if op == 0 and t in ("STREAM_CREATE", "STREAM_DELETE", "VOICE_STATE_UPDATE"):
-                d = data.get("d", {})
-                guild_id = d.get("guild_id")
-                if not guild_id and "stream_key" in d:
-                    parts = str(d["stream_key"]).split(":")
-                    if len(parts) >= 2 and parts[0] == "guild":
-                        guild_id = parts[1]
-                if guild_id:
-                    try:
-                        gid = int(guild_id)
-                        guild = client.get_guild(gid)
-                        if guild and _guild_allowed(gid):
-                            log.info("[STREAM-EVENT] Raw %s received for guild %s — syncing spectator", t, guild.name)
-                            asyncio.create_task(_sync_stream_spectator(guild))
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        for channel in guild.voice_channels:
+            humans = [
+                m for m in channel.members if not m.bot and m.id != client.user.id
+            ]
+            if humans:
+                await _join_channel(channel)
+                break
 
 
 @client.event
@@ -2670,8 +2504,6 @@ async def on_voice_state_update(member, before, after):
     guild = (after.channel or before.channel).guild
     if not _guild_allowed(guild.id):
         return
-
-    asyncio.create_task(_sync_stream_spectator(guild))
 
     if after.channel and (not before.channel or before.channel.id != after.channel.id):
         _cancel_idle_leave(guild.id)
@@ -4834,69 +4666,6 @@ async def _relay_voice_summary(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
-async def _relay_stream_watch(request: web.Request) -> web.Response:
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-        streamer_name = str(data["streamer_name"])
-    except Exception:
-        return web.json_response({"error": "invalid body"}, status=400)
-    streamer_id = data.get("streamer_id")
-    if streamer_id is not None:
-        try:
-            streamer_id = int(streamer_id)
-        except Exception:
-            streamer_id = None
-
-    session = await _spectator_mgr.start_watching(
-        guild_id=guild_id,
-        streamer_name=streamer_name,
-        streamer_id=streamer_id,
-        immediate_check=True,
-    )
-    return web.json_response({"watching": True, "guild_id": guild_id, "streamer": streamer_name})
-
-
-async def _relay_stream_unwatch(request: web.Request) -> web.Response:
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-    except Exception:
-        return web.json_response({"error": "invalid body"}, status=400)
-
-    stopped = await _spectator_mgr.stop_watching(guild_id)
-    return web.json_response({"stopped": stopped, "guild_id": guild_id})
-
-
-async def _relay_stream_spectator_mode(request: web.Request) -> web.Response:
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-        fast = bool(data.get("fast", True))
-    except Exception:
-        return web.json_response({"error": "invalid body"}, status=400)
-
-    guild = client.get_guild(guild_id)
-    if guild:
-        await _sync_stream_spectator(guild)
-
-    _spectator_mgr.set_fast_mode(guild_id, fast=fast)
-    asyncio.create_task(_spectator_mgr.inspect_now(guild_id))
-    return web.json_response({"status": "ok", "guild_id": guild_id, "fast": fast})
-
-
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4913,9 +4682,6 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/leave", _relay_leave)
     app.router.add_post("/speak", _relay_speak)
-    app.router.add_post("/stream-watch", _relay_stream_watch)
-    app.router.add_post("/stream-unwatch", _relay_stream_unwatch)
-    app.router.add_post("/stream-spectator/mode", _relay_stream_spectator_mode)
     app.router.add_post("/restrict_speaker", _relay_restrict_speaker)
 
     app.router.add_post("/sensibilidad", _relay_sensibilidad)

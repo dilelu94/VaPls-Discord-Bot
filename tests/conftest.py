@@ -348,16 +348,3 @@ def indio(tmp_path, monkeypatch):
     gc._mem_path = str(mem_path)  # convenience for tests
     yield gc
     _clear()
-
-
-@pytest.fixture(autouse=True)
-async def cleanup_spectator_mgr():
-    yield
-    if "userbot.bot" in sys.modules:
-        try:
-            bot_mod = sys.modules["userbot.bot"]
-            mgr = getattr(bot_mod, "_spectator_mgr", None)
-            if mgr:
-                await mgr.stop_all()
-        except Exception:
-            pass

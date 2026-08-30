@@ -79,14 +79,6 @@ def _load_idle_leave_helpers(idle_seconds: float = 0.05):
         exception=lambda *a, **k: None,
     )
 
-    class _FakeSpectatorMgr:
-        async def stop_watching(self, *a, **k):
-            pass
-        def get_session(self, *a, **k):
-            return None
-        async def start_watching(self, *a, **k):
-            return None
-
     ns = {
         "config": config_stub,
         "client": client_stub,
@@ -97,7 +89,6 @@ def _load_idle_leave_helpers(idle_seconds: float = 0.05):
         "voice_recv": SimpleNamespace(VoiceRecvClient=object),
         "_idle_leave_tasks": {},
         "_active_streams": {},
-        "_spectator_mgr": _FakeSpectatorMgr(),
     }
 
     block = _extract_func_block(
