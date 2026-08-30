@@ -35,8 +35,8 @@ jobs:
       - name: Run test suite
         shell: bash
         run: |
-          set -o pipefail
-          pytest -n auto -q --tb=short --color=no 2>&1 | tee pytest.log
+          pytest -n auto -q --tb=short --color=no > pytest.log 2>&1 || { cat pytest.log; exit 1; }
+          cat pytest.log
       - name: Upload pytest log
         if: always()
         uses: actions/upload-artifact@v4
