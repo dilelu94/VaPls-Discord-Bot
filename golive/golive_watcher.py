@@ -155,14 +155,14 @@ class GoLiveWatcherConnection:
             user_id=self.target_user_id,
         )
 
-    async def capture_snapshot(self, duration_sec: float = 3.0, filename: str = "latest_snapshot.jpg") -> Optional[str]:
-        """Captures a burst of RTP video packets for duration_sec seconds and extracts a JPEG snapshot."""
-        if not self._connected:
-            ok = await self.connect()
-            if not ok:
-                return None
-
-        # Bind listener to global RTP dispatcher and VoiceClient's socket reader if available
+    async def capture_snapshot(
+        self,
+        duration_sec: float = 3.0,
+        filename: str = "latest_snapshot.jpg",
+        max_wait_sec: float = 8.0,
+    ) -> Optional[str]:
+        """Captures a burst of RTP video packets for duration_sec seconds after waiting for stream handshake."""
+        # Bind listener to global RTP dispatcher and VoiceClient's socket reader BEFORE connect
         register_rtp_listener(self._on_udp_packet)
         vc_conn = getattr(self._regular_vc, "_connection", None) or self._regular_vc
         socket_reader = getattr(vc_conn, "_socket_reader", None) or getattr(self._regular_vc, "ws", None)
@@ -172,8 +172,24 @@ class GoLiveWatcherConnection:
         elif socket_reader and hasattr(socket_reader, "register"):
             socket_reader.register(self._on_udp_packet)
 
+        if not self._connected:
+            ok = await self.connect()
+            if not ok:
+                unregister_rtp_listener(self._on_udp_packet)
+                return None
+
         self.receiver.start_capture()
-        log.info("[WATCHER] Capturing stream sample burst for %.1f seconds...", duration_sec)
+        log.info("[WATCHER] Waiting for initial stream packets (up to %.1fs)...", max_wait_sec)
+
+        # Wait until video packets start arriving from Discord Gateway (handshake sync)
+        start_wait = time.monotonic()
+        while time.monotonic() - start_wait < max_wait_sec:
+            if len(self.receiver._raw_nal_buffer) > 0:
+                log.info("[WATCHER] Stream video packets detected! Collecting sample burst for %.1fs...", duration_sec)
+                break
+            await asyncio.sleep(0.2)
+
+        # Collect sample burst for duration_sec
         await asyncio.sleep(duration_sec)
         self.receiver.stop_capture()
 
