@@ -824,7 +824,7 @@ alguien manda imágenes por DM al Indio y las rechaza (cancelar) o cuando falla 
 descripción — vuelven al pool como candidatas para historias.
 
 - `init_pool()`: crea automáticamente la carpeta `indio_images/pool/` si no existe, escanea el directorio y cachea la lista.
-- `get_random_image(mgr)`: elige una al azar de `indio_images/pool/` excluyendo las ya guardadas en el manifiesto. Si el pool está vacío, cae en **fallback** utilizando el catálogo de imágenes guardadas (`indio_images/`) para que el sistema continúe funcionando sin interrupción.
+- `get_random_image(mgr, exclude_paths)`: elige una al azar estrictamente de las imágenes sin procesar en `indio_images/pool/`, excluyendo las ya guardadas en el manifiesto y las que estén en revisión/aprobación activa. Si no quedan candidatas sin procesar en el pool, retorna `None`.
 - `remove_from_pool(rel_path)`: borra la imagen del pool cuando se aprueba.
 
 ### Pipeline de historia

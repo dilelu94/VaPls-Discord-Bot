@@ -27,8 +27,18 @@ _pool_initialized = False
 
 
 def _manifest_original_filenames(mgr: imageManager.ImageManager) -> set[str]:
-    """Return set of ``original_filename`` values from the manifest."""
-    return {img.get("original_filename", "") for img in mgr.images}
+    """Return set of original_filename and filename values from the manifest."""
+    used = set()
+    for img in mgr.images:
+        orig = img.get("original_filename")
+        if orig:
+            used.add(orig)
+            used.add(Path(orig).name)
+        fname = img.get("filename")
+        if fname:
+            used.add(fname)
+            used.add(Path(fname).name)
+    return used
 
 
 def _scan_pool_dir() -> list[dict]:
@@ -66,8 +76,6 @@ async def init_pool() -> int:
     """
     global _pool_images, _pool_initialized
     async with _pool_init_lock:
-        if _pool_initialized:
-            return len(_pool_images)
         Path(POOL_DIR).mkdir(parents=True, exist_ok=True)
         _pool_images = _scan_pool_dir()
         _pool_initialized = True
@@ -75,37 +83,42 @@ async def init_pool() -> int:
         return len(_pool_images)
 
 
-def get_random_image(mgr: imageManager.ImageManager) -> Optional[dict]:
-    """Pick a random image from the pool that is not already in the manifest.
+def get_random_image(
+    mgr: imageManager.ImageManager,
+    exclude_paths: Optional[set[str]] = None,
+) -> Optional[dict]:
+    """Pick a random unprocessed image strictly from the pool.
+
+    Excludes images that are already saved in the manifest or are currently
+    in active review / pending approval.
 
     Args:
         mgr: The ImageManager whose manifest is checked for dedup.
+        exclude_paths: Optional set of relative paths to exclude (e.g. active reviews).
 
     Returns:
         A dict with ``rel_path``, ``subfolder``, ``filename``, or ``None``
-        when both pool and saved catalog are exhausted.
+        when the unprocessed pool is empty or all images are excluded.
     """
-    available = [e for e in _pool_images if Path(POOL_DIR, e["rel_path"]).exists()]
-    if available:
-        _pool_images[:] = available
+    global _pool_images
+    Path(POOL_DIR).mkdir(parents=True, exist_ok=True)
+    _pool_images = _scan_pool_dir()
+
     used = _manifest_original_filenames(mgr)
-    candidates = [e for e in _pool_images if e["rel_path"] not in used]
+    excluded = set(exclude_paths or [])
+
+    candidates = [
+        e for e in _pool_images
+        if e["rel_path"] not in used
+        and e["filename"] not in used
+        and e["rel_path"] not in excluded
+        and e["filename"] not in excluded
+    ]
+
     if not candidates:
-        # Fallback: pick a saved image from imageManager catalog if pool is empty
-        saved = [
-            {
-                "rel_path": img["filename"],
-                "subfolder": "",
-                "filename": img["filename"],
-                "basename_no_ext": Path(img["filename"]).stem,
-            }
-            for img in mgr.images
-            if Path(config.INDIO_IMAGES_DIR, img["filename"]).exists()
-        ]
-        if saved:
-            logger.info("pool empty, using saved image catalog fallback (%d images)", len(saved))
-            return random.choice(saved)
+        logger.warning("no unprocessed images available in pool")
         return None
+
     return random.choice(candidates)
 
 

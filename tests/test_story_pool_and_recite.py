@@ -31,7 +31,7 @@ async def test_init_pool_creates_directory_if_missing(temp_pool_and_catalog):
     assert count == 0
 
 
-def test_get_random_image_fallback_to_saved_catalog(temp_pool_and_catalog):
+def test_get_random_image_strict_pool_only(temp_pool_and_catalog):
     pool_dir, catalog_dir = temp_pool_and_catalog
     pool_dir.mkdir(parents=True, exist_ok=True)
     catalog_dir.mkdir(parents=True, exist_ok=True)
@@ -51,10 +51,19 @@ def test_get_random_image_fallback_to_saved_catalog(temp_pool_and_catalog):
         "created_at": 1000,
     })
 
-    # Pool is empty, should return the saved image as fallback
+    # Pool is empty — must return None (no fallback to catalog)
+    pick = imagePool.get_random_image(mgr)
+    assert pick is None
+
+    # Now add an unprocessed image to pool
+    (pool_dir / "unprocessed.jpg").write_bytes(b"unprocessed")
     pick = imagePool.get_random_image(mgr)
     assert pick is not None
-    assert pick["filename"] == "saved_123.jpg"
+    assert pick["filename"] == "unprocessed.jpg"
+
+    # If unprocessed.jpg is in exclude_paths, return None
+    pick_excluded = imagePool.get_random_image(mgr, exclude_paths={"unprocessed.jpg"})
+    assert pick_excluded is None
 
 
 async def test_post_review_spawns_tts_recitation(temp_pool_and_catalog, monkeypatch):

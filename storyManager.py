@@ -761,10 +761,15 @@ async def trigger_story(
     )
 
     mgr = _init_image_mgr()
-    pick = imagePool.get_random_image(mgr)
+    pending_paths = {
+        r.get("rel_path")
+        for r in list(_pending_reviews.values()) + list(_pending_owner_approvals.values())
+        if r.get("rel_path")
+    }
+    pick = imagePool.get_random_image(mgr, exclude_paths=pending_paths)
     if pick is None:
         logger.warning(
-            "story trigger(%s): no images left in pool for guild %s",
+            "story trigger(%s): no unprocessed images left in pool for guild %s",
             trigger_type,
             guild_id,
         )
