@@ -277,20 +277,24 @@ class DaveSession:
 
     def decrypt(self, user_id: int, media_type, packet: bytes) -> bytes:
         """DAVE-decrypt an incoming media packet for a specific user ID."""
-        ratchet = self._session.get_key_ratchet(str(user_id))
-        if ratchet is not None:
-            try:
-                self._decryptor.transition_to_key_ratchet(ratchet)
-            except Exception:
-                pass
-        if media_type == 1 or media_type == dave.MediaType.video or str(media_type).lower() == "video":
+        if user_id is not None:
+            ratchet = self._session.get_key_ratchet(str(user_id))
+            if ratchet is not None:
+                try:
+                    self._decryptor.transition_to_key_ratchet(ratchet)
+                except Exception:
+                    pass
+        if media_type == 1 or media_type == getattr(dave, "MediaType", None).video or str(media_type).lower() == "video":
             m_type = dave.MediaType.video
         else:
             m_type = dave.MediaType.audio
-        res = self._decryptor.decrypt(m_type, packet)
-        if res is None:
+        try:
+            res = self._decryptor.decrypt(m_type, packet)
+            if res is None:
+                return packet
+            return res
+        except Exception:
             return packet
-        return res
 
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
         """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
@@ -301,10 +305,13 @@ class DaveSession:
                     self._decryptor.transition_to_key_ratchet(ratchet)
                 except Exception:
                     pass
-        res = self._decryptor.decrypt(dave.MediaType.video, data)
-        if res is None:
+        try:
+            res = self._decryptor.decrypt(dave.MediaType.video, data)
+            if res is None:
+                return data
+            return res
+        except Exception:
             return data
-        return res
 
     def __repr__(self) -> str:
         return (
