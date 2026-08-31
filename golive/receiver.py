@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import struct
 import subprocess
 import logging
 from typing import Optional, List
@@ -33,12 +34,10 @@ class StreamSnapshotReceiver:
     def start_capture(self) -> None:
         self.depacketizer.reset()
         self._raw_nal_buffer.clear()
-        self._sps_nal = None
-        self._pps_nal = None
         self._sample_start_time = time.monotonic()
         self._is_capturing = True
         self._seen_keyframe = False
-        log.info("[RECEIVER] Started video snapshot sample capture")
+        log.info("[RECEIVER] Started video snapshot sample capture (has_sps=%s, has_pps=%s)", bool(self._sps_nal), bool(self._pps_nal))
 
     def stop_capture(self) -> None:
         self._is_capturing = False
@@ -97,7 +96,7 @@ class StreamSnapshotReceiver:
         clean_hdr[0] &= ~0x10  # Clear extension bit since extension headers were already stripped in raw_payload
         decrypted_rtp = bytes(clean_hdr) + decrypted_payload
 
-        # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 5, 7, 8)
+        # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 7 or keyframe with SPS/PPS)
         for nal in self.depacketizer.depacketize(decrypted_rtp):
             if len(nal) > 4:
                 nal_type = nal[4] & 0x1F
@@ -106,7 +105,7 @@ class StreamSnapshotReceiver:
                 elif nal_type == 8:
                     self._pps_nal = bytes(nal)
 
-                if not self._seen_keyframe and nal_type in (5, 7, 8):
+                if not self._seen_keyframe and (nal_type == 7 or (nal_type in (5, 8) and self._sps_nal and self._pps_nal)):
                     self._seen_keyframe = True
                     log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
 
