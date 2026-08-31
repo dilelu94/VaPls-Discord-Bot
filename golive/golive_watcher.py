@@ -352,7 +352,11 @@ class GoLiveWatcherConnection:
         start_wait = time.monotonic()
         video_started = False
         while time.monotonic() - start_wait < max_wait_sec:
-            if len(self.receiver._raw_nal_buffer) >= 2000:
+            if (
+                len(self.receiver._raw_nal_buffer) >= 15000
+                and self.receiver._sps_nal
+                and self.receiver._pps_nal
+            ):
                 video_started = True
                 log.info(
                     "[WATCHSTREAM] Stream video packets detected! Initial buffer: %d bytes. Recording sample for %.1fs...",
