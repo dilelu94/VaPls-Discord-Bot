@@ -374,11 +374,17 @@ class GoLiveWatcherConnection:
         if isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
             secret_key = bytes(secret_key)
             is_decrypted = False
-            if not hasattr(self, "_decryptor") or getattr(self, "_decryptor_mode", None) != mode:
+            if (
+                not hasattr(self, "_decryptor")
+                or getattr(self, "_decryptor_mode", None) != mode
+                or getattr(self, "_decryptor_key", None) != secret_key
+            ):
                 try:
                     from discord.ext.voice_recv.reader import PacketDecryptor
                     self._decryptor = PacketDecryptor(mode, secret_key)
                     self._decryptor_mode = mode
+                    self._decryptor_key = secret_key
+                    log.info("[WATCHSTREAM] Instantiated PacketDecryptor with mode=%s (key_len=%d)", mode, len(secret_key))
                 except Exception as e:
                     log.warning("[WATCHSTREAM] could not instantiate PacketDecryptor: %s", e)
                     self._decryptor = None
@@ -388,7 +394,7 @@ class GoLiveWatcherConnection:
                     from discord.ext.voice_recv.rtp import RTPPacket
                     rtp_pkt = RTPPacket(data)
                     decrypted_payload = self._decryptor.decrypt_rtp(rtp_pkt)
-                    if decrypted_payload:
+                    if decrypted_payload is not None:
                         hdr = bytearray(rtp_pkt.header)
                         hdr[0] &= ~0x10  # Clear extension bit since decrypt_rtp already processed ext headers
                         data = bytes(hdr) + decrypted_payload
