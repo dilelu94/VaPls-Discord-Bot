@@ -116,9 +116,20 @@ class GoLiveWatcherConnection:
         self.server_id: Optional[int] = None
         self._stream_key: str = f"guild:{guild_id}:{channel_id}:{target_user_id}"
 
+        self.endpoint: Optional[str] = None
+        self.token: Optional[str] = None
+        self.ssrc: int = getattr(vc, "ssrc", 0)
+        self.voice_port: Optional[int] = None
+        self.endpoint_ip: Optional[str] = None
+        self.ip: Optional[str] = None
+        self.port: Optional[int] = None
+        self.mode: str = ""
+        self.secret_key: list[int] = []
+
         self.socket: Optional[socket.socket] = None
         self.ws: Optional[DiscordVoiceWebSocket] = None
         self._socket_reader: Optional[SocketReader] = None
+        self._poll_task: Optional[asyncio.Task] = None
 
         state = getattr(vc, "_connection", None)
         self.dave_session = getattr(state, "dave_session", None) if state else getattr(vc, "dave_session", None)
@@ -133,12 +144,46 @@ class GoLiveWatcherConnection:
     def user(self):
         return self._regular_vc.user
 
+    @property
+    def voice_client(self) -> discord.VoiceClient:
+        return self._regular_vc
+
+    @property
+    def supported_modes(self):
+        return type(self._regular_vc).supported_modes
+
+    @property
+    def max_dave_protocol_version(self) -> int:
+        return 0
+
+    @property
+    def can_encrypt(self) -> bool:
+        return False
+
+    async def reinit_dave_session(self, force: bool = False) -> None:
+        pass
+
+    async def _execute_transition(self, transition_id: int) -> None:
+        pass
+
     async def connect(self, timeout: float = 20.0) -> bool:
         """Discreetly sends STREAM_WATCH and STREAM_SET_PAUSED to trigger stream packet flow."""
         main_ws = self._bot.ws
         if not main_ws:
             log.warning("[WATCHER] Main bot websocket is not connected")
             return False
+
+        # Register gateway event futures BEFORE sending op 20 to avoid losing
+        # events that arrive before we start listening.
+        stream_key = self._stream_key
+        create_fut = main_ws.wait_for(
+            "STREAM_CREATE",
+            predicate=lambda d: d.get("stream_key", "") == stream_key,
+        )
+        server_fut = main_ws.wait_for(
+            "STREAM_SERVER_UPDATE",
+            predicate=lambda d: d.get("stream_key", "") == stream_key,
+        )
 
         log.info(
             "[WATCHER] Requesting STREAM_WATCH for stream_key=%s",
@@ -147,7 +192,7 @@ class GoLiveWatcherConnection:
 
         try:
             # 1. Send Opcode 20 (STREAM_WATCH)
-            ok1 = await _send_gateway_json(
+            await _send_gateway_json(
                 main_ws,
                 {
                     "op": _OP_STREAM_WATCH,
@@ -159,7 +204,7 @@ class GoLiveWatcherConnection:
             )
 
             # 2. Send Opcode 22 (STREAM_SET_PAUSED: false) on Gateway WS
-            ok2 = await _send_gateway_json(
+            await _send_gateway_json(
                 main_ws,
                 {
                     "op": _OP_STREAM_SET_PAUSED,
@@ -184,12 +229,61 @@ class GoLiveWatcherConnection:
                     },
                 )
 
-            self._connected = ok1 or ok2
-            log.info("[WATCHER] STREAM_WATCH signal sent (status=%s)", self._connected)
-            return self._connected
+            # 4. Connect dedicated stream WebSocket & UDP socket if STREAM_SERVER_UPDATE is received
+            try:
+                server_data = await asyncio.wait_for(server_fut, timeout=5.0)
+                endpoint = server_data.get("endpoint", "")
+                if endpoint.startswith("wss://"):
+                    endpoint = endpoint[6:]
+                self.endpoint = endpoint
+                self.token = server_data.get("token")
+                log.info("[WATCHER] Received STREAM_SERVER_UPDATE: endpoint=%s", self.endpoint)
+
+                create_data = await asyncio.wait_for(create_fut, timeout=3.0)
+                self.server_id = int(create_data["rtc_server_id"])
+
+                if self.endpoint and DiscordVoiceWebSocket is not None:
+                    self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self.socket.setblocking(False)
+                    self._socket_reader = SocketReader(self, start_paused=False)
+                    self._socket_reader.register(self._on_udp_packet)
+                    self._socket_reader.start()
+
+                    self.ws = await DiscordVoiceWebSocket.from_connection_state(
+                        self, resume=False
+                    )
+                    while not self.ip:
+                        await self.ws.poll_event()
+
+                    if self.endpoint_ip and self.voice_port:
+                        self.socket.connect((self.endpoint_ip, self.voice_port))
+
+                    while self.ws.secret_key is None:
+                        await self.ws.poll_event()
+
+                    await self.ws.client_connect()
+                    loop = asyncio.get_event_loop()
+                    self._poll_task = loop.create_task(self._poll_ws(), name="watcher-ws-poll")
+                    log.info("[WATCHER] Dedicated stream socket connection established to %s", self.endpoint)
+            except Exception as exc:
+                log.info("[WATCHER] Dedicated stream connection note: %s (using main voice listener fallback)", exc)
+
+            self._connected = True
+            log.info("[WATCHER] STREAM_WATCH signal sent (status=True)")
+            return True
         except Exception as exc:
             log.error("[WATCHER] Failed to send STREAM_WATCH: %s", exc, exc_info=True)
             return False
+
+    async def _poll_ws(self) -> None:
+        """Continuously poll the stream WebSocket to handle heartbeats."""
+        try:
+            while self.ws:
+                await self.ws.poll_event()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            log.warning("[WATCHER] Stream WS poller ended: %s", exc)
 
     def _on_udp_packet(self, data: bytes) -> None:
         """UDP Socket callback for incoming RTP packets."""
@@ -427,6 +521,29 @@ class GoLiveWatcherConnection:
 
     async def disconnect(self) -> None:
         """Sends STREAM_SET_PAUSED: true to stop stream packet flow cleanly."""
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            try:
+                await self._poll_task
+            except asyncio.CancelledError:
+                pass
+
+        try:
+            if self.ws:
+                await self.ws.close()
+        except Exception:
+            pass
+
+        if self._socket_reader is not None:
+            self._socket_reader.stop()
+            self._socket_reader = None
+
+        if self.socket:
+            try:
+                self.socket.close()
+            except Exception:
+                pass
+
         if not self._connected:
             return
 
