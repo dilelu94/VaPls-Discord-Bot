@@ -211,22 +211,33 @@ class GoLiveWatcherConnection:
                 except Exception as e:
                     log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
 
-        # Check payload type — skip Opus audio (120, 111) and RTCP (72-76, 200-204)
+        # Check payload type — skip Opus audio (120, 111, 121, 77) and RTCP (72-76, 200-204)
         pt = data[1] & 0x7F
-        if pt in (120, 111) or 72 <= pt <= 76 or 200 <= pt <= 204:
+        if pt in (120, 111, 121, 77) or 72 <= pt <= 76 or 200 <= pt <= 204:
             return
 
         # Extract SSRC from 12-byte RTP header (bytes 8..11)
         ssrc = struct.unpack("!I", data[8:12])[0]
 
-        # Bind video SSRC on first valid video payload packet (PT >= 96)
-        if pt >= 96:
-            if not hasattr(self, "_video_ssrc") or self._video_ssrc is None:
-                self._video_ssrc = ssrc
-                log.info("[WATCHSTREAM] Discovered active video SSRC: %d (PT=%d)", ssrc, pt)
-            elif self._video_ssrc != ssrc:
-                # Skip packets from other SSRCs (audio / secondary streams)
-                return
+        # Inspect payload for valid H.264 NAL unit type (1=Slice, 5=IDR, 7=SPS, 8=PPS, 24=STAP-A, 28=FU-A)
+        csrc_count = data[0] & 0x0F
+        has_ext = bool((data[0] >> 4) & 0x01)
+        off = 12 + (csrc_count * 4)
+        if has_ext and len(data) >= off + 4:
+            try:
+                ext_len = struct.unpack("!H", data[off + 2 : off + 4])[0]
+                off += 4 + (ext_len * 4)
+            except Exception:
+                pass
+
+        if len(data) > off:
+            nal_type = data[off] & 0x1F
+            if nal_type in (1, 5, 7, 8, 24, 28):
+                if not hasattr(self, "_video_ssrc") or self._video_ssrc is None:
+                    self._video_ssrc = ssrc
+                    log.info("[WATCHSTREAM] Discovered active H.264 video SSRC: %d (PT=%d, NAL=%d)", ssrc, pt, nal_type)
+                elif self._video_ssrc != ssrc:
+                    return
 
         if not hasattr(self, "_packet_count"):
             self._packet_count = 0
