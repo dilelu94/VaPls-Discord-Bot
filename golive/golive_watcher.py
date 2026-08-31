@@ -186,10 +186,11 @@ class GoLiveWatcherConnection:
         vc = self._regular_vc
         mode = getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
         secret_key = getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
-        if secret_key and isinstance(secret_key, (list, tuple)):
-            secret_key = bytes(secret_key)
 
-        if mode and secret_key:
+        is_decrypted = True
+        if isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
+            secret_key = bytes(secret_key)
+            is_decrypted = False
             if not hasattr(self, "_decryptor") or getattr(self, "_decryptor_mode", None) != mode:
                 try:
                     from discord.ext.voice_recv.reader import PacketDecryptor
@@ -208,8 +209,12 @@ class GoLiveWatcherConnection:
                         hdr = bytearray(rtp_pkt.header)
                         hdr[0] &= ~0x10  # Clear extension bit since decrypt_rtp already processed ext headers
                         data = bytes(hdr) + decrypted_payload
+                        is_decrypted = True
                 except Exception as e:
                     log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
+
+        if not is_decrypted:
+            return
 
         # Check payload type — skip Opus audio (120, 111, 121, 77) and RTCP (72-76, 200-204)
         pt = data[1] & 0x7F
@@ -218,26 +223,6 @@ class GoLiveWatcherConnection:
 
         # Extract SSRC from 12-byte RTP header (bytes 8..11)
         ssrc = struct.unpack("!I", data[8:12])[0]
-
-        # Inspect payload for valid H.264 NAL unit type (1=Slice, 5=IDR, 7=SPS, 8=PPS, 24=STAP-A, 28=FU-A)
-        csrc_count = data[0] & 0x0F
-        has_ext = bool((data[0] >> 4) & 0x01)
-        off = 12 + (csrc_count * 4)
-        if has_ext and len(data) >= off + 4:
-            try:
-                ext_len = struct.unpack("!H", data[off + 2 : off + 4])[0]
-                off += 4 + (ext_len * 4)
-            except Exception:
-                pass
-
-        if len(data) > off:
-            nal_type = data[off] & 0x1F
-            if nal_type in (1, 5, 7, 8, 24, 28):
-                if not hasattr(self, "_video_ssrc") or self._video_ssrc is None:
-                    self._video_ssrc = ssrc
-                    log.info("[WATCHSTREAM] Discovered active H.264 video SSRC: %d (PT=%d, NAL=%d)", ssrc, pt, nal_type)
-                elif self._video_ssrc != ssrc:
-                    return
 
         if not hasattr(self, "_packet_count"):
             self._packet_count = 0
