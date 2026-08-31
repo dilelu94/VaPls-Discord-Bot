@@ -252,15 +252,25 @@ class GoLiveWatcherConnection:
             self.target_user_id,
             self._stream_key,
         )
-        # Bind listener to global RTP dispatcher and VoiceClient's socket reader BEFORE connect
+        # Bind listener to VoiceRecvClient reader thread (_reader._socket_listeners)
         register_rtp_listener(self._on_udp_packet)
         vc_conn = getattr(self._regular_vc, "_connection", None) or self._regular_vc
-        socket_reader = getattr(vc_conn, "_socket_reader", None) or getattr(self._regular_vc, "ws", None)
+        reader = (
+            getattr(self._regular_vc, "_reader", None)
+            or getattr(vc_conn, "_reader", None)
+            or getattr(vc_conn, "_socket_reader", None)
+        )
 
-        if hasattr(vc_conn, "add_socket_listener"):
+        if reader is not None:
+            if hasattr(reader, "add_socket_listener") and callable(reader.add_socket_listener):
+                reader.add_socket_listener(self._on_udp_packet)
+            elif hasattr(reader, "_socket_listeners") and isinstance(reader._socket_listeners, list):
+                if self._on_udp_packet not in reader._socket_listeners:
+                    reader._socket_listeners.append(self._on_udp_packet)
+            elif hasattr(reader, "register") and callable(reader.register):
+                reader.register(self._on_udp_packet)
+        elif hasattr(vc_conn, "add_socket_listener"):
             vc_conn.add_socket_listener(self._on_udp_packet)
-        elif socket_reader and hasattr(socket_reader, "register"):
-            socket_reader.register(self._on_udp_packet)
 
         if not self._connected:
             ok = await self.connect()
@@ -330,14 +340,25 @@ class GoLiveWatcherConnection:
             self.target_user_id,
             self._stream_key,
         )
+        # Bind listener to VoiceRecvClient reader thread (_reader._socket_listeners)
         register_rtp_listener(self._on_udp_packet)
         vc_conn = getattr(self._regular_vc, "_connection", None) or self._regular_vc
-        socket_reader = getattr(vc_conn, "_socket_reader", None) or getattr(self._regular_vc, "ws", None)
+        reader = (
+            getattr(self._regular_vc, "_reader", None)
+            or getattr(vc_conn, "_reader", None)
+            or getattr(vc_conn, "_socket_reader", None)
+        )
 
-        if hasattr(vc_conn, "add_socket_listener"):
+        if reader is not None:
+            if hasattr(reader, "add_socket_listener") and callable(reader.add_socket_listener):
+                reader.add_socket_listener(self._on_udp_packet)
+            elif hasattr(reader, "_socket_listeners") and isinstance(reader._socket_listeners, list):
+                if self._on_udp_packet not in reader._socket_listeners:
+                    reader._socket_listeners.append(self._on_udp_packet)
+            elif hasattr(reader, "register") and callable(reader.register):
+                reader.register(self._on_udp_packet)
+        elif hasattr(vc_conn, "add_socket_listener"):
             vc_conn.add_socket_listener(self._on_udp_packet)
-        elif socket_reader and hasattr(socket_reader, "register"):
-            socket_reader.register(self._on_udp_packet)
 
         if not self._connected:
             ok = await self.connect()
