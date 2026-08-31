@@ -223,6 +223,21 @@ class GoLiveWatcherConnection:
             if self.dave_session:
                 self.dave_session.set_passthrough_mode(True, 10)
 
+    def add_socket_listener(self, callback) -> None:
+        if self._socket_reader is not None:
+            self._socket_reader.register(callback)
+
+    def remove_socket_listener(self, callback) -> None:
+        if self._socket_reader is not None:
+            self._socket_reader.unregister(callback)
+
+    def send_packet(self, packet: bytes) -> None:
+        if self.socket:
+            try:
+                self.socket.sendall(packet)
+            except OSError:
+                pass
+
     async def connect(self, timeout: float = 20.0) -> bool:
         """Discreetly sends STREAM_WATCH and STREAM_SET_PAUSED to trigger stream packet flow."""
         main_ws = self._bot.ws
