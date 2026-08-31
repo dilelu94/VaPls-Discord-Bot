@@ -53,13 +53,14 @@ class H264RTPDepacketizer:
         if not payload or len(payload) < 4:
             return
 
-        # Sequence continuity check
+        # Sequence continuity check for video stream
         if self._last_seq is not None:
             expected_seq = (self._last_seq + 1) & 0xFFFF
-            if seq != expected_seq:
-                log.debug("[DEPACK] Sequence gap: expected %d, got %d", expected_seq, seq)
+            diff = (seq - expected_seq) & 0xFFFF
+            if diff > 50 and diff < 65000:
+                log.debug("[DEPACK] Large sequence gap detected: expected %d, got %d", expected_seq, seq)
                 if self._fu_in_progress:
-                    log.warning("[DEPACK] Discarding incomplete FU-A buffer due to sequence gap")
+                    log.warning("[DEPACK] Discarding incomplete FU-A buffer due to large sequence gap")
                     self._fu_buffer.clear()
                     self._fu_in_progress = False
 
