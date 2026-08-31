@@ -34,19 +34,13 @@ class StreamSnapshotReceiver:
     def start_capture(self) -> None:
         self.depacketizer.reset()
         self._raw_nal_buffer.clear()
+        self._sps_nal = None
+        self._pps_nal = None
         self._sample_start_time = time.monotonic()
         self._is_capturing = True
         self._seen_keyframe = False
         self._nal_counts = {7: 0, 8: 0, 5: 0, 1: 0, 28: 0, "other": 0}
-
-    def start_capture(self) -> None:
-        self.depacketizer.reset()
-        self._raw_nal_buffer.clear()
-        self._sample_start_time = time.monotonic()
-        self._is_capturing = True
-        self._seen_keyframe = False
-        self._nal_counts = {7: 0, 8: 0, 5: 0, 1: 0, 28: 0, "other": 0}
-        log.info("[RECEIVER] Started video snapshot sample capture (has_sps=%s, has_pps=%s)", bool(self._sps_nal), bool(self._pps_nal))
+        log.info("[RECEIVER] Started video snapshot sample capture")
 
     def stop_capture(self) -> None:
         self._is_capturing = False

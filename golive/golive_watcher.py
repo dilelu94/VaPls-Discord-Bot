@@ -575,9 +575,10 @@ class GoLiveWatcherConnection:
         video_started = False
         while time.monotonic() - start_wait < max_wait_sec:
             if (
-                len(self.receiver._raw_nal_buffer) >= 15000
+                self.receiver._seen_keyframe
                 and self.receiver._sps_nal
                 and self.receiver._pps_nal
+                and len(self.receiver._raw_nal_buffer) >= 15000
             ):
                 video_started = True
                 log.info(
@@ -588,11 +589,14 @@ class GoLiveWatcherConnection:
                 break
             await asyncio.sleep(0.3)
 
-        if not video_started and len(self.receiver._raw_nal_buffer) > 0:
-            log.info(
-                "[WATCHSTREAM] Proceeding with available buffer (%d bytes) after wait...",
-                len(self.receiver._raw_nal_buffer),
-            )
+        if not video_started:
+            if self.receiver._seen_keyframe and len(self.receiver._raw_nal_buffer) > 0:
+                log.info(
+                    "[WATCHSTREAM] Proceeding with keyframe buffer (%d bytes) after wait...",
+                    len(self.receiver._raw_nal_buffer),
+                )
+            else:
+                log.warning("[WATCHSTREAM] Keyframe (SPS+PPS+IDR) was not received within %.1fs timeout", max_wait_sec)
 
         await asyncio.sleep(duration_sec)
         self.receiver.stop_capture()
