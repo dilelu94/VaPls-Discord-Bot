@@ -211,13 +211,22 @@ class GoLiveWatcherConnection:
                 except Exception as e:
                     log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
 
-        # Check payload type — skip Opus audio packets (typically PT 120 or 111)
+        # Check payload type — skip Opus audio (120, 111) and RTCP (72-76, 200-204)
         pt = data[1] & 0x7F
-        if pt in (120, 111):
+        if pt in (120, 111) or 72 <= pt <= 76 or 200 <= pt <= 204:
             return
 
         # Extract SSRC from 12-byte RTP header (bytes 8..11)
         ssrc = struct.unpack("!I", data[8:12])[0]
+
+        # Bind video SSRC on first valid video payload packet (PT >= 96)
+        if pt >= 96:
+            if not hasattr(self, "_video_ssrc") or self._video_ssrc is None:
+                self._video_ssrc = ssrc
+                log.info("[WATCHSTREAM] Discovered active video SSRC: %d (PT=%d)", ssrc, pt)
+            elif self._video_ssrc != ssrc:
+                # Skip packets from other SSRCs (audio / secondary streams)
+                return
 
         if not hasattr(self, "_packet_count"):
             self._packet_count = 0
