@@ -4694,7 +4694,7 @@ async def _relay_watchstream_snapshot(request: web.Request) -> web.Response:
         guild_id = int(data["guild_id"])
         channel_id = int(data["channel_id"])
         target_user_id = int(data["target_user_id"])
-        duration = float(data.get("duration", 3.0))
+        duration = float(data.get("duration", 6.0))
     except Exception as e:
         log.warning("[WATCHSTREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)

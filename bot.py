@@ -1647,10 +1647,10 @@ async def verstream(
     ctx,
     duracion: discord.Option(
         float,
-        description="Duración de la muestra en segundos (por defecto 3.0s)",
+        description="Duración de la muestra en segundos (por defecto 6.0s)",
         required=False,
-        default=3.0,
-    ) = 3.0,
+        default=6.0,
+    ) = 6.0,
     grabar_video: discord.Option(
         bool,
         description="Si es True, graba un video MP4 de 10s en lugar de una foto fija",

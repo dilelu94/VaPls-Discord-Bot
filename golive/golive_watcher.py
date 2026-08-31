@@ -246,9 +246,9 @@ class GoLiveWatcherConnection:
 
     async def capture_snapshot(
         self,
-        duration_sec: float = 4.0,
+        duration_sec: float = 6.0,
         filename: str = "latest_snapshot.jpg",
-        max_wait_sec: float = 12.0,
+        max_wait_sec: float = 15.0,
     ) -> Optional[str]:
         """Captures a burst of RTP video packets for duration_sec seconds after waiting for stream handshake."""
         log.info(
@@ -280,7 +280,11 @@ class GoLiveWatcherConnection:
         start_wait = time.monotonic()
         video_started = False
         while time.monotonic() - start_wait < max_wait_sec:
-            if len(self.receiver._raw_nal_buffer) >= 2000:
+            if (
+                len(self.receiver._raw_nal_buffer) >= 15000
+                and self.receiver._sps_nal
+                and self.receiver._pps_nal
+            ):
                 video_started = True
                 log.info(
                     "[WATCHSTREAM] Stream video packets detected! Initial buffer: %d bytes. Collecting sample burst for %.1fs...",
