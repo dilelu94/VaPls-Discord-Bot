@@ -131,6 +131,10 @@ class GoLiveWatcherConnection:
         self._socket_reader: Optional[SocketReader] = None
         self._poll_task: Optional[asyncio.Task] = None
 
+        self.dave_protocol_version: int = 0
+        self.dave_pending_transitions: dict = {}
+        self.dave_downgraded: bool = False
+
         state = getattr(vc, "_connection", None)
         self.dave_session = getattr(state, "dave_session", None) if state else getattr(vc, "dave_session", None)
         self.receiver = StreamSnapshotReceiver()
@@ -154,17 +158,70 @@ class GoLiveWatcherConnection:
 
     @property
     def max_dave_protocol_version(self) -> int:
-        return 0
+        try:
+            import davey_compat
+            return davey_compat.DAVE_PROTOCOL_VERSION
+        except Exception:
+            return 1
 
     @property
     def can_encrypt(self) -> bool:
-        return False
+        return (
+            self.dave_protocol_version != 0
+            and self.dave_session is not None
+            and getattr(self.dave_session, "ready", False)
+        )
 
     async def reinit_dave_session(self, force: bool = False) -> None:
-        pass
+        if self.dave_protocol_version > 0 and self.server_id:
+            dave_channel_id = self.server_id - 1
+            if self.dave_session is not None:
+                self.dave_session.reinit(
+                    self.dave_protocol_version, self.user.id, dave_channel_id
+                )
+            else:
+                try:
+                    import davey_compat
+                    self.dave_session = davey_compat.DaveSession(
+                        self.dave_protocol_version, self.user.id, dave_channel_id
+                    )
+                    self.dave_session._voice_state = self
+                except Exception as exc:
+                    log.warning("[WATCHER] DaveSession init error: %s", exc)
+            if self.dave_session is not None and self.ws:
+                try:
+                    from discord.gateway import DiscordVoiceWebSocket
+                    await self.ws.send_binary(
+                        DiscordVoiceWebSocket.MLS_KEY_PACKAGE,
+                        self.dave_session.get_serialized_key_package(),
+                    )
+                except Exception as exc:
+                    log.warning("[WATCHER] Could not send MLS_KEY_PACKAGE: %s", exc)
+        elif self.dave_session:
+            self.dave_session.reset()
+            self.dave_session.set_passthrough_mode(True, 10)
+
+    async def _recover_from_invalid_commit(self, transition_id: int) -> None:
+        if self.ws:
+            await self.ws.send_as_json(
+                {
+                    "op": DiscordVoiceWebSocket.MLS_INVALID_COMMIT_WELCOME,
+                    "d": {"transition_id": transition_id},
+                }
+            )
+            await self.reinit_dave_session(force=True)
 
     async def _execute_transition(self, transition_id: int) -> None:
-        pass
+        if transition_id not in self.dave_pending_transitions:
+            return
+        old_version = self.dave_protocol_version
+        self.dave_protocol_version = self.dave_pending_transitions.pop(transition_id)
+        if old_version != self.dave_protocol_version and self.dave_protocol_version == 0:
+            self.dave_downgraded = True
+        elif transition_id > 0 and self.dave_downgraded:
+            self.dave_downgraded = False
+            if self.dave_session:
+                self.dave_session.set_passthrough_mode(True, 10)
 
     async def connect(self, timeout: float = 20.0) -> bool:
         """Discreetly sends STREAM_WATCH and STREAM_SET_PAUSED to trigger stream packet flow."""
