@@ -4701,6 +4701,20 @@ async def _relay_watchstream_snapshot(request: web.Request) -> web.Response:
 
     vc = _get_vc_for_guild_id(guild_id)
     if not vc:
+        channel = client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await client.fetch_channel(channel_id)
+            except Exception:
+                pass
+        if isinstance(channel, discord.VoiceChannel):
+            try:
+                await _join_channel(channel)
+                vc = _get_vc_for_guild_id(guild_id)
+            except Exception as e:
+                log.warning("[WATCHSTREAM] auto-join failed: %s", e)
+
+    if not vc:
         return web.json_response({"error": "el indio no esta en voz en este servidor"}, status=400)
 
     try:
@@ -4758,6 +4772,20 @@ async def _relay_watchstream_record(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid body"}, status=400)
 
     vc = _get_vc_for_guild_id(guild_id)
+    if not vc:
+        channel = client.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await client.fetch_channel(channel_id)
+            except Exception:
+                pass
+        if isinstance(channel, discord.VoiceChannel):
+            try:
+                await _join_channel(channel)
+                vc = _get_vc_for_guild_id(guild_id)
+            except Exception as e:
+                log.warning("[WATCHSTREAM] auto-join failed: %s", e)
+
     if not vc:
         return web.json_response({"error": "el indio no esta en voz en este servidor"}, status=400)
 
