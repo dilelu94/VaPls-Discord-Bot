@@ -42,6 +42,18 @@ config = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(config)
 
 sys.modules["userbot_config"] = config
+
+import discord.gateway
+try:
+    from golive.video_compat import patch_video
+    patch_video(discord.gateway)
+except ModuleNotFoundError:
+    try:
+        from video_compat import patch_video
+        patch_video(discord.gateway)
+    except ModuleNotFoundError:
+        pass
+
 import greeting
 from transcript_channel import (
     resolve_transcript_channel as _resolve_transcript_channel_impl,
