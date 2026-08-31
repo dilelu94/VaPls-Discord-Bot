@@ -158,7 +158,7 @@ class GoLiveWatcherConnection:
                 },
             )
 
-            # 2. Send Opcode 22 (STREAM_SET_PAUSED: false)
+            # 2. Send Opcode 22 (STREAM_SET_PAUSED: false) on Gateway WS
             ok2 = await _send_gateway_json(
                 main_ws,
                 {
@@ -169,6 +169,20 @@ class GoLiveWatcherConnection:
                     },
                 },
             )
+
+            # 3. Send Opcode 22 (STREAM_SET_PAUSED: false) on Voice WS if available
+            voice_ws = getattr(self._regular_vc, "ws", None) or getattr(getattr(self._regular_vc, "_connection", None), "ws", None)
+            if voice_ws:
+                await _send_gateway_json(
+                    voice_ws,
+                    {
+                        "op": 22,
+                        "d": {
+                            "stream_key": self._stream_key,
+                            "paused": False,
+                        },
+                    },
+                )
 
             self._connected = ok1 or ok2
             log.info("[WATCHER] STREAM_WATCH signal sent (status=%s)", self._connected)
