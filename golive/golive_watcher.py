@@ -333,10 +333,13 @@ class GoLiveWatcherConnection:
                     while self.ws.secret_key is None:
                         await self.ws.poll_event()
 
+                    self.mode = getattr(self.ws, "mode", "") or "aead_xchacha20_poly1305_rtpsize"
+                    self.secret_key = getattr(self.ws, "secret_key", None) or []
+
                     await self.ws.client_connect()
                     loop = asyncio.get_event_loop()
                     self._poll_task = loop.create_task(self._poll_ws(), name="watcher-ws-poll")
-                    log.info("[WATCHER] Dedicated stream socket connection established to %s", self.endpoint)
+                    log.info("[WATCHER] Dedicated stream socket connection established to %s (mode=%s)", self.endpoint, self.mode)
             except Exception as exc:
                 log.info("[WATCHER] Dedicated stream connection note: %s (using main voice listener fallback)", exc)
 
@@ -364,8 +367,8 @@ class GoLiveWatcherConnection:
 
         # 0. Apply Discord RTP transport decryption if key/mode is present
         vc = self._regular_vc
-        mode = getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
-        secret_key = getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
+        mode = getattr(self, "mode", None) or getattr(getattr(self, "ws", None), "mode", None) or getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
+        secret_key = getattr(self, "secret_key", None) or getattr(getattr(self, "ws", None), "secret_key", None) or getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
 
         is_decrypted = True
         if isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
