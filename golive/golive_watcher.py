@@ -304,9 +304,78 @@ class GoLiveWatcherConnection:
         )
 
         # Extract snapshot JPEG
-        jpg_path = self.receiver.extract_snapshot(duration_sec=duration_sec, filename=filename)
-        log.info("[WATCHSTREAM] Snapshot extraction result: %s", jpg_path)
-        return jpg_path
+        snapshot_path = self.receiver.extract_snapshot(filename=filename)
+        log.info("[WATCHSTREAM] Snapshot extraction result: %s", snapshot_path)
+        return snapshot_path
+
+    async def record_and_decode_stream(
+        self,
+        duration_sec: float = 10.0,
+        h264_filename: str = "recorded_stream.h264",
+        mp4_filename: str = "recorded_stream.mp4",
+        max_wait_sec: float = 12.0,
+    ) -> Optional[str]:
+        """Captures a 10-second burst of RTP video packets and converts them into an MP4 video file."""
+        log.info(
+            "[WATCHSTREAM] Initiating 10s video recording for target_user=%s (stream_key=%s)",
+            self.target_user_id,
+            self._stream_key,
+        )
+        register_rtp_listener(self._on_udp_packet)
+        vc_conn = getattr(self._regular_vc, "_connection", None) or self._regular_vc
+        socket_reader = getattr(vc_conn, "_socket_reader", None) or getattr(self._regular_vc, "ws", None)
+
+        if hasattr(vc_conn, "add_socket_listener"):
+            vc_conn.add_socket_listener(self._on_udp_packet)
+        elif socket_reader and hasattr(socket_reader, "register"):
+            socket_reader.register(self._on_udp_packet)
+
+        if not self._connected:
+            ok = await self.connect()
+            if not ok:
+                log.warning("[WATCHSTREAM] connect() failed — aborting record_and_decode_stream")
+                unregister_rtp_listener(self._on_udp_packet)
+                return None
+
+        self.receiver.start_capture()
+        log.info("[WATCHSTREAM] Waiting for initial stream packets (up to %.1fs)...", max_wait_sec)
+
+        start_wait = time.monotonic()
+        video_started = False
+        while time.monotonic() - start_wait < max_wait_sec:
+            if len(self.receiver._raw_nal_buffer) >= 2000:
+                video_started = True
+                log.info(
+                    "[WATCHSTREAM] Stream video packets detected! Initial buffer: %d bytes. Recording sample for %.1fs...",
+                    len(self.receiver._raw_nal_buffer),
+                    duration_sec,
+                )
+                break
+            await asyncio.sleep(0.3)
+
+        if not video_started and len(self.receiver._raw_nal_buffer) > 0:
+            log.info(
+                "[WATCHSTREAM] Proceeding with available buffer (%d bytes) after wait...",
+                len(self.receiver._raw_nal_buffer),
+            )
+
+        await asyncio.sleep(duration_sec)
+        self.receiver.stop_capture()
+
+        unregister_rtp_listener(self._on_udp_packet)
+        if hasattr(vc_conn, "remove_socket_listener"):
+            vc_conn.remove_socket_listener(self._on_udp_packet)
+        elif socket_reader and hasattr(socket_reader, "unregister"):
+            socket_reader.unregister(self._on_udp_packet)
+
+        log.info(
+            "[WATCHSTREAM] Recording burst finished. Collected %d bytes of raw NAL data. Decoding to MP4...",
+            len(self.receiver._raw_nal_buffer),
+        )
+
+        mp4_path = self.receiver.convert_sample_to_mp4(h264_filename=h264_filename, mp4_filename=mp4_filename)
+        log.info("[WATCHSTREAM] MP4 video recording result: %s", mp4_path)
+        return mp4_path
 
     async def disconnect(self) -> None:
         """Sends STREAM_SET_PAUSED: true to stop stream packet flow cleanly."""

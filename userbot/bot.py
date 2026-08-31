@@ -4742,6 +4742,66 @@ async def _relay_watchstream_snapshot(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
 
+async def _relay_watchstream_record(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        channel_id = int(data["channel_id"])
+        target_user_id = int(data["target_user_id"])
+        duration = float(data.get("duration", 10.0))
+    except Exception as e:
+        log.warning("[WATCHSTREAM] invalid body: %s", e)
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    vc = _get_vc_for_guild_id(guild_id)
+    if not vc:
+        return web.json_response({"error": "el indio no esta en voz en este servidor"}, status=400)
+
+    try:
+        from golive.golive_watcher import GoLiveWatcherConnection
+    except ModuleNotFoundError:
+        try:
+            from golive_watcher import GoLiveWatcherConnection
+        except ModuleNotFoundError:
+            return web.json_response({"error": "GoLiveWatcherConnection module not found"}, status=500)
+
+    watcher = GoLiveWatcherConnection(
+        bot=client,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        target_user_id=target_user_id,
+        vc=vc,
+    )
+
+    try:
+        mp4_path = await watcher.record_and_decode_stream(duration_sec=duration)
+        await watcher.disconnect()
+        if mp4_path and os.path.exists(mp4_path):
+            return web.json_response({
+                "success": True,
+                "video_path": mp4_path,
+                "guild_id": guild_id,
+                "target_user_id": target_user_id,
+                "duration": duration,
+                "file_size": os.path.getsize(mp4_path),
+            })
+        else:
+            buf_len = len(watcher.receiver._raw_nal_buffer) if hasattr(watcher, "receiver") else 0
+            if buf_len == 0:
+                reason = "No se recibieron paquetes de video (asegurate de estar transmitiendo pantalla en Go Live)"
+            else:
+                reason = f"Error al decodificar video MP4 ({buf_len} bytes de NAL recibidos)"
+            return web.json_response({"success": False, "error": reason}, status=500)
+    except Exception as e:
+        log.exception("[WATCHSTREAM] record failed in userbot")
+        await watcher.disconnect()
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def _relay_watchstream_stop(request: web.Request) -> web.Response:
     if not config.RELAY_SECRET:
         return web.json_response({"error": "relay disabled"}, status=503)
@@ -4788,6 +4848,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/sensibilidad", _relay_sensibilidad)
     app.router.add_post("/toggle_wake_sound", _relay_toggle_wake_sound)
     app.router.add_post("/watchstream/snapshot", _relay_watchstream_snapshot)
+    app.router.add_post("/watchstream/record", _relay_watchstream_record)
     app.router.add_post("/watchstream/stop", _relay_watchstream_stop)
     app.router.add_post("/activity/log", _relay_activity_log)
     app.router.add_get("/activity", _relay_activity_list)

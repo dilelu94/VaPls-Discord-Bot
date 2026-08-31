@@ -37,11 +37,28 @@ class StreamSnapshotReceiver:
         self._sample_start_time = time.monotonic()
         self._is_capturing = True
         self._seen_keyframe = False
+        self._nal_counts = {7: 0, 8: 0, 5: 0, 1: 0, 28: 0, "other": 0}
+
+    def start_capture(self) -> None:
+        self.depacketizer.reset()
+        self._raw_nal_buffer.clear()
+        self._sample_start_time = time.monotonic()
+        self._is_capturing = True
+        self._seen_keyframe = False
+        self._nal_counts = {7: 0, 8: 0, 5: 0, 1: 0, 28: 0, "other": 0}
         log.info("[RECEIVER] Started video snapshot sample capture (has_sps=%s, has_pps=%s)", bool(self._sps_nal), bool(self._pps_nal))
 
     def stop_capture(self) -> None:
         self._is_capturing = False
-        log.info("[RECEIVER] Stopped video snapshot capture")
+        log.info(
+            "[RECEIVER] Stopped video capture: %d bytes buffered (SPS=%d, PPS=%d, IDR=%d, Slices=%d, FU-A=%d)",
+            len(self._raw_nal_buffer),
+            self._nal_counts.get(7, 0),
+            self._nal_counts.get(8, 0),
+            self._nal_counts.get(5, 0),
+            self._nal_counts.get(1, 0),
+            self._nal_counts.get(28, 0),
+        )
 
     def process_rtp_packet(
         self,
@@ -100,6 +117,11 @@ class StreamSnapshotReceiver:
         for nal in self.depacketizer.depacketize(decrypted_rtp):
             if len(nal) > 4:
                 nal_type = nal[4] & 0x1F
+                if nal_type in self._nal_counts:
+                    self._nal_counts[nal_type] += 1
+                else:
+                    self._nal_counts["other"] += 1
+
                 if nal_type == 7:
                     self._sps_nal = bytes(nal)
                 elif nal_type == 8:
@@ -117,10 +139,7 @@ class StreamSnapshotReceiver:
         duration_sec: float = 3.0,
         filename: str = "latest_snapshot.jpg",
     ) -> Optional[str]:
-        """Saves collected NAL units to disk and extracts a JPEG frame using FFmpeg.
-
-        Returns absolute path to the generated JPEG image, or None if extraction failed.
-        """
+        """Saves collected NAL units to disk and extracts a JPEG frame using FFmpeg."""
         if not self._raw_nal_buffer:
             log.warning("[RECEIVER] No NAL units collected in buffer")
             return None
@@ -140,7 +159,6 @@ class StreamSnapshotReceiver:
                 f.write(final_buffer)
             log.info("[RECEIVER] Saved %d bytes of H.264 data to %s", len(final_buffer), h264_path)
 
-            # Invoke FFmpeg to decode the H.264 stream sample and save the first keyframe as JPEG
             cmd = [
                 "ffmpeg",
                 "-y",
@@ -165,11 +183,78 @@ class StreamSnapshotReceiver:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
 
             if res.returncode == 0 and os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
-                log.info("[RECEIVER] Snapshot extracted successfully: %s", jpg_path)
+                log.info("[RECEIVER] Snapshot extracted successfully: %s (%d bytes)", jpg_path, os.path.getsize(jpg_path))
                 return os.path.abspath(jpg_path)
             else:
                 log.warning("[RECEIVER] FFmpeg snapshot extraction failed: %s", res.stderr.decode("utf-8", errors="ignore"))
                 return None
         except Exception as exc:
             log.error("[RECEIVER] Failed to extract snapshot: %s", exc)
+            return None
+
+    def convert_sample_to_mp4(
+        self,
+        h264_filename: str = "recorded_stream.h264",
+        mp4_filename: str = "recorded_stream.mp4",
+    ) -> Optional[str]:
+        """Encodes collected NAL units into an MP4 video file and returns its path."""
+        if not self._raw_nal_buffer:
+            log.warning("[RECEIVER] No NAL units collected in buffer to convert to MP4")
+            return None
+
+        h264_path = os.path.join(self.output_dir, h264_filename)
+        mp4_path = os.path.join(self.output_dir, mp4_filename)
+
+        try:
+            final_buffer = bytearray()
+            if self._sps_nal and not self._raw_nal_buffer.startswith(self._sps_nal):
+                final_buffer.extend(self._sps_nal)
+            if self._pps_nal and self._pps_nal not in final_buffer and self._pps_nal not in self._raw_nal_buffer:
+                final_buffer.extend(self._pps_nal)
+            final_buffer.extend(self._raw_nal_buffer)
+
+            with open(h264_path, "wb") as f:
+                f.write(final_buffer)
+            log.info("[RECEIVER] Saved %d bytes of raw H.264 bitstream to %s", len(final_buffer), h264_path)
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "info",
+                "-err_detect",
+                "ignore_err",
+                "-probesize",
+                "10M",
+                "-analyzeduration",
+                "10M",
+                "-f",
+                "h264",
+                "-i",
+                h264_path,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+                mp4_path,
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30.0)
+            stderr_out = res.stderr.decode("utf-8", errors="ignore")
+
+            if res.returncode == 0 and os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+                mp4_size = os.path.getsize(mp4_path)
+                log.info(
+                    "[RECEIVER] MP4 video encoded successfully: %s (%d bytes). FFmpeg log summary:\n%s",
+                    mp4_path,
+                    mp4_size,
+                    "\n".join(stderr_out.splitlines()[-6:]),
+                )
+                return os.path.abspath(mp4_path)
+            else:
+                log.warning("[RECEIVER] FFmpeg MP4 encoding failed (rc=%d):\n%s", res.returncode, stderr_out)
+                return None
+        except Exception as exc:
+            log.error("[RECEIVER] Failed to convert sample to MP4: %s", exc)
             return None

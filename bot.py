@@ -1651,8 +1651,14 @@ async def verstream(
         required=False,
         default=3.0,
     ) = 3.0,
+    grabar_video: discord.Option(
+        bool,
+        description="Si es True, graba un video MP4 de 10s en lugar de una foto fija",
+        required=False,
+        default=False,
+    ) = False,
 ):
-    """Slash command: captures a snapshot of the caller's live stream and asks Gemini to comment."""
+    """Slash command: captures a snapshot or MP4 video of the caller's live stream and asks Gemini to comment."""
     await safe_defer(ctx)
     _track_command(ctx, "verstream")
 
@@ -1670,15 +1676,17 @@ async def verstream(
         await safe_respond(ctx, "❌ El relay del Indio no está configurado.")
         return
 
-    url = urljoin(relay_url, "/watchstream/snapshot")
+    endpoint = "/watchstream/record" if grabar_video else "/watchstream/snapshot"
+    actual_dur = 10.0 if (grabar_video and duracion == 3.0) else duracion
+    url = urljoin(relay_url, endpoint)
     headers = {"X-API-Secret": relay_secret}
     payload = {
         "guild_id": ctx.guild.id,
         "channel_id": voice_channel.id,
         "target_user_id": ctx.author.id,
-        "duration": duracion,
+        "duration": actual_dur,
     }
-    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT + duracion + 5.0)
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT + actual_dur + 10.0)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
@@ -1690,11 +1698,19 @@ async def verstream(
                         err_msg = data.get("error", "")
                     except Exception:
                         pass
-                    if not err_msg or "snapshot extraction failed" in err_msg:
+                    if not err_msg or "extraction failed" in err_msg or "encoding failed" in err_msg:
                         err_msg = "Asegurate de estar transmitiendo pantalla en vivo (Go Live) y probá de nuevo."
                     await safe_respond(ctx, f"⚠️ No pude capturar el stream: {err_msg}")
                     return
                 data = await resp.json()
+                if grabar_video and data.get("success"):
+                    video_path = data.get("video_path", "")
+                    file_size = data.get("file_size", 0)
+                    await safe_respond(
+                        ctx,
+                        f"🎥 **Video del stream grabado y decodificado con éxito:** `{video_path}` ({file_size} bytes, {actual_dur:.1f}s)",
+                    )
+                    return
     except Exception as e:
         log.exception("verstream relay failed")
         await safe_respond(ctx, f"⚠️ Error capturando stream: {e}")
