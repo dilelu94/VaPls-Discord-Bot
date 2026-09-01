@@ -517,11 +517,14 @@ class GoLiveWatcherConnection:
                 unregister_rtp_listener(self._on_udp_packet)
                 return None
 
-        # Enable DAVE passthrough mode so unencrypted video frames pass through cleanly
+        # Enable DAVE passthrough mode only if DAVE is not active/ready
         for ds in (self.dave_session, getattr(self._regular_vc, "dave_session", None)):
             if ds is not None and hasattr(ds, "set_passthrough_mode"):
                 try:
-                    ds.set_passthrough_mode(True, 10)
+                    if getattr(ds, "ready", False):
+                        ds.set_passthrough_mode(False)
+                    else:
+                        ds.set_passthrough_mode(True, 10)
                 except Exception as e:
                     log.debug("[WATCHSTREAM] set_passthrough_mode note: %s", e)
 

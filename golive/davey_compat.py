@@ -309,22 +309,17 @@ class DaveSession:
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
         """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
         target_uid_str = str(user_id) if user_id else (str(ssrc) if ssrc else None)
-        if target_uid_str and target_uid_str != self._active_decryptor_user_id:
+        active_key = target_uid_str or str(self._user_id)
+
+        if active_key != self._active_decryptor_user_id:
             ratchet = None
-            try:
-                ratchet = self._session.get_key_ratchet(target_uid_str)
-            except Exception:
-                pass
-
-            if ratchet is None and ssrc:
+            for lookup in (target_uid_str, str(ssrc) if ssrc else None, str(self._user_id)):
+                if not lookup:
+                    continue
                 try:
-                    ratchet = self._session.get_key_ratchet(str(ssrc))
-                except Exception:
-                    pass
-
-            if ratchet is None:
-                try:
-                    ratchet = self._session.get_key_ratchet(str(self._user_id))
+                    ratchet = self._session.get_key_ratchet(lookup)
+                    if ratchet is not None:
+                        break
                 except Exception:
                     pass
 
@@ -332,8 +327,8 @@ class DaveSession:
                 try:
                     self._decryptor.transition_to_key_ratchet(ratchet)
                     self._decryptor.transition_to_passthrough_mode(False)
-                    self._active_decryptor_user_id = target_uid_str
-                    log.info("[DAVE-VIDEO] Transitioned decryptor key ratchet to user_id=%s", target_uid_str)
+                    self._active_decryptor_user_id = active_key
+                    log.info("[DAVE-VIDEO] Transitioned decryptor key ratchet to %s", active_key)
                 except Exception as ex:
                     log.debug("[DAVE-VIDEO] ratchet transition note: %s", ex)
 
