@@ -297,10 +297,11 @@ class DaveSession:
             res = self._decryptor.decrypt(m_type, packet)
             if res is None:
                 return packet
-            return res
         except Exception:
             return packet
 
+    def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
+        """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
         ratchet = None
         if user_id is not None:
             ratchet = self._session.get_key_ratchet(str(user_id))
