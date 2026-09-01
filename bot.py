@@ -48,6 +48,7 @@ from transferCommand import manager as transferManager
 import storyManager
 import petGenerator
 # import geminiImage
+import geminiClient
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
