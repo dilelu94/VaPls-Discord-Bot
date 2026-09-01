@@ -85,7 +85,7 @@ class H264RTPDepacketizer:
             end_bit = bool((fu_header >> 6) & 0x01)
             original_nal_type = fu_header & 0x1F
 
-            reconstructed_nal_header = bytes([(fu_indicator & 0xE0) | original_nal_type])
+            reconstructed_nal_header = bytes([(fu_indicator & 0x60) | original_nal_type])
 
             if start_bit:
                 self._fu_buffer.clear()
