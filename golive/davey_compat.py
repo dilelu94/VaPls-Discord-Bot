@@ -302,6 +302,17 @@ class DaveSession:
 
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
         """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
+        if user_id is not None and getattr(self, "_last_decrypted_user_id", None) != user_id:
+            try:
+                ratchet = self._session.get_key_ratchet(str(user_id))
+                if ratchet is not None:
+                    self._decryptor.transition_to_key_ratchet(ratchet)
+                    self._decryptor.transition_to_passthrough_mode(False)
+                    self._last_decrypted_user_id = user_id
+                    log.info("[DAVE-VIDEO] Transitioned decryptor to key ratchet for user_id=%s", user_id)
+            except Exception as ex:
+                log.debug("[DAVE-VIDEO] Transition error for user_id=%s: %s", user_id, ex)
+
         try:
             res = self._decryptor.decrypt(dave.MediaType.video, data)
             if res is not None:
