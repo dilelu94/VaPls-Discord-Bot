@@ -408,7 +408,6 @@ class GoLiveWatcherConnection:
                     decrypted_payload = self._decryptor.decrypt_rtp(rtp_pkt)
                     if decrypted_payload is not None:
                         hdr = bytearray(rtp_pkt.header)
-                        hdr[0] &= ~0x10  # Clear extension bit since ext header was already skipped by PacketDecryptor
                         data = bytes(hdr) + decrypted_payload
                         is_decrypted = True
                 except Exception as e:
