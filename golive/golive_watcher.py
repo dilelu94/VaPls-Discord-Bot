@@ -473,6 +473,43 @@ class GoLiveWatcherConnection:
         elif hasattr(vc_conn, "add_socket_listener"):
             vc_conn.add_socket_listener(self._on_udp_packet)
 
+        # Always re-announce stream watch & unpause to ensure media server routing
+        main_ws = self._bot.ws
+        if main_ws:
+            await _send_gateway_json(
+                main_ws,
+                {
+                    "op": _OP_STREAM_WATCH,
+                    "d": {
+                        "stream_key": self._stream_key,
+                        "video_codec": "H264",
+                    },
+                },
+            )
+            await _send_gateway_json(
+                main_ws,
+                {
+                    "op": _OP_STREAM_SET_PAUSED,
+                    "d": {
+                        "stream_key": self._stream_key,
+                        "paused": False,
+                    },
+                },
+            )
+
+        voice_ws = getattr(self._regular_vc, "ws", None) or getattr(getattr(self._regular_vc, "_connection", None), "ws", None)
+        if voice_ws:
+            await _send_gateway_json(
+                voice_ws,
+                {
+                    "op": 22,
+                    "d": {
+                        "stream_key": self._stream_key,
+                        "paused": False,
+                    },
+                },
+            )
+
         if not self._connected:
             ok = await self.connect()
             if not ok:
@@ -489,21 +526,28 @@ class GoLiveWatcherConnection:
                     log.debug("[WATCHSTREAM] set_passthrough_mode note: %s", e)
 
         self.receiver.start_capture()
-        try:
-            target_ssrc = getattr(self, "video_ssrc", None) or getattr(self.receiver, "ssrc", None) or 1
-            pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, 1, target_ssrc)
-            sock = getattr(self, "socket", None) or getattr(vc_conn, "socket", None)
-            if sock and hasattr(sock, "sendall"):
-                sock.sendall(pli_pkt)
-                log.info("[WATCHSTREAM] Sent RTCP PLI keyframe request for SSRC %s", target_ssrc)
-        except Exception as e:
-            log.warning("[WATCHSTREAM] RTCP PLI request note: %s", e)
         log.info("[WATCHSTREAM] Waiting for initial stream packets (up to %.1fs)...", max_wait_sec)
 
         # Wait until video packets start arriving from Discord Gateway (handshake sync)
         start_wait = time.monotonic()
         video_started = False
+        last_pli_time = 0.0
+
+        sock = getattr(self, "socket", None) or getattr(vc_conn, "socket", None)
+
         while time.monotonic() - start_wait < max_wait_sec:
+            now = time.monotonic()
+            if now - last_pli_time >= 1.0:
+                last_pli_time = now
+                try:
+                    target_ssrc = getattr(self, "video_ssrc", None) or getattr(self.receiver, "ssrc", None) or 1
+                    pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, 1, target_ssrc)
+                    if sock and hasattr(sock, "sendall"):
+                        sock.sendall(pli_pkt)
+                        log.info("[WATCHSTREAM] Sent RTCP PLI keyframe request for SSRC %s", target_ssrc)
+                except Exception as e:
+                    log.debug("[WATCHSTREAM] RTCP PLI request note: %s", e)
+
             if (
                 len(self.receiver._raw_nal_buffer) >= 15000
                 and self.receiver._sps_nal

@@ -4269,6 +4269,17 @@ async def scheduled_daily_stream():
     if not config.SCHEDULED_STREAM_ENABLED:
         return
 
+    # Skip immediate execution on task startup (iteration 0) if not at scheduled time (00:00 UTC-3)
+    if scheduled_daily_stream.current_loop == 0:
+        tz = datetime.timezone(datetime.timedelta(hours=-3))
+        now = datetime.datetime.now(tz)
+        if not (now.hour == 0 and now.minute <= 5):
+            log.info(
+                "[SCHEDULED STREAM] Skipping immediate execution on startup (current time %s is not 00:00).",
+                now.strftime("%H:%M"),
+            )
+            return
+
     log.info("[SCHEDULED STREAM] Running daily stream task.")
 
     target_guild = None
