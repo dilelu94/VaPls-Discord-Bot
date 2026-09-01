@@ -57,12 +57,13 @@ logging.getLogger("discord.client").setLevel(logging.WARNING)
 client = discord.Client(chunk_guilds_at_startup=False)
 
 class GoLiveStream:
-    def __init__(self, bot, guild_id, channel_id, vc, url):
+    def __init__(self, bot, guild_id, channel_id, vc, url, start_sec: float = 0.0):
         self.bot = bot
         self.guild_id = guild_id
         self.channel_id = channel_id
         self.vc = vc
         self.url = url
+        self.start_sec = start_sec
         self.conn = None
         self.video_player = None
         self.audio_sender = None
@@ -191,6 +192,7 @@ class GoLiveStream:
             original_url=self.url,
             initial_seq=self._video_seq,
             initial_ts=self._video_ts,
+            start_time=self.start_sec,
         )
         self.video_player.start()
         log.info("[STREAM] Video player started for '%s'", self.title)
@@ -697,6 +699,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
         guild_id = int(data["guild_id"])
         channel_id = int(data["channel_id"])
         url = str(data["url"]).strip()
+        start_sec = float(data.get("start_sec", 0.0))
     except Exception as e:
         log.warning("[STREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
@@ -704,7 +707,14 @@ async def _relay_stream(request: web.Request) -> web.Response:
         log.warning("[STREAM] empty url")
         return web.json_response({"error": "empty url"}, status=400)
     stream_title = str(data.get("channel_name", "")).strip() or "Stream"
-    log.info("[STREAM] guild=%s channel=%s url=%s title=%s", guild_id, channel_id, url[:120], stream_title)
+    log.info(
+        "[STREAM] guild=%s channel=%s url=%s title=%s start_sec=%.1f",
+        guild_id,
+        channel_id,
+        url[:120],
+        stream_title,
+        start_sec,
+    )
 
     if not client.is_ready():
         return web.json_response({"error": "client not ready"}, status=503)
@@ -760,7 +770,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
             task.cancel()
         await _set_nickname(guild, f"GoLive - {stream_title}")
 
-    stream = GoLiveStream(client, guild_id, channel_id, vc, url)
+    stream = GoLiveStream(client, guild_id, channel_id, vc, url, start_sec=start_sec)
     try:
         await stream.start()
     except Exception as e:

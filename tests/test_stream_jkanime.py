@@ -82,3 +82,19 @@ async def test_stream_jkanime_fallback_search(ctx_factory):
     ):
         await bot.stream(ctx, canal="chainsaw man")
         assert ctx.interaction.edit_original_response.called is True
+
+
+def test_parse_stream_query():
+    assert bot.parse_stream_query("https://steamcommunity.com/id/FrankOxx/ 6") == (
+        "https://steamcommunity.com/id/FrankOxx/",
+        360.0,
+    )
+    assert bot.parse_stream_query("https://youtube.com/watch?v=123 10") == (
+        "https://youtube.com/watch?v=123",
+        600.0,
+    )
+    assert bot.parse_stream_query("jojo part 6 cap 13 min 5") == (
+        "jojo part 6 cap 13",
+        300.0,
+    )
+    assert bot.parse_stream_query("chainsaw man") == ("chainsaw man", 0.0)

@@ -1752,11 +1752,46 @@ async def verstream(
 
 
 
+def parse_stream_query(canal_input: str) -> tuple[str, float]:
+    """Extract optional start minute/time from canal_input.
+
+    Returns:
+        (cleaned_canal, start_sec)
+    """
+    raw = canal_input.strip()
+
+    # 1. Match explicit minute keyword: 'min 6', 'minuto 6', '6 min', '6m'
+    m1 = re.search(r"\s+(?:min|minuto|m)\.?\s*(\d+(?:\.\d+)?)\s*$", raw, re.I)
+    if m1:
+        start_min = float(m1.group(1))
+        cleaned = raw[: m1.start()].strip()
+        return cleaned, start_min * 60.0
+
+    m2 = re.search(r"\s+(\d+(?:\.\d+)?)\s*(?:min|minutos|m)\s*$", raw, re.I)
+    if m2:
+        start_min = float(m2.group(1))
+        cleaned = raw[: m2.start()].strip()
+        return cleaned, start_min * 60.0
+
+    # 2. Check for bare trailing number when query starts with http://, https://, or twitch
+    if raw.startswith(("http://", "https://", "rtsp://", "rtmp://")) or re.match(
+        r"^(?:www\.)?twitch\.tv/", raw, re.I
+    ):
+        m3 = re.search(r"\s+(\d+(?:\.\d+)?)\s*$", raw)
+        if m3:
+            start_min = float(m3.group(1))
+            cleaned = raw[: m3.start()].strip()
+            return cleaned, start_min * 60.0
+
+    return raw, 0.0
+
+
 async def start_iptv_stream_logic(
     guild_id: int,
     voice_channel: discord.VoiceChannel,
     stream_url: str,
     channel_name: str,
+    start_sec: float = 0.0,
 ) -> tuple[bool, str, bool]:
     """Sends the HTTP request to the GoLive relay to start streaming a channel.
 
@@ -1774,13 +1809,15 @@ async def start_iptv_stream_logic(
         "channel_id": voice_channel.id,
         "url": stream_url,
         "channel_name": channel_name,
+        "start_sec": start_sec,
     }
     log.info(
-        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s",
+        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s start_sec=%.1f",
         url,
         guild_id,
         voice_channel.id,
         stream_url,
+        start_sec,
     )
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     is_live = True
@@ -1808,7 +1845,14 @@ async def start_iptv_stream_logic(
         log.exception("stream relay failed")
         return False, f"⚠️ Error iniciando stream: {e}", True
 
-    return True, f"📺 Transmitiendo **{channel_name}** en **{voice_channel.name}**.\nUsá **/stopstream** para cortar.", is_live
+    start_unix = int(time.time())
+    start_min_str = f" (iniciando en el min {int(start_sec // 60)})" if start_sec >= 60 else ""
+    status_msg = (
+        f"📺 Transmitiendo **{channel_name}**{start_min_str} en **{voice_channel.name}**.\n"
+        f"⏱️ **Inicio:** <t:{start_unix}:t> (<t:{start_unix}:R>)\n"
+        f"Usá **/stopstream** para cortar."
+    )
+    return True, status_msg, is_live
 
 
 
@@ -2678,6 +2722,7 @@ async def stream(
             await safe_respond(ctx, f"⚠️ Error cargando el buscador: {e}")
         return
 
+    canal, start_sec = parse_stream_query(canal)
     raw_canal = canal.strip()
 
     # Check for direct JKAnime URL
@@ -2694,7 +2739,7 @@ async def stream(
                 )
                 return
             success, status_msg, is_live = await start_iptv_stream_logic(
-                ctx.guild_id, voice_channel, stream_url, ep_title_ext
+                ctx.guild_id, voice_channel, stream_url, ep_title_ext, start_sec=start_sec
             )
             if success:
                 _active_sources[ctx.guild_id] = {"type": "jkanime", "url": stream_url}
@@ -2732,7 +2777,7 @@ async def stream(
             )
             if stream_url:
                 success, status_msg, is_live = await start_iptv_stream_logic(
-                    ctx.guild_id, voice_channel, stream_url, ep_title_ext
+                    ctx.guild_id, voice_channel, stream_url, ep_title_ext, start_sec=start_sec
                 )
                 if success:
                     _active_sources[ctx.guild_id] = {
@@ -2807,7 +2852,7 @@ async def stream(
                 )
                 if stream_url:
                     success, status_msg, is_live = await start_iptv_stream_logic(
-                        ctx.guild_id, voice_channel, stream_url, ep_title_ext
+                        ctx.guild_id, voice_channel, stream_url, ep_title_ext, start_sec=start_sec
                     )
                     if success:
                         _active_sources[ctx.guild_id] = {
@@ -2864,17 +2909,19 @@ async def stream(
         channel_name = ch.name
 
     log.info(
-        "[STREAM] canal=%r channel=%s url=%s",
+        "[STREAM] canal=%r channel=%s url=%s start_sec=%.1f",
         canal,
         channel_name,
         stream_url,
+        start_sec,
     )
 
     success, status_msg, is_live = await start_iptv_stream_logic(
         ctx.guild_id,
         voice_channel,
         stream_url,
-        channel_name
+        channel_name,
+        start_sec=start_sec,
     )
 
     if success:

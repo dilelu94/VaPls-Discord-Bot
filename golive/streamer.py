@@ -800,6 +800,7 @@ class H264VideoPlayer(threading.Thread):
         original_url: str | None = None,
         initial_seq: int = 0,
         initial_ts: int = 0,
+        start_time: float = 0.0,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
@@ -837,7 +838,7 @@ class H264VideoPlayer(threading.Thread):
         # Playback control state
         self._paused: threading.Event = threading.Event()
         self._paused.set()  # Initial state is playing
-        self._start_time: float = 0.0
+        self._start_time: float = start_time
         self._seeking: bool = False
 
     # ── Public API ────────────────────────────────────────────────────────────
