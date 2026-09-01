@@ -117,3 +117,38 @@ async def test_extract_jkanime_stream_no_h1():
         assert stream_url == "https://nika.playmudos.com/test_stream.m3u8?token=123"
         assert ep_title == "Jojo No Kimyou Na Bouken Part 6 Stone Ocean - Episodio 1"
 
+
+def test_parse_anime_query():
+    assert jkanime.parse_anime_query("jojo part 6 cap 13") == ("jojo part 6", 13)
+    assert jkanime.parse_anime_query("anime: naruto 22") == ("naruto", 22)
+    assert jkanime.parse_anime_query("dragon ball ep 5") == ("dragon ball", 5)
+    assert jkanime.parse_anime_query("jojo part 6") == ("jojo part 6", None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_anime_and_episode_cumulative():
+    part1 = {
+        "title": "JoJo no Kimyou na Bouken Part 6: Stone Ocean",
+        "slug": "jojo-no-kimyou-na-bouken-part-6-stone-ocean",
+        "url": "https://jkanime.net/jojo-no-kimyou-na-bouken-part-6-stone-ocean/",
+    }
+    part2 = {
+        "title": "JoJo no Kimyou na Bouken Part 6: Stone Ocean Part 2",
+        "slug": "jojo-no-kimyou-na-bouken-part-6-stone-ocean-part-2",
+        "url": "https://jkanime.net/jojo-no-kimyou-na-bouken-part-6-stone-ocean-part-2/",
+    }
+
+    async def mock_search(query, session=None):
+        return [part1, part2]
+
+    async def mock_info(slug, session=None):
+        return {"slug": slug, "title": slug, "episodes": 12}
+
+    with patch.object(jkanime, "search_jkanime", side_effect=mock_search), patch.object(
+        jkanime, "get_jkanime_anime_info", side_effect=mock_info
+    ):
+        url, results, rel_ep = await jkanime.resolve_anime_and_episode("jojo part 6 cap 13")
+        assert url == "https://jkanime.net/jojo-no-kimyou-na-bouken-part-6-stone-ocean-part-2/1/"
+        assert rel_ep == 1
+
+

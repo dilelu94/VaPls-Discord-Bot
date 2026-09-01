@@ -154,6 +154,86 @@ async def search_jkanime(
     return results
 
 
+def parse_anime_query(query: str) -> tuple[str, Optional[int]]:
+    """Parse a user query like 'jojo part 6 cap 13' into (title_query, ep_num)."""
+    q = re.sub(r"^(?:anime|an):\s*", "", query, flags=re.I).strip()
+    ep_match = re.search(
+        r"(?:\s+(?:cap|capitulo|ep|episodio)\.?)?\s*(\d+)\s*$", q, re.I
+    )
+    if ep_match:
+        ep_num = int(ep_match.group(1))
+        title_query = q[: ep_match.start()].strip()
+        if title_query:
+            return title_query, ep_num
+    return q, None
+
+
+async def resolve_anime_and_episode(
+    raw_query: str, session: Optional[aiohttp.ClientSession] = None
+) -> tuple[Optional[str], list[dict], Optional[int]]:
+    """Resolve a raw anime query (e.g. 'jojo part 6 cap 13') to a direct episode URL, candidate results, and episode number.
+
+    Returns:
+        (direct_episode_url, search_results, target_ep_num)
+    """
+    title_query, global_ep = parse_anime_query(raw_query)
+
+    async def _do_resolve(s: aiohttp.ClientSession):
+        results = await search_jkanime(title_query, session=s)
+
+        words = [w for w in re.findall(r"\w+", title_query) if len(w) > 2]
+        if words:
+            fallback_results = await search_jkanime(words[0], session=s)
+            seen = {r["slug"] for r in results}
+            for r in fallback_results:
+                if r["slug"] not in seen:
+                    results.append(r)
+                    seen.add(r["slug"])
+
+        if not results:
+            return None, [], global_ep
+
+        q_words = [w.lower() for w in re.findall(r"\w+", title_query)]
+        matching_series = []
+        for r in results:
+            t_text = f"{r['title']} {r['slug']}".lower()
+            score = sum(1 for w in q_words if w in t_text)
+            if score > 0:
+                matching_series.append((score, r))
+
+        matching_series.sort(key=lambda x: x[0], reverse=True)
+        sorted_results = (
+            [r for _, r in matching_series] if matching_series else results
+        )
+
+        if global_ep is None:
+            return None, sorted_results, None
+
+        cumulative = 0
+        for sc, r in matching_series:
+            info = await get_jkanime_anime_info(r["slug"], session=s)
+            eps_count = info["episodes"]
+            if cumulative < global_ep <= cumulative + eps_count:
+                rel_ep = global_ep - cumulative
+                target_url = f"https://jkanime.net/{r['slug']}/{rel_ep}/"
+                return target_url, sorted_results, rel_ep
+            cumulative += eps_count
+
+        # Fallback to first candidate with requested episode number
+        first_slug = sorted_results[0]["slug"]
+        return (
+            f"https://jkanime.net/{first_slug}/{global_ep}/",
+            sorted_results,
+            global_ep,
+        )
+
+    if session is not None:
+        return await _do_resolve(session)
+    else:
+        async with aiohttp.ClientSession() as s:
+            return await _do_resolve(s)
+
+
 async def get_jkanime_anime_info(
     url_or_slug: str, session: Optional[aiohttp.ClientSession] = None
 ) -> dict:

@@ -2744,18 +2744,59 @@ async def stream(
                 await safe_respond(ctx, embed=view.build_embed(), view=view)
             return
 
-    # Check for anime prefix e.g. "anime: naruto" or "an: jojo"
+    # Check for anime prefix e.g. "anime: naruto 22" or "an: jojo part 6 cap 13"
     if raw_canal.lower().startswith(("anime:", "an:")):
         anime_query = re.sub(r"^(?:anime|an):\s*", "", raw_canal, flags=re.I).strip()
-        results = await jkanime.search_jkanime(anime_query)
-        if not results:
+        direct_ep_url, jk_results, _ = await jkanime.resolve_anime_and_episode(
+            anime_query
+        )
+        if direct_ep_url:
+            stream_url, ep_title_ext = await jkanime.extract_jkanime_stream(
+                direct_ep_url
+            )
+            if stream_url:
+                success, status_msg, is_live = await start_iptv_stream_logic(
+                    ctx.guild_id, voice_channel, stream_url, ep_title_ext
+                )
+                if success:
+                    _active_sources[ctx.guild_id] = {
+                        "type": "jkanime",
+                        "url": stream_url,
+                    }
+                    _paused_streams.discard(ctx.guild_id)
+                    view = StreamControlView(ctx.guild_id) if not is_live else None
+                    if redirect_ch:
+                        msg = await redirect_ch.send(
+                            content=f"<@{ctx.author.id}> {status_msg}", view=view
+                        )
+                        if view:
+                            view.message = msg
+                    else:
+                        await safe_respond(ctx, status_msg, view=view)
+                        if view:
+                            try:
+                                view.message = (
+                                    await ctx.interaction.original_response()
+                                )
+                            except Exception:
+                                pass
+                else:
+                    if redirect_ch:
+                        await redirect_ch.send(
+                            content=f"<@{ctx.author.id}> {status_msg}"
+                        )
+                    else:
+                        await safe_respond(ctx, status_msg)
+                return
+
+        if not jk_results:
             await safe_respond(
                 ctx, f'❌ No encontré animes en JKAnime para "{anime_query}".'
             )
             return
-        view = JkanimeSearchView(results, voice_channel, redirect_ch=redirect_ch)
+        view = JkanimeSearchView(jk_results, voice_channel, redirect_ch=redirect_ch)
         embed = discord.Embed(
-            title=f'🌸 {len(results)} animes encontrados para "{anime_query}"',
+            title=f'🌸 {len(jk_results)} animes encontrados para "{anime_query}"',
             description="Seleccioná un anime para elegir el episodio a transmitir:",
             color=0xFF69B4,
         )
@@ -2791,7 +2832,53 @@ async def stream(
         results = await iptv.search(canal, limit=5)
         if not results:
             # Fallback to search in JKAnime
-            jk_results = await jkanime.search_jkanime(canal)
+            direct_ep_url, jk_results, _ = await jkanime.resolve_anime_and_episode(
+                canal
+            )
+            if direct_ep_url:
+                stream_url, ep_title_ext = await jkanime.extract_jkanime_stream(
+                    direct_ep_url
+                )
+                if stream_url:
+                    success, status_msg, is_live = await start_iptv_stream_logic(
+                        ctx.guild_id, voice_channel, stream_url, ep_title_ext
+                    )
+                    if success:
+                        _active_sources[ctx.guild_id] = {
+                            "type": "jkanime",
+                            "url": stream_url,
+                        }
+                        _paused_streams.discard(ctx.guild_id)
+                        view = (
+                            StreamControlView(ctx.guild_id)
+                            if not is_live
+                            else None
+                        )
+                        if redirect_ch:
+                            msg = await redirect_ch.send(
+                                content=f"<@{ctx.author.id}> {status_msg}",
+                                view=view,
+                            )
+                            if view:
+                                view.message = msg
+                        else:
+                            await safe_respond(ctx, status_msg, view=view)
+                            if view:
+                                try:
+                                    view.message = (
+                                        await ctx.interaction.original_response()
+                                    )
+                                except Exception:
+                                    pass
+                    else:
+                        if redirect_ch:
+                            await redirect_ch.send(
+                                content=f"<@{ctx.author.id}> {status_msg}"
+                            )
+                        else:
+                            await safe_respond(ctx, status_msg)
+                    return
+
             if jk_results:
                 view = JkanimeSearchView(
                     jk_results, voice_channel, redirect_ch=redirect_ch
