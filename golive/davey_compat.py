@@ -316,6 +316,11 @@ class DaveSession:
         target_uid_str = str(user_id) if user_id else (str(ssrc) if ssrc else None)
         active_key = target_uid_str or str(self._user_id)
 
+        try:
+            self._decryptor.transition_to_passthrough_mode(False)
+        except Exception:
+            pass
+
         if active_key != self._active_decryptor_user_id:
             ratchet = None
             for lookup in (target_uid_str, str(ssrc) if ssrc else None, str(self._user_id)):
