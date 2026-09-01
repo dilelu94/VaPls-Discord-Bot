@@ -301,8 +301,6 @@ class DaveSession:
         except Exception:
             return packet
 
-    def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
-        """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
         ratchet = None
         if user_id is not None:
             ratchet = self._session.get_key_ratchet(str(user_id))
@@ -312,14 +310,11 @@ class DaveSession:
         if ratchet is not None:
             try:
                 self._decryptor.transition_to_key_ratchet(ratchet)
-            except Exception:
-                pass
-        try:
-            res = self._decryptor.decrypt(dave.MediaType.video, data)
-            if res is not None:
-                return res
-        except Exception as ex:
-            log.warning("[DAVE-VIDEO] Primary decrypt failed for user_id=%s ssrc=%s: %s", user_id, ssrc, ex)
+                res = self._decryptor.decrypt(dave.MediaType.video, data)
+                if res is not None:
+                    return res
+            except Exception as ex:
+                log.debug("[DAVE-VIDEO] Primary decrypt failed for user_id=%s ssrc=%s: %s", user_id, ssrc, ex)
 
         if hasattr(self._session, "get_key_ratchets"):
             try:
@@ -328,14 +323,20 @@ class DaveSession:
                         self._decryptor.transition_to_key_ratchet(r)
                         res = self._decryptor.decrypt(dave.MediaType.video, data)
                         if res is not None:
-                            log.info("[DAVE-VIDEO] Fallback ratchet decrypt OK len=%d", len(res))
                             return res
                     except Exception:
                         continue
             except Exception:
                 pass
 
-        log.warning("[DAVE-VIDEO] ALL video decrypts failed for len=%d — returning raw data", len(data))
+        try:
+            self._decryptor.transition_to_passthrough_mode(True)
+            res = self._decryptor.decrypt(dave.MediaType.video, data)
+            if res is not None:
+                return res
+        except Exception:
+            pass
+
         return data
 
     def __repr__(self) -> str:
