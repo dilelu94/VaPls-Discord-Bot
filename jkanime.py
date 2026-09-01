@@ -233,6 +233,7 @@ async def extract_jkanime_stream(
     ep_title = f"{slug.replace('-', ' ').title()} - Episodio {ep_num}"
 
     async def _do_extract(s: aiohttp.ClientSession) -> tuple[Optional[str], str]:
+        nonlocal ep_title
         html = await _fetch(s, clean_url)
         if not html:
             return None, ep_title

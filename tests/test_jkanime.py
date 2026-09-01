@@ -86,3 +86,34 @@ async def test_extract_jkanime_stream():
         )
         assert stream_url == "https://nika.playmudos.com/test_stream.m3u8?token=123"
         assert ep_title == "JoJo Stone Ocean - Episodio 1"
+
+
+@pytest.mark.asyncio
+async def test_extract_jkanime_stream_no_h1():
+    episode_html = """
+    <html>
+      <body>
+        <iframe src="https://jkanime.net/jkplayer/um?e=test_hash"></iframe>
+      </body>
+    </html>
+    """
+    player_html = """
+    <html>
+      <script>
+        var streamUrl = "https://nika.playmudos.com/test_stream.m3u8?token=123";
+      </script>
+    </html>
+    """
+
+    async def mock_fetch(session, url, referer=None):
+        if "jkplayer" in url:
+            return player_html
+        return episode_html
+
+    with patch.object(jkanime, "_fetch", side_effect=mock_fetch):
+        stream_url, ep_title = await jkanime.extract_jkanime_stream(
+            "https://jkanime.net/jojo-no-kimyou-na-bouken-part-6-stone-ocean/1/"
+        )
+        assert stream_url == "https://nika.playmudos.com/test_stream.m3u8?token=123"
+        assert ep_title == "Jojo No Kimyou Na Bouken Part 6 Stone Ocean - Episodio 1"
+
