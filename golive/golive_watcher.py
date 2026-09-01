@@ -371,7 +371,12 @@ class GoLiveWatcherConnection:
         secret_key = getattr(self, "secret_key", None) or getattr(getattr(self, "ws", None), "secret_key", None) or getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
 
         is_decrypted = False
-        if isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
+        if len(data) > 12:
+            nal_hdr = data[12] & 0x1F
+            if 1 <= nal_hdr <= 28:
+                is_decrypted = True
+
+        if not is_decrypted and isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
             secret_key = bytes(secret_key)
             if (
                 not hasattr(self, "_decryptor")
