@@ -103,6 +103,7 @@ class DaveSession:
 
         self._decryptor = dave.Decryptor()
         self._decryptor.transition_to_passthrough_mode(True)
+        self._active_decryptor_user_id: str | None = None
 
         self._ready = False
         self._epoch: int | None = None
@@ -307,34 +308,34 @@ class DaveSession:
 
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
         """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
-        ratchet = None
-        if user_id is not None:
+        target_uid_str = str(user_id) if user_id else (str(ssrc) if ssrc else None)
+        if target_uid_str and target_uid_str != self._active_decryptor_user_id:
+            ratchet = None
             try:
-                ratchet = self._session.get_key_ratchet(str(user_id))
-            except Exception:
-                pass
-        if ratchet is None and ssrc:
-            try:
-                ratchet = self._session.get_key_ratchet(str(ssrc))
-            except Exception:
-                pass
-        if ratchet is None:
-            try:
-                ratchet = self._session.get_key_ratchet(str(self._user_id))
+                ratchet = self._session.get_key_ratchet(target_uid_str)
             except Exception:
                 pass
 
-        if ratchet is not None:
-            try:
-                self._decryptor.transition_to_key_ratchet(ratchet)
-                self._decryptor.transition_to_passthrough_mode(False)
-            except Exception as ex:
-                log.debug("[DAVE-VIDEO] ratchet transition note: %s", ex)
-        else:
-            try:
-                self._decryptor.transition_to_passthrough_mode(True)
-            except Exception:
-                pass
+            if ratchet is None and ssrc:
+                try:
+                    ratchet = self._session.get_key_ratchet(str(ssrc))
+                except Exception:
+                    pass
+
+            if ratchet is None:
+                try:
+                    ratchet = self._session.get_key_ratchet(str(self._user_id))
+                except Exception:
+                    pass
+
+            if ratchet is not None:
+                try:
+                    self._decryptor.transition_to_key_ratchet(ratchet)
+                    self._decryptor.transition_to_passthrough_mode(False)
+                    self._active_decryptor_user_id = target_uid_str
+                    log.info("[DAVE-VIDEO] Transitioned decryptor key ratchet to user_id=%s", target_uid_str)
+                except Exception as ex:
+                    log.debug("[DAVE-VIDEO] ratchet transition note: %s", ex)
 
         try:
             res = self._decryptor.decrypt(dave.MediaType.video, data)
