@@ -104,7 +104,7 @@ class StreamSnapshotReceiver:
                     log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
 
         clean_hdr = bytearray(rtp_data[:12])
-        clean_hdr[0] &= ~0x10  # Clear extension bit since extension headers were already stripped in raw_payload
+        clean_hdr[0] &= ~0x1F  # Clear extension bit (0x10) and CSRC count (0x0F) since headers were already stripped
         decrypted_rtp = bytes(clean_hdr) + decrypted_payload
 
         # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 7 or keyframe with SPS/PPS)
