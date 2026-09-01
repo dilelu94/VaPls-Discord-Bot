@@ -154,15 +154,20 @@ class DaveSession:
 
     def _refresh_key(self) -> None:
         """Pull key ratchets from the MLS session → give them to Encryptor and Decryptor."""
-        ratchet = self._session.get_key_ratchet(str(self._user_id))
-        if ratchet is not None:
-            self._encryptor.set_key_ratchet(ratchet)
+        ratchet_enc = self._session.get_key_ratchet(str(self._user_id))
+        if ratchet_enc is not None:
+            self._encryptor.set_key_ratchet(ratchet_enc)
             self._encryptor.set_passthrough_mode(False)
+
+        ratchet_dec = self._session.get_key_ratchet(str(self._user_id))
+        if ratchet_dec is not None:
             try:
-                self._decryptor.transition_to_key_ratchet(ratchet)
+                self._decryptor.transition_to_key_ratchet(ratchet_dec)
                 self._decryptor.transition_to_passthrough_mode(False)
             except Exception as exc:
                 log.warning("[DAVE] decryptor ratchet transition warning: %s", exc)
+
+        if ratchet_enc is not None or ratchet_dec is not None:
             if not self._ready:
                 log.info("[DAVE] Key ratchet established — session READY")
             self._ready = True
