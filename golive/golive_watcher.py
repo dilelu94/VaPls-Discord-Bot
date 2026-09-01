@@ -434,9 +434,10 @@ class GoLiveWatcherConnection:
                 self._packet_count, pt, ssrc, len(data)
             )
 
+        dave_sess = getattr(self, "dave_session", None) or getattr(self._regular_vc, "dave_session", None)
         self.receiver.process_rtp_packet(
             rtp_data=data,
-            dave_session=self.dave_session,
+            dave_session=dave_sess,
             ssrc=ssrc,
             user_id=self.target_user_id,
         )
