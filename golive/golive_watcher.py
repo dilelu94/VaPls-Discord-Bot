@@ -487,6 +487,15 @@ class GoLiveWatcherConnection:
                 return None
 
         self.receiver.start_capture()
+        try:
+            target_ssrc = getattr(self, "video_ssrc", None) or getattr(self.receiver, "ssrc", None) or 1
+            pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, 1, target_ssrc)
+            sock = getattr(self, "socket", None) or getattr(vc_conn, "socket", None)
+            if sock and hasattr(sock, "sendall"):
+                sock.sendall(pli_pkt)
+                log.info("[WATCHSTREAM] Sent RTCP PLI keyframe request for SSRC %s", target_ssrc)
+        except Exception as e:
+            log.warning("[WATCHSTREAM] RTCP PLI request note: %s", e)
         log.info("[WATCHSTREAM] Waiting for initial stream packets (up to %.1fs)...", max_wait_sec)
 
         # Wait until video packets start arriving from Discord Gateway (handshake sync)
