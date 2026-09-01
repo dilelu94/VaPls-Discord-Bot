@@ -97,14 +97,19 @@ async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: floa
     fut = loop.create_future()
 
     async def _on_socket_response(msg):
-        if isinstance(msg, dict):
-            event_type = msg.get("t")
-            if event_type in ("STREAM_SERVER_UPDATE", "STREAM_CREATE", "STREAM_DELETE", "VIDEO"):
-                log.info("[WATCHER-GW] Socket event %s: payload=%s", event_type, msg.get("d"))
-            if event_type == event_name:
-                d = msg.get("d", {})
-                if predicate(d) and not fut.done():
-                    fut.set_result(d)
+        try:
+            if isinstance(msg, (str, bytes)):
+                msg = json.loads(msg)
+            if isinstance(msg, dict):
+                event_type = msg.get("t")
+                if event_type in ("STREAM_SERVER_UPDATE", "STREAM_CREATE", "STREAM_DELETE", "VIDEO"):
+                    log.info("[WATCHER-GW] Socket event %s: payload=%s", event_type, msg.get("d"))
+                if event_type == event_name:
+                    d = msg.get("d", {})
+                    if predicate(d) and not fut.done():
+                        fut.set_result(d)
+        except Exception:
+            pass
 
     add_listener_fn = getattr(bot, "add_listener", None)
     if add_listener_fn and callable(add_listener_fn):
@@ -273,7 +278,7 @@ class GoLiveWatcherConnection:
             _wait_for_gateway_event(
                 self._bot,
                 "STREAM_SERVER_UPDATE",
-                lambda d: d.get("stream_key", "") == stream_key,
+                lambda d: str(self.target_user_id) in str(d.get("stream_key", "")),
                 timeout=5.0,
             )
         )
@@ -281,7 +286,7 @@ class GoLiveWatcherConnection:
             _wait_for_gateway_event(
                 self._bot,
                 "STREAM_CREATE",
-                lambda d: d.get("stream_key", "") == stream_key,
+                lambda d: str(self.target_user_id) in str(d.get("stream_key", "")),
                 timeout=5.0,
             )
         )
