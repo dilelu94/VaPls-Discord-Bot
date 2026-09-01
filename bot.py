@@ -2285,21 +2285,14 @@ class IptvSearchView(BaseView):
         )
 
         if success:
-            view = StreamControlView(interaction.guild_id) if not _is_live else None
+            view = None
             if self.redirect_ch:
-                msg = await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}", view=view)
-                if view:
-                    view.message = msg
+                await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}")
                 await self.update_message(interaction, status_text=f"🟢 Transmisión iniciada en {voice_channel.name}")
             else:
                 await interaction.edit_original_response(
-                    content=f"🟢 {status_msg}", embed=None, view=view
+                    content=f"🟢 {status_msg}", embed=None, view=None
                 )
-                if view:
-                    try:
-                        view.message = await interaction.original_response()
-                    except Exception:
-                        pass
         else:
             await self.update_message(interaction, status_text=f"🔴 Error: {status_msg}")
 
@@ -2361,23 +2354,16 @@ class IptvMultiSourceView(BaseView):
             )
 
             if success:
-                view = StreamControlView(interaction.guild_id) if not _is_live else None
+                view = None
                 if self.redirect_ch:
-                    msg = await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}", view=view)
-                    if view:
-                        view.message = msg
+                    await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}")
                     await interaction.edit_original_response(
                         content=f"🟢 Transmisión iniciada en {voice_channel.name}", embed=None, view=None
                     )
                 else:
                     await interaction.edit_original_response(
-                        content=f"🟢 {status_msg}", embed=None, view=view
+                        content=f"🟢 {status_msg}", embed=None, view=None
                     )
-                    if view:
-                        try:
-                            view.message = await interaction.original_response()
-                        except Exception:
-                            pass
             else:
                 await interaction.edit_original_response(
                     content=f"🔴 {status_msg}", embed=None, view=None
@@ -2541,26 +2527,19 @@ class JkanimeEpisodeView(BaseView):
                 "url": stream_url,
             }
             _paused_streams.discard(interaction.guild_id)
-            view = StreamControlView(interaction.guild_id) if not _is_live else None
+            view = None
             if self.redirect_ch:
-                msg = await self.redirect_ch.send(
-                    content=f"<@{interaction.user.id}> {status_msg}", view=view
+                await self.redirect_ch.send(
+                    content=f"<@{interaction.user.id}> {status_msg}"
                 )
-                if view:
-                    view.message = msg
                 await self.update_message(
                     interaction,
                     status_text=f"🟢 Transmisión iniciada en {voice_channel.name}",
                 )
             else:
                 await interaction.edit_original_response(
-                    content=f"🟢 {status_msg}", embed=None, view=view
+                    content=f"🟢 {status_msg}", embed=None, view=None
                 )
-                if view:
-                    try:
-                        view.message = await interaction.original_response()
-                    except Exception:
-                        pass
         else:
             await self.update_message(
                 interaction, status_text=f"🔴 Error: {status_msg}"
@@ -2720,20 +2699,10 @@ async def stream(
             if success:
                 _active_sources[ctx.guild_id] = {"type": "jkanime", "url": stream_url}
                 _paused_streams.discard(ctx.guild_id)
-                view = StreamControlView(ctx.guild_id) if not is_live else None
                 if redirect_ch:
-                    msg = await redirect_ch.send(
-                        content=f"<@{ctx.author.id}> {status_msg}", view=view
-                    )
-                    if view:
-                        view.message = msg
+                    await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
                 else:
-                    await safe_respond(ctx, status_msg, view=view)
-                    if view:
-                        try:
-                            view.message = await ctx.interaction.original_response()
-                        except Exception:
-                            pass
+                    await safe_respond(ctx, status_msg)
             else:
                 if redirect_ch:
                     await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
@@ -2771,22 +2740,12 @@ async def stream(
                         "url": stream_url,
                     }
                     _paused_streams.discard(ctx.guild_id)
-                    view = StreamControlView(ctx.guild_id) if not is_live else None
                     if redirect_ch:
-                        msg = await redirect_ch.send(
-                            content=f"<@{ctx.author.id}> {status_msg}", view=view
+                        await redirect_ch.send(
+                            content=f"<@{ctx.author.id}> {status_msg}"
                         )
-                        if view:
-                            view.message = msg
                     else:
-                        await safe_respond(ctx, status_msg, view=view)
-                        if view:
-                            try:
-                                view.message = (
-                                    await ctx.interaction.original_response()
-                                )
-                            except Exception:
-                                pass
+                        await safe_respond(ctx, status_msg)
                 else:
                     if redirect_ch:
                         await redirect_ch.send(
@@ -2856,27 +2815,12 @@ async def stream(
                             "url": stream_url,
                         }
                         _paused_streams.discard(ctx.guild_id)
-                        view = (
-                            StreamControlView(ctx.guild_id)
-                            if not is_live
-                            else None
-                        )
                         if redirect_ch:
-                            msg = await redirect_ch.send(
-                                content=f"<@{ctx.author.id}> {status_msg}",
-                                view=view,
+                            await redirect_ch.send(
+                                content=f"<@{ctx.author.id}> {status_msg}"
                             )
-                            if view:
-                                view.message = msg
                         else:
-                            await safe_respond(ctx, status_msg, view=view)
-                            if view:
-                                try:
-                                    view.message = (
-                                        await ctx.interaction.original_response()
-                                    )
-                                except Exception:
-                                    pass
+                            await safe_respond(ctx, status_msg)
                     else:
                         if redirect_ch:
                             await redirect_ch.send(
@@ -2936,18 +2880,10 @@ async def stream(
     if success:
         _active_sources[ctx.guild_id] = {"type": source_type, "url": stream_url}
         _paused_streams.discard(ctx.guild_id)
-        view = StreamControlView(ctx.guild_id) if not is_live else None
         if redirect_ch:
-            msg = await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}", view=view)
-            if view:
-                view.message = msg
+            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
         else:
-            await safe_respond(ctx, status_msg, view=view)
-            if view:
-                try:
-                    view.message = await ctx.interaction.original_response()
-                except Exception:
-                    pass
+            await safe_respond(ctx, status_msg)
     else:
         if redirect_ch:
             await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
