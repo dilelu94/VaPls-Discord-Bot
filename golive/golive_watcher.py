@@ -370,7 +370,7 @@ class GoLiveWatcherConnection:
         mode = getattr(self, "mode", None) or getattr(getattr(self, "ws", None), "mode", None) or getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
         secret_key = getattr(self, "secret_key", None) or getattr(getattr(self, "ws", None), "secret_key", None) or getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
 
-        is_decrypted = True
+        is_decrypted = False
         pt = data[1] & 0x7F
 
         # Check if packet is ALREADY decrypted by VoiceRecvClient reader thread
