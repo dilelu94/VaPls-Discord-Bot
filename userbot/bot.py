@@ -54,6 +54,16 @@ except ModuleNotFoundError:
     except ModuleNotFoundError:
         pass
 
+try:
+    from golive import davey_compat
+except ModuleNotFoundError:
+    import davey_compat
+
+import discord.voice_state
+discord.voice_state.davey = davey_compat
+discord.gateway.davey = davey_compat
+davey_compat.patch_reinit(discord.voice_state)
+
 import greeting
 from transcript_channel import (
     resolve_transcript_channel as _resolve_transcript_channel_impl,
