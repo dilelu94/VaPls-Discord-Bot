@@ -174,6 +174,9 @@ def _install_dave_patch():
                 except Exception:
                     pass
 
+            if hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77):
+                return raw
+
             _dave_stats["total"] += 1
             n = _dave_stats["total"]
 

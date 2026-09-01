@@ -101,35 +101,7 @@ class StreamSnapshotReceiver:
                     log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
 
             if self._seen_keyframe:
-                if dave_session and hasattr(dave_session, "decrypt_h264"):
-                    if len(nal) > 4 and (nal[4] & 0x1F) in (7, 9) and self._pending_frame_nals:
-                        frame_bytes = b"".join(self._pending_frame_nals)
-                        try:
-                            dec_bytes = dave_session.decrypt_h264(ssrc or 0, frame_bytes, user_id=user_id)
-                            if dec_bytes is not None:
-                                frame_bytes = dec_bytes
-                        except Exception as exc:
-                            log.debug("[RECEIVER] real-time DAVE decrypt note: %s", exc)
-                        self._raw_nal_buffer.extend(frame_bytes)
-                        self._pending_frame_nals = []
-
-                    self._pending_frame_nals.append(bytes(nal))
-                else:
-                    self._raw_nal_buffer.extend(nal)
-
-    def flush_pending_frame(self, dave_session=None, ssrc: Optional[int] = None, user_id: Optional[int] = None) -> None:
-        """Flushes and decrypts any remaining pending Access Unit frame into _raw_nal_buffer."""
-        if self._pending_frame_nals:
-            frame_bytes = b"".join(self._pending_frame_nals)
-            if dave_session and hasattr(dave_session, "decrypt_h264"):
-                try:
-                    dec_bytes = dave_session.decrypt_h264(ssrc or 0, frame_bytes, user_id=user_id)
-                    if dec_bytes is not None:
-                        frame_bytes = dec_bytes
-                except Exception as exc:
-                    log.debug("[RECEIVER] real-time DAVE flush decrypt note: %s", exc)
-            self._raw_nal_buffer.extend(frame_bytes)
-            self._pending_frame_nals = []
+                self._raw_nal_buffer.extend(nal)
 
     def extract_snapshot(
         self,
@@ -140,8 +112,6 @@ class StreamSnapshotReceiver:
         user_id: Optional[int] = None,
     ) -> Optional[str]:
         """Saves collected NAL units to disk and extracts a JPEG frame using FFmpeg."""
-        self.flush_pending_frame(dave_session=dave_session, ssrc=ssrc, user_id=user_id)
-
         if not self._raw_nal_buffer:
             log.warning("[RECEIVER] No NAL units collected in buffer")
             return None
