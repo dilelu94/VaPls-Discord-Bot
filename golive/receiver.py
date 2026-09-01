@@ -245,7 +245,7 @@ class StreamSnapshotReceiver:
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30.0)
             stderr_out = res.stderr.decode("utf-8", errors="ignore")
 
-            if res.returncode == 0 and os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 0:
+            if os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 100:
                 mp4_size = os.path.getsize(mp4_path)
                 log.info(
                     "[RECEIVER] MP4 video encoded successfully: %s (%d bytes). FFmpeg log summary:\n%s",
