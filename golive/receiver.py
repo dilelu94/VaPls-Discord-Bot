@@ -141,8 +141,8 @@ class StreamSnapshotReceiver:
         jpg_path = os.path.join(self.output_dir, filename)
 
         try:
-            mp4_path = self.convert_sample_to_mp4()
-            if mp4_path and os.path.exists(mp4_path):
+            mp4_path = self.convert_sample_to_mp4(h264_filename="sample_stream.h264", mp4_filename="snapshot_stream.mp4")
+            if mp4_path and os.path.exists(mp4_path) and os.path.getsize(mp4_path) > 100:
                 cmd = [
                     "ffmpeg",
                     "-y",
@@ -157,39 +157,41 @@ class StreamSnapshotReceiver:
                     jpg_path,
                 ]
                 subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
+                if os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 100:
+                    log.info("[RECEIVER] Snapshot extracted from MP4 successfully: %s (%d bytes)", jpg_path, os.path.getsize(jpg_path))
+                    return os.path.abspath(jpg_path)
 
-            if not (os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 100):
-                h264_path = os.path.join(self.output_dir, "sample_stream.h264")
-                final_buffer = bytearray()
-                if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
-                    final_buffer.extend(self._sps_nal)
-                if self._pps_nal and self._pps_nal not in self._raw_nal_buffer and self._pps_nal not in final_buffer:
-                    final_buffer.extend(self._pps_nal)
-                final_buffer.extend(self._raw_nal_buffer)
+            h264_path = os.path.join(self.output_dir, "sample_stream.h264")
+            final_buffer = bytearray()
+            if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
+                final_buffer.extend(self._sps_nal)
+            if self._pps_nal and self._pps_nal not in self._raw_nal_buffer and self._pps_nal not in final_buffer:
+                final_buffer.extend(self._pps_nal)
+            final_buffer.extend(self._raw_nal_buffer)
 
-                with open(h264_path, "wb") as f:
-                    f.write(final_buffer)
+            with open(h264_path, "wb") as f:
+                f.write(final_buffer)
 
-                cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-loglevel",
-                    "error",
-                    "-fflags",
-                    "+nobuffer+discardcorrupt",
-                    "-err_detect",
-                    "ignore_err",
-                    "-f",
-                    "h264",
-                    "-i",
-                    h264_path,
-                    "-vframes",
-                    "1",
-                    "-q:v",
-                    "2",
-                    jpg_path,
-                ]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-loglevel",
+                "error",
+                "-fflags",
+                "+nobuffer+discardcorrupt",
+                "-err_detect",
+                "ignore_err",
+                "-f",
+                "h264",
+                "-i",
+                h264_path,
+                "-vframes",
+                "1",
+                "-q:v",
+                "2",
+                jpg_path,
+            ]
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
 
             if os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
                 log.info("[RECEIVER] Snapshot extracted successfully: %s (%d bytes)", jpg_path, os.path.getsize(jpg_path))
