@@ -110,7 +110,10 @@ class H264RTPDepacketizer:
                 nal_size = struct.unpack("!H", payload[pos : pos + 2])[0]
                 pos += 2
                 if pos + nal_size <= len(payload):
-                    yield ANNEXB_PREFIX + payload[pos : pos + nal_size]
+                    sub_nal = payload[pos : pos + nal_size]
+                    if sub_nal:
+                        clean_sub = bytes([sub_nal[0] & 0x7F]) + sub_nal[1:]
+                        yield ANNEXB_PREFIX + clean_sub
                     pos += nal_size
                 else:
                     break

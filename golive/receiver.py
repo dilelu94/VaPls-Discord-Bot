@@ -138,53 +138,64 @@ class StreamSnapshotReceiver:
             log.warning("[RECEIVER] No NAL units collected in buffer")
             return None
 
-        h264_path = os.path.join(self.output_dir, "sample_stream.h264")
         jpg_path = os.path.join(self.output_dir, filename)
 
         try:
-            final_buffer = bytearray()
-            if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
-                final_buffer.extend(self._sps_nal)
-            if self._pps_nal and self._pps_nal not in self._raw_nal_buffer and self._pps_nal not in final_buffer:
-                final_buffer.extend(self._pps_nal)
-            final_buffer.extend(self._raw_nal_buffer)
+            mp4_path = self.convert_sample_to_mp4()
+            if mp4_path and os.path.exists(mp4_path):
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    mp4_path,
+                    "-vframes",
+                    "1",
+                    "-q:v",
+                    "2",
+                    jpg_path,
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
 
-            with open(h264_path, "wb") as f:
-                f.write(final_buffer)
-            log.info("[RECEIVER] Saved %d bytes of H.264 data to %s", len(final_buffer), h264_path)
+            if not (os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 100):
+                h264_path = os.path.join(self.output_dir, "sample_stream.h264")
+                final_buffer = bytearray()
+                if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
+                    final_buffer.extend(self._sps_nal)
+                if self._pps_nal and self._pps_nal not in self._raw_nal_buffer and self._pps_nal not in final_buffer:
+                    final_buffer.extend(self._pps_nal)
+                final_buffer.extend(self._raw_nal_buffer)
 
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-loglevel",
-                "error",
-                "-flags",
-                "low_delay",
-                "-fflags",
-                "+nobuffer+discardcorrupt",
-                "-err_detect",
-                "ignore_err",
-                "-probesize",
-                "32K",
-                "-analyzeduration",
-                "0",
-                "-f",
-                "h264",
-                "-i",
-                h264_path,
-                "-vframes",
-                "1",
-                "-q:v",
-                "2",
-                jpg_path,
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
+                with open(h264_path, "wb") as f:
+                    f.write(final_buffer)
+
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-fflags",
+                    "+nobuffer+discardcorrupt",
+                    "-err_detect",
+                    "ignore_err",
+                    "-f",
+                    "h264",
+                    "-i",
+                    h264_path,
+                    "-vframes",
+                    "1",
+                    "-q:v",
+                    "2",
+                    jpg_path,
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
 
             if os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
                 log.info("[RECEIVER] Snapshot extracted successfully: %s (%d bytes)", jpg_path, os.path.getsize(jpg_path))
                 return os.path.abspath(jpg_path)
             else:
-                log.warning("[RECEIVER] FFmpeg snapshot extraction failed: %s", res.stderr.decode("utf-8", errors="ignore"))
+                log.warning("[RECEIVER] FFmpeg snapshot extraction failed")
                 return None
         except Exception as exc:
             log.error("[RECEIVER] Failed to extract snapshot: %s", exc)
