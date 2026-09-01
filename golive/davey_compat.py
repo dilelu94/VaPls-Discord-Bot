@@ -318,8 +318,8 @@ class DaveSession:
             res = self._decryptor.decrypt(dave.MediaType.video, data)
             if res is not None:
                 return res
-        except Exception:
-            pass
+        except Exception as ex:
+            log.warning("[DAVE-VIDEO] Primary decrypt failed for user_id=%s ssrc=%s: %s", user_id, ssrc, ex)
 
         if hasattr(self._session, "get_key_ratchets"):
             try:
@@ -328,12 +328,14 @@ class DaveSession:
                         self._decryptor.transition_to_key_ratchet(r)
                         res = self._decryptor.decrypt(dave.MediaType.video, data)
                         if res is not None:
+                            log.info("[DAVE-VIDEO] Fallback ratchet decrypt OK len=%d", len(res))
                             return res
                     except Exception:
                         continue
             except Exception:
                 pass
 
+        log.warning("[DAVE-VIDEO] ALL video decrypts failed for len=%d — returning raw data", len(data))
         return data
 
     def __repr__(self) -> str:
