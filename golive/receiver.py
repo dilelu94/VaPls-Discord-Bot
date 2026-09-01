@@ -96,7 +96,7 @@ class StreamSnapshotReceiver:
                 elif nal_type == 8:
                     self._pps_nal = bytes(nal)
 
-                if not self._seen_keyframe and (nal_type == 7 or (nal_type in (5, 8) and self._sps_nal and self._pps_nal)):
+                if not self._seen_keyframe and (nal_type in (5, 7) or (nal_type == 8 and self._sps_nal and self._pps_nal)):
                     self._seen_keyframe = True
                     log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
 
