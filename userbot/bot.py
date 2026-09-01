@@ -186,6 +186,13 @@ def _install_dave_patch():
                     pass
 
             if hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77):
+                log.info(
+                    "[VIDEO-RTP] Video packet intercepted: PT=%s SSRC=%s raw_len=%d attrs=%s",
+                    getattr(packet, "pt", None),
+                    getattr(packet, "ssrc", None),
+                    len(raw or b""),
+                    [a for a in dir(packet) if not a.startswith("_")],
+                )
                 return raw
 
             _dave_stats["total"] += 1
@@ -319,6 +326,7 @@ log.info("Opus decode resilience patch installed.")
 # Discord assigned to this user.
 from discord.voice_state import VoiceConnectionState as _VCS
 
+_orig_reinit = _VCS.reinit_dave_session
 _last_reinit_ts = 0.0
 
 
