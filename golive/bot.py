@@ -413,7 +413,7 @@ class GoLiveStream:
         if self.video_player:
             self.video_player.seek(target_sec)
 
-    async def stop(self, disconnect_voice: bool = False):
+    async def stop(self, disconnect_voice: bool = True):
         if self._stopped:
             return
         self._stopped = True
@@ -856,9 +856,18 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
     stream = _active_streams.pop(guild_id, None)
     if stream:
         try:
-            await stream.stop()
+            await stream.stop(disconnect_voice=True)
         except Exception as e:
             log.warning("[STOPSTREAM] stream stop failed: %s", e)
+
+    guild = client.get_guild(guild_id)
+    if guild:
+        vc = _vc_for_guild(guild)
+        if vc and vc.is_connected():
+            try:
+                await asyncio.wait_for(vc.disconnect(force=True), timeout=3.0)
+            except Exception as e:
+                log.warning("[STOPSTREAM] vc disconnect error: %s", e)
 
     log.info("[STOPSTREAM] stopped guild=%s", guild_id)
     return web.json_response({"stopped": True, "guild_id": guild_id})
