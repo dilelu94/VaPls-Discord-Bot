@@ -61,37 +61,54 @@ class StreamSnapshotReceiver:
         ssrc: Optional[int] = None,
         user_id: Optional[int] = None,
     ) -> None:
-        # 1. Depacketize RTP -> reassembled Annex-B NAL units (handles Single NAL, STAP-A, and FU-A fragments)
-        for nal in self.depacketizer.depacketize(rtp_data):
-            if len(nal) <= 4:
-                continue
+        if not self._is_capturing or not rtp_data or len(rtp_data) < 12:
+            return
 
-            nal_payload = nal[4:]
+        # Parse RTP header offset
+        byte0 = rtp_data[0]
+        csrc_count = byte0 & 0x0F
+        has_extension = bool((byte0 >> 4) & 0x01)
+        offset = 12 + (csrc_count * 4)
 
-            # 2. DAVE E2EE video decryption on complete reassembled NAL payload
-            if dave_session:
-                if hasattr(dave_session, "decrypt_h264"):
-                    try:
-                        dec_payload = dave_session.decrypt_h264(ssrc or 0, nal_payload, user_id=user_id)
-                        if dec_payload:
-                            nal = nal[:4] + dec_payload
-                    except Exception as exc:
-                        log.warning("[RECEIVER] DAVE decrypt_h264 warning: %s", exc)
+        if has_extension and len(rtp_data) >= offset + 4:
+            ext_len = struct.unpack("!H", rtp_data[offset + 2 : offset + 4])[0]
+            offset += 4 + (ext_len * 4)
 
-            nal_type = nal[4] & 0x1F
-            if nal_type in self._nal_counts:
-                self._nal_counts[nal_type] += 1
-            else:
-                self._nal_counts["other"] += 1
+        if len(rtp_data) <= offset:
+            return
 
-            if nal_type == 7:
-                self._sps_nal = bytes(nal)
-            elif nal_type == 8:
-                self._pps_nal = bytes(nal)
+        header = rtp_data[:offset]
+        raw_payload = rtp_data[offset:]
 
-            if not self._seen_keyframe and (nal_type == 7 or (nal_type in (5, 8) and self._sps_nal and self._pps_nal)):
-                self._seen_keyframe = True
-                log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
+        # DAVE E2EE video decryption on RTP payload if session is present
+        decrypted_payload = raw_payload
+        if dave_session and hasattr(dave_session, "decrypt_h264"):
+            try:
+                decrypted_payload = dave_session.decrypt_h264(ssrc or 0, raw_payload, user_id=user_id)
+            except Exception as exc:
+                log.warning("[RECEIVER] DAVE decrypt_h264 warning: %s", exc)
+
+        clean_hdr = bytearray(rtp_data[:12])
+        clean_hdr[0] = 0x80  # Force RTP v2, no extension, 0 CSRC since extension was stripped above
+        decrypted_rtp = bytes(clean_hdr) + decrypted_payload
+
+        # Depacketize RTP -> Annex-B NAL units
+        for nal in self.depacketizer.depacketize(decrypted_rtp):
+            if len(nal) > 4:
+                nal_type = nal[4] & 0x1F
+                if nal_type in self._nal_counts:
+                    self._nal_counts[nal_type] += 1
+                else:
+                    self._nal_counts["other"] += 1
+
+                if nal_type == 7:
+                    self._sps_nal = bytes(nal)
+                elif nal_type == 8:
+                    self._pps_nal = bytes(nal)
+
+                if not self._seen_keyframe and (nal_type == 7 or (nal_type in (5, 8) and self._sps_nal and self._pps_nal)):
+                    self._seen_keyframe = True
+                    log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
 
             if self._seen_keyframe:
                 self._raw_nal_buffer.extend(nal)
