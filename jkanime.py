@@ -169,13 +169,14 @@ def parse_anime_query(query: str) -> tuple[str, Optional[int]]:
             return title_query, ep_num
 
     # 2. Match bare trailing number (e.g. "naruto 22"), unless preceded by part/season/parte/temporada/s/v
-    bare_match = re.search(
-        r"(?<!\b(?:part|parte|season|temporada|s|v|vol))\s+(\d+)\s*$", q, re.I
-    )
+    bare_match = re.search(r"\s+(\d+)\s*$", q, re.I)
     if bare_match:
-        ep_num = int(bare_match.group(1))
         title_query = q[: bare_match.start()].strip()
-        if title_query:
+        is_part_keyword = re.search(
+            r"\b(?:part|parte|season|temporada|s|v|vol)\b$", title_query, re.I
+        )
+        if not is_part_keyword and title_query:
+            ep_num = int(bare_match.group(1))
             return title_query, ep_num
 
     return q, None
