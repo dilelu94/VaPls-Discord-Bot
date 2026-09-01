@@ -288,23 +288,28 @@ class DaveSession:
 
     def decrypt(self, user_id: int, media_type, packet: bytes) -> bytes:
         """DAVE-decrypt an incoming media packet for a specific user ID."""
-        if user_id is not None:
-            ratchet = self._session.get_key_ratchet(str(user_id))
+        target_uid_str = str(user_id) if user_id is not None else str(self._user_id)
+        if target_uid_str != self._active_decryptor_user_id:
+            ratchet = self._session.get_key_ratchet(target_uid_str)
             if ratchet is not None:
                 try:
                     self._decryptor.transition_to_key_ratchet(ratchet)
+                    self._decryptor.transition_to_passthrough_mode(False)
+                    self._active_decryptor_user_id = target_uid_str
                 except Exception:
                     pass
+
         if media_type == 1 or media_type == getattr(dave, "MediaType", None).video or str(media_type).lower() == "video":
             m_type = dave.MediaType.video
         else:
             m_type = dave.MediaType.audio
         try:
             res = self._decryptor.decrypt(m_type, packet)
-            if res is None:
-                return packet
+            if res is not None:
+                return res
         except Exception:
-            return packet
+            pass
+        return packet
 
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
         """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
