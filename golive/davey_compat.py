@@ -307,7 +307,7 @@ class DaveSession:
             if res is not None:
                 return res
         except Exception as ex:
-            log.debug("[DAVE-VIDEO] decrypt_h264 failed for ssrc=%s user_id=%s: %s", ssrc, user_id, ex)
+            log.warning("[DAVE-VIDEO] decrypt_h264 failed for ssrc=%s user_id=%s: %s", ssrc, user_id, ex)
 
         return data
 
