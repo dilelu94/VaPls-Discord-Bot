@@ -341,7 +341,17 @@ class DaveSession:
             res = self._decryptor.decrypt(dave.MediaType.video, data)
             if res is not None:
                 return res
-            log.warning("[DAVE-VIDEO] decrypt returned None for frame of size %d (ssrc=%s, user_id=%s)", len(data), ssrc, user_id)
+            st = self._decryptor.get_stats(dave.MediaType.video)
+            log.warning(
+                "[DAVE-VIDEO] decrypt returned None (len=%d, attempts=%d, success=%d, fail=%d, missing_key=%d, invalid_nonce=%d, pass=%d)",
+                len(data),
+                st.decrypt_attempts,
+                st.decrypt_success_count,
+                st.decrypt_failure_count,
+                st.decrypt_missing_key_count,
+                st.decrypt_invalid_nonce_count,
+                st.passthrough_count,
+            )
         except Exception as ex:
             log.warning("[DAVE-VIDEO] decrypt_h264 exception for ssrc=%s user_id=%s: %s", ssrc, user_id, ex)
 
