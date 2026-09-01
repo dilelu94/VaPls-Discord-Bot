@@ -407,8 +407,13 @@ class GoLiveWatcherConnection:
                     rtp_pkt = RTPPacket(data)
                     decrypted_payload = self._decryptor.decrypt_rtp(rtp_pkt)
                     if decrypted_payload is not None:
+                        if rtp_pkt.has_extension and len(decrypted_payload) >= 4:
+                            ext_len = struct.unpack("!H", decrypted_payload[2:4])[0]
+                            ext_bytes = 4 + (ext_len * 4)
+                            if len(decrypted_payload) > ext_bytes:
+                                decrypted_payload = decrypted_payload[ext_bytes:]
                         hdr = bytearray(rtp_pkt.header)
-                        hdr[0] &= ~0x10  # Clear extension bit since decrypt_rtp already processed ext headers
+                        hdr[0] &= ~0x10  # Clear extension bit since ext headers were stripped
                         data = bytes(hdr) + decrypted_payload
                         is_decrypted = True
                 except Exception as e:
