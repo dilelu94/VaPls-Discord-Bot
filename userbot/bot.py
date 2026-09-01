@@ -319,10 +319,16 @@ log.info("Opus decode resilience patch installed.")
 # Discord assigned to this user.
 from discord.voice_state import VoiceConnectionState as _VCS
 
-_orig_reinit = _VCS.reinit_dave_session
+_last_reinit_ts = 0.0
 
 
 async def _patched_reinit(self):
+    global _last_reinit_ts
+    now = time.monotonic()
+    if now - _last_reinit_ts < 5.0:
+        log.warning("[DAVE-INIT] Rate-limiting reinit_dave_session call (too frequent)")
+        return
+    _last_reinit_ts = now
     log.info(
         f"[DAVE-INIT] reinit_dave_session called: "
         f"dave_protocol_version={self.dave_protocol_version}"

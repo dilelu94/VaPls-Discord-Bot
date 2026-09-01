@@ -239,31 +239,37 @@ class DaveSession:
     def process_commit(self, commit: bytes) -> None:
         """Called by gateway.py. Raises on rejection so gateway can recover."""
         log.info("[DAVE] Processing MLS commit (size=%d)", len(commit))
-        result = self._session.process_commit(commit)
-        if isinstance(result, dave.RejectType):
-            log.error("[DAVE] Commit REJECTED: %s", result.name)
-            raise RuntimeError(f"DAVE commit rejected: {result.name}")
-        if isinstance(result, dict) and result:
-            self._epoch = max(result.keys())
-            log.info("[DAVE] Commit processed OK, epoch=%s", self._epoch)
-        self._refresh_key()
+        try:
+            result = self._session.process_commit(commit)
+            if isinstance(result, dave.RejectType):
+                log.warning("[DAVE] Commit REJECTED: %s — switching to passthrough mode", result.name)
+                self.set_passthrough_mode(True)
+                return
+            if isinstance(result, dict) and result:
+                self._epoch = max(result.keys())
+                log.info("[DAVE] Commit processed OK, epoch=%s", self._epoch)
+            self._refresh_key()
+        except Exception as exc:
+            log.warning("[DAVE] process_commit note: %s — switching to passthrough mode", exc)
+            self.set_passthrough_mode(True)
 
     def process_welcome(self, welcome: bytes) -> None:
-        """Called by gateway.py. Raises on failure so gateway can recover."""
+        """Process incoming DAVE Welcome message. Falls back to passthrough mode on rejection."""
         log.info("[DAVE] Processing MLS welcome (size=%d)", len(welcome))
         recognized = self._get_recognized_users()
         try:
             result = self._session.process_welcome(welcome, recognized)
+            if result is None:
+                log.warning("[DAVE] Welcome REJECTED by libdave — switching to passthrough mode")
+                self.set_passthrough_mode(True)
+                return
+            if isinstance(result, dict) and result:
+                self._epoch = max(result.keys())
+                log.info("[DAVE] Welcome processed OK, epoch=%s", self._epoch)
+            self._refresh_key()
         except Exception as exc:
-            log.error("[DAVE] process_welcome FAILED: %s", exc)
-            raise
-        if result is None:
-            log.error("[DAVE] Welcome REJECTED by libdave")
-            raise RuntimeError("DAVE welcome rejected by libdave")
-        if isinstance(result, dict) and result:
-            self._epoch = max(result.keys())
-            log.info("[DAVE] Welcome processed OK, epoch=%s", self._epoch)
-        self._refresh_key()
+            log.warning("[DAVE] process_welcome note: %s — switching to passthrough mode", exc)
+            self.set_passthrough_mode(True)
 
     def encrypt_opus(self, data: bytes) -> bytes:
         """DAVE-encrypt an Opus frame before transport encryption."""

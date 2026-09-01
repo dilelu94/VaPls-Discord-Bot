@@ -115,22 +115,22 @@ class DaveSession:
         return result  # CommitWelcome | None
 
     def process_commit(self, commit: bytes) -> None:
-        """Called by gateway.py. Raises on rejection so gateway can recover."""
+        """Called by gateway.py. Falls back to passthrough on failure."""
         log.info("[DAVE] Processing MLS commit (size=%d)", len(commit))
         try:
             self._session.process_commit(commit)
         except Exception as exc:
-            log.error("[DAVE] process_commit FAILED: %s", exc)
-            raise
+            log.warning("[DAVE] process_commit note: %s — switching to passthrough mode", exc)
+            self.set_passthrough_mode(True)
 
     def process_welcome(self, welcome: bytes) -> None:
-        """Called by gateway.py. Raises on failure so gateway can recover."""
+        """Called by gateway.py. Falls back to passthrough on failure."""
         log.info("[DAVE] Processing MLS welcome (size=%d)", len(welcome))
         try:
             self._session.process_welcome(welcome)
         except Exception as exc:
-            log.error("[DAVE] process_welcome FAILED: %s", exc)
-            raise
+            log.warning("[DAVE] process_welcome note: %s — switching to passthrough mode", exc)
+            self.set_passthrough_mode(True)
 
     def set_passthrough_mode(
         self, passthrough: bool, transition_expiry=None
