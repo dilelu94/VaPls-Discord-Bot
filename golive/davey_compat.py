@@ -302,33 +302,12 @@ class DaveSession:
 
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
         """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
-        ratchet = None
-        if user_id is not None:
-            ratchet = self._session.get_key_ratchet(str(user_id))
-        if ratchet is None and ssrc:
-            ratchet = self._session.get_key_ratchet(str(ssrc))
-
-        if ratchet is not None:
-            try:
-                self._decryptor.transition_to_key_ratchet(ratchet)
-                res = self._decryptor.decrypt(dave.MediaType.video, data)
-                if res is not None:
-                    return res
-            except Exception as ex:
-                log.debug("[DAVE-VIDEO] Primary decrypt failed for user_id=%s ssrc=%s: %s", user_id, ssrc, ex)
-
-        if hasattr(self._session, "get_key_ratchets"):
-            try:
-                for r in self._session.get_key_ratchets():
-                    try:
-                        self._decryptor.transition_to_key_ratchet(r)
-                        res = self._decryptor.decrypt(dave.MediaType.video, data)
-                        if res is not None:
-                            return res
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+        try:
+            res = self._decryptor.decrypt(dave.MediaType.video, data)
+            if res is not None:
+                return res
+        except Exception as ex:
+            log.debug("[DAVE-VIDEO] decrypt_h264 failed for ssrc=%s user_id=%s: %s", ssrc, user_id, ex)
 
         return data
 
