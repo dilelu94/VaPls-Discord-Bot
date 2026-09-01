@@ -576,8 +576,15 @@ class GoLiveWatcherConnection:
             len(self.receiver._raw_nal_buffer),
         )
 
-        # Extract snapshot JPEG
-        ds = self.dave_session or getattr(self._regular_vc, "dave_session", None)
+        # Extract snapshot JPEG: prioritize active READY DAVE session from voice client
+        vc_ds = getattr(self._regular_vc, "dave_session", None)
+        if vc_ds is not None and getattr(vc_ds, "ready", False):
+            ds = vc_ds
+        elif self.dave_session and getattr(self.dave_session, "ready", False):
+            ds = self.dave_session
+        else:
+            ds = vc_ds or self.dave_session
+
         ssrc = getattr(self, "_target_ssrc", None)
         snapshot_path = self.receiver.extract_snapshot(
             filename=filename,
