@@ -256,3 +256,45 @@ def test_person_name_generic_folders():
 def test_person_name_case_insensitive():
     assert storyManager._person_name("Varios/gente.jpg") is None
     assert storyManager._person_name("Grupo/foto.jpg") is None
+
+
+async def test_watch_loop_skips_during_startup_grace_period(bot):
+    """_watch_loop skips automatic story generation right after bot startup/restart."""
+    b, ch = bot
+    guild = MagicMock()
+    guild.id = 456
+    b.guilds = [guild]
+
+    # Pre-set chat activity from 5 hours ago (before restart)
+    import time
+
+    now = time.time()
+    storyManager._last_chat_activity[456] = now - 18000
+    storyManager._stories_today.clear()
+    storyManager._last_attempt_at.clear()
+    storyManager._watcher_start_time = now - 30  # started 30s ago
+
+    with patch.object(storyManager, "trigger_story", AsyncMock()) as mock_trigger:
+        await storyManager._watch_loop(b)
+        mock_trigger.assert_not_called()
+
+
+async def test_watch_loop_triggers_after_startup_grace_period(bot):
+    """_watch_loop triggers story if grace period has passed and chat is idle."""
+    b, ch = bot
+    guild = MagicMock()
+    guild.id = 456
+    b.guilds = [guild]
+
+    import time
+
+    now = time.time()
+    storyManager._last_chat_activity[456] = now - 18000
+    storyManager._stories_today.clear()
+    storyManager._last_attempt_at.clear()
+    storyManager._watcher_start_time = now - 7200  # started 2h ago
+
+    with patch.object(storyManager, "trigger_story", AsyncMock()) as mock_trigger:
+        await storyManager._watch_loop(b)
+        mock_trigger.assert_called_once()
+

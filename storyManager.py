@@ -48,6 +48,7 @@ _idle_scheduled: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
 _last_attempt_at: dict[int, float] = {}
 _recent_stories: dict[int, list[str]] = {}
+_watcher_start_time: float = 0.0
 
 _background_tasks: set[asyncio.Task] = set()
 
@@ -1231,6 +1232,8 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
 
 
 async def start_story_watcher(bot) -> None:
+    global _watcher_start_time
+    _watcher_start_time = time.time()
     _recover_state()
     await imagePool.init_pool()
     await _recover_pending_reviews(bot, config.INDIO_STORY_CHANNEL_ID)
@@ -1253,6 +1256,12 @@ async def _watch_loop(bot) -> None:
             continue
 
         if time.time() - _last_attempt_at.get(gid, 0.0) < 3600:
+            continue
+
+        # Startup grace period: don't auto-trigger idle stories right after bot restart
+        uptime = time.time() - _watcher_start_time if _watcher_start_time > 0 else 0.0
+        grace_needed = config.INDIO_STORY_DAILY_MIN_IDLE * 60
+        if uptime < grace_needed:
             continue
 
         last_activity = _last_chat_activity.get(gid, 0.0)
