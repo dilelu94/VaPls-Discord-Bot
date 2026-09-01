@@ -796,7 +796,7 @@ class H264VideoPlayer(threading.Thread):
         fps: float = 25.0,
         live: bool | None = True,
         audio: bool = True,
-        probe_size: int = 2_000_000,
+        probe_size: int = 10_000_000,
         original_url: str | None = None,
         initial_seq: int = 0,
         initial_ts: int = 0,
@@ -1313,7 +1313,17 @@ class H264VideoPlayer(threading.Thread):
             now = time.monotonic()
             due = _t0 + _n / self._fps
             slack = due - now
-            if slack <= 0:
+            if slack <= -0.05:
+                lateness = -slack
+                _stats_late += 1
+                _stats_late_total += lateness
+                if lateness > _stats_late_max:
+                    _stats_late_max = lateness
+                # Resync wall clock baseline on network stalls to maintain smooth 30fps pacing
+                _t0 = now - _n / self._fps
+                due = now
+                slack = 0.0
+            elif slack <= 0:
                 lateness = -slack
                 _stats_late += 1
                 _stats_late_total += lateness

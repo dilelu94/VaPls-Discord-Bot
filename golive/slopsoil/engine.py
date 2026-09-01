@@ -212,7 +212,7 @@ async def start_live_stream(
     subtitle: str = "",
     live: bool | None = True,
     audio: bool = True,
-    probe_size: int = 2_000_000,
+    probe_size: int = 10_000_000,
     start_time: float = 0.0,
 ) -> None:
     """
