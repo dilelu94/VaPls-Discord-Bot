@@ -73,7 +73,7 @@ async def search_jkanime(
 
     # Pattern matching anime cards in JKAnime search results
     matches = re.finditer(
-        r'<a[^>]+href="https://jkanime\.net/([a-z0-9\-]+)/"[^>]*>\s*<h5>([^<]+)</h5>',
+        r'<h5>\s*<a\s+href="https://jkanime\.net/([a-z0-9\-]+)/"[^>]*>([^<]+)</a>\s*</h5>',
         html,
         re.I,
     )
@@ -105,6 +105,28 @@ async def search_jkanime(
                     "image": img_url,
                 }
             )
+
+    # Secondary pattern matching nested card h5
+    if not results:
+        card_matches = re.finditer(
+            r'<a[^>]+href="https://jkanime\.net/([a-z0-9\-]+)/"[^>]*>\s*<h5>([^<]+)</h5>',
+            html,
+            re.I,
+        )
+        for m in card_matches:
+            slug = m.group(1).strip()
+            title = m.group(2).strip()
+            if slug and slug not in seen_slugs:
+                seen_slugs.add(slug)
+                img_url = f"https://cdn.jkdesa.com/assets/images/animes/image/{slug}.jpg"
+                results.append(
+                    {
+                        "title": title,
+                        "slug": slug,
+                        "url": f"https://jkanime.net/{slug}/",
+                        "image": img_url,
+                    }
+                )
 
     # Fallback pattern if <h5> is structured differently
     if not results:
@@ -258,6 +280,14 @@ async def extract_jkanime_stream(
                 if mp4_matches:
                     log.info("Found .mp4 stream via %s", player_url[:60])
                     return mp4_matches[0], ep_title
+
+                # Search for DPlayer stream URL (url: 'https://...')
+                dp_match = re.search(
+                    r"url:\s*['\"](https?://[^\s'\"<>\\]+)['\"]", p_html
+                )
+                if dp_match:
+                    log.info("Found DPlayer stream via %s", player_url[:60])
+                    return dp_match.group(1), ep_title
 
             except Exception as e:
                 log.warning("Player fetch failed for %s: %s", player_url, e)
