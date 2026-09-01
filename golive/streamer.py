@@ -843,6 +843,12 @@ class H264VideoPlayer(threading.Thread):
     # ── Public API ────────────────────────────────────────────────────────────
 
     @property
+    def current_position(self) -> float:
+        if self._fps > 0:
+            return max(0.0, self._start_time + (self._frames_emitted / self._fps))
+        return self._start_time
+
+    @property
     def audio_fifo(self) -> str:
         return self._audio_fifo
 
@@ -895,12 +901,17 @@ class H264VideoPlayer(threading.Thread):
 
     def run(self) -> None:
         try:
+            auto_retries = 0
             while not self._end.is_set():
                 self._seeking = False
                 self._stream()
-                
+
                 if self._seeking and not self._end.is_set():
-                    log.info("Seeking to %.2fs, restarting stream loop", self._start_time)
+                    log.info(
+                        "Seeking/Resuming to %.2fs, restarting stream loop",
+                        self._start_time,
+                    )
+                    auto_retries = 0
                     continue
 
                 if (
@@ -910,14 +921,32 @@ class H264VideoPlayer(threading.Thread):
                     and self._enc is not _SW_ENCODER
                 ):
                     log.warning(
-                        "video encoder %s produced no output — retrying with software "
-                        "encoder %s",
-                        self._enc.name if self._enc else "?", _SW_ENCODER.name,
+                        "video encoder %s produced no output — retrying with software encoder %s",
+                        self._enc.name if self._enc else "?",
+                        _SW_ENCODER.name,
                     )
                     self._enc = _SW_ENCODER
                     self._proc = None
                     continue
-                
+
+                # Auto-recovery if stream stalled or ended unexpectedly mid-playback
+                if (
+                    not self._end.is_set()
+                    and self._frames_emitted > 0
+                    and auto_retries < 5
+                ):
+                    auto_retries += 1
+                    resume_pos = max(0.0, self.current_position - 2.0)
+                    log.warning(
+                        "Stream stalled/ended unexpectedly at %.2fs. Auto-recovering (%d/5) from %.2fs...",
+                        self.current_position,
+                        auto_retries,
+                        resume_pos,
+                    )
+                    self._start_time = resume_pos
+                    self._seeking = True
+                    continue
+
                 break
         except Exception:
             log.exception("H264VideoPlayer error")

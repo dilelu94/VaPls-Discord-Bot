@@ -1929,6 +1929,13 @@ class StreamControlView(BaseView):
         else:
             await interaction.response.send_message("❌ Error de comunicación con el stream.", ephemeral=True)
 
+    @discord.ui.button(label="🔄 Destrabar", style=discord.ButtonStyle.success, custom_id="stream_resume_stuck")
+    async def resume_stuck(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_message("🔄 Reanudando stream desde el punto actual...", ephemeral=True, delete_after=3)
+        success = await _send_stream_control(self.guild_id, "resume_pos")
+        if not success:
+            await interaction.followup.send("❌ Error de comunicación con el stream.", ephemeral=True)
+
     @discord.ui.button(label="⏱️ Saltar a...", style=discord.ButtonStyle.secondary, custom_id="stream_seek")
     async def jump_to(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.send_modal(StreamSeekModal(self.guild_id))

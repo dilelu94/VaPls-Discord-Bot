@@ -409,6 +409,12 @@ class GoLiveStream:
         if self.video_player:
             self.video_player.resume()
 
+    @property
+    def current_position(self) -> float:
+        if self.video_player and hasattr(self.video_player, "current_position"):
+            return self.video_player.current_position
+        return 0.0
+
     def seek(self, target_sec: float):
         if self.video_player:
             self.video_player.seek(target_sec)
@@ -904,6 +910,19 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
         elif vp and hasattr(vp, "resume"):
             vp.resume()
         return web.json_response({"status": "resumed", "guild_id": guild_id})
+    elif action == "resume_pos":
+        curr_pos = 0.0
+        player = getattr(stream, "video_player", None) or vp
+        if player and hasattr(player, "current_position"):
+            curr_pos = player.current_position
+        resume_sec = max(0.0, curr_pos - 2.0)
+        if stream and hasattr(stream, "seek"):
+            stream.seek(resume_sec)
+        elif vp and hasattr(vp, "seek"):
+            vp.seek(resume_sec)
+        return web.json_response(
+            {"status": "resumed_from_pos", "pos": resume_sec, "guild_id": guild_id}
+        )
     elif action == "seek":
         try:
             target_sec = float(data.get("timestamp", 0))
