@@ -170,10 +170,15 @@ def _install_dave_patch():
             if raw:
                 try:
                     from golive.golive_watcher import dispatch_rtp_packet
-                    if hasattr(packet, "header"):
-                        full_rtp = bytes(packet.header) + raw
+                    if hasattr(packet, "header") and len(packet.header) >= 12:
+                        hdr = bytes(packet.header)
                     elif raw_data and len(raw_data) >= 12:
-                        full_rtp = raw_data[:12] + raw
+                        hdr = raw_data[:12]
+                    else:
+                        hdr = b""
+                    if hdr:
+                        clean_hdr = bytes([hdr[0] & 0xE0]) + hdr[1:12]
+                        full_rtp = clean_hdr + raw
                     else:
                         full_rtp = raw
                     dispatch_rtp_packet(full_rtp)

@@ -143,8 +143,6 @@ class StreamSnapshotReceiver:
                 "-y",
                 "-loglevel",
                 "error",
-                "-skip_frame",
-                "nokey",
                 "-f",
                 "h264",
                 "-i",
