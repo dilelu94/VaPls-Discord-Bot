@@ -585,7 +585,7 @@ class GoLiveWatcherConnection:
         else:
             ds = vc_ds or self.dave_session
 
-        ssrc = getattr(self, "_target_ssrc", None)
+        ssrc = getattr(self, "video_ssrc", None) or getattr(self.receiver, "ssrc", None) or getattr(self, "_target_ssrc", None)
         snapshot_path = self.receiver.extract_snapshot(
             filename=filename,
             dave_session=ds,

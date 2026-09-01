@@ -146,11 +146,12 @@ class StreamSnapshotReceiver:
                         frames.append(b"".join(cur_frame))
 
                     decrypted_chunks = []
+                    target_ssrc = ssrc if ssrc is not None else getattr(self, "ssrc", 0)
                     for fr in frames:
-                        dec_fr = dave_session.decrypt_h264(ssrc or 0, fr, user_id=user_id)
+                        dec_fr = dave_session.decrypt_h264(target_ssrc, fr, user_id=user_id)
                         decrypted_chunks.append(dec_fr if dec_fr is not None else fr)
                     decrypted_buffer = b"".join(decrypted_chunks)
-                    log.info("[RECEIVER] DAVE frame-by-frame decrypted %d frames (%d -> %d bytes)", len(frames), len(raw_bytes), len(decrypted_buffer))
+                    log.info("[RECEIVER] DAVE frame-by-frame decrypted %d frames for ssrc=%s, user_id=%s (%d -> %d bytes)", len(frames), target_ssrc, user_id, len(raw_bytes), len(decrypted_buffer))
                 except Exception as exc:
                     log.warning("[RECEIVER] DAVE frame decrypt_h264 warning: %s", exc)
 
