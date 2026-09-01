@@ -88,6 +88,12 @@ class StreamSnapshotReceiver:
                 try:
                     decrypted_payload = dave_session.decrypt_h264(ssrc or 0, raw_payload, user_id=user_id)
                 except Exception as exc:
+                    exc_str = str(exc)
+                    if "UnencryptedWhenPassthroughDisabled" in exc_str and hasattr(dave_session, "set_passthrough_mode"):
+                        try:
+                            dave_session.set_passthrough_mode(True, 10)
+                        except Exception:
+                            pass
                     log.warning("[RECEIVER] DAVE decrypt_h264 warning: %s", exc)
             elif hasattr(dave_session, "decrypt"):
                 try:
@@ -101,6 +107,12 @@ class StreamSnapshotReceiver:
                     m_type = getattr(dave, "MediaType", None).video if (dave and hasattr(dave, "MediaType")) else 1
                     decrypted_payload = dave_session.decrypt(user_id or 0, m_type, raw_payload)
                 except Exception as exc:
+                    exc_str = str(exc)
+                    if "UnencryptedWhenPassthroughDisabled" in exc_str and hasattr(dave_session, "set_passthrough_mode"):
+                        try:
+                            dave_session.set_passthrough_mode(True, 10)
+                        except Exception:
+                            pass
                     log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
 
         has_ext = bool((rtp_data[0] >> 4) & 0x01)
