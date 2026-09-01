@@ -17,12 +17,12 @@ def test_receiver_buffering():
         receiver = StreamSnapshotReceiver(output_dir=tmpdir)
         receiver.start_capture()
 
-        # SPS NAL packet
-        pkt1 = make_rtp_packet(1, b"\x07\x42\xe0\x1f")
+        # IDR Keyframe NAL packet (NAL type 5: 0x05 & 0x1f = 5)
+        pkt1 = make_rtp_packet(1, b"\x05\x88\x84\x00\x00")
         receiver.process_rtp_packet(pkt1)
 
         assert len(receiver._raw_nal_buffer) > 0
-        assert b"\x00\x00\x00\x01\x07" in receiver._raw_nal_buffer
+        assert b"\x00\x00\x00\x01\x05" in receiver._raw_nal_buffer
 
 
 def test_extract_snapshot_ffmpeg_success():
@@ -30,7 +30,7 @@ def test_extract_snapshot_ffmpeg_success():
         receiver = StreamSnapshotReceiver(output_dir=tmpdir)
         receiver.start_capture()
 
-        pkt1 = make_rtp_packet(1, b"\x07\x42\xe0\x1f")
+        pkt1 = make_rtp_packet(1, b"\x05\x88\x84\x00\x00")
         receiver.process_rtp_packet(pkt1)
 
         jpg_path = os.path.join(tmpdir, "test_snapshot.jpg")
