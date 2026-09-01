@@ -402,51 +402,6 @@ class GoLiveWatcherConnection:
         if not data or len(data) < 12:
             return
 
-        # 0. Apply Discord RTP transport decryption if key/mode is present
-        vc = self._regular_vc
-        mode = getattr(self, "mode", None) or getattr(getattr(self, "ws", None), "mode", None) or getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
-        secret_key = getattr(self, "secret_key", None) or getattr(getattr(self, "ws", None), "secret_key", None) or getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
-
-        is_decrypted = False
-        if len(data) > 12:
-            nal_hdr = data[12] & 0x1F
-            if 1 <= nal_hdr <= 28:
-                is_decrypted = True
-
-        if not is_decrypted and isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
-            secret_key = bytes(secret_key)
-            if (
-                not hasattr(self, "_decryptor")
-                or getattr(self, "_decryptor_mode", None) != mode
-                or getattr(self, "_decryptor_key", None) != secret_key
-            ):
-                try:
-                    from discord.ext.voice_recv.reader import PacketDecryptor
-                    self._decryptor = PacketDecryptor(mode, secret_key)
-                    self._decryptor_mode = mode
-                    self._decryptor_key = secret_key
-                    log.info("[WATCHSTREAM] Instantiated PacketDecryptor with mode=%s (key_len=%d)", mode, len(secret_key))
-                except Exception as e:
-                    log.warning("[WATCHSTREAM] could not instantiate PacketDecryptor: %s", e)
-                    self._decryptor = None
-
-            if getattr(self, "_decryptor", None):
-                try:
-                    from discord.ext.voice_recv.rtp import RTPPacket
-                    rtp_pkt = RTPPacket(data)
-                    decrypted_payload = self._decryptor.decrypt_rtp(rtp_pkt)
-                    if decrypted_payload is not None:
-                        hdr = bytearray(rtp_pkt.header)
-                        data = bytes(hdr) + decrypted_payload
-                        is_decrypted = True
-                except Exception as e:
-                    log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
-        else:
-            is_decrypted = True
-
-        if not is_decrypted:
-            return
-
         # Check payload type — skip Opus audio (120, 111, 121, 77) and RTCP (72-76, 200-204)
         pt = data[1] & 0x7F
         if pt in (120, 111, 121, 77) or 72 <= pt <= 76 or 200 <= pt <= 204:
