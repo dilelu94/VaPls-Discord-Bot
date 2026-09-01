@@ -145,6 +145,7 @@ class GoLiveStream:
                 url=self.target_url,
                 live=self.is_live,
                 audio=True,
+                start_time=self.start_sec,
             )
             self.conn = getattr(client, "live_connections", {}).get(self.guild_id)
             self.video_player = getattr(client, "video_players", {}).get(self.guild_id)
@@ -864,27 +865,53 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
         log.warning("[STOPSTREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
 
+    log.info("[STOPSTREAM] received stop request for guild=%s", guild_id)
+
+    # 1. Disconnect GoLiveConnection first so screenshare (op 19 STREAM_DELETE) is sent to Discord
+    conn = getattr(client, "live_connections", {}).pop(guild_id, None)
+    if conn:
+        try:
+            log.info("[STOPSTREAM] disconnecting GoLiveConnection for guild=%s", guild_id)
+            await asyncio.wait_for(conn.disconnect(), timeout=3.0)
+        except Exception as e:
+            log.warning("[STOPSTREAM] conn disconnect error: %s", e)
+
+    # 2. Stop video player thread if active
+    vp = getattr(client, "video_players", {}).pop(guild_id, None)
+    if vp:
+        try:
+            vp.stop()
+        except Exception:
+            pass
+
+    # 3. Cancel slopsoil background tasks
     try:
         slopsoil_cancel_live_stream(client, guild_id)
     except Exception as e:
         log.warning("[STOPSTREAM] slopsoil_cancel_live_stream error: %s", e)
 
+    # 4. Stop GoLiveStream object without inline voice disconnect
     stream = _active_streams.pop(guild_id, None)
     if stream:
         try:
-            await stream.stop(disconnect_voice=True)
+            await stream.stop(disconnect_voice=False)
         except Exception as e:
             log.warning("[STOPSTREAM] stream stop failed: %s", e)
 
-    guild = client.get_guild(guild_id)
-    if guild:
-        vc = _vc_for_guild(guild)
-        if vc and vc.is_connected():
-            try:
-                await asyncio.wait_for(vc.disconnect(force=True), timeout=3.0)
-            except Exception as e:
-                log.warning("[STOPSTREAM] vc disconnect error: %s", e)
+    # 5. Schedule voice client disconnect in background after sending HTTP response
+    async def _delayed_vc_disconnect():
+        await asyncio.sleep(0.2)
+        guild = client.get_guild(guild_id)
+        if guild:
+            _schedule_nickname_restore(guild)
+            vc = _vc_for_guild(guild)
+            if vc and vc.is_connected():
+                try:
+                    await vc.disconnect(force=True)
+                except Exception as e:
+                    log.warning("[STOPSTREAM] vc disconnect error: %s", e)
 
+    asyncio.create_task(_delayed_vc_disconnect())
     log.info("[STOPSTREAM] stopped guild=%s", guild_id)
     return web.json_response({"stopped": True, "guild_id": guild_id})
 

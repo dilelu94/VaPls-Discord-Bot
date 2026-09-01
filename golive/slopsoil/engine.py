@@ -213,6 +213,7 @@ async def start_live_stream(
     live: bool | None = True,
     audio: bool = True,
     probe_size: int = 2_000_000,
+    start_time: float = 0.0,
 ) -> None:
     """
     Connect to voice and begin a go-live screenshare stream.
@@ -262,7 +263,7 @@ async def start_live_stream(
     proxy_vc = _GoLiveVCProxy(conn)
     video_player = H264VideoPlayer(
         url=url, voice_client=proxy_vc, fps=_stream_fps(),  # type: ignore[arg-type]
-        live=live, audio=audio, probe_size=probe_size,
+        live=live, audio=audio, probe_size=probe_size, start_time=start_time,
     )
     bot.video_players[guild.id] = video_player
     video_player.start()

@@ -793,6 +793,7 @@ class H264VideoPlayer(threading.Thread):
         live: bool | None = True,
         audio: bool = True,
         probe_size: int = 2_000_000,
+        start_time: float = 0.0,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
@@ -804,6 +805,7 @@ class H264VideoPlayer(threading.Thread):
         self._live = live
         self._audio = audio
         self._probe_size = probe_size
+        self._start_time = start_time
         self._seq: int = 0
         self._ts: int = 0
         self._ts_inc: int = round(_CLOCK / fps)
@@ -905,7 +907,9 @@ class H264VideoPlayer(threading.Thread):
     def _ffmpeg_cmd(self) -> list[str]:
         enc = self._enc
         assert enc is not None, "H264VideoPlayer started with no encoder available"
-        pre_input = enc.pre_input
+        pre_input = list(enc.pre_input)
+        if self._start_time > 0:
+            pre_input.extend(["-ss", str(self._start_time)])
 
         probe_args = [
             "-probesize", str(self._probe_size),
