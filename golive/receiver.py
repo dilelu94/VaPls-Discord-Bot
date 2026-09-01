@@ -115,15 +115,6 @@ class StreamSnapshotReceiver:
                             pass
                     log.warning("[RECEIVER] DAVE decrypt warning: %s", exc)
 
-        has_ext = bool((rtp_data[0] >> 4) & 0x01)
-        if has_ext and len(decrypted_payload) >= 4:
-            try:
-                ext_len = int.from_bytes(decrypted_payload[2:4], "big")
-                ext_bytes = 4 + (ext_len * 4)
-                if len(decrypted_payload) > ext_bytes:
-                    decrypted_payload = decrypted_payload[ext_bytes:]
-            except Exception:
-                pass
 
         clean_hdr = bytearray(rtp_data[:12])
         clean_hdr[0] = 0x80  # Force RTP v2, no extension, 0 CSRC since extension was stripped above
