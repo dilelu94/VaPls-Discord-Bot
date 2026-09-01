@@ -172,6 +172,11 @@ class DaveSession:
 
     # ── Public API (mirrors davey.DaveSession) ────────────────────────────────
 
+    @property
+    def ready(self) -> bool:
+        """Return True if the DAVE key ratchet is established."""
+        return self._ready
+
     def reinit(self, protocol_version: int, user_id: int, channel_id: int) -> None:
         self._protocol_version = protocol_version
         self._user_id = user_id

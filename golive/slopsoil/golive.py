@@ -151,7 +151,7 @@ class GoLiveConnection:
         return (
             self.dave_protocol_version != 0
             and self.dave_session is not None
-            and self.dave_session.ready
+            and getattr(self.dave_session, "ready", False)
         )
 
     async def reinit_dave_session(self, force: bool = False) -> None:
