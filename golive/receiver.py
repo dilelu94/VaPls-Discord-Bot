@@ -180,7 +180,7 @@ class StreamSnapshotReceiver:
             ]
             res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10.0)
 
-            if res.returncode == 0 and os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
+            if os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
                 log.info("[RECEIVER] Snapshot extracted successfully: %s (%d bytes)", jpg_path, os.path.getsize(jpg_path))
                 return os.path.abspath(jpg_path)
             else:
