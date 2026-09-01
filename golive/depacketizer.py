@@ -74,7 +74,8 @@ class H264RTPDepacketizer:
             if self._fu_in_progress:
                 self._fu_buffer.clear()
                 self._fu_in_progress = False
-            yield ANNEXB_PREFIX + payload
+            clean_payload = bytes([payload[0] & 0x7F]) + payload[1:]
+            yield ANNEXB_PREFIX + clean_payload
 
         # FU-A (Fragmentation Unit Type A - type 28 / 0x1C)
         elif nal_type == 28:
