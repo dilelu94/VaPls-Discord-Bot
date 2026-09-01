@@ -129,7 +129,28 @@ class StreamSnapshotReceiver:
             decrypted_buffer = bytes(final_buffer)
             if dave_session and hasattr(dave_session, "decrypt_h264"):
                 try:
-                    decrypted_buffer = dave_session.decrypt_h264(ssrc or 0, bytes(final_buffer), user_id=user_id)
+                    raw_bytes = bytes(final_buffer)
+                    parts = raw_bytes.split(b"\x00\x00\x00\x01")
+                    nals = [b"\x00\x00\x00\x01" + p for p in parts if p]
+
+                    frames = []
+                    cur_frame = []
+                    for nal in nals:
+                        if len(nal) > 4:
+                            nt = nal[4] & 0x1F
+                            if nt in (7, 9) and cur_frame:
+                                frames.append(b"".join(cur_frame))
+                                cur_frame = []
+                        cur_frame.append(nal)
+                    if cur_frame:
+                        frames.append(b"".join(cur_frame))
+
+                    decrypted_chunks = []
+                    for fr in frames:
+                        dec_fr = dave_session.decrypt_h264(ssrc or 0, fr, user_id=user_id)
+                        decrypted_chunks.append(dec_fr if dec_fr is not None else fr)
+                    decrypted_buffer = b"".join(decrypted_chunks)
+                    log.info("[RECEIVER] DAVE frame-by-frame decrypted %d frames (%d -> %d bytes)", len(frames), len(raw_bytes), len(decrypted_buffer))
                 except Exception as exc:
                     log.warning("[RECEIVER] DAVE frame decrypt_h264 warning: %s", exc)
 
