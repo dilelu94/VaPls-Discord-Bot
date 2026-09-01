@@ -412,6 +412,8 @@ class GoLiveWatcherConnection:
 
         # Extract SSRC from 12-byte RTP header (bytes 8..11)
         ssrc = struct.unpack("!I", data[8:12])[0]
+        self.video_ssrc = ssrc
+        self.receiver.ssrc = ssrc
 
         if not hasattr(self, "_packet_count"):
             self._packet_count = 0
