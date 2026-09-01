@@ -97,10 +97,14 @@ async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: floa
     fut = loop.create_future()
 
     async def _on_socket_response(msg):
-        if isinstance(msg, dict) and msg.get("t") == event_name:
-            d = msg.get("d", {})
-            if predicate(d) and not fut.done():
-                fut.set_result(d)
+        if isinstance(msg, dict):
+            event_type = msg.get("t")
+            if event_type in ("STREAM_SERVER_UPDATE", "STREAM_CREATE", "STREAM_DELETE", "VIDEO"):
+                log.info("[WATCHER-GW] Socket event %s: payload=%s", event_type, msg.get("d"))
+            if event_type == event_name:
+                d = msg.get("d", {})
+                if predicate(d) and not fut.done():
+                    fut.set_result(d)
 
     add_listener_fn = getattr(bot, "add_listener", None)
     if add_listener_fn and callable(add_listener_fn):
