@@ -329,14 +329,6 @@ class DaveSession:
             except Exception:
                 pass
 
-        try:
-            self._decryptor.transition_to_passthrough_mode(True)
-            res = self._decryptor.decrypt(dave.MediaType.video, data)
-            if res is not None:
-                return res
-        except Exception:
-            pass
-
         return data
 
     def __repr__(self) -> str:
