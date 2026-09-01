@@ -92,8 +92,27 @@ async def _send_gateway_json(ws, data: dict) -> bool:
         except Exception:
             pass
 
-    log.error("[WATCHER] Unable to send JSON payload over websocket %s", type(ws))
-    return False
+async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: float = 5.0) -> Optional[dict]:
+    loop = asyncio.get_event_loop()
+    fut = loop.create_future()
+
+    async def _on_socket_response(msg):
+        if isinstance(msg, dict) and msg.get("t") == event_name:
+            d = msg.get("d", {})
+            if predicate(d) and not fut.done():
+                fut.set_result(d)
+
+    add_listener_fn = getattr(bot, "add_listener", None)
+    if add_listener_fn and callable(add_listener_fn):
+        bot.add_listener(_on_socket_response, "on_socket_response")
+    try:
+        return await asyncio.wait_for(fut, timeout=timeout)
+    except Exception:
+        return None
+    finally:
+        remove_listener_fn = getattr(bot, "remove_listener", None)
+        if remove_listener_fn and callable(remove_listener_fn):
+            bot.remove_listener(_on_socket_response, "on_socket_response")
 
 
 class GoLiveWatcherConnection:
@@ -242,19 +261,25 @@ class GoLiveWatcherConnection:
         """Discreetly sends STREAM_WATCH and STREAM_SET_PAUSED to trigger stream packet flow."""
         main_ws = self._bot.ws
         if not main_ws:
-            log.warning("[WATCHER] Main bot websocket is not connected")
+            log.warning("[WATCHER] bot.ws is None — cannot connect stream watcher")
             return False
 
-        # Register gateway event futures BEFORE sending op 20 to avoid losing
-        # events that arrive before we start listening.
         stream_key = self._stream_key
-        create_fut = main_ws.wait_for(
-            "STREAM_CREATE",
-            predicate=lambda d: d.get("stream_key", "") == stream_key,
+        server_fut = asyncio.create_task(
+            _wait_for_gateway_event(
+                self._bot,
+                "STREAM_SERVER_UPDATE",
+                lambda d: d.get("stream_key", "") == stream_key,
+                timeout=5.0,
+            )
         )
-        server_fut = main_ws.wait_for(
-            "STREAM_SERVER_UPDATE",
-            predicate=lambda d: d.get("stream_key", "") == stream_key,
+        create_fut = asyncio.create_task(
+            _wait_for_gateway_event(
+                self._bot,
+                "STREAM_CREATE",
+                lambda d: d.get("stream_key", "") == stream_key,
+                timeout=5.0,
+            )
         )
 
         log.info(
@@ -303,7 +328,9 @@ class GoLiveWatcherConnection:
 
             # 4. Connect dedicated stream WebSocket & UDP socket if STREAM_SERVER_UPDATE is received
             try:
-                server_data = await asyncio.wait_for(server_fut, timeout=5.0)
+                server_data = await server_fut
+                if not server_data:
+                    raise asyncio.TimeoutError("STREAM_SERVER_UPDATE timed out")
                 endpoint = server_data.get("endpoint", "")
                 if endpoint.startswith("wss://"):
                     endpoint = endpoint[6:]
@@ -311,8 +338,9 @@ class GoLiveWatcherConnection:
                 self.token = server_data.get("token")
                 log.info("[WATCHER] Received STREAM_SERVER_UPDATE: endpoint=%s", self.endpoint)
 
-                create_data = await asyncio.wait_for(create_fut, timeout=3.0)
-                self.server_id = int(create_data["rtc_server_id"])
+                create_data = await create_fut
+                if create_data and "rtc_server_id" in create_data:
+                    self.server_id = int(create_data["rtc_server_id"])
 
                 if self.endpoint and DiscordVoiceWebSocket is not None:
                     self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
