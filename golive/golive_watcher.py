@@ -430,8 +430,8 @@ class GoLiveWatcherConnection:
         self._packet_count += 1
         if self._packet_count == 1 or self._packet_count % 100 == 0:
             log.info(
-                "[WATCHSTREAM] Video RTP packet #%d received (PT=%d, SSRC=%d, len=%d)",
-                self._packet_count, pt, ssrc, len(data)
+                "[WATCHSTREAM] Video RTP packet #%d (PT=%d, SSRC=%d, len=%d, hex_hdr=%s)",
+                self._packet_count, pt, ssrc, len(data), data[:16].hex()
             )
 
         dave_sess = getattr(self, "dave_session", None) or getattr(self._regular_vc, "dave_session", None)
