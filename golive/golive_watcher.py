@@ -577,7 +577,14 @@ class GoLiveWatcherConnection:
         )
 
         # Extract snapshot JPEG
-        snapshot_path = self.receiver.extract_snapshot(filename=filename)
+        ds = self.dave_session or getattr(self._regular_vc, "dave_session", None)
+        ssrc = getattr(self, "_target_ssrc", None)
+        snapshot_path = self.receiver.extract_snapshot(
+            filename=filename,
+            dave_session=ds,
+            ssrc=ssrc,
+            user_id=self.target_user_id,
+        )
         log.info("[WATCHSTREAM] Snapshot extraction result: %s", snapshot_path)
         return snapshot_path
 

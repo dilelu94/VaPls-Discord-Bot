@@ -80,20 +80,8 @@ class StreamSnapshotReceiver:
         header = rtp_data[:offset]
         raw_payload = rtp_data[offset:]
 
-        # DAVE E2EE video decryption on RTP payload if session is present
-        decrypted_payload = raw_payload
-        if dave_session and hasattr(dave_session, "decrypt_h264"):
-            try:
-                decrypted_payload = dave_session.decrypt_h264(ssrc or 0, raw_payload, user_id=user_id)
-            except Exception as exc:
-                log.warning("[RECEIVER] DAVE decrypt_h264 warning: %s", exc)
-
-        clean_hdr = bytearray(rtp_data[:12])
-        clean_hdr[0] = 0x80  # Force RTP v2, no extension, 0 CSRC since extension was stripped above
-        decrypted_rtp = bytes(clean_hdr) + decrypted_payload
-
         # Depacketize RTP -> Annex-B NAL units
-        for nal in self.depacketizer.depacketize(decrypted_rtp):
+        for nal in self.depacketizer.depacketize(rtp_data):
             if len(nal) > 4:
                 nal_type = nal[4] & 0x1F
                 if nal_type in self._nal_counts:
@@ -117,6 +105,9 @@ class StreamSnapshotReceiver:
         self,
         duration_sec: float = 3.0,
         filename: str = "latest_snapshot.jpg",
+        dave_session=None,
+        ssrc: Optional[int] = None,
+        user_id: Optional[int] = None,
     ) -> Optional[str]:
         """Saves collected NAL units to disk and extracts a JPEG frame using FFmpeg."""
         if not self._raw_nal_buffer:
@@ -134,9 +125,17 @@ class StreamSnapshotReceiver:
                 final_buffer.extend(self._pps_nal)
             final_buffer.extend(self._raw_nal_buffer)
 
+            # Perform DAVE E2EE frame decryption on reassembled Annex-B bitstream if DAVE session present
+            decrypted_buffer = bytes(final_buffer)
+            if dave_session and hasattr(dave_session, "decrypt_h264"):
+                try:
+                    decrypted_buffer = dave_session.decrypt_h264(ssrc or 0, bytes(final_buffer), user_id=user_id)
+                except Exception as exc:
+                    log.warning("[RECEIVER] DAVE frame decrypt_h264 warning: %s", exc)
+
             with open(h264_path, "wb") as f:
-                f.write(final_buffer)
-            log.info("[RECEIVER] Saved %d bytes of raw H.264 bitstream to %s", len(final_buffer), h264_path)
+                f.write(decrypted_buffer)
+            log.info("[RECEIVER] Saved %d bytes of raw H.264 bitstream to %s", len(decrypted_buffer), h264_path)
 
             # Direct JPEG extraction from raw H.264 bitstream using FFmpeg
             cmd = [
