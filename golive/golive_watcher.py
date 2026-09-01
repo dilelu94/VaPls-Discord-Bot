@@ -371,20 +371,7 @@ class GoLiveWatcherConnection:
         secret_key = getattr(self, "secret_key", None) or getattr(getattr(self, "ws", None), "secret_key", None) or getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
 
         is_decrypted = False
-        pt = data[1] & 0x7F
-
-        # Check if packet is ALREADY decrypted by VoiceRecvClient reader thread
-        if pt in (101, 102) and len(data) > 12:
-            offset = 12 + ((data[0] & 0x0F) * 4)
-            if ((data[0] >> 4) & 1) and len(data) >= offset + 4:
-                ext_len = struct.unpack("!H", data[offset + 2 : offset + 4])[0]
-                offset += 4 + (ext_len * 4)
-            if len(data) > offset:
-                nal_type = data[offset] & 0x1F
-                if nal_type in (1, 5, 7, 8, 24, 28):
-                    is_decrypted = True
-
-        if not is_decrypted and isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
+        if isinstance(mode, str) and secret_key and isinstance(secret_key, (bytes, list, tuple)):
             secret_key = bytes(secret_key)
             if (
                 not hasattr(self, "_decryptor")
@@ -412,6 +399,8 @@ class GoLiveWatcherConnection:
                         is_decrypted = True
                 except Exception as e:
                     log.debug("[WATCHSTREAM] transport decrypt failed: %s", e)
+        else:
+            is_decrypted = True
 
         if not is_decrypted:
             return

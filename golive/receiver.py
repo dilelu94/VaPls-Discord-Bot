@@ -128,9 +128,9 @@ class StreamSnapshotReceiver:
 
         try:
             final_buffer = bytearray()
-            if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
+            if self._sps_nal:
                 final_buffer.extend(self._sps_nal)
-            if self._pps_nal and self._pps_nal not in self._raw_nal_buffer and self._pps_nal not in final_buffer:
+            if self._pps_nal:
                 final_buffer.extend(self._pps_nal)
             final_buffer.extend(self._raw_nal_buffer)
 
