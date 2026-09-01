@@ -126,7 +126,7 @@ class StreamSnapshotReceiver:
                 pass
 
         clean_hdr = bytearray(rtp_data[:12])
-        clean_hdr[0] &= ~0x1F  # Clear extension bit (0x10) and CSRC count (0x0F) since headers were already stripped
+        clean_hdr[0] = 0x80  # Force RTP v2, no extension, 0 CSRC since extension was stripped above
         decrypted_rtp = bytes(clean_hdr) + decrypted_payload
 
         # 2. Depacketize RTP -> Annex-B NAL units (sync to first keyframe NAL 7 or keyframe with SPS/PPS)
