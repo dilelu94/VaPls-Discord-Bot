@@ -39,8 +39,13 @@ def test_extract_snapshot_ffmpeg_success():
             mock_run.return_value.returncode = 0
 
             def create_fake_jpg(*args, **kwargs):
+                cmd = args[0] if args else []
+                if cmd and len(cmd) > 0:
+                    out_file = cmd[-1]
+                    with open(out_file, "wb") as f:
+                        f.write(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 2000)
                 with open(jpg_path, "wb") as f:
-                    f.write(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00")
+                    f.write(b"\xff\xd8\xff\xe0\x00\x10JFIF\x00" + b"\x00" * 2000)
                 res = MagicMock()
                 res.returncode = 0
                 res.stderr = b""

@@ -346,6 +346,7 @@ class GoLiveStream:
                             # Set nickname to reflect new video
                             guild = client.get_guild(self.guild_id)
                             if guild:
+                                _save_original_nickname(guild)
                                 await _set_nickname(guild, f"GoLive - {next_title}")
                             
                             await self._start_players()
@@ -464,7 +465,7 @@ class GoLiveStream:
 
         guild = client.get_guild(self.guild_id)
         if guild:
-            _schedule_nickname_restore(guild)
+            await _restore_nickname(guild)
 
         log.info("[STREAM] Stream stopped and cleaned up")
 
@@ -590,45 +591,63 @@ class HeadbanzGoLiveStream:
                 pass
         guild = client.get_guild(self.guild_id)
         if guild:
-            _schedule_nickname_restore(guild)
+            await _restore_nickname(guild)
         log.info("[HEADBANZ] Stream stopped and cleaned up")
 
 
 _active_streams: dict[int, GoLiveStream] = {}
 _nick_restore_tasks: dict[int, asyncio.Task] = {}
+_original_nicknames: dict[int, Optional[str]] = {}
 
-DEFAULT_NICKNAME = "GoLive - VaPls"
+DEFAULT_NICKNAME: Optional[str] = None
 
 
-async def _set_nickname(guild: discord.Guild, name: str) -> None:
-    """Change the golive bot's nickname in a guild (32-char Discord limit)."""
+def _save_original_nickname(guild: discord.Guild) -> None:
+    """Save the bot's current nickname in guild before changing it for a stream."""
+    if guild.id not in _original_nicknames:
+        me = getattr(guild, "me", None) or guild.get_member(client.user.id)
+        current_nick = me.nick if me else None
+        _original_nicknames[guild.id] = current_nick
+        log.info("[NICK] Saved original nick '%s' for guild=%s", current_nick, guild.id)
+
+
+async def _set_nickname(guild: discord.Guild, name: Optional[str]) -> None:
+    """Change the golive bot's nickname in a guild (32-char Discord limit). If name is None, resets nick to normal."""
     if os.getenv("ENABLE_NICKNAME_CHANGE", "true").lower() not in ("1", "true", "yes"):
         log.info("[NICK] skipped because ENABLE_NICKNAME_CHANGE=false")
         return
-    nick = name[:32]
+    nick = name[:32] if name else None
     try:
         me = getattr(guild, "me", None) or guild.get_member(client.user.id)
         if me is None:
             me = await guild.fetch_member(client.user.id)
         if me is not None:
-            await me.edit(nick=nick)
-            log.info("[NICK] set to '%s' in guild=%s", nick, guild.id)
+            if me.nick != nick:
+                await me.edit(nick=nick)
+                log.info("[NICK] set to '%s' in guild=%s", nick, guild.id)
         else:
             log.warning("[NICK] bot member not found in guild=%s", guild.id)
     except Exception as e:
         log.warning("[NICK] failed to set nick in guild=%s: %s", guild.id, e)
 
 
-def _schedule_nickname_restore(guild: discord.Guild) -> None:
-    async def _delayed_restore():
-        await asyncio.sleep(30)
-        await _set_nickname(guild, DEFAULT_NICKNAME)
-        _nick_restore_tasks.pop(guild.id, None)
-
-    task = _nick_restore_tasks.get(guild.id)
-    if task:
+async def _restore_nickname(guild: discord.Guild) -> None:
+    """Immediately restore the bot's original nickname in a guild."""
+    task = _nick_restore_tasks.pop(guild.id, None)
+    if task and not task.done():
         task.cancel()
-    _nick_restore_tasks[guild.id] = asyncio.create_task(_delayed_restore())
+
+    target_nick = _original_nicknames.pop(guild.id, DEFAULT_NICKNAME)
+    log.info("[NICK] Restoring original nick '%s' in guild=%s", target_nick, guild.id)
+    await _set_nickname(guild, target_nick)
+
+
+def _schedule_nickname_restore(guild: discord.Guild) -> None:
+    """Schedule immediate nickname restoration task."""
+    task = _nick_restore_tasks.get(guild.id)
+    if task and not task.done():
+        task.cancel()
+    _nick_restore_tasks[guild.id] = asyncio.create_task(_restore_nickname(guild))
 
 
 def _guild_allowed(guild_id: int) -> bool:
@@ -766,8 +785,9 @@ async def _relay_stream(request: web.Request) -> web.Response:
     vc = _vc_for_guild(guild)
 
     if stream_title:
+        _save_original_nickname(guild)
         task = _nick_restore_tasks.pop(guild_id, None)
-        if task:
+        if task and not task.done():
             task.cancel()
         await _set_nickname(guild, f"GoLive - {stream_title}")
 
@@ -841,6 +861,7 @@ async def _relay_headbanz(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=500)
 
     _active_streams[guild_id] = stream
+    _save_original_nickname(guild)
     await _set_nickname(guild, "GoLive - Headbanz")
     return web.json_response(
         {
@@ -903,7 +924,7 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
         await asyncio.sleep(0.2)
         guild = client.get_guild(guild_id)
         if guild:
-            _schedule_nickname_restore(guild)
+            await _restore_nickname(guild)
             vc = _vc_for_guild(guild)
             if vc and vc.is_connected():
                 try:
@@ -1048,6 +1069,9 @@ async def _idle_watcher(guild_id: int):
                         await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
                     except Exception as e:
                         log.warning("[WATCHDOG] Disconnect failed: %s", e)
+                    guild = client.get_guild(guild_id)
+                    if guild:
+                        await _restore_nickname(guild)
                     break
     except asyncio.CancelledError:
         pass
@@ -1073,6 +1097,12 @@ def _stop_idle_watchdog(guild_id: int):
 @client.event
 async def on_ready():
     log.info("GoLive online as %s (id=%s)", client.user, client.user.id)
+    for guild in client.guilds:
+        if guild.id not in _active_streams:
+            me = getattr(guild, "me", None) or guild.get_member(client.user.id)
+            if me and me.nick and me.nick.startswith("GoLive - "):
+                log.info("[NICK] Clearing stale stream nick '%s' in guild=%s", me.nick, guild.id)
+                await _set_nickname(guild, None)
 
 
 @client.event
@@ -1084,7 +1114,9 @@ async def on_voice_state_update(member, before, after):
         else:
             # Left voice
             if before.channel is not None:
-                _stop_idle_watchdog(before.channel.guild.id)
+                guild = before.channel.guild
+                _stop_idle_watchdog(guild.id)
+                await _restore_nickname(guild)
 
 
 # ---------- Main ------------------------------------------------------------
