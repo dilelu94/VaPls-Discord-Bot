@@ -30,10 +30,12 @@ class StreamSnapshotReceiver:
         self._sample_start_time: Optional[float] = None
         self._is_capturing: bool = False
         self._seen_keyframe: bool = False
+        self._pending_frame_nals: list[bytes] = []
 
     def start_capture(self) -> None:
         self.depacketizer.reset()
         self._raw_nal_buffer.clear()
+        self._pending_frame_nals.clear()
         self._sps_nal = None
         self._pps_nal = None
         self._sample_start_time = time.monotonic()
@@ -99,17 +101,47 @@ class StreamSnapshotReceiver:
                     log.info("[RECEIVER] Synchronized to H.264 keyframe boundary (NAL type %d)", nal_type)
 
             if self._seen_keyframe:
-                self._raw_nal_buffer.extend(nal)
+                if dave_session and hasattr(dave_session, "decrypt_h264"):
+                    if len(nal) > 4 and (nal[4] & 0x1F) in (7, 9) and self._pending_frame_nals:
+                        frame_bytes = b"".join(self._pending_frame_nals)
+                        try:
+                            dec_bytes = dave_session.decrypt_h264(ssrc or 0, frame_bytes, user_id=user_id)
+                            if dec_bytes is not None:
+                                frame_bytes = dec_bytes
+                        except Exception as exc:
+                            log.debug("[RECEIVER] real-time DAVE decrypt note: %s", exc)
+                        self._raw_nal_buffer.extend(frame_bytes)
+                        self._pending_frame_nals = []
+
+                    self._pending_frame_nals.append(bytes(nal))
+                else:
+                    self._raw_nal_buffer.extend(nal)
+
+    def flush_pending_frame(self, dave_session=None, ssrc: Optional[int] = None, user_id: Optional[int] = None) -> None:
+        """Flushes and decrypts any remaining pending Access Unit frame into _raw_nal_buffer."""
+        if self._pending_frame_nals:
+            frame_bytes = b"".join(self._pending_frame_nals)
+            if dave_session and hasattr(dave_session, "decrypt_h264"):
+                try:
+                    dec_bytes = dave_session.decrypt_h264(ssrc or 0, frame_bytes, user_id=user_id)
+                    if dec_bytes is not None:
+                        frame_bytes = dec_bytes
+                except Exception as exc:
+                    log.debug("[RECEIVER] real-time DAVE flush decrypt note: %s", exc)
+            self._raw_nal_buffer.extend(frame_bytes)
+            self._pending_frame_nals = []
 
     def extract_snapshot(
         self,
-        duration_sec: float = 3.0,
+        duration_sec: float = 6.0,
         filename: str = "latest_snapshot.jpg",
         dave_session=None,
         ssrc: Optional[int] = None,
         user_id: Optional[int] = None,
     ) -> Optional[str]:
         """Saves collected NAL units to disk and extracts a JPEG frame using FFmpeg."""
+        self.flush_pending_frame(dave_session=dave_session, ssrc=ssrc, user_id=user_id)
+
         if not self._raw_nal_buffer:
             log.warning("[RECEIVER] No NAL units collected in buffer")
             return None
@@ -119,42 +151,13 @@ class StreamSnapshotReceiver:
 
         try:
             final_buffer = bytearray()
-            if self._sps_nal:
+            if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
                 final_buffer.extend(self._sps_nal)
-            if self._pps_nal:
+            if self._pps_nal and self._pps_nal not in self._raw_nal_buffer:
                 final_buffer.extend(self._pps_nal)
             final_buffer.extend(self._raw_nal_buffer)
 
-            # Perform DAVE E2EE frame decryption on reassembled Annex-B bitstream if DAVE session present
             decrypted_buffer = bytes(final_buffer)
-            if dave_session and hasattr(dave_session, "decrypt_h264"):
-                try:
-                    raw_bytes = bytes(final_buffer)
-                    parts = raw_bytes.split(b"\x00\x00\x00\x01")
-                    nals = [b"\x00\x00\x00\x01" + p for p in parts if p]
-
-                    frames = []
-                    cur_frame = []
-                    for nal in nals:
-                        if len(nal) > 4:
-                            nt = nal[4] & 0x1F
-                            if nt in (7, 9) and cur_frame:
-                                frames.append(b"".join(cur_frame))
-                                cur_frame = []
-                        cur_frame.append(nal)
-                    if cur_frame:
-                        frames.append(b"".join(cur_frame))
-
-                    decrypted_chunks = []
-                    target_ssrc = ssrc if ssrc is not None else getattr(self, "ssrc", 0)
-                    for fr in frames:
-                        dec_fr = dave_session.decrypt_h264(target_ssrc, fr, user_id=user_id)
-                        decrypted_chunks.append(dec_fr if dec_fr is not None else fr)
-                    decrypted_buffer = b"".join(decrypted_chunks)
-                    log.info("[RECEIVER] DAVE frame-by-frame decrypted %d frames for ssrc=%s, user_id=%s (%d -> %d bytes)", len(frames), target_ssrc, user_id, len(raw_bytes), len(decrypted_buffer))
-                except Exception as exc:
-                    log.warning("[RECEIVER] DAVE frame decrypt_h264 warning: %s", exc)
-
             with open(h264_path, "wb") as f:
                 f.write(decrypted_buffer)
             log.info("[RECEIVER] Saved %d bytes of raw H.264 bitstream to %s", len(decrypted_buffer), h264_path)
