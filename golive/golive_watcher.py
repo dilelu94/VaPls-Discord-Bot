@@ -92,18 +92,18 @@ async def _send_gateway_json(ws, data: dict) -> bool:
         except Exception:
             pass
 
-async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: float = 5.0) -> Optional[dict]:
+async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: float = 8.0) -> Optional[dict]:
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
 
-    async def _on_socket_response(msg):
+    def _check_msg(msg):
         try:
             if isinstance(msg, (str, bytes)):
                 msg = json.loads(msg)
             if isinstance(msg, dict):
                 event_type = msg.get("t")
                 if event_type in ("STREAM_SERVER_UPDATE", "STREAM_CREATE", "STREAM_DELETE", "VIDEO"):
-                    log.info("[WATCHER-GW] Socket event %s: payload=%s", event_type, msg.get("d"))
+                    log.info("[WATCHER-GW] Event %s: payload=%s", event_type, msg.get("d"))
                 if event_type == event_name:
                     d = msg.get("d", {})
                     if predicate(d) and not fut.done():
@@ -111,9 +111,21 @@ async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: floa
         except Exception:
             pass
 
+    async def _on_socket_response(msg):
+        _check_msg(msg)
+
+    async def _on_socket_raw_receive(msg):
+        _check_msg(msg)
+
     add_listener_fn = getattr(bot, "add_listener", None)
+    events_to_listen = ("on_socket_response", "socket_response", "on_socket_raw_receive", "socket_raw_receive")
     if add_listener_fn and callable(add_listener_fn):
-        bot.add_listener(_on_socket_response, "on_socket_response")
+        for evt in events_to_listen:
+            try:
+                add_listener_fn(_on_socket_response, evt)
+                add_listener_fn(_on_socket_raw_receive, evt)
+            except Exception:
+                pass
     try:
         return await asyncio.wait_for(fut, timeout=timeout)
     except Exception:
@@ -121,7 +133,12 @@ async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: floa
     finally:
         remove_listener_fn = getattr(bot, "remove_listener", None)
         if remove_listener_fn and callable(remove_listener_fn):
-            bot.remove_listener(_on_socket_response, "on_socket_response")
+            for evt in events_to_listen:
+                try:
+                    remove_listener_fn(_on_socket_response, evt)
+                    remove_listener_fn(_on_socket_raw_receive, evt)
+                except Exception:
+                    pass
 
 
 class GoLiveWatcherConnection:

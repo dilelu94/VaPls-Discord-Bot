@@ -2426,51 +2426,6 @@ def _schedule_idle_leave(guild: discord.Guild) -> None:
     )
 
 
-def install_socket_video_interceptor(vc):
-    """Hooks vc.socket.recv to intercept and decrypt video RTP packets before voice_recv drops them."""
-    if not vc:
-        return
-    sock = getattr(vc, "socket", None) or getattr(getattr(vc, "_connection", None), "socket", None)
-    if sock is None or not hasattr(sock, "recv") or not callable(getattr(sock, "recv", None)):
-        return
-    if getattr(sock, "_video_intercepted", False):
-        return
-
-    orig_recv = sock.recv
-
-    def _video_recv(bufsize, flags=0):
-        data = orig_recv(bufsize, flags)
-        if data and len(data) >= 12:
-            pt = data[1] & 0x7F
-            if pt not in (120, 111, 121, 77) and not (72 <= pt <= 76 or 200 <= pt <= 204):
-                try:
-                    mode = getattr(vc, "mode", None) or getattr(getattr(vc, "_connection", None), "mode", None)
-                    secret_key = getattr(vc, "secret_key", None) or getattr(getattr(vc, "_connection", None), "secret_key", None)
-                    if mode and secret_key:
-                        from discord.ext.voice_recv.reader import PacketDecryptor
-                        from discord.ext.voice_recv.rtp import RTPPacket
-                        from golive.golive_watcher import dispatch_rtp_packet
-
-                        if not hasattr(vc, "_video_decryptor") or getattr(vc, "_video_decryptor_mode", None) != mode:
-                            vc._video_decryptor = PacketDecryptor(mode, bytes(secret_key))
-                            vc._video_decryptor_mode = mode
-
-                        rtp_pkt = RTPPacket(data)
-                        decrypted_payload = vc._video_decryptor.decrypt_rtp(rtp_pkt)
-                        if decrypted_payload is not None:
-                            hdr = bytearray(rtp_pkt.header)
-                            hdr[0] = hdr[0] & 0xE0
-                            full_rtp = bytes(hdr) + decrypted_payload
-                            dispatch_rtp_packet(full_rtp)
-                except Exception as exc:
-                    pass
-        return data
-
-    sock.recv = _video_recv
-    sock._video_intercepted = True
-    log.info("[WATCHSTREAM] Installed socket video interceptor on voice socket")
-
-
 async def _start_listening(vc: voice_recv.VoiceRecvClient):
     """Ensure the sink is attached once the voice client is connected.
 
@@ -2490,7 +2445,6 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
         log.warning(f"[VOICE] Timeout waiting for connection in {vc.channel.name}")
         return
     await asyncio.sleep(1.0)
-    install_socket_video_interceptor(vc)
     sink = _make_voice_sink()
     log.info(
         f"[VOICE] Starting listener in {vc.channel.name} (sink={type(sink).__name__})"
