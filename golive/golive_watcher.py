@@ -461,7 +461,7 @@ class GoLiveWatcherConnection:
                 rtp_packet = RTPPacket(data)
                 decrypted_payload = self._decryptor.decrypt_rtp(rtp_packet)
             except Exception as e:
-                log.debug("[WATCHSTREAM] RTP decryption note: %s", e)
+                log.info("[WATCHSTREAM] RTP decryption error: %s", e)
 
         if decrypted_payload:
             clean_byte0 = data[0] & ~0x10  # Clear extension bit (0x10) as decrypt_rtp stripped extension headers
