@@ -441,9 +441,33 @@ class GoLiveWatcherConnection:
                 self._packet_count, pt, ssrc, len(data), data[:16].hex()
             )
 
+        # Get decryptor from watcher or voice client if available
+        if not getattr(self, "_decryptor", None):
+            mode = getattr(self, "mode", None) or getattr(self._regular_vc, "mode", None)
+            secret_key = getattr(self, "secret_key", None) or getattr(self._regular_vc, "secret_key", None)
+            if mode and secret_key:
+                try:
+                    from discord.ext.voice_recv.reader import PacketDecryptor
+                    sec_bytes = bytes(secret_key) if isinstance(secret_key, (list, tuple, bytearray)) else secret_key
+                    self._decryptor = PacketDecryptor(mode, sec_bytes)
+                except Exception as e:
+                    log.warning("[WATCHER] Failed to create PacketDecryptor: %s", e)
+
+        # Attempt RTP transport decryption
+        decrypted_payload = None
+        if getattr(self, "_decryptor", None):
+            try:
+                from discord.ext.voice_recv.rtp import RTPPacket
+                rtp_packet = RTPPacket(data)
+                decrypted_payload = self._decryptor.decrypt_rtp(rtp_packet)
+            except Exception as e:
+                log.debug("[WATCHSTREAM] RTP decryption note: %s", e)
+
+        rtp_data_to_process = (data[:12] + decrypted_payload) if decrypted_payload else data
+
         dave_sess = getattr(self, "dave_session", None) or getattr(self._regular_vc, "dave_session", None)
         self.receiver.process_rtp_packet(
-            rtp_data=data,
+            rtp_data=rtp_data_to_process,
             dave_session=dave_sess,
             ssrc=ssrc,
             user_id=self.target_user_id,
