@@ -201,52 +201,44 @@ def _install_dave_patch():
 
             is_video = hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77)
 
-            _dave_stats["total"] += 1
-            n = _dave_stats["total"]
-
-            if davey is None:
-                _dave_stats["dave_skip"] += 1
-                return raw
-
             vc = getattr(self, "_voice_client", None)
-            if vc is None:
-                _dave_stats["dave_skip"] += 1
-                return raw
-
-            state = getattr(vc, "_connection", None)
+            state = getattr(vc, "_connection", None) if vc else None
             dave = getattr(state, "dave_session", None) if state else None
 
-            if dave is None or not getattr(dave, "ready", False):
-                _dave_stats["dave_skip"] += 1
-                return raw if is_video else _OPUS_SILENCE
-
-            ssrc_map = getattr(vc, "_ssrc_to_id", None)
-            if not ssrc_map:
-                ssrc_map = getattr(vc, "ssrc_user_map", {}) or {}
+            ssrc_map = (getattr(vc, "_ssrc_to_id", None) or getattr(vc, "ssrc_user_map", {})) if vc else {}
             uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
-            if not uid:
-                _dave_stats["dave_skip"] += 1
-                return raw if is_video else _OPUS_SILENCE
 
-            m_type = davey.MediaType.video if is_video else davey.MediaType.audio
-            try:
-                decrypted = dave.decrypt(uid, m_type, raw)
-                _dave_stats["dave_ok"] += 1
-                if is_video and decrypted:
+            if is_video:
+                payload = raw
+                if dave is not None and getattr(dave, "ready", False) and uid and davey is not None:
                     try:
-                        from golive.golive_watcher import dispatch_rtp_packet
-                        if hasattr(packet, "header") and len(packet.header) >= 12:
-                            hdr = bytes(packet.header)
-                            clean_hdr = bytes([hdr[0] & 0xF0]) + hdr[1:12]
-                            dispatch_rtp_packet(clean_hdr + decrypted)
+                        decrypted = dave.decrypt(uid, davey.MediaType.video, raw)
+                        if decrypted:
+                            payload = decrypted
                     except Exception:
                         pass
+                try:
+                    from golive.golive_watcher import dispatch_rtp_packet
+                    if hasattr(packet, "header") and len(packet.header) >= 12:
+                        hdr = bytes(packet.header)
+                        clean_hdr = bytes([hdr[0] & 0xF0]) + hdr[1:12]
+                        dispatch_rtp_packet(clean_hdr + payload)
+                except Exception:
+                    pass
+                return payload
+
+            _dave_stats["total"] += 1
+            if davey is None or vc is None or dave is None or not getattr(dave, "ready", False) or not uid:
+                _dave_stats["dave_skip"] += 1
+                return _OPUS_SILENCE
+
+            try:
+                decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
+                _dave_stats["dave_ok"] += 1
                 return decrypted
             except Exception as e:
                 _dave_stats["dave_fail"] += 1
-                if n <= 5 or n % 500 == 0:
-                    log.info(f"[DAVE-DBG] #{n} dave.decrypt failed (video={is_video}): {e}")
-                return raw if is_video else _OPUS_SILENCE
+                return _OPUS_SILENCE
 
         setattr(PacketDecryptor, method_name, wrapped)
 
