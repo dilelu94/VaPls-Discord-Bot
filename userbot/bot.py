@@ -191,7 +191,7 @@ def _install_dave_patch():
                     else:
                         hdr = b""
                     if hdr:
-                        clean_hdr = bytes([hdr[0] & 0xE0]) + hdr[1:12]
+                        clean_hdr = bytes([hdr[0] & 0xF0]) + hdr[1:12]
                         full_rtp = clean_hdr + raw
                     else:
                         full_rtp = raw
