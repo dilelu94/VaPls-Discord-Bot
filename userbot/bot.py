@@ -127,40 +127,6 @@ _last_voice_ts: dict[int, float] = {}
 # opus_decode produces silence instead of crashing the PacketRouter thread.
 _OPUS_SILENCE = b"\xf8\xff\xfe"
 
-try:
-    from discord.gateway import DiscordWebSocket
-    _orig_ws_received_message = DiscordWebSocket.received_message
-
-    async def _patched_ws_received_message(self, msg, /):
-        try:
-            parsed = None
-            if isinstance(msg, str):
-                parsed = json.loads(msg)
-            elif isinstance(msg, dict):
-                parsed = msg
-
-            if parsed and isinstance(parsed, dict):
-                t = parsed.get("t")
-                d = parsed.get("d", {})
-                if t in ("STREAM_SERVER_UPDATE", "STREAM_CREATE") and isinstance(d, dict):
-                    stream_key = d.get("stream_key")
-                    if stream_key:
-                        if not hasattr(client, "_active_stream_updates"):
-                            client._active_stream_updates = {}
-                        client._active_stream_updates[stream_key] = d
-                        if t == "STREAM_SERVER_UPDATE":
-                            client._active_stream_updates[f"{stream_key}:server"] = d
-                        elif t == "STREAM_CREATE":
-                            client._active_stream_updates[f"{stream_key}:create"] = d
-                        log.info("[WATCHER-GW] Cached %s for stream_key=%s: endpoint=%s", t, stream_key, d.get("endpoint"))
-        except Exception:
-            pass
-        return await _orig_ws_received_message(self, msg)
-
-    DiscordWebSocket.received_message = _patched_ws_received_message
-except Exception as _exc:
-    log.warning("Could not patch DiscordWebSocket.received_message: %s", _exc)
-
 
 def _install_dave_patch():
     _orig_init = AudioReader.__init__
@@ -2284,6 +2250,30 @@ async def _dispatch_to_indio(
 # `intents` AND fail user login (HTTP 401) against current Discord, so we stay
 # on the pinned version that authenticates.
 client = discord.Client(chunk_guilds_at_startup=False)
+
+
+def _parse_stream_server_update(data):
+    stream_key = data.get("stream_key")
+    if stream_key:
+        if not hasattr(client, "_active_stream_updates"):
+            client._active_stream_updates = {}
+        client._active_stream_updates[stream_key] = data
+        client._active_stream_updates[f"{stream_key}:server"] = data
+        log.info("[WATCHER-GW] Cached STREAM_SERVER_UPDATE for stream_key=%s: endpoint=%s", stream_key, data.get("endpoint"))
+
+
+def _parse_stream_create(data):
+    stream_key = data.get("stream_key")
+    if stream_key:
+        if not hasattr(client, "_active_stream_updates"):
+            client._active_stream_updates = {}
+        client._active_stream_updates[stream_key] = data
+        client._active_stream_updates[f"{stream_key}:create"] = data
+        log.info("[WATCHER-GW] Cached STREAM_CREATE for stream_key=%s", stream_key)
+
+
+client._connection.parsers["STREAM_SERVER_UPDATE"] = _parse_stream_server_update
+client._connection.parsers["STREAM_CREATE"] = _parse_stream_create
 
 
 def _channel_has_others(guild_id: int) -> bool:
