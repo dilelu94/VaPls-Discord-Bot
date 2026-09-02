@@ -199,15 +199,7 @@ def _install_dave_patch():
                 except Exception:
                     pass
 
-            if hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77):
-                log.info(
-                    "[VIDEO-RTP] Video packet intercepted: PT=%s SSRC=%s raw_len=%d attrs=%s",
-                    getattr(packet, "pt", None),
-                    getattr(packet, "ssrc", None),
-                    len(raw or b""),
-                    [a for a in dir(packet) if not a.startswith("_")],
-                )
-                return raw
+            is_video = hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77)
 
             _dave_stats["total"] += 1
             n = _dave_stats["total"]
@@ -221,30 +213,12 @@ def _install_dave_patch():
                 _dave_stats["dave_skip"] += 1
                 return raw
 
-            # In voice_recv's VoiceRecvClient (which subclasses VoiceClient),
-            # the active VoiceConnectionState lives at vc._connection, and the
-            # dave_session is set on it during reinit_dave_session.
             state = getattr(vc, "_connection", None)
             dave = getattr(state, "dave_session", None) if state else None
 
-            if n == 1:
-                log.info(
-                    f"[DAVE-DBG] vc_type={type(vc).__name__} "
-                    f"state_type={type(state).__name__ if state else None} "
-                    f"state_dave_attr={hasattr(state, 'dave_session') if state else None} "
-                    f"vc_attrs_with_dave={[a for a in dir(vc) if 'dave' in a.lower()]} "
-                    f"state_attrs_with_dave={[a for a in dir(state) if 'dave' in a.lower()] if state else []}"
-                )
-
             if dave is None or not getattr(dave, "ready", False):
                 _dave_stats["dave_skip"] += 1
-                if n <= 5 or n % 500 == 0:
-                    log.info(
-                        f"[DAVE-DBG] #{n} dave not ready "
-                        f"(dave={dave is not None}, "
-                        f"ready={getattr(dave, 'ready', None) if dave else None})"
-                    )
-                return _OPUS_SILENCE
+                return raw if is_video else _OPUS_SILENCE
 
             ssrc_map = getattr(vc, "_ssrc_to_id", None)
             if not ssrc_map:
@@ -252,27 +226,27 @@ def _install_dave_patch():
             uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
             if not uid:
                 _dave_stats["dave_skip"] += 1
-                if n <= 5 or n % 500 == 0:
-                    log.info(
-                        f"[DAVE-DBG] #{n} no uid for ssrc={packet.ssrc} "
-                        f"(map_size={len(ssrc_map) if ssrc_map else 0})"
-                    )
-                return _OPUS_SILENCE
+                return raw if is_video else _OPUS_SILENCE
 
+            m_type = davey.MediaType.video if is_video else davey.MediaType.audio
             try:
-                decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
+                decrypted = dave.decrypt(uid, m_type, raw)
                 _dave_stats["dave_ok"] += 1
-                if n <= 3 or n % 500 == 0:
-                    log.info(
-                        f"[DAVE-DBG] #{n} dave.decrypt OK uid={uid} "
-                        f"in={len(raw)}B out={len(decrypted)}B"
-                    )
+                if is_video and decrypted:
+                    try:
+                        from golive.golive_watcher import dispatch_rtp_packet
+                        if hasattr(packet, "header") and len(packet.header) >= 12:
+                            hdr = bytes(packet.header)
+                            clean_hdr = bytes([hdr[0] & 0xF0]) + hdr[1:12]
+                            dispatch_rtp_packet(clean_hdr + decrypted)
+                    except Exception:
+                        pass
                 return decrypted
             except Exception as e:
                 _dave_stats["dave_fail"] += 1
                 if n <= 5 or n % 500 == 0:
-                    log.info(f"[DAVE-DBG] #{n} dave.decrypt failed: {e}")
-                return _OPUS_SILENCE
+                    log.info(f"[DAVE-DBG] #{n} dave.decrypt failed (video={is_video}): {e}")
+                return raw if is_video else _OPUS_SILENCE
 
         setattr(PacketDecryptor, method_name, wrapped)
 
