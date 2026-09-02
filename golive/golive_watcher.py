@@ -575,8 +575,9 @@ class GoLiveWatcherConnection:
                     if not target_ssrcs:
                         target_ssrcs.add(1)
 
+                    sender_ssrc = getattr(self._regular_vc, "ssrc", 1) or getattr(self, "ssrc", 1) or 1
                     for s_code in target_ssrcs:
-                        pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, 1, s_code)
+                        pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, sender_ssrc, s_code)
                         if sock and hasattr(sock, "sendall"):
                             sock.sendall(pli_pkt)
                     log.info("[WATCHSTREAM] Sent RTCP PLI keyframe requests for SSRCs %s", list(target_ssrcs))

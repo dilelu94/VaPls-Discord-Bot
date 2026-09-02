@@ -97,13 +97,16 @@ class StreamSnapshotReceiver:
                     self._pps_nal = bytes(nal)
 
                 if not self._seen_keyframe:
-                    if nal_type == 5:
+                    if nal_type in (5, 7, 8):
                         self._seen_keyframe = True
                         if self._sps_nal and self._sps_nal not in self._raw_nal_buffer:
                             self._raw_nal_buffer.extend(self._sps_nal)
                         if self._pps_nal and self._pps_nal not in self._raw_nal_buffer:
                             self._raw_nal_buffer.extend(self._pps_nal)
-                        log.info("[RECEIVER] Synchronized to H.264 IDR keyframe boundary (NAL type 5)")
+                        log.info("[RECEIVER] Synchronized to H.264 frame boundary (NAL type %d)", nal_type)
+                    elif self._sample_start_time and (time.monotonic() - self._sample_start_time) > 2.0:
+                        self._seen_keyframe = True
+                        log.info("[RECEIVER] Fallback: enabling video buffer capture after 2s wait (NAL type %d)", nal_type)
 
             if self._seen_keyframe:
                 self._raw_nal_buffer.extend(nal)
