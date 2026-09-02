@@ -342,6 +342,8 @@ class GoLiveWatcherConnection:
                     create_data = await create_fut
                 if create_data and "rtc_server_id" in create_data:
                     self.server_id = int(create_data["rtc_server_id"])
+                else:
+                    self.server_id = self.guild_id
 
                 if self.endpoint and DiscordVoiceWebSocket is not None:
                     self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
