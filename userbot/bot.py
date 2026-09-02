@@ -138,7 +138,17 @@ def _install_dave_patch():
         # Upstream AudioReader signature is (self, sink, voice_client, ...).
         self.decryptor._voice_client = voice_client
 
-    AudioReader.__init__ = _patched_init
+    _orig_callback = getattr(AudioReader, "callback", None)
+    if _orig_callback is not None:
+        def _patched_callback(self, packet_data: bytes) -> None:
+            if packet_data:
+                try:
+                    from golive.golive_watcher import dispatch_rtp_packet
+                    dispatch_rtp_packet(packet_data)
+                except Exception:
+                    pass
+            return _orig_callback(self, packet_data)
+        AudioReader.callback = _patched_callback
 
     def _wrap_method(method_name):
         original = getattr(PacketDecryptor, method_name, None)
