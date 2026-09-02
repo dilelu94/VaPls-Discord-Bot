@@ -463,7 +463,11 @@ class GoLiveWatcherConnection:
             except Exception as e:
                 log.debug("[WATCHSTREAM] RTP decryption note: %s", e)
 
-        rtp_data_to_process = (data[:12] + decrypted_payload) if decrypted_payload else data
+        if decrypted_payload:
+            clean_byte0 = data[0] & ~0x10  # Clear extension bit (0x10) as decrypt_rtp stripped extension headers
+            rtp_data_to_process = bytes([clean_byte0]) + data[1:12] + decrypted_payload
+        else:
+            rtp_data_to_process = data
 
         dave_sess = getattr(self, "dave_session", None) or getattr(self._regular_vc, "dave_session", None)
         self.receiver.process_rtp_packet(
