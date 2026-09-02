@@ -100,7 +100,7 @@ async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: floa
             if isinstance(msg, dict):
                 event_type = msg.get("t")
                 if event_type in ("STREAM_SERVER_UPDATE", "STREAM_CREATE", "STREAM_DELETE", "VIDEO"):
-                    log.info("[WATCHER-GW] Socket event %s: payload=%s", event_type, msg.get("d"))
+                    log.info("[WATCHER-GW] Raw event %s: payload=%s", event_type, msg.get("d"))
                 if event_type == event_name:
                     d = msg.get("d", {})
                     return bool(predicate(d))
@@ -109,7 +109,7 @@ async def _wait_for_gateway_event(bot, event_name: str, predicate, timeout: floa
         return False
 
     try:
-        msg = await bot.wait_for("socket_response", check=_check, timeout=timeout)
+        msg = await bot.wait_for("socket_raw_receive", check=_check, timeout=timeout)
         if isinstance(msg, (str, bytes)):
             msg = json.loads(msg)
         if isinstance(msg, dict):
