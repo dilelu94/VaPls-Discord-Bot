@@ -69,6 +69,13 @@ class H264RTPDepacketizer:
         fu_indicator = payload[0]
         nal_type = fu_indicator & 0x1F
 
+        if not hasattr(self, "_depack_debug_count"):
+            self._depack_debug_count = 0
+        self._depack_debug_count += 1
+        if self._depack_debug_count <= 10:
+            log.info("[DEPACK-DEBUG] #%d: len=%d has_ext=%s offset=%d fu_ind=0x%02x nal_type=%d payload_hex=%s",
+                     self._depack_debug_count, len(rtp_packet), has_extension, offset, fu_indicator, nal_type, payload[:16].hex())
+
         # Single NAL Unit (types 1..23)
         if 1 <= nal_type <= 23:
             if self._fu_in_progress:
