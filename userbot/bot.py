@@ -2563,6 +2563,19 @@ async def on_ready():
 
 
 @client.event
+async def on_socket_response(msg):
+    try:
+        if isinstance(msg, (str, bytes)):
+            msg = json.loads(msg)
+        if isinstance(msg, dict):
+            t = msg.get("t")
+            if t in ("STREAM_SERVER_UPDATE", "STREAM_CREATE", "STREAM_DELETE", "STREAM_UPDATE"):
+                log.info("[GLOBAL-GW] Socket event %s: payload=%s", t, msg.get("d"))
+    except Exception:
+        pass
+
+
+@client.event
 async def on_voice_state_update(member, before, after):
     if member.id == client.user.id:
         return
