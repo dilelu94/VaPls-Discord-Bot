@@ -366,13 +366,16 @@ class GoLiveWatcherConnection:
                     self.ws = await DiscordVoiceWebSocket.from_connection_state(
                         self, resume=False
                     )
-                    while not self.ip:
+                    while not getattr(self.ws, "ip", None) and not getattr(self, "ip", None):
                         await self.ws.poll_event()
 
-                    if self.endpoint_ip and self.voice_port:
-                        self.socket.connect((self.endpoint_ip, self.voice_port))
+                    endpoint_ip = getattr(self.ws, "endpoint_ip", None) or getattr(self, "endpoint_ip", None)
+                    voice_port = getattr(self.ws, "voice_port", None) or getattr(self.ws, "port", None) or getattr(self, "voice_port", None)
 
-                    while self.ws.secret_key is None:
+                    if endpoint_ip and voice_port:
+                        self.socket.connect((endpoint_ip, voice_port))
+
+                    while getattr(self.ws, "secret_key", None) is None:
                         await self.ws.poll_event()
 
                     self.mode = getattr(self.ws, "mode", "") or "aead_xchacha20_poly1305_rtpsize"
