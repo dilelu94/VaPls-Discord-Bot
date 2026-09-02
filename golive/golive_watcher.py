@@ -319,9 +319,15 @@ class GoLiveWatcherConnection:
 
             # 4. Connect dedicated stream WebSocket & UDP socket if STREAM_SERVER_UPDATE is received
             try:
-                cached_server = getattr(self._bot, "_active_stream_updates", {}).get(f"{self._stream_key}:server") or getattr(self._bot, "_active_stream_updates", {}).get(self._stream_key)
+                cached_server = None
+                updates = getattr(self._bot, "_active_stream_updates", {})
+                for k, v in updates.items():
+                    if isinstance(v, dict) and str(self.target_user_id) in str(k) and v.get("endpoint"):
+                        cached_server = v
+                        break
+
                 if cached_server:
-                    log.info("[WATCHER] Using cached STREAM_SERVER_UPDATE for %s: endpoint=%s", self._stream_key, cached_server.get("endpoint"))
+                    log.info("[WATCHER] Using cached STREAM_SERVER_UPDATE for target_user=%s: endpoint=%s", self.target_user_id, cached_server.get("endpoint"))
                     server_data = cached_server
                 else:
                     server_data = await server_fut
@@ -335,7 +341,12 @@ class GoLiveWatcherConnection:
                 self.token = server_data.get("token")
                 log.info("[WATCHER] Received STREAM_SERVER_UPDATE: endpoint=%s", self.endpoint)
 
-                cached_create = getattr(self._bot, "_active_stream_updates", {}).get(f"{self._stream_key}:create")
+                cached_create = None
+                for k, v in updates.items():
+                    if isinstance(v, dict) and str(self.target_user_id) in str(k) and v.get("rtc_server_id"):
+                        cached_create = v
+                        break
+
                 if cached_create:
                     create_data = cached_create
                 else:
