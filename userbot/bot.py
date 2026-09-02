@@ -2428,12 +2428,15 @@ def _schedule_idle_leave(guild: discord.Guild) -> None:
 
 def install_socket_video_interceptor(vc):
     """Hooks vc.socket.recv to intercept and decrypt video RTP packets before voice_recv drops them."""
-    if not vc or not hasattr(vc, "socket") or vc.socket is None:
+    if not vc:
         return
-    if getattr(vc.socket, "_video_intercepted", False):
+    sock = getattr(vc, "socket", None) or getattr(getattr(vc, "_connection", None), "socket", None)
+    if sock is None or not hasattr(sock, "recv") or not callable(getattr(sock, "recv", None)):
+        return
+    if getattr(sock, "_video_intercepted", False):
         return
 
-    orig_recv = vc.socket.recv
+    orig_recv = sock.recv
 
     def _video_recv(bufsize, flags=0):
         data = orig_recv(bufsize, flags)
@@ -2463,8 +2466,8 @@ def install_socket_video_interceptor(vc):
                     pass
         return data
 
-    vc.socket.recv = _video_recv
-    vc.socket._video_intercepted = True
+    sock.recv = _video_recv
+    sock._video_intercepted = True
     log.info("[WATCHSTREAM] Installed socket video interceptor on voice socket")
 
 
