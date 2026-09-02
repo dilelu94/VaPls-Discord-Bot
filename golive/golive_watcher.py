@@ -319,7 +319,13 @@ class GoLiveWatcherConnection:
 
             # 4. Connect dedicated stream WebSocket & UDP socket if STREAM_SERVER_UPDATE is received
             try:
-                server_data = await server_fut
+                cached_server = getattr(self._bot, "_active_stream_updates", {}).get(f"{self._stream_key}:server") or getattr(self._bot, "_active_stream_updates", {}).get(self._stream_key)
+                if cached_server:
+                    log.info("[WATCHER] Using cached STREAM_SERVER_UPDATE for %s: endpoint=%s", self._stream_key, cached_server.get("endpoint"))
+                    server_data = cached_server
+                else:
+                    server_data = await server_fut
+
                 if not server_data:
                     raise asyncio.TimeoutError("STREAM_SERVER_UPDATE timed out")
                 endpoint = server_data.get("endpoint", "")
@@ -329,7 +335,11 @@ class GoLiveWatcherConnection:
                 self.token = server_data.get("token")
                 log.info("[WATCHER] Received STREAM_SERVER_UPDATE: endpoint=%s", self.endpoint)
 
-                create_data = await create_fut
+                cached_create = getattr(self._bot, "_active_stream_updates", {}).get(f"{self._stream_key}:create")
+                if cached_create:
+                    create_data = cached_create
+                else:
+                    create_data = await create_fut
                 if create_data and "rtc_server_id" in create_data:
                     self.server_id = int(create_data["rtc_server_id"])
 
@@ -392,9 +402,13 @@ class GoLiveWatcherConnection:
             ssrc = struct.unpack("!I", data[8:12])[0] if len(data) >= 12 else -1
             log.info("[WATCHSTREAM-DEBUG] Packet #%d: len=%d PT=%d SSRC=%d hex=%s", self._total_udp_count, len(data), pt, ssrc, data[:20].hex())
 
-        # Check payload type — skip Opus audio (120, 111, 121, 77) and RTCP (72-76, 200-204)
-        pt = data[1] & 0x7F
-        if pt in (120, 111, 121, 77) or 72 <= pt <= 76 or 200 <= pt <= 204:
+        # Check payload type — skip Opus audio (120, 111, 121, 77) and RTCP (72-76, 200-206)
+        raw_pt = data[1]
+        if 200 <= raw_pt <= 206 or 72 <= raw_pt <= 76:
+            return
+
+        pt = raw_pt & 0x7F
+        if pt in (120, 111, 121, 77):
             return
 
         # Extract SSRC from 12-byte RTP header (bytes 8..11)
