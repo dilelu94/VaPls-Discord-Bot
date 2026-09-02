@@ -441,37 +441,16 @@ class GoLiveWatcherConnection:
                 self._packet_count, pt, ssrc, len(data), data[:16].hex()
             )
 
-        # Get decryptor from watcher or voice client if available
-        if not getattr(self, "_decryptor", None):
-            mode = getattr(self, "mode", None) or getattr(self._regular_vc, "mode", None)
-            secret_key = getattr(self, "secret_key", None) or getattr(self._regular_vc, "secret_key", None)
-            if mode and secret_key:
-                try:
-                    from discord.ext.voice_recv.reader import PacketDecryptor
-                    sec_bytes = bytes(secret_key) if isinstance(secret_key, (list, tuple, bytearray)) else secret_key
-                    self._decryptor = PacketDecryptor(mode, sec_bytes)
-                except Exception as e:
-                    log.warning("[WATCHER] Failed to create PacketDecryptor: %s", e)
-
-        # Attempt RTP transport decryption
-        decrypted_payload = None
-        if getattr(self, "_decryptor", None):
-            try:
-                from discord.ext.voice_recv.rtp import RTPPacket
-                rtp_packet = RTPPacket(data)
-                decrypted_payload = self._decryptor.decrypt_rtp(rtp_packet)
-            except Exception as e:
-                log.info("[WATCHSTREAM] RTP decryption error: %s", e)
-
-        if decrypted_payload:
-            clean_byte0 = data[0] & ~0x10  # Clear extension bit (0x10) as decrypt_rtp stripped extension headers
-            rtp_data_to_process = bytes([clean_byte0]) + data[1:12] + decrypted_payload
-        else:
-            rtp_data_to_process = data
+        if not hasattr(self, "_payload_debug_count"):
+            self._payload_debug_count = 0
+        self._payload_debug_count += 1
+        if self._payload_debug_count <= 10:
+            payload_hex = data[12:32].hex() if len(data) >= 12 else ""
+            log.info("[WATCHSTREAM-PAYLOAD] Video payload #%d: len=%d hex=%s", self._payload_debug_count, len(data[12:]), payload_hex)
 
         dave_sess = getattr(self, "dave_session", None) or getattr(self._regular_vc, "dave_session", None)
         self.receiver.process_rtp_packet(
-            rtp_data=rtp_data_to_process,
+            rtp_data=data,
             dave_session=dave_sess,
             ssrc=ssrc,
             user_id=self.target_user_id,
