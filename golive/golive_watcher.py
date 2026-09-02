@@ -384,6 +384,14 @@ class GoLiveWatcherConnection:
         if not data or len(data) < 12:
             return
 
+        if not hasattr(self, "_total_udp_count"):
+            self._total_udp_count = 0
+        self._total_udp_count += 1
+        if self._total_udp_count <= 25:
+            pt = data[1] & 0x7F if len(data) > 1 else -1
+            ssrc = struct.unpack("!I", data[8:12])[0] if len(data) >= 12 else -1
+            log.info("[WATCHSTREAM-DEBUG] Packet #%d: len=%d PT=%d SSRC=%d hex=%s", self._total_udp_count, len(data), pt, ssrc, data[:20].hex())
+
         # Check payload type — skip Opus audio (120, 111, 121, 77) and RTCP (72-76, 200-204)
         pt = data[1] & 0x7F
         if pt in (120, 111, 121, 77) or 72 <= pt <= 76 or 200 <= pt <= 204:
