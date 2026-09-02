@@ -366,20 +366,20 @@ class GoLiveWatcherConnection:
                     self.ws = await DiscordVoiceWebSocket.from_connection_state(
                         self, resume=False
                     )
-                    while not getattr(self.ws, "ip", None) and not getattr(self, "ip", None):
+                    while not getattr(self, "ip", None) and not getattr(self.ws, "ip", None):
                         await self.ws.poll_event()
 
-                    endpoint_ip = getattr(self.ws, "endpoint_ip", None) or getattr(self, "endpoint_ip", None)
-                    voice_port = getattr(self.ws, "voice_port", None) or getattr(self.ws, "port", None) or getattr(self, "voice_port", None)
+                    endpoint_ip = getattr(self, "endpoint_ip", None) or getattr(self.ws, "endpoint_ip", None)
+                    voice_port = getattr(self, "voice_port", None) or getattr(self.ws, "voice_port", None) or getattr(self.ws, "port", None)
 
                     if endpoint_ip and voice_port:
                         self.socket.connect((endpoint_ip, voice_port))
 
-                    while getattr(self.ws, "secret_key", None) is None:
+                    while getattr(self, "secret_key", None) is None and getattr(self.ws, "secret_key", None) is None:
                         await self.ws.poll_event()
 
-                    self.mode = getattr(self.ws, "mode", "") or "aead_xchacha20_poly1305_rtpsize"
-                    self.secret_key = getattr(self.ws, "secret_key", None) or []
+                    self.mode = getattr(self, "mode", "") or getattr(self.ws, "mode", "") or "aead_xchacha20_poly1305_rtpsize"
+                    self.secret_key = getattr(self, "secret_key", None) or getattr(self.ws, "secret_key", None) or []
 
                     await self.ws.client_connect()
                     loop = asyncio.get_event_loop()
@@ -551,11 +551,28 @@ class GoLiveWatcherConnection:
             if now - last_pli_time >= 1.0:
                 last_pli_time = now
                 try:
-                    target_ssrc = getattr(self, "video_ssrc", None) or getattr(self.receiver, "ssrc", None) or 1
-                    pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, 1, target_ssrc)
-                    if sock and hasattr(sock, "sendall"):
-                        sock.sendall(pli_pkt)
-                        log.info("[WATCHSTREAM] Sent RTCP PLI keyframe request for SSRC %s", target_ssrc)
+                    target_ssrcs = set()
+                    if getattr(self, "video_ssrc", None):
+                        target_ssrcs.add(self.video_ssrc)
+                    if getattr(self.receiver, "ssrc", None):
+                        target_ssrcs.add(self.receiver.ssrc)
+
+                    # Lookup SSRCs from regular_vc mapping
+                    ssrc_map = getattr(self._regular_vc, "_ssrc_to_id", {}) or getattr(self._regular_vc, "ssrc_user_map", {}) or {}
+                    for s_code, u_id in ssrc_map.items():
+                        if str(u_id) == str(self.target_user_id):
+                            target_ssrcs.add(s_code)
+                            target_ssrcs.add(s_code + 1)
+                            target_ssrcs.add(s_code + 2)
+
+                    if not target_ssrcs:
+                        target_ssrcs.add(1)
+
+                    for s_code in target_ssrcs:
+                        pli_pkt = struct.pack("!BBHII", 0x81, 206, 2, 1, s_code)
+                        if sock and hasattr(sock, "sendall"):
+                            sock.sendall(pli_pkt)
+                    log.info("[WATCHSTREAM] Sent RTCP PLI keyframe requests for SSRCs %s", list(target_ssrcs))
                 except Exception as e:
                     log.debug("[WATCHSTREAM] RTCP PLI request note: %s", e)
 
