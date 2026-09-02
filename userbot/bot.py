@@ -228,17 +228,21 @@ def _install_dave_patch():
                 return payload
 
             _dave_stats["total"] += 1
-            if davey is None or vc is None or dave is None or not getattr(dave, "ready", False) or not uid:
+            payload = raw
+            if davey is not None and vc is not None and dave is not None and getattr(dave, "ready", False):
+                try:
+                    decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
+                    if decrypted:
+                        payload = decrypted
+                        _dave_stats["dave_ok"] += 1
+                    else:
+                        _dave_stats["dave_skip"] += 1
+                except Exception:
+                    _dave_stats["dave_fail"] += 1
+            else:
                 _dave_stats["dave_skip"] += 1
-                return _OPUS_SILENCE
 
-            try:
-                decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
-                _dave_stats["dave_ok"] += 1
-                return decrypted
-            except Exception as e:
-                _dave_stats["dave_fail"] += 1
-                return _OPUS_SILENCE
+            return payload
 
         setattr(PacketDecryptor, method_name, wrapped)
 
@@ -2582,6 +2586,30 @@ async def on_socket_response(msg):
 @client.event
 async def on_voice_state_update(member, before, after):
     if member.id == client.user.id:
+        if before.channel and not after.channel:
+            log.info("[VOICE] Userbot disconnected from %s", before.channel.name)
+            vc = _vc_for_guild(before.channel.guild)
+            if vc:
+                try:
+                    if vc.is_listening():
+                        vc.stop_listening()
+                    if vc.is_playing():
+                        vc.stop()
+                except Exception:
+                    pass
+        elif after.channel and (not before.channel or before.channel.id != after.channel.id):
+            log.info(
+                "[VOICE] Userbot moved from %s to %s",
+                getattr(before.channel, "name", "None"),
+                after.channel.name,
+            )
+            vc = _vc_for_guild(after.channel.guild)
+            if vc:
+                try:
+                    if vc.is_playing():
+                        vc.stop()
+                except Exception:
+                    pass
         return
     if member.bot or member.id in config.IGNORE_USER_IDS:
         return
@@ -4024,30 +4052,31 @@ async def _relay_speak(request: web.Request) -> web.Response:
         return web.json_response({"error": "guild not found"}, status=404)
 
     vc = _vc_for_guild(guild)
-    if vc is None or not vc.is_connected():
-        target_channel = None
-        if channel_id:
-            ch = guild.get_channel(int(channel_id))
-            if isinstance(ch, discord.VoiceChannel):
+    target_channel = None
+    if channel_id:
+        ch = guild.get_channel(int(channel_id))
+        if isinstance(ch, discord.VoiceChannel):
+            target_channel = ch
+    if target_channel is None and user_id:
+        m = guild.get_member(int(user_id))
+        if m and getattr(m, "voice", None):
+            target_channel = getattr(m.voice, "channel", None)
+    if target_channel is None:
+        for ch in guild.voice_channels:
+            if any(not getattr(mem, "bot", False) for mem in ch.members):
                 target_channel = ch
-        if target_channel is None and user_id:
-            m = guild.get_member(int(user_id))
-            if m and getattr(m, "voice", None):
-                target_channel = getattr(m.voice, "channel", None)
-        if target_channel is None:
-            for ch in guild.voice_channels:
-                if any(not getattr(mem, "bot", False) for mem in ch.members):
-                    target_channel = ch
-                    break
-        if target_channel is not None:
+                break
+
+    if target_channel is not None:
+        if vc is None or not vc.is_connected() or (getattr(vc, "channel", None) and vc.channel.id != target_channel.id):
             try:
                 await _join_channel(target_channel)
                 vc = _vc_for_guild(guild)
             except Exception as e:
                 log.exception("[RELAY-SPEAK] failed to join voice channel: %s", e)
                 return web.json_response({"error": f"voice join failed: {e}"}, status=500)
-        else:
-            return web.json_response({"error": "no active voice channel found"}, status=400)
+    elif vc is None or not vc.is_connected():
+        return web.json_response({"error": "no active voice channel found"}, status=400)
 
     if vc is None or not vc.is_connected():
         return web.json_response({"error": "userbot not connected to voice"}, status=400)
@@ -4070,6 +4099,8 @@ async def _relay_speak(request: web.Request) -> web.Response:
 
     try:
         source = discord.FFmpegOpusAudio(wav_path, options=greeting.FFMPEG_NORMALIZE_OPTS)
+        if vc.is_playing():
+            vc.stop()
         vc.play(source, after=_after)
         log.info(
             "[RELAY-SPEAK] userbot speaking TTS text (length=%d) in %s",
