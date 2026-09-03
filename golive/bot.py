@@ -102,21 +102,42 @@ class GoLiveStream:
         if target_url.startswith(("http://", "https://")):
             from urllib.parse import urlparse
             _path = urlparse(target_url).path.lower()
-            if _path.endswith((".m3u8", ".mpd", ".m3u")) or ".m3u8" in target_url.lower():
-                log.info("[STREAM] Direct stream URL detected — skipping yt-dlp")
+            _DIRECT_MEDIA_EXTS = (
+                ".m3u8", ".mpd", ".m3u",
+                ".mkv", ".mp4", ".webm", ".avi", ".mov",
+                ".ts", ".flv", ".wmv", ".ogv", ".ogg",
+            )
+            _is_direct = (
+                any(_path.endswith(ext) for ext in _DIRECT_MEDIA_EXTS)
+                or ".m3u8" in target_url.lower()
+            )
+            if _is_direct:
+                log.info("[STREAM] Direct media URL detected — skipping yt-dlp: %s", _path)
+                self.is_live = False
             else:
                 log.info("[STREAM] Checking stream URL via yt-dlp for %s", target_url)
                 try:
                     res = await _yt_extract_url(target_url)
                 except Exception as e:
-                    log.warning("[STREAM] yt-dlp extraction failed: %s", e)
-                    raise RuntimeError(f"Failed to extract stream URL via yt-dlp: {e}")
-
-                if res:
-                    target_url, title, self.is_live = res
-                    log.info("[STREAM] Extracted stream: %s -> %s (live=%s)", title, target_url, self.is_live)
+                    err_str = str(e)
+                    # yt-dlp can't scrape raw CDN file links — use the URL as-is.
+                    if "Requested format is not available" in err_str or "Unable to extract" in err_str:
+                        log.warning(
+                            "[STREAM] yt-dlp can't handle URL, falling back to direct: %s", e
+                        )
+                        self.is_live = False
+                    else:
+                        log.warning("[STREAM] yt-dlp extraction failed: %s", e)
+                        raise RuntimeError(f"Failed to extract stream URL via yt-dlp: {e}")
                 else:
-                    raise RuntimeError("Failed to extract stream URL via yt-dlp")
+                    if res:
+                        target_url, title, self.is_live = res
+                        log.info(
+                            "[STREAM] Extracted stream: %s -> %s (live=%s)",
+                            title, target_url, self.is_live,
+                        )
+                    else:
+                        raise RuntimeError("Failed to extract stream URL via yt-dlp")
         
         self.target_url = target_url
         self.title = title
