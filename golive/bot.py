@@ -16,7 +16,7 @@ import logging
 import os
 import time
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 import aiohttp
 from aiohttp import web
