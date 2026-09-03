@@ -596,6 +596,7 @@ class HeadbanzGoLiveStream:
 
 
 _active_streams: dict[int, GoLiveStream] = {}
+_active_torrent_procs: dict[int, Any] = {}
 _nick_restore_tasks: dict[int, asyncio.Task] = {}
 _original_nicknames: dict[int, Optional[str]] = {}
 
@@ -784,6 +785,26 @@ async def _relay_stream(request: web.Request) -> web.Response:
     await _join_channel(channel)
     vc = _vc_for_guild(guild)
 
+    # Handle Magnet URI / torrent URL via TorrentStreamerProcess
+    torrent_proc = None
+    if url.startswith("magnet:?") or len(url) == 40 or ".torrent" in url.lower():
+        try:
+            try:
+                from torrent_streamer import TorrentStreamerProcess
+            except ModuleNotFoundError:
+                from golive.torrent_streamer import TorrentStreamerProcess
+            
+            torrent_proc = TorrentStreamerProcess(url)
+            resolved_url = await torrent_proc.start(timeout=25.0)
+            log.info("[STREAM] Magnet resolved to local stream URL: %s", resolved_url)
+            url = resolved_url
+            _active_torrent_procs[guild_id] = torrent_proc
+        except Exception as e:
+            log.exception("[STREAM] Failed to resolve torrent stream: %s", e)
+            if torrent_proc:
+                await torrent_proc.stop()
+            return web.json_response({"error": f"Failed to resolve torrent stream: {e}"}, status=500)
+
     if stream_title:
         _save_original_nickname(guild)
         task = _nick_restore_tasks.pop(guild_id, None)
@@ -797,6 +818,9 @@ async def _relay_stream(request: web.Request) -> web.Response:
     except Exception as e:
         log.exception("[STREAM] failed to start stream via Slopsoil engine")
         await stream.stop()
+        tp = _active_torrent_procs.pop(guild_id, None)
+        if tp:
+            await tp.stop()
         return web.json_response({"error": str(e)}, status=500)
 
     _active_streams[guild_id] = stream
@@ -918,6 +942,14 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
             await stream.stop(disconnect_voice=False)
         except Exception as e:
             log.warning("[STOPSTREAM] stream stop failed: %s", e)
+
+    # 4b. Stop active torrent engine process if active
+    tp = _active_torrent_procs.pop(guild_id, None)
+    if tp:
+        try:
+            await tp.stop()
+        except Exception as e:
+            log.warning("[STOPSTREAM] torrent proc stop error: %s", e)
 
     # 5. Schedule voice client disconnect in background after sending HTTP response
     async def _delayed_vc_disconnect():

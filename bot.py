@@ -38,6 +38,7 @@ import errorHandler
 import geminiKeys
 import iptv
 import jkanime
+import torrent_search
 import decifrarVoting
 import adivinadorCommand
 from adivinadorCommand import start_headbanz_game
@@ -2001,6 +2002,77 @@ class StreamControlView(BaseView):
             pass
 
 
+class TorrentSearchView(BaseView):
+    """Interactive SelectMenu UI for choosing a torrent stream option."""
+
+    def __init__(
+        self,
+        items: list[torrent_search.TorrentStreamItem],
+        voice_channel: discord.VoiceChannel,
+        redirect_ch=None,
+    ):
+        super().__init__(timeout=180)
+        self.items = items
+        self.voice_channel = voice_channel
+        self.redirect_ch = redirect_ch
+
+        options = []
+        for idx, item in enumerate(items[:25]):
+            options.append(
+                discord.SelectOption(
+                    label=item.format_display_label(),
+                    value=str(idx),
+                    description=f"Hash: {item.infohash[:8]}..." if item.infohash else None,
+                )
+            )
+
+        select = discord.ui.Select(
+            placeholder="🧲 Seleccioná un torrent para transmitir...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+        select.callback = self.select_callback
+        self.add_item(select)
+
+    async def select_callback(self, interaction: discord.Interaction):
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+        except Exception:
+            pass
+
+        select_elem = interaction.data.get("values", [])
+        if not select_elem:
+            return
+        idx = int(select_elem[0])
+        item = self.items[idx]
+
+        success, status_msg, is_live = await start_iptv_stream_logic(
+            interaction.guild_id,
+            self.voice_channel,
+            item.magnet_or_url,
+            item.title,
+        )
+        if success:
+            _active_sources[interaction.guild_id] = {
+                "type": "torrent",
+                "url": item.magnet_or_url,
+            }
+            _paused_streams.discard(interaction.guild_id)
+
+        try:
+            if self.redirect_ch:
+                await self.redirect_ch.send(
+                    content=f"<@{interaction.user.id}> {status_msg}"
+                )
+            else:
+                await interaction.followup.send(content=status_msg)
+        except Exception:
+            pass
+        self.stop()
+
+
 class IptvSearchModal(discord.ui.Modal):
     """Modal for free-text channel search within the IPTV browser."""
 
@@ -2725,6 +2797,47 @@ async def stream(
 
     canal, start_sec = parse_stream_query(canal)
     raw_canal = canal.strip()
+
+    # Check for direct Torrent / Magnet link / Stremio resolve URL
+    if torrent_search.is_torrent_input(raw_canal) and not raw_canal.lower().startswith("torrent:"):
+        magnet_url, title = torrent_search.resolve_stremio_or_magnet_url(raw_canal)
+        success, status_msg, is_live = await start_iptv_stream_logic(
+            ctx.guild_id, voice_channel, magnet_url, title, start_sec=start_sec
+        )
+        if success:
+            _active_sources[ctx.guild_id] = {"type": "torrent", "url": magnet_url}
+            _paused_streams.discard(ctx.guild_id)
+            if redirect_ch:
+                await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
+            else:
+                await safe_respond(ctx, status_msg)
+        else:
+            if redirect_ch:
+                await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
+            else:
+                await safe_respond(ctx, status_msg)
+        return
+
+    # Check for explicit torrent search prefix e.g. "torrent: matrix"
+    if raw_canal.lower().startswith("torrent:"):
+        torrent_query = raw_canal[8:].strip()
+        items = await torrent_search.search_stremio_torrents(torrent_query)
+        if not items:
+            await safe_respond(
+                ctx, f'❌ No se encontraron torrents para "{torrent_query}".'
+            )
+            return
+        view = TorrentSearchView(items, voice_channel, redirect_ch=redirect_ch)
+        embed = discord.Embed(
+            title=f'🧲 {len(items)} torrents encontrados para "{torrent_query}"',
+            description="Seleccioná una opción para iniciar la transmisión por Go Live:",
+            color=0x9B59B6,
+        )
+        try:
+            await ctx.interaction.edit_original_response(embed=embed, view=view)
+        except Exception:
+            await safe_respond(ctx, embed=embed, view=view)
+        return
 
     # Check for direct JKAnime URL
     if jkanime.is_jkanime_url(raw_canal):
