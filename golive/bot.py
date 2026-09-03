@@ -101,6 +101,7 @@ class GoLiveStream:
         
         if target_url.startswith(("http://", "https://")):
             from urllib.parse import urlparse
+            import aiohttp
             _path = urlparse(target_url).path.lower()
             _DIRECT_MEDIA_EXTS = (
                 ".m3u8", ".mpd", ".m3u",
@@ -111,8 +112,34 @@ class GoLiveStream:
                 any(_path.endswith(ext) for ext in _DIRECT_MEDIA_EXTS)
                 or ".m3u8" in target_url.lower()
             )
+
+            # For extensionless URLs (e.g. CDN /dld/<uuid>?token=...) sniff the
+            # Content-Type via a HEAD request before deciding to use yt-dlp.
+            if not _is_direct:
+                _DIRECT_CONTENT_TYPES = ("video/", "audio/", "application/octet-stream")
+                try:
+                    async with aiohttp.ClientSession() as _sess:
+                        async with _sess.head(
+                            target_url,
+                            allow_redirects=True,
+                            timeout=aiohttp.ClientTimeout(total=8),
+                            headers={"User-Agent": "Mozilla/5.0"},
+                        ) as _resp:
+                            _ct = _resp.headers.get("Content-Type", "").lower()
+                            if any(_ct.startswith(t) for t in _DIRECT_CONTENT_TYPES):
+                                log.info(
+                                    "[STREAM] Content-Type=%r → direct media, skipping yt-dlp", _ct
+                                )
+                                _is_direct = True
+                            else:
+                                log.info(
+                                    "[STREAM] Content-Type=%r → will try yt-dlp", _ct
+                                )
+                except Exception as _he:
+                    log.warning("[STREAM] HEAD request failed (%s), proceeding with yt-dlp", _he)
+
             if _is_direct:
-                log.info("[STREAM] Direct media URL detected — skipping yt-dlp: %s", _path)
+                log.info("[STREAM] Using URL directly (no yt-dlp): %s", _path or target_url)
                 self.is_live = False
             else:
                 log.info("[STREAM] Checking stream URL via yt-dlp for %s", target_url)
@@ -120,8 +147,18 @@ class GoLiveStream:
                     res = await _yt_extract_url(target_url)
                 except Exception as e:
                     err_str = str(e)
-                    # yt-dlp can't scrape raw CDN file links — use the URL as-is.
-                    if "Requested format is not available" in err_str or "Unable to extract" in err_str:
+                    # Broad fallback: any HTTP-level failure or extraction failure
+                    # on an unrecognised URL → try the raw URL directly instead
+                    # of surfacing a hard error.
+                    _FALLBACK_SIGNALS = (
+                        "Requested format is not available",
+                        "Unable to extract",
+                        "Unable to download webpage",
+                        "HTTP Error 400",
+                        "HTTP Error 403",
+                        "HTTP Error 404",
+                    )
+                    if any(s in err_str for s in _FALLBACK_SIGNALS):
                         log.warning(
                             "[STREAM] yt-dlp can't handle URL, falling back to direct: %s", e
                         )
