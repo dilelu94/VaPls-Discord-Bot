@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """GoLive userbot: IPTV + Instagram streaming via a dedicated Discord user account.
 
 Runs separately from the indio userbot. No voice receive, no Whisper,

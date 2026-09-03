@@ -9,6 +9,7 @@ for _mod in ("video_compat", "davey_compat", "golive_connection", "golive.slopso
         sys.modules[_mod] = MagicMock()
 
 import discord
+discord.VoiceClient = MagicMock()
 if not hasattr(discord, "voice_state"):
     discord.voice_state = MagicMock()
 if "discord.voice_state" not in sys.modules:
