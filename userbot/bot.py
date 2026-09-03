@@ -203,17 +203,17 @@ def _install_dave_patch():
 
             vc = getattr(self, "_voice_client", None)
             state = getattr(vc, "_connection", None) if vc else None
-            dave = getattr(state, "dave_session", None) if state else None
+            dave = getattr(state, "dave_session", None) or getattr(vc, "dave_session", None)
 
-            ssrc_map = (getattr(vc, "_ssrc_to_id", None) or getattr(vc, "ssrc_user_map", {})) if vc else {}
+            ssrc_map = (getattr(vc, "_ssrc_to_id", None) or getattr(vc, "ssrc_user_map", {}) or getattr(state, "_ssrc_to_id", {})) if vc else {}
             uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
 
             if is_video:
                 payload = raw
-                if dave is not None and getattr(dave, "ready", False) and uid and davey is not None:
+                if dave is not None and uid and davey is not None:
                     try:
                         decrypted = dave.decrypt(uid, davey.MediaType.video, raw)
-                        if decrypted:
+                        if decrypted and decrypted != raw:
                             payload = decrypted
                     except Exception:
                         pass
@@ -229,18 +229,29 @@ def _install_dave_patch():
 
             _dave_stats["total"] += 1
             payload = raw
-            if davey is not None and vc is not None and dave is not None and getattr(dave, "ready", False):
+            decrypted_ok = False
+            if davey is not None and dave is not None:
                 try:
                     decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
-                    if decrypted:
+                    if decrypted and decrypted != raw:
                         payload = decrypted
                         _dave_stats["dave_ok"] += 1
+                        decrypted_ok = True
                     else:
                         _dave_stats["dave_skip"] += 1
-                except Exception:
+                except Exception as e:
                     _dave_stats["dave_fail"] += 1
             else:
                 _dave_stats["dave_skip"] += 1
+
+            if _dave_stats["total"] % 200 == 1:
+                log.info(
+                    f"[DAVE-STATS] total={_dave_stats['total']} ok={_dave_stats['dave_ok']} "
+                    f"skip={_dave_stats['dave_skip']} fail={_dave_stats['dave_fail']} | "
+                    f"ssrc={getattr(packet, 'ssrc', None)} -> uid={uid} | "
+                    f"dave_exists={dave is not None} ready={getattr(dave, 'ready', False)} "
+                    f"decrypted_ok={decrypted_ok} | ssrc_map_len={len(ssrc_map)}"
+                )
 
             return payload
 
@@ -326,6 +337,9 @@ async def _patched_reinit(self):
         f"dave_protocol_version={self.dave_protocol_version}"
     )
     await _orig_reinit(self)
+    ds = getattr(self, "dave_session", None)
+    if ds is not None:
+        ds._voice_state = self
     log.info(
         f"[DAVE-INIT] After reinit: dave_session={self.dave_session is not None}, "
         f"ready={getattr(self.dave_session, 'ready', None) if self.dave_session else None}"
@@ -2459,6 +2473,15 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
     )
     try:
         vc.listen(sink)
+        endpoint_ip = getattr(vc, "endpoint_ip", None) or getattr(getattr(vc, "_connection", None), "endpoint_ip", None)
+        voice_port = getattr(vc, "voice_port", None) or getattr(getattr(vc, "_connection", None), "voice_port", None)
+        ssrc = getattr(vc, "ssrc", None) or getattr(getattr(vc, "_connection", None), "ssrc", 1) or 1
+        sock = getattr(vc, "socket", None) or getattr(getattr(vc, "_connection", None), "socket", None)
+        if sock and endpoint_ip and voice_port:
+            import struct
+            rtp_ping = struct.pack("!BBHII", 0x80, 120, 1, 1, ssrc) + b"\xf8\xff\xfe"
+            sock.sendto(rtp_ping, (endpoint_ip, voice_port))
+            log.info(f"[VOICE] Sent initial UDP NAT ping to {endpoint_ip}:{voice_port} (ssrc={ssrc})")
     except Exception as e:
         log.exception(f"[VOICE] listen() failed: {e}")
         analytics.capture_exception(e, properties={"action": "voice_listen_failed"})
