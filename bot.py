@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Main Discord bot entrypoint for VaPls.
 
 Handles slash commands, voice playback, greeting triggers, analytics, and the
@@ -14,6 +16,7 @@ import asyncio
 import re
 import time
 import datetime
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 from urllib.parse import urljoin
 import aiohttp
 import discord
