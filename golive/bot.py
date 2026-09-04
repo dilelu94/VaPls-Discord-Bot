@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-"""GoLive userbot: IPTV + Instagram streaming via a dedicated Discord user account.
+"""GoLive userbot: IPTV streaming via a dedicated Discord user account.
 
 Runs separately from the indio userbot. No voice receive, no Whisper,
 no VOSK, no DAVE — just FFmpeg → H.264 → RTP out a Discord UDP socket.
 
 Endpoints:
-  POST /stream     — start an IPTV Go Live in a voice channel
-  POST /stopstream — stop the active stream
+  POST /stream         — start a Go Live stream in a voice channel
+  POST /stopstream     — stop the active stream
   POST /stream/control — pause/resume/seek the active stream
-  POST /instagram  — start an infinite Instagram Reel stream (Go Live)
 """
 
 import asyncio
@@ -31,10 +30,7 @@ import davey_compat
 try:
     from golive.slopsoil.golive import GoLiveConnection
 except ModuleNotFoundError:
-    try:
-        from slopsoil.golive import GoLiveConnection
-    except ModuleNotFoundError:
-        from golive_connection import GoLiveConnection
+    from slopsoil.golive import GoLiveConnection
 
 
 
@@ -79,7 +75,6 @@ class GoLiveStream:
         self.queue = []
         self.queue_titles = []
         self.idle_event = None
-        self.is_first_reel = ("instagram.com" in url)
 
         # RTP counters carried across reel transitions so the client's jitter
         # buffer never sees the video clock jump backwards on the same SSRC.
@@ -197,94 +192,23 @@ class GoLiveStream:
         if guild and not self.vc:
             self.vc = _vc_for_guild(guild)
 
-        if self.is_first_reel:
-            log.info("[STREAM] First Instagram Reel detected. Pausing 5 seconds for viewers to connect...")
-            await asyncio.sleep(5.0)
-            self.is_first_reel = False
-
-        try:
-            await slopsoil_start_live_stream(
-                bot=client,
-                send=_dummy_send,
-                guild=guild,
-                voice_channel=channel,
-                vc=self.vc,
-                title=self.title,
-                url=self.target_url,
-                live=self.is_live,
-                audio=True,
-                start_time=self.start_sec,
-            )
-            self.conn = getattr(client, "live_connections", {}).get(self.guild_id)
-            self.video_player = getattr(client, "video_players", {}).get(self.guild_id)
-            self.video_ssrc = (self.conn.ssrc + 1) if (self.conn and hasattr(self.conn, "ssrc")) else 101
-        except Exception as e:
-            log.warning("[STREAM] slopsoil_start_live_stream fallback to direct connection: %s", e)
-            try:
-                from golive.slopsoil.golive import GoLiveConnection
-            except ModuleNotFoundError:
-                try:
-                    from slopsoil.golive import GoLiveConnection
-                except ModuleNotFoundError:
-                    from golive_connection import GoLiveConnection
-            self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
-            conn_res = self.conn.connect(timeout=30.0)
-            if asyncio.iscoroutine(conn_res) or hasattr(conn_res, "__await__"):
-                await conn_res
-            self.video_ssrc = self.conn.ssrc + 1
-            
-            await self._start_players()
-
-        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
-
-    async def _start_players(self):
-        from streamer import H264VideoPlayer, _stream_fps
-        try:
-            from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
-        except ModuleNotFoundError:
-            try:
-                from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
-            except ModuleNotFoundError:
-                from slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
-        proxy_vc = _GoLiveVCProxy(self.conn)
-        if self._video_ts or self._audio_ts:
-            log.info(
-                "[STREAM] Seeding RTP: video seq=%d ts=%d, audio seq=%d ts=%d",
-                self._video_seq, self._video_ts, self._audio_seq, self._audio_ts,
-            )
-        self.video_player = H264VideoPlayer(
+        await slopsoil_start_live_stream(
+            bot=client,
+            send=_dummy_send,
+            guild=guild,
+            voice_channel=channel,
+            vc=self.vc,
+            title=self.title,
             url=self.target_url,
-            voice_client=proxy_vc,
-            fps=_stream_fps(),
             live=self.is_live,
             audio=True,
-            original_url=self.url,
-            initial_seq=self._video_seq,
-            initial_ts=self._video_ts,
             start_time=self.start_sec,
         )
-        self.video_player.start()
-        log.info("[STREAM] Video player started for '%s'", self.title)
-        
-        log.info("[STREAM] Waiting for audio FIFO...")
-        try:
-            f = await asyncio.wait_for(
-                asyncio.to_thread(open, self.video_player.audio_fifo, "rb"),
-                timeout=30.0,
-            )
-        except TimeoutError:
-            log.error("[STREAM] Timed out waiting for audio FIFO")
-            raise RuntimeError("Timed out waiting for audio FIFO")
-            
-        self.audio_sender = GoLiveAudioSender(
-            file_obj=f,
-            conn=self.conn,
-            is_source_active=self.video_player.is_source_active,
-            initial_seq=self._audio_seq,
-            initial_ts=self._audio_ts,
-        )
-        self.audio_sender.start()
-        log.info("[STREAM] Audio sender started for '%s'", self.title)
+        self.conn = getattr(client, "live_connections", {}).get(self.guild_id)
+        self.video_player = getattr(client, "video_players", {}).get(self.guild_id)
+        self.video_ssrc = (self.conn.ssrc + 1) if (self.conn and hasattr(self.conn, "ssrc")) else 101
+
+        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
 
     async def _stop_players(self):
         if self.video_player:
@@ -536,133 +460,12 @@ class GoLiveStream:
         log.info("[STREAM] Stream stopped and cleaned up")
 
 
-class HeadbanzGoLiveStream:
-    """Manages GoLive streaming of a static image for the Headbanz game."""
-    def __init__(self, bot, guild_id: int, channel_id: int, vc, image_path: str) -> None:
-        self.bot = bot
-        self.guild_id = guild_id
-        self.channel_id = channel_id
-        self.vc = vc
-        self.image_path = image_path
-        self.conn = None
-        self.video_player = None
-        self.audio_sender = None
-        self.video_ssrc = None
-        self.is_live = False
-        self._stopped = False
-        self._inactivity_task = None
 
-    async def start(self) -> None:
-        log.info("[HEADBANZ] Establishing GoLive connection...")
-        self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
-        await self.conn.connect(timeout=30.0)
-        self.video_ssrc = self.conn.ssrc + 1
-        await self._start_players()
-        self._inactivity_task = asyncio.create_task(self._inactivity_loop())
 
-    async def _start_players(self) -> None:
-        from streamer import HeadbanzPlayer
-        try:
-            from golive_connection import _GoLiveVCProxy, GoLiveAudioSender
-        except ModuleNotFoundError:
-            try:
-                from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
-            except ModuleNotFoundError:
-                from slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
-        proxy_vc = _GoLiveVCProxy(self.conn)
-        self.video_player = HeadbanzPlayer(
-            image_path=self.image_path,
-            voice_client=proxy_vc,
-            fps=15.0,
-        )
-        self.video_player.start()
-        log.info("[HEADBANZ] Headbanz video player started")
-
-        log.info("[HEADBANZ] Waiting for audio FIFO...")
-        try:
-            f = await asyncio.wait_for(
-                asyncio.to_thread(open, self.video_player.audio_fifo, "rb"),
-                timeout=15.0,
-            )
-        except TimeoutError:
-            log.error("[HEADBANZ] Timed out waiting for audio FIFO")
-            raise RuntimeError("Timed out waiting for audio FIFO")
-
-        self.audio_sender = GoLiveAudioSender(
-            file_obj=f,
-            conn=self.conn,
-            is_source_active=self.video_player.is_source_active,
-        )
-        self.audio_sender.start()
-        log.info("[HEADBANZ] Audio sender started")
-
-    async def _stop_players(self) -> None:
-        if self.video_player:
-            self.video_player.stop()
-        if self.audio_sender:
-            self.audio_sender.stop()
-        await asyncio.to_thread(self._wait_players)
-        self.video_player = None
-        self.audio_sender = None
-
-    def _wait_players(self) -> None:
-        deadline = time.monotonic() + 5.0
-        for p in (self.video_player, self.audio_sender):
-            if p and p.is_alive():
-                remaining = deadline - time.monotonic()
-                if remaining > 0:
-                    p.join(timeout=remaining)
-                if p.is_alive():
-                    log.warning("[HEADBANZ] %s still alive after 5s", p.name)
-
-    async def _inactivity_loop(self) -> None:
-        try:
-            while not self._stopped:
-                await asyncio.sleep(2)
-                if self._stopped:
-                    break
-                if self.conn and not self.conn.healthy:
-                    log.warning("[HEADBANZ] GoLive connection lost. Auto-stopping.")
-                    break
-                if self.video_player and not self.video_player.is_alive():
-                    log.info("[HEADBANZ] Video player ended naturally — auto-stopping")
-                    break
-        except asyncio.CancelledError:
-            return
-        if not self._stopped:
-            _active_streams.pop(self.guild_id, None)
-            await self.stop()
-
-    async def stop(self) -> None:
-        if self._stopped:
-            return
-        self._stopped = True
-        if self._inactivity_task:
-            self._inactivity_task.cancel()
-            self._inactivity_task = None
-        log.info("[HEADBANZ] Stopping stream...")
-        try:
-            await self._stop_players()
-        except Exception:
-            pass
-        if self.conn:
-            try:
-                await asyncio.wait_for(self.conn.disconnect(), timeout=5.0)
-            except Exception:
-                pass
-        if self.vc and self.vc.is_connected():
-            try:
-                await self.vc.disconnect(force=True)
-            except Exception:
-                pass
-        guild = client.get_guild(self.guild_id)
-        if guild:
-            await _restore_nickname(guild)
-        log.info("[HEADBANZ] Stream stopped and cleaned up")
 
 
 _active_streams: dict[int, GoLiveStream] = {}
-_active_torrent_procs: dict[int, Any] = {}
+
 _nick_restore_tasks: dict[int, asyncio.Task] = {}
 _original_nicknames: dict[int, Optional[str]] = {}
 
@@ -808,16 +611,10 @@ async def _relay_stream(request: web.Request) -> web.Response:
 
     existing = _active_streams.get(guild_id)
     if existing and not getattr(existing, "_stopped", True):
-        is_existing_reel = "instagram.com" in (getattr(existing, "url", "") or "")
-        is_new_reel = "instagram.com" in url
-        if is_existing_reel or is_new_reel or hasattr(existing, "queue"):
-            if not hasattr(existing, "queue"):
-                existing.queue = []
-            if not hasattr(existing, "queue_titles"):
-                existing.queue_titles = []
+        if hasattr(existing, "queue"):
             existing.queue.append(url)
             existing.queue_titles.append(stream_title)
-            log.info("[STREAM] Queued reel for guild=%s: %s (pos %d)", guild_id, url, len(existing.queue))
+            log.info("[STREAM] Queued video for guild=%s: %s (pos %d)", guild_id, url, len(existing.queue))
             if len(existing.queue) == 1 and hasattr(existing, "_prefetch_next"):
                 asyncio.create_task(existing._prefetch_next())
             return web.json_response({
@@ -851,25 +648,6 @@ async def _relay_stream(request: web.Request) -> web.Response:
     await _join_channel(channel)
     vc = _vc_for_guild(guild)
 
-    # Handle Magnet URI / torrent URL via TorrentStreamerProcess
-    torrent_proc = None
-    if url.startswith("magnet:?") or len(url) == 40 or ".torrent" in url.lower():
-        try:
-            try:
-                from torrent_streamer import TorrentStreamerProcess
-            except ModuleNotFoundError:
-                from golive.torrent_streamer import TorrentStreamerProcess
-            
-            torrent_proc = TorrentStreamerProcess(url)
-            resolved_url = await torrent_proc.start(timeout=25.0)
-            log.info("[STREAM] Magnet resolved to local stream URL: %s", resolved_url)
-            url = resolved_url
-            _active_torrent_procs[guild_id] = torrent_proc
-        except Exception as e:
-            log.exception("[STREAM] Failed to resolve torrent stream: %s", e)
-            if torrent_proc:
-                await torrent_proc.stop()
-            return web.json_response({"error": f"Failed to resolve torrent stream: {e}"}, status=500)
 
     if stream_title:
         _save_original_nickname(guild)
@@ -884,9 +662,6 @@ async def _relay_stream(request: web.Request) -> web.Response:
     except Exception as e:
         log.exception("[STREAM] failed to start stream via Slopsoil engine")
         await stream.stop()
-        tp = _active_torrent_procs.pop(guild_id, None)
-        if tp:
-            await tp.stop()
         return web.json_response({"error": str(e)}, status=500)
 
     _active_streams[guild_id] = stream
@@ -899,69 +674,6 @@ async def _relay_stream(request: web.Request) -> web.Response:
         "is_live": stream.is_live,
         "engine": "slopsoil_native"
     })
-
-
-async def _relay_headbanz(request: web.Request) -> web.Response:
-    log.info("[HEADBANZ] request from %s", request.remote)
-    if not config.RELAY_SECRET:
-        return web.json_response({"error": "relay disabled"}, status=503)
-    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
-        return web.json_response({"error": "unauthorized"}, status=401)
-    try:
-        data = await request.json()
-        guild_id = int(data["guild_id"])
-        channel_id = int(data["channel_id"])
-        image_path = str(data["image_path"]).strip()
-    except Exception as e:
-        log.warning("[HEADBANZ] invalid body: %s", e)
-        return web.json_response({"error": "invalid body"}, status=400)
-
-    if not client.is_ready():
-        return web.json_response({"error": "client not ready"}, status=503)
-
-    existing = _active_streams.get(guild_id)
-    if existing and not getattr(existing, "_stopped", True):
-        log.warning("[HEADBANZ] already streaming for guild=%s", guild_id)
-        return web.json_response({"error": "busy", "message": "Already streaming"}, status=409)
-
-    guild = client.get_guild(guild_id)
-    if guild is None:
-        return web.json_response({"error": "guild not found"}, status=404)
-
-    channel = guild.get_channel(channel_id)
-    if not isinstance(channel, discord.VoiceChannel):
-        try:
-            channel = await client.fetch_channel(channel_id)
-        except Exception as e:
-            return web.json_response({"error": f"channel not found: {e}"}, status=404)
-
-    if not isinstance(channel, discord.VoiceChannel):
-        return web.json_response({"error": "not a voice channel"}, status=400)
-
-    await _join_channel(channel)
-    vc = _vc_for_guild(guild)
-    if vc is None or not vc.is_connected():
-        return web.json_response({"error": "not connected"}, status=500)
-
-    stream = HeadbanzGoLiveStream(client, guild_id, channel_id, vc, image_path)
-    try:
-        await stream.start()
-    except Exception as e:
-        await stream.stop()
-        return web.json_response({"error": str(e)}, status=500)
-
-    _active_streams[guild_id] = stream
-    _save_original_nickname(guild)
-    await _set_nickname(guild, "GoLive - Headbanz")
-    return web.json_response(
-        {
-            "started": True,
-            "guild_id": guild_id,
-            "channel_name": channel.name,
-            "video_ssrc": stream.video_ssrc,
-            "is_live": False,
-        }
-    )
 
 
 async def _relay_stopstream(request: web.Request) -> web.Response:
@@ -1009,13 +721,6 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
         except Exception as e:
             log.warning("[STOPSTREAM] stream stop failed: %s", e)
 
-    # 4b. Stop active torrent engine process if active
-    tp = _active_torrent_procs.pop(guild_id, None)
-    if tp:
-        try:
-            await tp.stop()
-        except Exception as e:
-            log.warning("[STOPSTREAM] torrent proc stop error: %s", e)
 
     # 5. Schedule voice client disconnect in background after sending HTTP response
     async def _delayed_vc_disconnect():
@@ -1328,7 +1033,6 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/stream", _relay_stream)
     app.router.add_post("/stopstream", _relay_stopstream)
     app.router.add_post("/stream/control", _relay_stream_control)
-    app.router.add_post("/headbanz", _relay_headbanz)
     app.router.add_post("/watchstream/snapshot", _relay_watchstream_snapshot)
     app.router.add_post("/watchstream/stop", _relay_watchstream_stop)
     runner = web.AppRunner(app)

@@ -239,12 +239,9 @@ async def test_extract_no_cookies_no_pot():
 @pytest.fixture
 def mock_golive_infra(monkeypatch):
     """Isolate GoLiveStream.start() from network / threads."""
-    conn = AsyncMock()
-    conn.ssrc = 1000
-    monkeypatch.setattr("golive.bot.GoLiveConnection", lambda *a, **k: conn)
+    monkeypatch.setattr("golive.bot.slopsoil_start_live_stream", AsyncMock())
     monkeypatch.setattr("asyncio.to_thread", lambda fn, *a: MagicMock())
-    monkeypatch.setattr("golive.bot.GoLiveStream._start_players", AsyncMock())
-    return conn
+    return None
 
 
 def _make_stream(url="https://youtube.com/watch?v=test"):
