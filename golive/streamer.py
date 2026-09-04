@@ -998,7 +998,10 @@ class H264VideoPlayer(threading.Thread):
             audio_map_idx = 1
         else:
             is_url = self._url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
-            if is_url and "googlevideo.com" not in self._url:
+            # -http_persistent 0 prevents connection reuse between HLS segments,
+            # but FFmpeg rejects it for direct file downloads (MKV, MP4 from CDN).
+            # Only apply it for live streams.
+            if is_url and self._live and "googlevideo.com" not in self._url:
                 input_args += ["-http_persistent", "0"]
             input_args += ["-i", self._url]
             audio_map_idx = 0
