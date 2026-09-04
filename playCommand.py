@@ -1860,6 +1860,9 @@ class GuildPlayer:
         if not self.currentSong:
             return
 
+        if seek_seconds == 0.0 and self.currentSong:
+            seek_seconds = float(self.currentSong.get("start_seconds") or 0.0)
+
         videoId = self.currentSong["id"]
         videoTitle = self.currentSong["title"]
 
@@ -3151,6 +3154,85 @@ def clearGuildPlayer(guildId: int):
         del guildPlayers[guildId]
 
 
+def parse_timestamp(val: Optional[str]) -> float:
+    """Parse a time string into total seconds.
+
+    Supports:
+        - MM:SS or M:SS (e.g. "1:30" -> 90.0, "01:15" -> 75.0, "0:45" -> 45.0)
+        - HH:MM:SS or H:MM:SS (e.g. "1:02:30" -> 3750.0)
+        - Pure numbers (e.g. "90" -> 90.0, "90.5" -> 90.5)
+        - Time unit suffixes (e.g. "1m30s" -> 90.0, "90s" -> 90.0, "1h2m30s" -> 3750.0, "2m" -> 120.0)
+        - Query string prefixes (e.g. "t=90s", "?t=1m30s", "start=90")
+
+    Returns:
+        float representing total seconds, or 0.0 if empty/invalid.
+    """
+    if not val or not isinstance(val, str):
+        return 0.0
+    s = val.strip().lstrip("?").strip()
+    if s.startswith("t="):
+        s = s[2:].strip()
+    elif s.startswith("start="):
+        s = s[6:].strip()
+    if not s:
+        return 0.0
+
+    if ":" in s:
+        parts = s.split(":")
+        try:
+            if len(parts) == 2:
+                mins = float(parts[0])
+                secs = float(parts[1])
+                return max(0.0, mins * 60.0 + secs)
+            elif len(parts) == 3:
+                hrs = float(parts[0])
+                mins = float(parts[1])
+                secs = float(parts[2])
+                return max(0.0, hrs * 3600.0 + mins * 60.0 + secs)
+        except (ValueError, TypeError):
+            pass
+
+    import re
+    unit_match = re.match(
+        r"^(?:(?P<h>\d+(?:\.\d+)?)h)?(?:(?P<m>\d+(?:\.\d+)?)m)?(?:(?P<s>\d+(?:\.\d+)?)s?)?$",
+        s,
+        re.IGNORECASE,
+    )
+    if unit_match and any(unit_match.groupdict().values()):
+        h_str = unit_match.group("h")
+        m_str = unit_match.group("m")
+        s_str = unit_match.group("s")
+        try:
+            hrs = float(h_str) if h_str else 0.0
+            mins = float(m_str) if m_str else 0.0
+            secs = float(s_str) if s_str else 0.0
+            total = hrs * 3600.0 + mins * 60.0 + secs
+            return max(0.0, total)
+        except (ValueError, TypeError):
+            pass
+
+    try:
+        return max(0.0, float(s))
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def extract_url_timestamp(url_str: str) -> float:
+    """Extract start timestamp from a YouTube URL if present (e.g. ?t=90s or &t=1m30s or &start=90)."""
+    if not url_str or not (url_str.startswith("http://") or url_str.startswith("https://")):
+        return 0.0
+    try:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url_str)
+        qs = urllib.parse.parse_qs(parsed.query)
+        t_vals = qs.get("t") or qs.get("start")
+        if t_vals:
+            return parse_timestamp(t_vals[0])
+    except Exception:
+        pass
+    return 0.0
+
+
 def _format_choice_prompt(candidates: list[dict]) -> str:
     """Render a numbered list of search candidates for the "¿cuál querés?"
     prompt. Shared shape used by the /play picker message."""
@@ -3166,6 +3248,7 @@ async def playLogic(
     ctx: discord.ApplicationContext,
     query: str,
     *,
+    inicio: Optional[str] = None,
     redirect_channel: Optional[discord.TextChannel] = None,
 ):
     """Handle the /play slash command.
@@ -3359,6 +3442,13 @@ async def playLogic(
 
         if not songs:
             return await _send("❌ No se pudieron obtener los metadatos del video.")
+
+        start_sec = parse_timestamp(inicio)
+        if start_sec <= 0.0:
+            start_sec = extract_url_timestamp(query)
+        if start_sec > 0.0:
+            for s in songs:
+                s["start_seconds"] = start_sec
     except FileNotFoundError as e:
         diag = _diag(
             "admin",
@@ -3572,6 +3662,7 @@ async def playFromIndio(
     voice_channel_id: Optional[int] = None,
     *,
     songs: Optional[list[dict]] = None,
+    inicio: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Queue a YouTube search/URL programmatically — no slash ctx required.
 
@@ -3662,6 +3753,13 @@ async def playFromIndio(
                 except Exception:
                     pass
             return False, "no encontre nada en YouTube con esa busqueda"
+
+    start_sec = parse_timestamp(inicio)
+    if start_sec <= 0.0:
+        start_sec = extract_url_timestamp(query)
+    if start_sec > 0.0:
+        for s in songs:
+            s["start_seconds"] = start_sec
 
     player = getGuildPlayer(guild_id, bot)
     player.textChannel = text_channel

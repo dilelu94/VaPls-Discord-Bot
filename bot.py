@@ -1265,6 +1265,12 @@ async def play(
         required=False,
         default=None,
     ) = None,
+    inicio: discord.Option(
+        str,
+        description="Tiempo de inicio (ej: 1:30, 90, 01:15, 1m30s)",
+        required=False,
+        default=None,
+    ) = None,
 ):
     """Slash command: queue and play a YouTube search or URL.
 
@@ -1272,6 +1278,7 @@ async def play(
         ctx: Discord application context.
         query: Search text or YouTube URL. If empty, replies with a hint
             instead of starting playback.
+        inicio: Optional start timestamp (e.g. "1:30", "90", "01:15", "1m30s").
 
     Side Effects:
         Joins voice and starts the GuildPlayer playback flow.
@@ -1295,11 +1302,18 @@ async def play(
             ch = ctx.guild.get_channel(config.INDIO_PLAY_CHANNEL_ID)
             if ch is not None and hasattr(ch, "send"):
                 redirect_ch = ch
-    _track_command(ctx, "play", {"query_length": len(query or "")})
+    _track_command(
+        ctx,
+        "play",
+        {
+            "query_length": len(query or ""),
+            "has_inicio": bool(inicio),
+        },
+    )
     if not query or not query.strip():
         await ctx.followup.send("decime qué reproducir la próxima", ephemeral=True)
         return
-    await playLogic(ctx, query, redirect_channel=redirect_ch)
+    await playLogic(ctx, query, inicio=inicio, redirect_channel=redirect_ch)
 
 
 @bot.slash_command(
