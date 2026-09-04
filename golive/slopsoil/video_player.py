@@ -510,7 +510,7 @@ def _detect_encoder() -> _EncoderConfig | None:
     # used when present.  Each is gated on an actual probe, so a compiled-in but
     # non-functional encoder is skipped and the next option is tried.
     if "h264_nvenc" in available:
-        if _test_encoder("h264_nvenc", []):
+        if _test_encoder("h264_nvenc", [], f"scale={res},format=yuv420p"):
             log.info("video encoder: h264_nvenc (NVIDIA)")
             return _EncoderConfig(
                 name="h264_nvenc",
@@ -535,7 +535,7 @@ def _detect_encoder() -> _EncoderConfig | None:
                     "-bufsize",
                     br,
                 ],
-                vf=f"scale={res}",
+                vf=f"scale={res},format=yuv420p",
             )
         log.info(
             "h264_nvenc is compiled in but unavailable (no usable NVIDIA GPU/driver) "
@@ -570,33 +570,11 @@ def _detect_encoder() -> _EncoderConfig | None:
             "DEBUG logging to see the FFmpeg error."
         )
 
-    if "libx264" in available and _test_encoder("libx264", []):
+    if "libx264" in available and _test_encoder("libx264", [], f"scale={res},format=yuv420p"):
         log.info("video encoder: libx264 (software)")
-        return _EncoderConfig(
-            name="libx264",
-            pre_input=[],
-            post_codec=[
-                "-preset",
-                "ultrafast",
-                "-tune",
-                "zerolatency",
-                "-profile:v",
-                "high",
-                "-level:v",
-                "4.2",
-                "-x264-params",
-                "aud=1",
-                "-b:v",
-                br,
-                "-maxrate",
-                br,
-                "-bufsize",
-                br,
-            ],
-            vf=f"scale={res}",
-        )
+        return _libx264_config()
 
-    if "libopenh264" in available and _test_encoder("libopenh264", []):
+    if "libopenh264" in available and _test_encoder("libopenh264", [], f"scale={res},format=yuv420p"):
         log.info("video encoder: libopenh264 (software)")
         return _libopenh264_config()
 
@@ -606,6 +584,35 @@ def _detect_encoder() -> _EncoderConfig | None:
         "or that VA-API/NVENC drivers are functional."
     )
     return None
+
+
+def _libx264_config() -> _EncoderConfig:
+    """libx264 software encoder config."""
+    res = _stream_resolution()
+    br = _stream_bitrate()
+    return _EncoderConfig(
+        name="libx264",
+        pre_input=[],
+        post_codec=[
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-profile:v",
+            "high",
+            "-level:v",
+            "4.2",
+            "-x264-params",
+            "aud=1",
+            "-b:v",
+            br,
+            "-maxrate",
+            br,
+            "-bufsize",
+            br,
+        ],
+        vf=f"scale={res},format=yuv420p",
+    )
 
 
 def _libopenh264_config() -> _EncoderConfig:
@@ -624,18 +631,22 @@ def _libopenh264_config() -> _EncoderConfig:
             "-maxrate", br,
             "-bufsize", br,
         ],
-        vf=f"scale={res}",
+        vf=f"scale={res},format=yuv420p",
     )
 
 
 _ENCODER: _EncoderConfig | None = _detect_encoder()
 
 # Software encoder to retry with when the hardware encoder produces no output at
-# runtime.  None when the primary is already software or libopenh264 is absent.
+# runtime. None when the primary is already software or no working secondary software encoder is available.
 _SW_ENCODER: _EncoderConfig | None = (
     _libopenh264_config()
-    if _ENCODER is not None and _ENCODER.name != "libopenh264"
-    else None
+    if _ENCODER is not None and _ENCODER.name not in ("libopenh264", "libx264") and _test_encoder("libopenh264", [], f"scale={_stream_resolution()},format=yuv420p")
+    else (
+        _libx264_config()
+        if _ENCODER is not None and _ENCODER.name != "libx264" and _test_encoder("libx264", [], f"scale={_stream_resolution()},format=yuv420p")
+        else None
+    )
 )
 
 
