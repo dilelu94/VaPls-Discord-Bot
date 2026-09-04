@@ -92,92 +92,100 @@ class GoLiveStream:
         self._prefetch_cache: dict[str, tuple[str, str, bool]] = {}
         self._prefetch_urls: set[str] = set()
 
-    async def start(self):
-        from ytdlp import _yt_extract_url
-        
-        target_url = self.url
+    @staticmethod
+    async def _resolve_stream_url(url: str) -> "tuple[str, str, bool]":
+        """Resolve *url* to a (target_url, title, is_live) triple.
+
+        For direct media files (detected by extension or Content-Type HEAD
+        sniff) yt-dlp is skipped entirely.  Any HTTP-level yt-dlp failure
+        falls back to using the raw URL so CDN links never surface as 500s.
+        """
+        target_url = url
         title = "Stream"
         is_live = True
-        
-        if target_url.startswith(("http://", "https://")):
-            from urllib.parse import urlparse
-            import aiohttp
-            _path = urlparse(target_url).path.lower()
-            _DIRECT_MEDIA_EXTS = (
-                ".m3u8", ".mpd", ".m3u",
-                ".mkv", ".mp4", ".webm", ".avi", ".mov",
-                ".ts", ".flv", ".wmv", ".ogv", ".ogg",
-            )
-            _is_direct = (
-                any(_path.endswith(ext) for ext in _DIRECT_MEDIA_EXTS)
-                or ".m3u8" in target_url.lower()
-            )
 
-            # For extensionless URLs (e.g. CDN /dld/<uuid>?token=...) sniff the
-            # Content-Type via a HEAD request before deciding to use yt-dlp.
-            if not _is_direct:
-                _DIRECT_CONTENT_TYPES = ("video/", "audio/", "application/octet-stream")
-                try:
-                    async with aiohttp.ClientSession() as _sess:
-                        async with _sess.head(
-                            target_url,
-                            allow_redirects=True,
-                            timeout=aiohttp.ClientTimeout(total=8),
-                            headers={"User-Agent": "Mozilla/5.0"},
-                        ) as _resp:
-                            _ct = _resp.headers.get("Content-Type", "").lower()
-                            if any(_ct.startswith(t) for t in _DIRECT_CONTENT_TYPES):
-                                log.info(
-                                    "[STREAM] Content-Type=%r → direct media, skipping yt-dlp", _ct
-                                )
-                                _is_direct = True
-                            else:
-                                log.info(
-                                    "[STREAM] Content-Type=%r → will try yt-dlp", _ct
-                                )
-                except Exception as _he:
-                    log.warning("[STREAM] HEAD request failed (%s), proceeding with yt-dlp", _he)
+        if not url.startswith(("http://", "https://")):
+            return target_url, title, is_live
 
-            if _is_direct:
-                log.info("[STREAM] Using URL directly (no yt-dlp): %s", _path or target_url)
-                self.is_live = False
-            else:
-                log.info("[STREAM] Checking stream URL via yt-dlp for %s", target_url)
-                try:
-                    res = await _yt_extract_url(target_url)
-                except Exception as e:
-                    err_str = str(e)
-                    # Broad fallback: any HTTP-level failure or extraction failure
-                    # on an unrecognised URL → try the raw URL directly instead
-                    # of surfacing a hard error.
-                    _FALLBACK_SIGNALS = (
-                        "Requested format is not available",
-                        "Unable to extract",
-                        "Unable to download webpage",
-                        "HTTP Error 400",
-                        "HTTP Error 403",
-                        "HTTP Error 404",
-                    )
-                    if any(s in err_str for s in _FALLBACK_SIGNALS):
-                        log.warning(
-                            "[STREAM] yt-dlp can't handle URL, falling back to direct: %s", e
-                        )
-                        self.is_live = False
-                    else:
-                        log.warning("[STREAM] yt-dlp extraction failed: %s", e)
-                        raise RuntimeError(f"Failed to extract stream URL via yt-dlp: {e}")
-                else:
-                    if res:
-                        target_url, title, self.is_live = res
-                        log.info(
-                            "[STREAM] Extracted stream: %s -> %s (live=%s)",
-                            title, target_url, self.is_live,
-                        )
-                    else:
-                        raise RuntimeError("Failed to extract stream URL via yt-dlp")
+        from urllib.parse import urlparse
+        import aiohttp
+        from ytdlp import _yt_extract_url
+
+        _path = urlparse(url).path.lower()
+        _DIRECT_MEDIA_EXTS = (
+            ".m3u8", ".mpd", ".m3u",
+            ".mkv", ".mp4", ".webm", ".avi", ".mov",
+            ".ts", ".flv", ".wmv", ".ogv", ".ogg",
+        )
+        _DIRECT_CONTENT_TYPES = ("video/", "audio/", "application/octet-stream")
+        _FALLBACK_SIGNALS = (
+            "Requested format is not available",
+            "Unable to extract",
+            "Unable to download webpage",
+            "HTTP Error 400",
+            "HTTP Error 403",
+            "HTTP Error 404",
+        )
+
+        is_direct = (
+            any(_path.endswith(ext) for ext in _DIRECT_MEDIA_EXTS)
+            or ".m3u8" in url.lower()
+        )
+
+        # For extensionless URLs (e.g. CDN /dld/<uuid>?token=...) sniff
+        # Content-Type via HEAD before deciding to invoke yt-dlp.
+        if not is_direct:
+            try:
+                async with aiohttp.ClientSession() as sess:
+                    async with sess.head(
+                        url,
+                        allow_redirects=True,
+                        timeout=aiohttp.ClientTimeout(total=8),
+                        headers={"User-Agent": "Mozilla/5.0"},
+                    ) as resp:
+                        ct = resp.headers.get("Content-Type", "").lower()
+                        if any(ct.startswith(t) for t in _DIRECT_CONTENT_TYPES):
+                            log.info(
+                                "[STREAM] Content-Type=%r → direct media, skipping yt-dlp", ct
+                            )
+                            is_direct = True
+                        else:
+                            log.info("[STREAM] Content-Type=%r → will try yt-dlp", ct)
+            except Exception as he:
+                log.warning("[STREAM] HEAD request failed (%s), proceeding with yt-dlp", he)
+
+        if is_direct:
+            log.info("[STREAM] Using URL directly (no yt-dlp): %s", _path or url)
+            return target_url, title, False  # is_live=False for files
+
+        log.info("[STREAM] Checking stream URL via yt-dlp for %s", url)
+        try:
+            res = await _yt_extract_url(url)
+        except Exception as e:
+            err_str = str(e)
+            if any(s in err_str for s in _FALLBACK_SIGNALS):
+                log.warning(
+                    "[STREAM] yt-dlp can't handle URL, falling back to direct: %s", e
+                )
+                return target_url, title, False
+            log.warning("[STREAM] yt-dlp extraction failed: %s", e)
+            raise RuntimeError(f"Failed to extract stream URL via yt-dlp: {e}")
+
+        if res:
+            target_url, title, is_live = res
+            log.info(
+                "[STREAM] Extracted stream: %s -> %s (live=%s)", title, target_url, is_live
+            )
+            return target_url, title, is_live
+
+        raise RuntimeError("Failed to extract stream URL via yt-dlp")
+
+    async def start(self):
         
+        target_url, title, is_live = await self._resolve_stream_url(self.url)
         self.target_url = target_url
         self.title = title
+        self.is_live = is_live
 
         log.info("[STREAM] Establishing GoLive connection...")
         
@@ -323,13 +331,12 @@ class GoLiveStream:
         reel-to-reel transition has no yt-dlp wait."""
         if self._stopped or not self.queue:
             return
-        from ytdlp import _yt_extract_url
         url = self.queue[0]
         if url in self._prefetch_cache or url in self._prefetch_urls:
             return
         self._prefetch_urls.add(url)
         try:
-            res = await _yt_extract_url(url)
+            res = await self._resolve_stream_url(url)
             if res and not self._stopped:
                 self._prefetch_cache[url] = res
         except Exception as e:
@@ -386,21 +393,20 @@ class GoLiveStream:
                             
                             await self._stop_players()
                             
-                            # Resolve target URL via yt-dlp (prefetched while the
+                            # Resolve target URL (prefetched while the
                             # previous reel was playing; inline fallback otherwise).
                             res = self._prefetch_cache.pop(next_url, None)
                             if res is None:
-                                from ytdlp import _yt_extract_url
                                 try:
-                                    res = await _yt_extract_url(next_url)
+                                    res = await self._resolve_stream_url(next_url)
                                 except Exception as e:
-                                    log.error("[STREAM] yt-dlp extraction failed for next URL: %s", e)
+                                    log.error("[STREAM] URL resolution failed for next URL: %s", e)
                                     continue
                             if res:
                                 self.target_url, self.title, self.is_live = res
                                 self.url = next_url
                             else:
-                                log.error("[STREAM] yt-dlp failed to extract next URL")
+                                log.error("[STREAM] Failed to resolve next URL")
                                 continue
                             
                             # Set nickname to reflect new video
