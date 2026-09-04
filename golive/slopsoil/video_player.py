@@ -805,11 +805,15 @@ class H264VideoPlayer(threading.Thread):
         audio: bool = True,
         probe_size: int = 10_000_000,
         start_time: float = 0.0,
+        audio_track: int = 0,
+        subtitle_track: int = -1,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
         self._vc = voice_client
         self._fps = fps
+        self._audio_track = audio_track
+        self._subtitle_track = subtitle_track
         self._end = threading.Event()
         self._proc: subprocess.Popen | None = None
 
@@ -926,6 +930,9 @@ class H264VideoPlayer(threading.Thread):
             "-probesize", str(self._probe_size),
             "-analyzeduration", str(self._probe_size),
         ]
+        a_idx = max(0, getattr(self, "_audio_track", 0))
+        sub_idx = getattr(self, "_subtitle_track", -1)
+
         if isinstance(self._url, (tuple, list)):
             primary_url = self._url[0]
             is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
@@ -935,7 +942,7 @@ class H264VideoPlayer(threading.Thread):
                 if is_u and self._live and "googlevideo.com" not in u:
                     input_args += ["-http_persistent", "0"]
                 input_args += ["-i", u]
-            audio_map = "1:a:0"
+            audio_map = f"1:a:{a_idx}?"
         else:
             primary_url = self._url
             is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
@@ -946,7 +953,12 @@ class H264VideoPlayer(threading.Thread):
             if is_url and self._live and "googlevideo.com" not in primary_url:
                 input_args += ["-http_persistent", "0"]
             input_args += ["-i", primary_url]
-            audio_map = "0:a:0"
+            audio_map = f"0:a:{a_idx}?"
+
+        vf_str = enc.vf
+        if sub_idx >= 0:
+            esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
 
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"
@@ -957,7 +969,7 @@ class H264VideoPlayer(threading.Thread):
         )
         video_out_args = [
             "-map", "0:v:0",
-            "-vf", enc.vf,
+            "-vf", vf_str,
             "-c:v", enc.name,
             *enc.post_codec,
             "-r", str(int(self._fps)),

@@ -1808,6 +1808,8 @@ async def start_iptv_stream_logic(
     stream_url: str,
     channel_name: str,
     start_sec: float = 0.0,
+    audio_track: int = 0,
+    subtitle_track: int = -1,
 ) -> tuple[bool, str, bool]:
     """Sends the HTTP request to the GoLive relay to start streaming a channel.
 
@@ -1826,14 +1828,18 @@ async def start_iptv_stream_logic(
         "url": stream_url,
         "channel_name": channel_name,
         "start_sec": start_sec,
+        "audio_track": audio_track,
+        "subtitle_track": subtitle_track,
     }
     log.info(
-        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s start_sec=%.1f",
+        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s start_sec=%.1f audio_track=%d subtitle_track=%d",
         url,
         guild_id,
         voice_channel.id,
         stream_url,
         start_sec,
+        audio_track,
+        subtitle_track,
     )
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     is_live = True
@@ -1869,6 +1875,76 @@ async def start_iptv_stream_logic(
         f"Usá **/stopstream** para cortar."
     )
     return True, status_msg, is_live
+
+
+async def start_stream_with_track_select(
+    ctx_or_interaction,
+    guild_id: int,
+    voice_channel: discord.VoiceChannel,
+    stream_url: str,
+    title: str,
+    start_sec: float = 0.0,
+    source_type: str = "direct",
+    redirect_ch: Optional[discord.TextChannel] = None,
+) -> tuple[bool, str, bool]:
+    """Inspects stream media tracks with ffprobe and displays track selection view if multiple audio or subtitle streams exist."""
+    from media_inspector import inspect_media_tracks
+    from stream_track_view import StreamTrackSelectView
+
+    user_id = getattr(getattr(ctx_or_interaction, "author", None) or getattr(ctx_or_interaction, "user", None), "id", None)
+
+    tracks_info = await inspect_media_tracks(stream_url, timeout=5.0)
+
+    if tracks_info.has_multiple_audios or tracks_info.has_subtitles:
+        async def _on_start_selected(interaction: discord.Interaction, audio_trk: int, sub_trk: int):
+            success, status_msg, is_live = await start_iptv_stream_logic(
+                guild_id, voice_channel, stream_url, title, start_sec=start_sec,
+                audio_track=audio_trk, subtitle_track=sub_trk,
+            )
+            if success:
+                _active_sources[guild_id] = {"type": source_type, "url": stream_url}
+                _paused_streams.discard(guild_id)
+            user_mention = f"<@{user_id}> " if user_id else ""
+            if redirect_ch:
+                await redirect_ch.send(content=f"{user_mention}{status_msg}")
+            else:
+                try:
+                    await interaction.followup.send(content=status_msg)
+                except Exception:
+                    pass
+
+        embed = discord.Embed(
+            title=f"🎬 Configuración para {title[:50]}",
+            description="Seleccioná la pista de audio (idioma) y subtítulos antes de transmitir:",
+            color=0x3498DB,
+        )
+        view = StreamTrackSelectView(tracks_info, _on_start_selected)
+        try:
+            if hasattr(ctx_or_interaction, "interaction") and ctx_or_interaction.interaction:
+                await ctx_or_interaction.interaction.edit_original_response(content=None, embed=embed, view=view)
+            elif isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.edit_message(content=None, embed=embed, view=view)
+            else:
+                await safe_respond(ctx_or_interaction, embed=embed, view=view)
+        except Exception:
+            try:
+                await safe_respond(ctx_or_interaction, embed=embed, view=view)
+            except Exception:
+                pass
+        return True, "Configurador desplegado", True
+
+    success, status_msg, is_live = await start_iptv_stream_logic(
+        guild_id, voice_channel, stream_url, title, start_sec=start_sec
+    )
+    if success:
+        _active_sources[guild_id] = {"type": source_type, "url": stream_url}
+        _paused_streams.discard(guild_id)
+    user_mention = f"<@{user_id}> " if user_id else ""
+    if redirect_ch:
+        await redirect_ch.send(content=f"{user_mention}{status_msg}")
+    else:
+        await safe_respond(ctx_or_interaction, status_msg)
+    return success, status_msg, is_live
 
 
 
@@ -2062,28 +2138,15 @@ class TorrentSearchView(BaseView):
         idx = int(select_elem[0])
         item = self.items[idx]
 
-        success, status_msg, is_live = await start_iptv_stream_logic(
+        await start_stream_with_track_select(
+            interaction,
             interaction.guild_id,
             self.voice_channel,
             item.magnet_or_url,
             item.title,
+            source_type="torrent",
+            redirect_ch=self.redirect_ch,
         )
-        if success:
-            _active_sources[interaction.guild_id] = {
-                "type": "torrent",
-                "url": item.magnet_or_url,
-            }
-            _paused_streams.discard(interaction.guild_id)
-
-        try:
-            if self.redirect_ch:
-                await self.redirect_ch.send(
-                    content=f"<@{interaction.user.id}> {status_msg}"
-                )
-            else:
-                await interaction.followup.send(content=status_msg)
-        except Exception:
-            pass
         self.stop()
 
 
@@ -2408,24 +2471,15 @@ class IptvSearchView(BaseView):
         await interaction.response.defer()
         await self.update_message(interaction, status_text=f"🔄 Conectando y transmitiendo **{ch.name}**...")
 
-        success, status_msg, _is_live = await start_iptv_stream_logic(
+        await start_stream_with_track_select(
+            interaction,
             interaction.guild_id,
             voice_channel,
             ch.url,
-            ch.name
+            ch.name,
+            source_type="iptv",
+            redirect_ch=self.redirect_ch,
         )
-
-        if success:
-            view = None
-            if self.redirect_ch:
-                await self.redirect_ch.send(content=f"<@{interaction.user.id}> {status_msg}")
-                await self.update_message(interaction, status_text=f"🟢 Transmisión iniciada en {voice_channel.name}")
-            else:
-                await interaction.edit_original_response(
-                    content=f"🟢 {status_msg}", embed=None, view=None
-                )
-        else:
-            await self.update_message(interaction, status_text=f"🔴 Error: {status_msg}")
 
 
 class IptvMultiSourceView(BaseView):
@@ -2648,33 +2702,15 @@ class JkanimeEpisodeView(BaseView):
             )
             return
 
-        success, status_msg, _is_live = await start_iptv_stream_logic(
-            interaction.guild_id, voice_channel, stream_url, ep_title
+        await start_stream_with_track_select(
+            interaction,
+            interaction.guild_id,
+            voice_channel,
+            stream_url,
+            ep_title,
+            source_type="jkanime",
+            redirect_ch=self.redirect_ch,
         )
-
-        if success:
-            _active_sources[interaction.guild_id] = {
-                "type": "jkanime",
-                "url": stream_url,
-            }
-            _paused_streams.discard(interaction.guild_id)
-            view = None
-            if self.redirect_ch:
-                await self.redirect_ch.send(
-                    content=f"<@{interaction.user.id}> {status_msg}"
-                )
-                await self.update_message(
-                    interaction,
-                    status_text=f"🟢 Transmisión iniciada en {voice_channel.name}",
-                )
-            else:
-                await interaction.edit_original_response(
-                    content=f"🟢 {status_msg}", embed=None, view=None
-                )
-        else:
-            await self.update_message(
-                interaction, status_text=f"🔴 Error: {status_msg}"
-            )
 
 
 class JkanimeSearchView(BaseView):
@@ -2815,21 +2851,9 @@ async def stream(
     # Check for direct Torrent / Magnet link / Stremio resolve URL
     if torrent_search.is_torrent_input(raw_canal) and not raw_canal.lower().startswith("torrent:"):
         magnet_url, title = torrent_search.resolve_stremio_or_magnet_url(raw_canal)
-        success, status_msg, is_live = await start_iptv_stream_logic(
-            ctx.guild_id, voice_channel, magnet_url, title, start_sec=start_sec
+        await start_stream_with_track_select(
+            ctx, ctx.guild_id, voice_channel, magnet_url, title, start_sec=start_sec, source_type="torrent", redirect_ch=redirect_ch
         )
-        if success:
-            _active_sources[ctx.guild_id] = {"type": "torrent", "url": magnet_url}
-            _paused_streams.discard(ctx.guild_id)
-            if redirect_ch:
-                await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-            else:
-                await safe_respond(ctx, status_msg)
-        else:
-            if redirect_ch:
-                await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-            else:
-                await safe_respond(ctx, status_msg)
         return
 
     # Check for explicit torrent search prefix e.g. "torrent: matrix"
@@ -3044,26 +3068,16 @@ async def stream(
         start_sec,
     )
 
-    success, status_msg, is_live = await start_iptv_stream_logic(
+    await start_stream_with_track_select(
+        ctx,
         ctx.guild_id,
         voice_channel,
         stream_url,
         channel_name,
         start_sec=start_sec,
+        source_type=source_type,
+        redirect_ch=redirect_ch,
     )
-
-    if success:
-        _active_sources[ctx.guild_id] = {"type": source_type, "url": stream_url}
-        _paused_streams.discard(ctx.guild_id)
-        if redirect_ch:
-            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-        else:
-            await safe_respond(ctx, status_msg)
-    else:
-        if redirect_ch:
-            await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-        else:
-            await safe_respond(ctx, status_msg)
 
 
 @bot.slash_command(

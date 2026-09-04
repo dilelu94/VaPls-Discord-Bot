@@ -1,0 +1,50 @@
+import sys
+from unittest.mock import MagicMock
+import pytest
+
+# Ensure mocks for missing optional dependencies before importing video_player
+for _mod in ("video_compat", "davey_compat", "golive_connection", "golive.slopsoil.golive", "ytdlp"):
+    if _mod not in sys.modules:
+        sys.modules[_mod] = MagicMock()
+
+import discord
+if not hasattr(discord, "voice_state"):
+    discord.voice_state = MagicMock()
+if "discord.voice_state" not in sys.modules:
+    sys.modules["discord.voice_state"] = discord.voice_state
+
+from golive.slopsoil.video_player import H264VideoPlayer
+
+
+def test_ffmpeg_cmd_audio_track_mapping():
+    vc = MagicMock()
+    vc.ssrc = 100
+
+    # Default audio track (0)
+    p0 = H264VideoPlayer("http://example.com/video.mkv", vc, audio_track=0)
+    cmd0 = p0._ffmpeg_cmd()
+    assert "0:a:0?" in cmd0
+
+    # Selected audio track 2
+    p2 = H264VideoPlayer("http://example.com/video.mkv", vc, audio_track=2)
+    cmd2 = p2._ffmpeg_cmd()
+    assert "0:a:2?" in cmd2
+
+
+def test_ffmpeg_cmd_subtitle_burn_in_filter():
+    vc = MagicMock()
+    vc.ssrc = 100
+
+    # No subtitles (-1)
+    p_nosub = H264VideoPlayer("http://example.com/video.mkv", vc, subtitle_track=-1)
+    cmd_nosub = p_nosub._ffmpeg_cmd()
+    vf_idx = cmd_nosub.index("-vf")
+    assert "subtitles=" not in cmd_nosub[vf_idx + 1]
+
+    # Subtitle track 1 selected
+    p_sub = H264VideoPlayer("http://example.com/video.mkv", vc, subtitle_track=1)
+    cmd_sub = p_sub._ffmpeg_cmd()
+    vf_idx = cmd_sub.index("-vf")
+    vf_str = cmd_sub[vf_idx + 1]
+    assert "subtitles=f=" in vf_str
+    assert "stream_index=1" in vf_str
