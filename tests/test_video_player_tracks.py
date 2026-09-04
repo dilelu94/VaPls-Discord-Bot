@@ -13,7 +13,21 @@ if not hasattr(discord, "voice_state"):
 if "discord.voice_state" not in sys.modules:
     sys.modules["discord.voice_state"] = discord.voice_state
 
-from golive.slopsoil.video_player import H264VideoPlayer
+from unittest.mock import patch
+from golive.slopsoil.video_player import H264VideoPlayer, _EncoderConfig
+import golive.slopsoil.video_player as vp
+
+
+@pytest.fixture(autouse=True)
+def mock_encoder():
+    dummy = _EncoderConfig(
+        name="libx264",
+        pre_input=[],
+        post_codec=["-preset", "ultrafast"],
+        vf="scale=1280x720,format=yuv420p",
+    )
+    with patch.object(vp, "_ENCODER", dummy):
+        yield
 
 
 def test_ffmpeg_cmd_audio_track_mapping():
