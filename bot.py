@@ -1888,15 +1888,26 @@ async def start_stream_with_track_select(
     source_type: str = "direct",
     redirect_ch: Optional[discord.TextChannel] = None,
 ) -> tuple[bool, str, bool]:
-    """Inspects stream media tracks with ffprobe and displays track selection view if multiple audio or subtitle streams exist."""
-    from media_inspector import inspect_media_tracks
+    """Inspects stream media tracks with ffprobe and displays track selection view."""
+    from media_inspector import AudioTrack, SubtitleTrack, inspect_media_tracks
     from stream_track_view import StreamTrackSelectView
 
     user_id = getattr(getattr(ctx_or_interaction, "author", None) or getattr(ctx_or_interaction, "user", None), "id", None)
 
     tracks_info = await inspect_media_tracks(stream_url, timeout=5.0)
 
-    if tracks_info.has_multiple_audios or tracks_info.has_subtitles:
+    # For non-IPTV streams (direct URL, MKV, Torrent, JKAnime), provide fallback track choices if ffprobe didn't report multiple tracks
+    if source_type != "iptv":
+        if len(tracks_info.audio_tracks) < 2:
+            existing_indices = {t.index for t in tracks_info.audio_tracks}
+            for idx, name in [(0, "Pista 1 (Predeterminada)"), (1, "Pista 2 (Audio Secundario)"), (2, "Pista 3"), (3, "Pista 4")]:
+                if idx not in existing_indices:
+                    tracks_info.audio_tracks.append(AudioTrack(index=idx, stream_index=idx, language="und", title=name))
+        if len(tracks_info.subtitle_tracks) == 0:
+            for idx, name in [(0, "Subtítulo 1 (Pista 1)"), (1, "Subtítulo 2 (Pista 2)"), (2, "Subtítulo 3 (Pista 3)")]:
+                tracks_info.subtitle_tracks.append(SubtitleTrack(index=idx, stream_index=idx, language="und", title=name))
+
+    if tracks_info.has_multiple_audios or tracks_info.has_subtitles or source_type != "iptv":
         async def _on_start_selected(interaction: discord.Interaction, audio_trk: int, sub_trk: int):
             success, status_msg, is_live = await start_iptv_stream_logic(
                 guild_id, voice_channel, stream_url, title, start_sec=start_sec,
@@ -1906,11 +1917,17 @@ async def start_stream_with_track_select(
                 _active_sources[guild_id] = {"type": source_type, "url": stream_url}
                 _paused_streams.discard(guild_id)
             user_mention = f"<@{user_id}> " if user_id else ""
+            control_view = StreamControlView(guild_id) if success else None
+            full_msg = f"{user_mention}{status_msg}"
             if redirect_ch:
-                await redirect_ch.send(content=f"{user_mention}{status_msg}")
+                msg = await redirect_ch.send(content=full_msg, view=control_view)
+                if control_view and hasattr(msg, "id"):
+                    control_view.message = msg
             else:
                 try:
-                    await interaction.followup.send(content=status_msg)
+                    msg = await interaction.followup.send(content=full_msg, view=control_view)
+                    if control_view and hasattr(msg, "id"):
+                        control_view.message = msg
                 except Exception:
                     pass
 
@@ -1941,11 +1958,18 @@ async def start_stream_with_track_select(
         _active_sources[guild_id] = {"type": source_type, "url": stream_url}
         _paused_streams.discard(guild_id)
     user_mention = f"<@{user_id}> " if user_id else ""
+    control_view = StreamControlView(guild_id) if success else None
+    full_msg = f"{user_mention}{status_msg}"
     if redirect_ch:
-        await redirect_ch.send(content=f"{user_mention}{status_msg}")
+        msg = await redirect_ch.send(content=full_msg, view=control_view)
+        if control_view and hasattr(msg, "id"):
+            control_view.message = msg
     else:
-        await safe_respond(ctx_or_interaction, status_msg)
+        msg = await safe_respond(ctx_or_interaction, full_msg, view=control_view)
+        if control_view and hasattr(msg, "id"):
+            control_view.message = msg
     return success, status_msg, is_live
+
 
 
 
