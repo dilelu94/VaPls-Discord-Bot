@@ -54,6 +54,34 @@ logging.getLogger("discord.client").setLevel(logging.WARNING)
 
 client = discord.Client(chunk_guilds_at_startup=False)
 
+
+def _parse_stream_server_update(data):
+    stream_key = data.get("stream_key")
+    if stream_key:
+        if not hasattr(client, "_active_stream_updates"):
+            client._active_stream_updates = {}
+        client._active_stream_updates[stream_key] = data
+        client._active_stream_updates[f"{stream_key}:server"] = data
+        log.info("[GOLIVE-GW] Cached STREAM_SERVER_UPDATE for stream_key=%s: endpoint=%s", stream_key, data.get("endpoint"))
+        client.dispatch("stream_server_update", data)
+        client.dispatch("STREAM_SERVER_UPDATE", data)
+
+
+def _parse_stream_create(data):
+    stream_key = data.get("stream_key")
+    if stream_key:
+        if not hasattr(client, "_active_stream_updates"):
+            client._active_stream_updates = {}
+        client._active_stream_updates[stream_key] = data
+        client._active_stream_updates[f"{stream_key}:create"] = data
+        log.info("[GOLIVE-GW] Cached STREAM_CREATE for stream_key=%s", stream_key)
+        client.dispatch("stream_create", data)
+        client.dispatch("STREAM_CREATE", data)
+
+
+client._connection.parsers["STREAM_SERVER_UPDATE"] = _parse_stream_server_update
+client._connection.parsers["STREAM_CREATE"] = _parse_stream_create
+
 class GoLiveStream:
     def __init__(self, bot, guild_id, channel_id, vc, url, start_sec: float = 0.0, audio_track: int = 0, subtitle_track: int = -1, subtitle_file: Optional[str] = None):
         self.bot = bot
