@@ -553,7 +553,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
         # Always feed rolling buffer for /clip command before any wake/sensitivity filters
         try:
-            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            mono = ensure_mono(pcm_data)
             gid = guild_id or self.user_guilds.get(user_id)
             if gid:
                 _rolling_audio_buffer.add_frame(gid, user_id, mono)
@@ -579,7 +579,7 @@ class TranscriberSink(voice_recv.AudioSink):
 
         try:
             if mono is None:
-                mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+                mono = ensure_mono(pcm_data)
             rms = audioop.rms(mono, 2)
             now = time.time()
 
@@ -1349,7 +1349,7 @@ class WakeWordSink(voice_recv.AudioSink):
 
         # Always feed rolling buffer for /clip command before any wake/sensitivity filters
         try:
-            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            mono = ensure_mono(pcm_data)
             gid = guild_id or self.user_guilds.get(user_id)
             if gid:
                 _rolling_audio_buffer.add_frame(gid, user_id, mono)
@@ -1385,7 +1385,7 @@ class WakeWordSink(voice_recv.AudioSink):
 
         try:
             if mono is None:
-                mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+                mono = ensure_mono(pcm_data)
             data_16k, new_state = audioop.ratecv(
                 mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
             )
@@ -2049,7 +2049,7 @@ class RecorderSink(voice_recv.AudioSink):
         if not pcm:
             return
         try:
-            mono = audioop.tomono(pcm, _REC_INPUT_WIDTH, 0.5, 0.5)
+            mono = ensure_mono(pcm, _REC_INPUT_WIDTH)
         except Exception as e:
             log.exception("[REC] tomono failed")
             analytics.capture_exception(e, properties={"action": "rec_tomono_failed"})
@@ -2359,6 +2359,28 @@ _idle_leave_tasks: dict[int, asyncio.Task] = {}
 # the vote closes. Defence-in-depth lives on the main bot side, so a missing
 # or stale entry here only impacts efficiency, not correctness.
 _vote_restrictions: dict[int, int] = {}
+
+
+def ensure_mono(pcm_data: bytes, width: int = 2) -> bytes:
+    """Ensure PCM data is 16-bit mono.
+
+    Discord voice packets delivered by voice_recv are 48kHz 16-bit PCM.
+    - 20ms mono = 1,920 bytes (960 samples * 2 bytes).
+    - 20ms stereo = 3,840 bytes (960 samples * 2 bytes * 2 channels).
+
+    Calling audioop.tomono on an already-mono 1,920-byte frame halves the sample
+    count to 960 bytes, destroying the audio and playing it at 2x chipmunk speed.
+    This helper safely checks byte length before downmixing.
+    """
+    if not pcm_data:
+        return b""
+    if len(pcm_data) % 1920 == 0 and len(pcm_data) % 3840 != 0:
+        return pcm_data
+    if len(pcm_data) % 3840 == 0:
+        return audioop.tomono(pcm_data, width, 0.5, 0.5)
+    if len(pcm_data) % 4 == 0 and len(pcm_data) > 1920:
+        return audioop.tomono(pcm_data, width, 0.5, 0.5)
+    return pcm_data
 
 
 def _is_speaker_allowed(guild_id: Optional[int], user_id: Optional[int]) -> bool:
