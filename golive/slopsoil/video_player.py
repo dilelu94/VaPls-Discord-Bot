@@ -485,6 +485,68 @@ def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
         return False
 
 
+def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 8.0) -> str | None:
+    """Extract embedded subtitle track from HTTP stream URL to a local temporary file."""
+    import tempfile
+    import uuid
+    sub_path = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.ass")
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel", "quiet",
+        "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "-probesize", "5000000",
+        "-analyzeduration", "5000000",
+        "-i", url,
+        "-map", f"0:s:{sub_idx}?",
+        "-c:s", "copy",
+        sub_path,
+    ]
+    try:
+        r = subprocess.run(cmd, timeout=timeout)
+        if r.returncode == 0 and os.path.exists(sub_path) and os.path.getsize(sub_path) > 0:
+            log.info("Extracted subtitle track %d copy to %s (%d bytes)", sub_idx, sub_path, os.path.getsize(sub_path))
+            return sub_path
+    except Exception as e:
+        log.warning("failed to extract subtitle track copy: %s", e)
+
+    sub_path_srt = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.srt")
+    cmd_conv = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel", "quiet",
+        "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "-probesize", "5000000",
+        "-analyzeduration", "5000000",
+        "-i", url,
+        "-map", f"0:s:{sub_idx}?",
+        "-c:s", "srt",
+        sub_path_srt,
+    ]
+    try:
+        r = subprocess.run(cmd_conv, timeout=timeout)
+        if r.returncode == 0 and os.path.exists(sub_path_srt) and os.path.getsize(sub_path_srt) > 0:
+            log.info("Converted subtitle track %d to %s (%d bytes)", sub_idx, sub_path_srt, os.path.getsize(sub_path_srt))
+            return sub_path_srt
+    except Exception as e:
+        log.warning("failed to convert subtitle track: %s", e)
+
+    if os.path.exists(sub_path):
+        try:
+            os.remove(sub_path)
+        except Exception:
+            pass
+    if os.path.exists(sub_path_srt):
+        try:
+            os.remove(sub_path_srt)
+        except Exception:
+            pass
+
+    return None
+
+
 def _detect_encoder() -> _EncoderConfig | None:
     """Pick the best available H.264 encoder. Returns None if nothing works."""
     try:
@@ -853,6 +915,11 @@ class H264VideoPlayer(threading.Thread):
         proc = self._proc
         if proc is not None and proc.poll() is None:
             proc.terminate()
+        if hasattr(self, "_temp_sub_file") and self._temp_sub_file and os.path.exists(self._temp_sub_file):
+            try:
+                os.remove(self._temp_sub_file)
+            except Exception:
+                pass
 
     def is_source_active(self) -> bool:
         """True while the player may still produce output, including the brief
@@ -957,8 +1024,19 @@ class H264VideoPlayer(threading.Thread):
 
         vf_str = enc.vf
         if sub_idx >= 0:
-            esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-            vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
+            if is_url:
+                if not hasattr(self, "_temp_sub_file") or not self._temp_sub_file:
+                    self._temp_sub_file = _extract_subtitle_file(primary_url, sub_idx)
+                sub_file = getattr(self, "_temp_sub_file", None)
+                if sub_file:
+                    esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+                    vf_str = f"subtitles=f='{esc_sub}',{vf_str}"
+                else:
+                    esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+                    vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
+            else:
+                esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+                vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
 
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"
