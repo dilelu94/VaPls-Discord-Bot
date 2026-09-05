@@ -125,3 +125,93 @@ async def pcm_to_ogg_opus(pcm: bytes,
     if proc.returncode != 0:
         raise RuntimeError(f"ffmpeg encode failed: {err.decode(errors='replace')}")
     return out
+
+
+from collections import deque
+import threading
+import time
+from typing import Dict, Deque, Tuple, Optional, List
+
+
+class RollingAudioBuffer:
+    """Thread-safe rolling buffer storing timestamped mono PCM frames per guild.
+
+    Keeps frames up to ``max_seconds`` (default 600.0s = 10m).
+    """
+
+    def __init__(self, max_seconds: float = 600.0, rms_threshold: int = 15):
+        self.max_seconds = max_seconds
+        self.rms_threshold = rms_threshold
+        # guild_id -> deque of (timestamp_sec, user_id, mono_pcm_bytes)
+        self._buffers: Dict[int, Deque[Tuple[float, int, bytes]]] = {}
+        self._lock = threading.Lock()
+
+    def add_frame(self, guild_id: int, user_id: int, pcm: bytes, timestamp: Optional[float] = None) -> None:
+        """Add a mono PCM frame for a guild and prune old frames."""
+        if not pcm or not guild_id:
+            return
+        now = timestamp if timestamp is not None else time.monotonic()
+        cutoff = now - self.max_seconds
+        with self._lock:
+            if guild_id not in self._buffers:
+                self._buffers[guild_id] = deque()
+            buf = self._buffers[guild_id]
+            buf.append((now, user_id, pcm))
+            while buf and buf[0][0] < cutoff:
+                buf.popleft()
+
+    def get_raw_frames(self, guild_id: int, duration_seconds: Optional[float] = None, now: Optional[float] = None) -> List[Tuple[float, int, bytes]]:
+        """Return raw timestamped frames within the requested duration window."""
+        now_ts = now if now is not None else time.monotonic()
+        dur = duration_seconds if duration_seconds is not None else self.max_seconds
+        cutoff = now_ts - dur
+        with self._lock:
+            buf = self._buffers.get(guild_id)
+            if not buf:
+                return []
+            return [f for f in buf if f[0] >= cutoff]
+
+    def get_clip(self, guild_id: int, duration_seconds: float = 600.0, now: Optional[float] = None, sample_rate: int = INPUT_SAMPLE_RATE, width: int = INPUT_WIDTH) -> Tuple[bytes, bool]:
+        """Extract and mix audio frames for `guild_id` within the requested duration.
+
+        Returns:
+            Tuple of (mixed_mono_pcm_bytes, had_voice_boolean).
+        """
+        now_ts = now if now is not None else time.monotonic()
+        dur = min(max(duration_seconds, 1.0), self.max_seconds)
+        matching = self.get_raw_frames(guild_id, duration_seconds=dur, now=now_ts)
+        if not matching:
+            return b"", False
+
+        # Verify voice activity
+        voice_found = False
+        for _, _, pcm in matching:
+            try:
+                if audioop.rms(pcm, width) >= self.rms_threshold:
+                    voice_found = True
+                    break
+            except Exception:
+                pass
+        if not voice_found:
+            return b"", False
+
+        # Calculate clip time range
+        min_ts = matching[0][0]
+        effective_start = min_ts
+        actual_duration = max(0.1, now_ts - effective_start)
+
+        frames_with_offsets = [(ts - effective_start, pcm) for ts, _, pcm in matching]
+        mixed = mix_pcm_frames(frames_with_offsets, max_seconds=actual_duration, sample_rate=sample_rate, width=width)
+        trimmed = trim_trailing_silence(mixed, sample_rate=sample_rate, width=width, threshold=self.rms_threshold)
+        return trimmed, True
+
+    def clear_guild(self, guild_id: int) -> None:
+        """Clear buffer for a guild."""
+        with self._lock:
+            self._buffers.pop(guild_id, None)
+
+    def clear_all(self) -> None:
+        """Clear all guild buffers."""
+        with self._lock:
+            self._buffers.clear()
+

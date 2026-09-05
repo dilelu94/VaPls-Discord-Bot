@@ -168,6 +168,7 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("disconnect_indio")} → `disconnect_indio` \
 - {_fmt_trigger("troll_move_user")} → `troll_move_user` \
 - {_fmt_trigger("comment_stream")} → `comment_stream` \
+- {_fmt_trigger("make_clip")} → `make_clip` \
 
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
@@ -471,6 +472,25 @@ _INDIO_TOOLS = [
             "NO la uses para transmisiones/pantalla/stream (para eso usá comment_stream)."
         ),
         "parameters": {"type": "OBJECT", "properties": {}},
+    },
+    {
+        "name": "make_clip",
+        "description": (
+            "Grabar y extraer un clip de audio de los últimos segundos/minutos del canal de voz. "
+            "Usala cuando el usuario pida 'hacé un clip', 'dame el clip', 'grabá el clip', "
+            "'clip de los últimos 5m', 'guardá el clip', 'clip', 'clip de los últimos 30s'."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "duration": {
+                    "type": "STRING",
+                    "description": (
+                        "Duración a extraer (ej: '30s', '1m', '5m', '10m'). Por defecto '30s'."
+                    ),
+                },
+            },
+        },
     },
 ]
 
@@ -2757,6 +2777,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "troll_move_user": ("TROLL_MOVE_USER", "target_user"),
     "comment_stream": ("COMMENT_STREAM", "fast"),
     "join_voice": ("JOIN_VOICE", None),
+    "make_clip": ("MAKE_CLIP", "duration"),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -2772,6 +2793,7 @@ _ACTION_FALLBACK_TEXT = {
     "TROLL_MOVE_USER": "🔀 A dar una vuelta",
     "COMMENT_STREAM": "📺 Mirando el stream",
     "JOIN_VOICE": "🎤 Ahí voy al canal de voz",
+    "MAKE_CLIP": "🎬 Clip de audio",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
@@ -3548,6 +3570,51 @@ async def _dispatch_indio_actions(
                             _spawn(_rejoin_later())
                     else:
                         statuses.append("disconnect: not in voice")
+
+                elif action == "MAKE_CLIP":
+                    dur_str = str(arg) if arg else "30s"
+                    target_cid = (
+                        getattr(reply_handle, "channel_id", None)
+                        or config.INDIO_REPLY_CHANNEL_ID
+                    )
+                    url = urljoin(config.INDIO_RELAY_URL, "/clip") if config.INDIO_RELAY_URL else ""
+                    ok = False
+                    msg = ""
+                    if url and config.INDIO_RELAY_SECRET:
+                        try:
+                            from bot import parse_clip_duration
+                            sec = parse_clip_duration(dur_str)
+                            headers = {"X-API-Secret": config.INDIO_RELAY_SECRET}
+                            payload = {"guild_id": int(guild_id), "duration": sec}
+                            timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT + 15.0)
+                            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                                async with sess.post(url, json=payload, headers=headers) as resp:
+                                    if resp.status == 200:
+                                        ogg_bytes = await resp.read()
+                                        import io
+                                        file_obj = discord.File(
+                                            io.BytesIO(ogg_bytes), filename=f"clip_{guild_id}_{int(time.time())}.ogg"
+                                        )
+                                        chan = bot.get_channel(target_cid) if target_cid else None
+                                        if chan is None and target_cid:
+                                            chan = await bot.fetch_channel(target_cid)
+                                        if chan:
+                                            dur_label = f"{int(sec // 60)} min" if sec >= 60 else f"{int(sec)} s"
+                                            await chan.send(content=f"🎬 **Clip de audio ({dur_label}):**", file=file_obj)
+                                            ok = True
+                                            msg = "clip sent"
+                                        else:
+                                            msg = "channel not found"
+                                    else:
+                                        res_json = await resp.json() if resp.status == 400 else {}
+                                        msg = res_json.get("error", f"HTTP {resp.status}")
+                        except Exception as e:
+                            logger.exception("indio MAKE_CLIP failed")
+                            msg = f"error: {e}"
+                    else:
+                        msg = "relay not configured"
+                    statuses.append(f"make_clip: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio MAKE_CLIP → ok=%s msg=%s", ok, msg)
 
                 elif action == "TROLL_MOVE_USER":
                     if not bot or not guild_id:

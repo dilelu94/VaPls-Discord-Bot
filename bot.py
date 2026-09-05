@@ -1656,6 +1656,109 @@ async def entraindio(ctx):
     await safe_respond(ctx, f"🪶 El indio va para **{voice_channel.name}**.")
 
 
+def parse_clip_duration(duracion_str: Optional[str]) -> float:
+    """Parse duration strings like '10m', '5m', '30s', '600' into seconds (5s..600s).
+
+    Default: 30.0s (30 seconds).
+    """
+    if not duracion_str or not isinstance(duracion_str, str) or not duracion_str.strip():
+        return 30.0
+    raw = duracion_str.strip().lower()
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*(m|min|minutos|s|seg|segundos)?$", raw)
+    if not m:
+        return 30.0
+    val = float(m.group(1))
+    unit = m.group(2)
+    if unit in ("m", "min", "minutos"):
+        seconds = val * 60.0
+    else:
+        seconds = val
+    return min(max(seconds, 5.0), 600.0)
+
+
+async def clipLogic(ctx, duracion_str: Optional[str] = "30s") -> None:
+    """Extract rolling audio clip from userbot and attach as .ogg file in Discord response."""
+    if not ctx.guild:
+        await safe_respond(ctx, "❌ Este comando solo puede usarse en un servidor.")
+        return
+
+    voice_state = getattr(ctx.author, "voice", None)
+    voice_channel = getattr(voice_state, "channel", None) if voice_state else None
+    if voice_channel is None:
+        await safe_respond(
+            ctx, "❌ Tenés que estar en un canal de voz para extraer el clip."
+        )
+        return
+
+    relay_url = config.INDIO_RELAY_URL
+    relay_secret = config.INDIO_RELAY_SECRET
+    if not (relay_url and relay_secret):
+        await safe_respond(ctx, "❌ El relay del Indio no está configurado.")
+        return
+
+    sec = parse_clip_duration(duracion_str)
+    url = urljoin(relay_url, "/clip")
+    headers = {"X-API-Secret": relay_secret}
+    payload = {
+        "guild_id": ctx.guild.id,
+        "duration": sec,
+    }
+    timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT + 15.0)
+
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.post(url, json=payload, headers=headers) as resp:
+                if resp.status >= 400:
+                    err_msg = ""
+                    try:
+                        data = await resp.json()
+                        err_msg = data.get("error", "")
+                    except Exception:
+                        pass
+                    if not err_msg:
+                        err_msg = f"No se pudo generar el clip de audio (HTTP {resp.status})."
+                    await safe_respond(ctx, f"⚠️ {err_msg}")
+                    return
+                ogg_bytes = await resp.read()
+    except Exception as e:
+        log.exception("clip relay failed")
+        await safe_respond(ctx, f"⚠️ Error obteniendo el clip: {e}")
+        return
+
+    import io
+    file_obj = discord.File(
+        io.BytesIO(ogg_bytes), filename=f"clip_{ctx.guild.id}_{int(time.time())}.ogg"
+    )
+    dur_label = f"{int(sec // 60)} min" if sec >= 60 else f"{int(sec)} s"
+    try:
+        await ctx.followup.send(
+            content=f"🎬 **Clip de audio ({dur_label}) de {voice_channel.name}:**",
+            file=file_obj,
+        )
+    except Exception as e:
+        log.exception("clip followup send failed")
+        await safe_respond(ctx, f"⚠️ Error al enviar el archivo de audio: {e}")
+
+
+@bot.slash_command(
+    name="clip",
+    description="Graba y envía los últimos segundos/minutos de audio del canal de voz (por defecto 30s)",
+)
+async def clip(
+    ctx,
+    duracion: discord.Option(
+        str,
+        description="Duración a extraer (ej: 30s, 1m, 5m, 10m; por defecto 30s)",
+        required=False,
+        default="30s",
+    ) = "30s",
+):
+    """Slash command: extract rolling audio recording from the userbot and upload as file."""
+    await safe_defer(ctx)
+    _track_command(ctx, "clip")
+    await clipLogic(ctx, duracion)
+
+
 @bot.slash_command(
     name="verstream",
     description="Captura tu transmisión de video en vivo y le pide al Indio que la comente",

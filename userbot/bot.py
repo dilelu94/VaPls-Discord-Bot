@@ -74,7 +74,10 @@ from recording import (
     mix_pcm_frames,
     trim_trailing_silence as _trim_trailing_silence,
     pcm_to_ogg_opus,
+    RollingAudioBuffer,
 )
+
+_rolling_audio_buffer = RollingAudioBuffer(max_seconds=600.0)
 
 try:
     from users import USERS as _USERS
@@ -543,6 +546,9 @@ class TranscriberSink(voice_recv.AudioSink):
 
         try:
             mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            gid = guild_id or self.user_guilds.get(user_id)
+            if gid:
+                _rolling_audio_buffer.add_frame(gid, user_id, mono)
             rms = audioop.rms(mono, 2)
             now = time.time()
 
@@ -1338,6 +1344,9 @@ class WakeWordSink(voice_recv.AudioSink):
 
         try:
             mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            gid = guild_id or self.user_guilds.get(user_id)
+            if gid:
+                _rolling_audio_buffer.add_frame(gid, user_id, mono)
             data_16k, new_state = audioop.ratecv(
                 mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
             )
@@ -4976,6 +4985,33 @@ async def _relay_watchstream_stop(request: web.Request) -> web.Response:
     return web.json_response({"stopped": True, "guild_id": guild_id})
 
 
+async def _relay_clip(request: web.Request) -> web.Response:
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+
+    try:
+        data = await request.json()
+        guild_id = int(data["guild_id"])
+        duration = float(data.get("duration", 600.0))
+    except Exception:
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    dur = min(max(duration, 5.0), 600.0)
+
+    pcm, had_voice = _rolling_audio_buffer.get_clip(guild_id, duration_seconds=dur)
+    if not had_voice or not pcm:
+        return web.json_response({"error": "No hay audio grabado en el canal en el periodo solicitado"}, status=400)
+
+    try:
+        ogg_bytes = await pcm_to_ogg_opus(pcm)
+        return web.Response(body=ogg_bytes, content_type="audio/ogg")
+    except Exception as e:
+        log.exception("[CLIP] ffmpeg encoding failed")
+        return web.json_response({"error": f"Error al codificar el clip de audio: {e}"}, status=500)
+
+
 async def _start_relay() -> Optional[web.AppRunner]:
     if not config.RELAY_SECRET:
         log.warning("RELAY_SECRET not set — local relay HTTP endpoint disabled.")
@@ -4985,6 +5021,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_post("/edit", _relay_edit)
     app.router.add_post("/dm", _relay_dm)
     app.router.add_post("/record", _relay_record)
+    app.router.add_post("/clip", _relay_clip)
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)

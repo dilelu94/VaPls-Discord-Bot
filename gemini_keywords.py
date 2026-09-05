@@ -156,6 +156,13 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "vení a voz",
         "entra a la llamada",
     ],
+    "make_clip": [
+        "clip",
+        "hacé un clip",
+        "dame el clip",
+        "grabá un clip de 5m",
+        "guardá los últimos 30s",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────
