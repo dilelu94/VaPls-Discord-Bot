@@ -2015,13 +2015,22 @@ async def start_stream_with_track_select(
                 msg = await redirect_ch.send(content=full_msg, view=control_view)
                 if control_view and hasattr(msg, "id"):
                     control_view.message = msg
+                try:
+                    await interaction.edit_original_response(content=f"▶ Transmisión enviada a <#{redirect_ch.id}>.", embed=None, view=None)
+                except Exception:
+                    pass
             else:
                 try:
-                    msg = await interaction.followup.send(content=full_msg, view=control_view)
+                    msg = await interaction.edit_original_response(content=full_msg, embed=None, view=control_view)
                     if control_view and hasattr(msg, "id"):
                         control_view.message = msg
                 except Exception:
-                    pass
+                    try:
+                        msg = await interaction.followup.send(content=full_msg, view=control_view)
+                        if control_view and hasattr(msg, "id"):
+                            control_view.message = msg
+                    except Exception:
+                        pass
 
         embed = discord.Embed(
             title=f"🎬 Configuración para {title[:50]}",

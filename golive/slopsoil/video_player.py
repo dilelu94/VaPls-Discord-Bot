@@ -485,36 +485,13 @@ def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
         return False
 
 
-def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 3.5) -> str | None:
-    """Extract embedded subtitle track from HTTP stream URL to a local temporary file."""
+def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 20.0) -> str | None:
+    """Extract embedded subtitle track from HTTP stream URL to a local temporary SRT/ASS file."""
     import tempfile
     import uuid
-    sub_path = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.ass")
-    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-loglevel", "quiet",
-        "-user_agent", ua,
-        "-headers", f"User-Agent: {ua}\r\n",
-        "-probesize", "1500000",
-        "-analyzeduration", "1500000",
-        "-i", url,
-        "-map", f"0:s:{sub_idx}?",
-        "-c:s", "copy",
-        sub_path,
-    ]
-    try:
-        r = subprocess.run(cmd, timeout=timeout)
-        if r.returncode == 0 and os.path.exists(sub_path) and os.path.getsize(sub_path) > 0:
-            log.info("Extracted subtitle track %d copy to %s (%d bytes)", sub_idx, sub_path, os.path.getsize(sub_path))
-            return sub_path
-    except Exception as e:
-        log.warning("failed to extract subtitle track copy: %s", e)
-
     sub_path_srt = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.srt")
-    cmd_conv = [
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    cmd_srt = [
         "ffmpeg",
         "-y",
         "-hide_banner",
@@ -529,24 +506,46 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 3.5) -> str 
         sub_path_srt,
     ]
     try:
-        r = subprocess.run(cmd_conv, timeout=timeout)
+        r = subprocess.run(cmd_srt, timeout=timeout)
         if r.returncode == 0 and os.path.exists(sub_path_srt) and os.path.getsize(sub_path_srt) > 0:
-            log.info("Converted subtitle track %d to %s (%d bytes)", sub_idx, sub_path_srt, os.path.getsize(sub_path_srt))
+            log.info("Extracted subtitle track %d to %s (%d bytes)", sub_idx, sub_path_srt, os.path.getsize(sub_path_srt))
             return sub_path_srt
     except Exception as e:
-        log.warning("failed to convert subtitle track: %s", e)
+        log.warning("failed to extract subtitle track srt: %s", e)
 
-    if os.path.exists(sub_path):
-        try:
-            os.remove(sub_path)
-        except Exception:
-            pass
+    sub_path_ass = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.ass")
+    cmd_ass = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel", "quiet",
+        "-user_agent", ua,
+        "-headers", f"User-Agent: {ua}\r\n",
+        "-probesize", "1500000",
+        "-analyzeduration", "1500000",
+        "-i", url,
+        "-map", f"0:s:{sub_idx}?",
+        "-c:s", "copy",
+        sub_path_ass,
+    ]
+    try:
+        r = subprocess.run(cmd_ass, timeout=timeout)
+        if r.returncode == 0 and os.path.exists(sub_path_ass) and os.path.getsize(sub_path_ass) > 0:
+            log.info("Extracted subtitle track %d ass copy to %s (%d bytes)", sub_idx, sub_path_ass, os.path.getsize(sub_path_ass))
+            return sub_path_ass
+    except Exception as e:
+        log.warning("failed to copy subtitle track ass: %s", e)
+
     if os.path.exists(sub_path_srt):
         try:
             os.remove(sub_path_srt)
-        except Exception:
+        except OSError:
             pass
-
+    if os.path.exists(sub_path_ass):
+        try:
+            os.remove(sub_path_ass)
+        except OSError:
+            pass
     return None
 
 

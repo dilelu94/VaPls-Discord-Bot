@@ -106,11 +106,10 @@ class StreamTrackSelectView(discord.ui.View):
 
     @discord.ui.button(label="▶ Transmitir en Go Live", style=discord.ButtonStyle.success, row=2)
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
-        for item in self.children:
-            item.disabled = True
         await interaction.response.edit_message(
             content="⏳ Iniciando transmisión con la configuración seleccionada...",
-            view=self,
+            embed=None,
+            view=None,
         )
         try:
             await self.on_start_callback(
