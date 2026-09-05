@@ -485,19 +485,21 @@ def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
         return False
 
 
-def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 8.0) -> str | None:
+def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 3.5) -> str | None:
     """Extract embedded subtitle track from HTTP stream URL to a local temporary file."""
     import tempfile
     import uuid
     sub_path = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.ass")
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     cmd = [
         "ffmpeg",
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
-        "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "-probesize", "5000000",
-        "-analyzeduration", "5000000",
+        "-user_agent", ua,
+        "-headers", f"User-Agent: {ua}\r\n",
+        "-probesize", "1500000",
+        "-analyzeduration", "1500000",
         "-i", url,
         "-map", f"0:s:{sub_idx}?",
         "-c:s", "copy",
@@ -517,9 +519,10 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 8.0) -> str 
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
-        "-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "-probesize", "5000000",
-        "-analyzeduration", "5000000",
+        "-user_agent", ua,
+        "-headers", f"User-Agent: {ua}\r\n",
+        "-probesize", "1500000",
+        "-analyzeduration", "1500000",
         "-i", url,
         "-map", f"0:s:{sub_idx}?",
         "-c:s", "srt",
@@ -1032,8 +1035,7 @@ class H264VideoPlayer(threading.Thread):
                     esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
                     vf_str = f"subtitles=f='{esc_sub}',{vf_str}"
                 else:
-                    esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-                    vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
+                    log.warning("Skipping subtitle filter for HTTP URL because local subtitle extraction was unavailable")
             else:
                 esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
                 vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"

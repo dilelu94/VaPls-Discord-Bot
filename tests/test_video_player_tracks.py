@@ -26,7 +26,7 @@ def mock_encoder():
         post_codec=["-preset", "ultrafast"],
         vf="scale=1280x720,format=yuv420p",
     )
-    with patch.object(vp, "_ENCODER", dummy):
+    with patch.object(vp, "_ENCODER", dummy), patch.object(vp, "_extract_subtitle_file", return_value="/tmp/mock_sub.ass"):
         yield
 
 
@@ -61,4 +61,4 @@ def test_ffmpeg_cmd_subtitle_burn_in_filter():
     vf_idx = cmd_sub.index("-vf")
     vf_str = cmd_sub[vf_idx + 1]
     assert "subtitles=f=" in vf_str
-    assert "stream_index=1" in vf_str
+
