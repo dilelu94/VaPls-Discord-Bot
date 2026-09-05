@@ -12,6 +12,7 @@ from typing import Iterable, Tuple
 
 
 # voice_recv delivers 48 kHz stereo 16-bit PCM frames; we mix down to mono.
+# voice_recv delivers 48 kHz stereo 16-bit PCM frames; default channels = 1 (mono).
 INPUT_SAMPLE_RATE = 48000
 INPUT_WIDTH = 2  # 16-bit samples → 2 bytes
 OUTPUT_CHANNELS = 1
@@ -19,30 +20,33 @@ OUTPUT_CHANNELS = 1
 
 def mix_pcm_frames(frames: Iterable[Tuple[float, bytes]], max_seconds: float,
                    sample_rate: int = INPUT_SAMPLE_RATE,
-                   width: int = INPUT_WIDTH) -> bytes:
-    """Mix timestamped mono PCM frames into one fixed-length buffer.
+                   width: int = INPUT_WIDTH,
+                   channels: int = 1) -> bytes:
+    """Mix timestamped PCM frames into one fixed-length buffer.
 
     Args:
-        frames: Iterable of ``(offset_seconds, mono_pcm_bytes)`` tuples.
+        frames: Iterable of ``(offset_seconds, pcm_bytes)`` tuples.
             The offset is measured from the start of the recording window.
         max_seconds: Total length of the output buffer.
         sample_rate: PCM sample rate.
         width: PCM sample width in bytes; only 2 is supported by
             :func:`audioop.add`.
+        channels: Number of PCM channels (1 for mono, 2 for stereo).
 
     Returns:
-        A bytes object of length ``int(max_seconds * sample_rate) * width``
+        A bytes object of length ``int(max_seconds * sample_rate) * width * channels``
         with each frame summed into its position (saturated). Gaps stay as
         silence.
     """
+    frame_size = width * channels
     total_samples = int(max_seconds * sample_rate)
-    total_bytes = total_samples * width
+    total_bytes = total_samples * frame_size
     buf = bytearray(total_bytes)
     for offset, chunk in frames:
         if not chunk:
             continue
-        byte_offset = int(offset * sample_rate) * width
-        byte_offset -= byte_offset % width
+        byte_offset = int(offset * sample_rate) * frame_size
+        byte_offset -= byte_offset % frame_size
         if byte_offset >= total_bytes:
             continue
         end = byte_offset + len(chunk)
@@ -52,8 +56,6 @@ def mix_pcm_frames(frames: Iterable[Tuple[float, bytes]], max_seconds: float,
         if not chunk:
             continue
         existing = bytes(buf[byte_offset:end])
-        # audioop.add saturates on overflow, which is what we want when
-        # multiple speakers overlap.
         mixed = audioop.add(existing, chunk, width)
         buf[byte_offset:end] = mixed
     return bytes(buf)
@@ -62,14 +64,16 @@ def mix_pcm_frames(frames: Iterable[Tuple[float, bytes]], max_seconds: float,
 def trim_trailing_silence(pcm: bytes, *,
                           sample_rate: int = INPUT_SAMPLE_RATE,
                           width: int = INPUT_WIDTH,
+                          channels: int = 1,
                           threshold: int = 250,
                           window_ms: int = 100) -> bytes:
     """Slice off trailing silence so the reply audio is tight.
 
     Args:
-        pcm: Mono 16-bit PCM bytes.
+        pcm: 16-bit PCM bytes.
         sample_rate: Sample rate of ``pcm``.
         width: Sample width in bytes.
+        channels: Number of PCM channels.
         threshold: RMS threshold below which a window is treated as silence.
         window_ms: Granularity of the silence scan.
 
@@ -79,11 +83,12 @@ def trim_trailing_silence(pcm: bytes, *,
     """
     if not pcm:
         return pcm
-    window_bytes = max(width, (sample_rate * width * window_ms) // 1000)
+    frame_size = width * channels
+    window_bytes = max(frame_size, (sample_rate * frame_size * window_ms) // 1000)
     last_voice_end = 0
     for i in range(0, len(pcm), window_bytes):
         window = pcm[i:i + window_bytes]
-        if len(window) < width:
+        if len(window) < frame_size:
             continue
         if audioop.rms(window, width) >= threshold:
             last_voice_end = i + len(window)
@@ -99,12 +104,14 @@ def has_voice(pcm: bytes, *,
 
 
 async def pcm_to_ogg_opus(pcm: bytes,
-                          sample_rate: int = INPUT_SAMPLE_RATE) -> bytes:
-    """Encode raw mono s16le PCM to OGG/Opus via ffmpeg.
+                          sample_rate: int = INPUT_SAMPLE_RATE,
+                          channels: int = 1) -> bytes:
+    """Encode raw s16le PCM to OGG/Opus via ffmpeg.
 
     Args:
-        pcm: Raw PCM bytes (mono 16-bit signed little-endian).
+        pcm: Raw PCM bytes (16-bit signed little-endian).
         sample_rate: PCM sample rate.
+        channels: Number of PCM audio channels.
 
     Returns:
         OGG/Opus-encoded bytes.
@@ -114,7 +121,7 @@ async def pcm_to_ogg_opus(pcm: bytes,
     """
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-f", "s16le", "-ar", str(sample_rate), "-ac", "1", "-i", "pipe:0",
+        "-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels), "-i", "pipe:0",
         "-c:a", "libopus", "-b:a", "64k", "-application", "voip",
         "-f", "ogg", "pipe:1",
         stdin=asyncio.subprocess.PIPE,
