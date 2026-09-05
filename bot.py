@@ -2905,38 +2905,75 @@ class JkanimeSearchView(BaseView):
         await interaction.edit_original_response(embed=embed, view=ep_view)
 
 
+class StremioWebUIOverlayView(BaseView):
+    """View with a link button to open the Stremio & Anime Web UI."""
+
+    def __init__(self, url: str):
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="🌐 Abrir Buscador Stremio & Anime",
+                url=url,
+                style=discord.ButtonStyle.link,
+            )
+        )
+
+
 async def stream_autocomplete(ctx: discord.AutocompleteContext):
-    query = ctx.value or ""
+    query = (ctx.value or "").strip().lower()
+    options = []
+    if not query or "stremio".startswith(query) or "anime".startswith(query):
+        options.extend(["stremio", "anime"])
     try:
-        return await iptv.search_autocomplete(query)
+        iptv_opts = await iptv.search_autocomplete(query)
+        options.extend(iptv_opts)
     except Exception:
-        return []
+        pass
+    return options[:25]
+
+
+@bot.slash_command(
+    name="stremio",
+    description="Abre el buscador interactivo de Stremio & Anime para Go Live",
+)
+async def stremio_command(ctx):
+    """Slash command to open the Stremio & Anime web search interface."""
+    await safe_defer(ctx)
+    _track_command(ctx, "stremio")
+    stremio_url = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55:8080/stremio")
+    embed = discord.Embed(
+        title="🎬 Buscador Interactivo Stremio & Anime",
+        description="Buscá anime, películas y series con **TorBox Directo ⚡** y transmitilas a tu canal de voz en 1-click.",
+        color=0x8B5CF6,
+    )
+    view = StremioWebUIOverlayView(stremio_url)
+    await safe_respond(ctx, embed=embed, view=view)
+
+
+@bot.slash_command(
+    name="anime",
+    description="Abre el buscador interactivo de Anime & Stremio para Go Live",
+)
+async def anime_command(ctx):
+    """Slash command shortcut for /stremio."""
+    await stremio_command(ctx)
 
 
 @bot.slash_command(
     name="stream",
-    description="Transmití un canal de IPTV o Anime (JKAnime) en tu canal de voz (Go Live)",
+    description="Transmití un canal de IPTV, Stremio o Anime en tu canal de voz (Go Live)",
 )
 async def stream(
     ctx,
     canal: discord.Option(
         str,
-        description="Nombre del canal IPTV o Anime (ej: ESPN, TN, o jojo stone ocean)",
+        description="Nombre del canal IPTV, 'stremio' / 'anime', o título a buscar (ej: stremio, ESPN, TN)",
         required=False,
         default=None,
         autocomplete=stream_autocomplete,
     ),
 ):
-    """Slash command: search iptv-org / JKAnime and start a Go Live stream.
-
-    Args:
-        ctx: Discord application context.
-        canal: Search query for IPTV channel or JKAnime title / URL.
-
-    Side Effects:
-        Searches IPTV or JKAnime, asks the userbot to join the caller's
-        voice channel, and starts transcoding the M3U8 stream with FFmpeg.
-    """
+    """Slash command: search iptv-org / JKAnime / Stremio and start a Go Live stream."""
     will_redirect = (
         config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
     )
@@ -2964,6 +3001,17 @@ async def stream(
         )
         return
 
+    if canal is not None and canal.strip().lower() in ("stremio", "anime", "stremio anime"):
+        stremio_url = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55:8080/stremio")
+        embed = discord.Embed(
+            title="🎬 Buscador Interactivo Stremio & Anime",
+            description="Buscá anime, películas y series con **TorBox Directo ⚡** y transmitilas a tu canal de voz en 1-click.",
+            color=0x8B5CF6,
+        )
+        view = StremioWebUIOverlayView(stremio_url)
+        await ctx.interaction.edit_original_response(embed=embed, view=view)
+        return
+
     if canal is None:
         try:
             channels = await iptv.get_all_channels()
@@ -2987,6 +3035,7 @@ async def stream(
 
     canal, start_sec = parse_stream_query(canal)
     raw_canal = canal.strip()
+
 
     # Check for direct Torrent / Magnet link / Stremio resolve URL
     if torrent_search.is_torrent_input(raw_canal) and not raw_canal.lower().startswith("torrent:"):

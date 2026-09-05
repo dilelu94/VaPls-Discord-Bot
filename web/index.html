@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VaPls Stremio & Anime - Buscador GoLive</title>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/stremio/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header / Navbar -->
+    <header class="navbar">
+      <div class="brand">
+        <div class="logo-badge">⚡</div>
+        <div class="brand-text">
+          <h1>VaPls <span>Stremio</span></h1>
+          <p>Anime & Streaming en Discord Go Live</p>
+        </div>
+      </div>
+
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="searchInput" placeholder="Buscar anime, películas o series (ej. Naruto, Matrix, One Piece)..." autocomplete="off" autofocus>
+        <button id="clearSearch" class="clear-btn" style="display:none;">✕</button>
+      </div>
+
+      <div class="voice-status" id="voiceStatusPill">
+        <span class="status-dot"></span>
+        <span id="voiceStatusText">Cargando canales...</span>
+      </div>
+    </header>
+
+    <!-- Filter Tabs -->
+    <nav class="filter-bar">
+      <button class="tab-btn active" data-type="all">✨ Todos</button>
+      <button class="tab-btn" data-type="anime">🏮 Anime</button>
+      <button class="tab-btn" data-type="series">🍿 Series</button>
+      <button class="tab-btn" data-type="movie">🎥 Películas</button>
+    </nav>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Loading Spinner -->
+      <div id="loader" class="loader-container" style="display: none;">
+        <div class="spinner"></div>
+        <p>Buscando en Torrentio & Cinemeta...</p>
+      </div>
+
+      <!-- Empty / Initial State -->
+      <div id="emptyState" class="empty-state">
+        <div class="empty-icon">🍿</div>
+        <h2>¡Descubrí qué mirar en Discord!</h2>
+        <p>Escribí el nombre de cualquier anime, película o serie para obtener streams 4K/1080p con <b>TorBox Directo ⚡</b> y transmitilo al instante en tu canal de voz.</p>
+        <div class="quick-tags">
+          <span>Sugerencias:</span>
+          <button class="chip-btn">Naruto</button>
+          <button class="chip-btn">One Piece</button>
+          <button class="chip-btn">Attack on Titan</button>
+          <button class="chip-btn">Inception</button>
+          <button class="chip-btn">Interstellar</button>
+        </div>
+      </div>
+
+      <!-- Catalog Grid -->
+      <div id="catalogGrid" class="catalog-grid" style="display: none;"></div>
+    </main>
+
+    <!-- Detail & Stream Modal -->
+    <div id="detailModal" class="modal-overlay" style="display: none;">
+      <div class="modal-card">
+        <button id="closeModal" class="modal-close">✕</button>
+        
+        <div class="modal-banner" id="modalBanner">
+          <div class="banner-gradient"></div>
+        </div>
+
+        <div class="modal-body">
+          <div class="modal-poster-wrap">
+            <img id="modalPoster" src="" alt="Poster">
+          </div>
+
+          <div class="modal-details">
+            <div class="modal-header-info">
+              <span id="modalTypeBadge" class="badge">ANIME</span>
+              <span id="modalYear" class="meta-item">2002</span>
+              <span id="modalImdb" class="meta-item rating">⭐ IMDb</span>
+            </div>
+
+            <h2 id="modalTitle">Título del Contenido</h2>
+            <p id="modalGenres" class="genres-list"></p>
+            <p id="modalDescription" class="description-text"></p>
+
+            <!-- Series / Anime Episode Picker -->
+            <div id="episodeSection" class="section-box" style="display: none;">
+              <h3>📺 Seleccionar Episodio</h3>
+              <div class="episode-selectors">
+                <div class="select-group">
+                  <label for="seasonSelect">Temporada:</label>
+                  <select id="seasonSelect"></select>
+                </div>
+                <div class="select-group">
+                  <label for="episodeSelect">Episodio:</label>
+                  <select id="episodeSelect"></select>
+                </div>
+              </div>
+              <p id="episodeTitle" class="episode-title-preview"></p>
+            </div>
+
+            <!-- Torrent / Stream Picker -->
+            <div class="section-box">
+              <div class="section-header">
+                <h3>⚡ Opciones de Stream (TorBox CDN & Torrentio)</h3>
+                <button id="refreshStreamsBtn" class="mini-btn">🔄 Actualizar</button>
+              </div>
+
+              <div id="streamLoader" class="stream-loader" style="display: none;">
+                <div class="mini-spinner"></div> Buscando streams de alta velocidad...
+              </div>
+
+              <div id="streamList" class="stream-list"></div>
+            </div>
+
+            <!-- Discord Voice Channel Selector & Trigger -->
+            <div class="section-box discord-box">
+              <h3>🎙️ Transmitir en Discord Go Live</h3>
+              <div class="channel-picker">
+                <select id="voiceChannelSelect">
+                  <option value="">Cargando canales de voz...</option>
+                </select>
+              </div>
+
+              <button id="startStreamBtn" class="btn-primary" disabled>
+                <span class="play-icon">▶</span> Transmitir en Discord Go Live
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast" class="toast-container" style="display: none;">
+      <div class="toast-icon">🚀</div>
+      <div class="toast-message" id="toastMessage">Transmisión iniciada exitosamente</div>
+    </div>
+  </div>
+
+  <script src="/stremio/app.js"></script>
+</body>
+</html>

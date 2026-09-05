@@ -181,6 +181,8 @@ async def authMiddleware(request: web.Request, handler):
         request.path.startswith("/upload")
         or request.path.startswith("/dl")
         or request.path.startswith("/static")
+        or request.path.startswith("/stremio")
+        or request.path.startswith("/api/stremio")
         or request.path.startswith("/webhook")
         or request.path.startswith("/privacy")
         or request.path.startswith("/delete-data")
@@ -2052,6 +2054,103 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/webhook", handleWebhook)
     app.router.add_get("/privacy", privacyPage)
     app.router.add_get("/delete-data", deleteDataPage)
+
+    # ---- Stremio & Anime Web UI Endpoints ----
+    async def stremioIndex(request: web.Request) -> web.Response:
+        web_dir = os.path.join(os.path.dirname(__file__), "web")
+        index_path = os.path.join(web_dir, "index.html")
+        if os.path.exists(index_path):
+            with open(index_path, "r", encoding="utf-8") as f:
+                return web.Response(text=f.read(), content_type="text/html")
+        return web.Response(status=404, text="Web UI not found")
+
+    async def apiStremioSearch(request: web.Request) -> web.Response:
+        q = request.query.get("q", "").strip()
+        t = request.query.get("type", "all").strip()
+        if not q:
+            return web.json_response([])
+        from torrent_search import search_stremio_catalog
+        res = await search_stremio_catalog(q, t)
+        return web.json_response(res)
+
+    async def apiStremioMeta(request: web.Request) -> web.Response:
+        item_id = request.query.get("id", "").strip()
+        item_type = request.query.get("type", "series").strip()
+        if not item_id:
+            return web.json_response({"error": "missing id"}, status=400)
+        from torrent_search import get_stremio_meta
+        res = await get_stremio_meta(item_type, item_id)
+        return web.json_response(res)
+
+    async def apiStremioStreams(request: web.Request) -> web.Response:
+        item_id = request.query.get("id", "").strip()
+        item_type = request.query.get("type", "series").strip()
+        try:
+            season = int(request.query.get("season", 1))
+            episode = int(request.query.get("episode", 1))
+        except ValueError:
+            season, episode = 1, 1
+        imdb_id = request.query.get("imdb_id", None)
+        if not item_id:
+            return web.json_response({"error": "missing id"}, status=400)
+        from torrent_search import get_stremio_streams
+        res = await get_stremio_streams(item_type, item_id, season, episode, imdb_id)
+        return web.json_response(res)
+
+    async def apiStremioVoiceChannels(request: web.Request) -> web.Response:
+        channels_out = []
+        for g in bot.guilds:
+            for ch in g.voice_channels:
+                non_bots = [m for m in ch.members if not m.bot and m.id not in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}]
+                if non_bots:
+                    channels_out.append({
+                        "id": str(ch.id),
+                        "name": ch.name,
+                        "guild_id": str(g.id),
+                        "guild_name": g.name,
+                        "members_count": len(non_bots),
+                    })
+        return web.json_response({"channels": channels_out})
+
+    async def apiStremioPlay(request: web.Request) -> web.Response:
+        try:
+            body = await request.json()
+            channel_id = str(body["channel_id"])
+            stream_url = str(body["url"])
+            title = str(body.get("title", "Stream Stremio"))
+        except Exception:
+            return web.json_response({"error": "invalid json payload"}, status=400)
+
+        relay_url = getattr(config, "GOLIVE_RELAY_URL", "http://127.0.0.1:8082")
+        relay_secret = getattr(config, "GOLIVE_RELAY_SECRET", "")
+
+        try:
+            async with aiohttp.ClientSession() as sess:
+                headers = {"Content-Type": "application/json"}
+                if relay_secret:
+                    headers["X-API-Secret"] = relay_secret
+                payload = {
+                    "channel_id": channel_id,
+                    "url": stream_url,
+                    "title": title,
+                }
+                async with sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=15) as resp:
+                    data = await resp.json()
+                    return web.json_response(data, status=resp.status)
+        except Exception as e:
+            logger.error("Failed to relay stremio stream request: %s", e)
+            return web.json_response({"error": str(e)}, status=500)
+
+    app.router.add_get("/stremio", stremioIndex)
+    app.router.add_get("/stremio/", stremioIndex)
+    app.router.add_static("/stremio", os.path.join(os.path.dirname(__file__), "web"))
+
+    app.router.add_get("/api/stremio/search", apiStremioSearch)
+    app.router.add_get("/api/stremio/meta", apiStremioMeta)
+    app.router.add_get("/api/stremio/streams", apiStremioStreams)
+    app.router.add_get("/api/stremio/voice-channels", apiStremioVoiceChannels)
+    app.router.add_post("/api/stremio/play", apiStremioPlay)
+
     return app
 
 

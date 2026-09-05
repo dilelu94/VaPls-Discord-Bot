@@ -43,9 +43,10 @@ def test_resolve_stremio_or_magnet_url_with_stremio_link():
         "8c03a030ad101b5d2c5102a5c0845bb41b9f2960/"
         "%5BAnime%20Time%5D%20JoJo's%20Bizarre%20Adventure%20Part%206%20-%20Stone%20Ocean%20-%2026.mkv"
     )
-    magnet, title = resolve_stremio_or_magnet_url(stremio_url)
-    assert magnet == "magnet:?xt=urn:btih:8c03a030ad101b5d2c5102a5c0845bb41b9f2960"
+    resolved, title = resolve_stremio_or_magnet_url(stremio_url)
+    assert resolved == stremio_url
     assert "JoJo" in title
+
 
 
 def test_parse_torrent_quality():
@@ -100,6 +101,89 @@ async def test_search_stremio_torrents():
         assert items[0].infohash == "8c03a030ad101b5d2c5102a5c0845bb41b9f2960"
 
 
+@pytest.mark.asyncio
+async def test_search_stremio_catalog():
+    from torrent_search import search_stremio_catalog
+
+    catalog_data = json_bytes({
+        "metas": [
+            {
+                "id": "kitsu:11",
+                "name": "Naruto",
+                "poster": "https://media.kitsu.app/poster.jpg",
+                "year": "2002",
+                "description": "Ninja anime",
+            }
+        ]
+    })
+
+    def fake_urlopen(req, timeout=4.0):
+        mock_resp = MagicMock()
+        mock_resp.__enter__.return_value = mock_resp
+        mock_resp.read.return_value = catalog_data
+        return mock_resp
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        items = await search_stremio_catalog("Naruto", "anime")
+        assert len(items) == 1
+        assert items[0]["id"] == "kitsu:11"
+        assert items[0]["title"] == "Naruto"
+        assert items[0]["type"] == "anime"
+
+
+@pytest.mark.asyncio
+async def test_get_stremio_meta_and_streams():
+    from torrent_search import get_stremio_meta, get_stremio_streams
+
+    meta_data = json_bytes({
+        "meta": {
+            "name": "Naruto",
+            "imdb_id": "tt0409591",
+            "poster": "https://media.kitsu.app/poster.jpg",
+            "videos": [
+                {
+                    "id": "kitsu:11:1",
+                    "title": "Enter: Naruto Uzumaki!",
+                    "season": 1,
+                    "episode": 1,
+                }
+            ]
+        }
+    })
+
+    stream_data = json_bytes({
+        "streams": [
+            {
+                "name": "[TB+] Torrentio",
+                "title": "Naruto Episode 001 1080p\n👤 500 💾 250 MB",
+                "url": "https://torrentio.strem.fun/resolve/torbox/123/456",
+            }
+        ]
+    })
+
+    def fake_urlopen(req, timeout=5.0):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        mock_resp = MagicMock()
+        mock_resp.__enter__.return_value = mock_resp
+        if "meta" in url:
+            mock_resp.read.return_value = meta_data
+        else:
+            mock_resp.read.return_value = stream_data
+        return mock_resp
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        meta = await get_stremio_meta("anime", "kitsu:11")
+        assert meta["title"] == "Naruto"
+        assert len(meta["episodes"]) == 1
+        assert meta["episodes"][0]["title"] == "Enter: Naruto Uzumaki!"
+
+        streams = await get_stremio_streams("anime", "kitsu:11", 1, 1, "tt0409591")
+        assert len(streams) >= 1
+        assert streams[0]["is_direct"] is True
+        assert "resolve/torbox" in streams[0]["url"]
+
+
 def json_bytes(data: dict) -> bytes:
     import json
     return json.dumps(data).encode("utf-8")
+
