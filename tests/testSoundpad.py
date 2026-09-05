@@ -37,12 +37,9 @@ class MockVC:
         self.isPausedState = False
 
 class TestSoundpadSubfoldersAndPagination(unittest.IsolatedAsyncioTestCase):
-    """Async test suite covering Soundpad navigation and playback."""
     async def asyncSetUp(self):
-        self.temp_audio_dir = "/tmp/test_soundpad_navigation"
-        os.makedirs(self.temp_audio_dir, exist_ok=True)
-        
-        # Create nested folders
+        import tempfile
+        self.temp_audio_dir = tempfile.mkdtemp(prefix="test_soundpad_nav_")
         os.makedirs(os.path.join(self.temp_audio_dir, "Audios"), exist_ok=True)
         os.makedirs(os.path.join(self.temp_audio_dir, "Audios/Quandale Dingle"), exist_ok=True)
         os.makedirs(os.path.join(self.temp_audio_dir, "Audios/Quandale Dingle/sub"), exist_ok=True)
