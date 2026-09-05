@@ -11,6 +11,43 @@ from dataclasses import dataclass, field
 log = logging.getLogger(__name__)
 
 
+_LANG_MAP: dict[str, str] = {
+    "es": "Español 🇲🇽/🇪🇸",
+    "spa": "Español 🇲🇽/🇪🇸",
+    "spanish": "Español 🇲🇽/🇪🇸",
+    "en": "Inglés 🇺🇸/🇬🇧",
+    "eng": "Inglés 🇺🇸/🇬🇧",
+    "english": "Inglés 🇺🇸/🇬🇧",
+    "ja": "Japonés 🇯🇵",
+    "jpn": "Japonés 🇯🇵",
+    "japanese": "Japonés 🇯🇵",
+    "pt": "Portugués 🇧🇷",
+    "por": "Portugués 🇧🇷",
+    "portuguese": "Portugués 🇧🇷",
+    "fr": "Francés 🇫🇷",
+    "fra": "Francés 🇫🇷",
+    "fre": "Francés 🇫🇷",
+    "de": "Alemán 🇩🇪",
+    "ger": "Alemán 🇩🇪",
+    "deu": "Alemán 🇩🇪",
+    "it": "Italiano 🇮🇹",
+    "ita": "Italiano 🇮🇹",
+    "ru": "Ruso 🇷🇺",
+    "rus": "Ruso 🇷🇺",
+    "zh": "Chino 🇨🇳",
+    "zho": "Chino 🇨🇳",
+    "chi": "Chino 🇨🇳",
+    "ko": "Coreano 🇰🇷",
+    "kor": "Coreano 🇰🇷",
+}
+
+
+def format_language(lang_code: str) -> str:
+    if not lang_code or lang_code.lower() in ("und", "unk", "zxx", "none"):
+        return "Desconocido"
+    return _LANG_MAP.get(lang_code.lower(), lang_code.upper())
+
+
 @dataclass
 class AudioTrack:
     index: int  # relative audio index (0, 1, 2...)
@@ -22,11 +59,22 @@ class AudioTrack:
 
     @property
     def display_name(self) -> str:
-        lang_str = self.language.upper() if self.language and self.language != "und" else "Audio"
-        ch_str = f"{self.channels}ch" if self.channels else ""
+        lang_str = format_language(self.language)
         codec_str = self.codec.upper() if self.codec else ""
-        details = ", ".join(filter(None, [self.title, lang_str, codec_str, ch_str]))
-        return f"Pista {self.index + 1}: {details or 'Desconocido'}"
+        ch_str = f"{self.channels}ch" if self.channels else ""
+
+        parts = []
+        if lang_str != "Desconocido":
+            parts.append(lang_str)
+        if self.title:
+            parts.append(f"[{self.title}]")
+        
+        tech_specs = ", ".join(filter(None, [codec_str, ch_str]))
+        if tech_specs:
+            parts.append(f"({tech_specs})")
+
+        label = " ".join(parts) if parts else (f"Audio {self.index + 1} (Principal)" if self.index == 0 else f"Audio {self.index + 1}")
+        return f"Pista {self.index + 1}: {label}"
 
 
 @dataclass
@@ -40,10 +88,17 @@ class SubtitleTrack:
 
     @property
     def display_name(self) -> str:
-        lang_str = self.language.upper() if self.language and self.language != "und" else "Subtítulo"
-        forced_str = "(Forzados)" if self.is_forced else ""
-        details = " ".join(filter(None, [self.title, lang_str, forced_str])).strip()
-        return f"Sub {self.index + 1}: {details or 'Desconocido'}"
+        lang_str = format_language(self.language)
+        forced_str = " (Forzados)" if self.is_forced else ""
+        title_str = f" [{self.title}]" if self.title else ""
+        
+        if lang_str != "Desconocido":
+            return f"Sub {self.index + 1}: {lang_str}{title_str}{forced_str}"
+        elif self.title:
+            return f"Sub {self.index + 1}: {self.title}{forced_str}"
+        else:
+            return f"Subtítulo {self.index + 1}{forced_str}"
+
 
 
 @dataclass

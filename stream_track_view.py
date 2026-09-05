@@ -7,7 +7,7 @@ from typing import Callable, Optional
 
 import discord
 
-from media_inspector import MediaTracksInfo
+from media_inspector import MediaTracksInfo, format_language
 
 log = logging.getLogger(__name__)
 
@@ -16,11 +16,17 @@ class AudioTrackSelect(discord.ui.Select):
     def __init__(self, tracks_info: MediaTracksInfo):
         options = []
         for track in tracks_info.audio_tracks[:25]:  # Discord limit: 25 options
+            lang_name = format_language(track.language)
+            desc_parts = [f"Idioma: {lang_name}"]
+            if track.codec:
+                desc_parts.append(track.codec.upper())
+            if track.channels:
+                desc_parts.append(f"{track.channels} canales")
             options.append(
                 discord.SelectOption(
                     label=track.display_name[:100],
                     value=str(track.index),
-                    description=f"Idioma: {track.language.upper()} ({track.codec.upper()})",
+                    description=" | ".join(desc_parts)[:100],
                     default=(track.index == 0),
                 )
             )
@@ -46,19 +52,24 @@ class SubtitleTrackSelect(discord.ui.Select):
             discord.SelectOption(
                 label="🚫 Sin subtítulos",
                 value="-1",
-                description="No mostrar subtítulos",
+                description="No mostrar subtítulos quemados en pantalla",
                 default=True,
             )
         ]
         for track in tracks_info.subtitle_tracks[:24]:  # max 24 + 1 = 25
+            lang_name = format_language(track.language)
+            desc = f"Subtítulos en {lang_name}"
+            if track.is_forced:
+                desc += " (Subtítulos forzados)"
             options.append(
                 discord.SelectOption(
                     label=track.display_name[:100],
                     value=str(track.index),
-                    description=f"Idioma: {track.language.upper()} ({track.codec.upper()})",
+                    description=desc[:100],
                     default=False,
                 )
             )
+
         super().__init__(
             placeholder="💬 Seleccioná la pista de subtítulos...",
             min_values=1,
