@@ -1196,12 +1196,16 @@ def _track_command(ctx, name, extra=None):
     Side Effects:
         Sends analytics events to PostHog when enabled.
     """
-    analytics.identify_user(ctx.author)
-    props = {"command": name, "channel_id": str(getattr(ctx.channel, "id", "") or "")}
+    user = getattr(ctx, "author", None) or getattr(ctx, "user", None)
+    guild = getattr(ctx, "guild", None)
+    channel = getattr(ctx, "channel", None)
+    if user:
+        analytics.identify_user(user)
+    props = {"command": name, "channel_id": str(getattr(channel, "id", "") or "")}
     if extra:
         props.update(extra)
     analytics.capture(
-        "command invoked", user=ctx.author, guild=ctx.guild, properties=props
+        "command invoked", user=user, guild=guild, properties=props
     )
 
 
@@ -2205,7 +2209,14 @@ class StreamControlView(BaseView):
     @discord.ui.button(label="⏹ Detener", style=discord.ButtonStyle.danger, custom_id="stream_stop_btn")
     async def stop_stream_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.send_message("⏹ Deteniendo el stream...", ephemeral=True, delete_after=3)
-        ctx = type('Obj', (object,), {'guild_id': self.guild_id, 'respond': interaction.followup.send})()
+        ctx = type('Obj', (object,), {
+            'guild': interaction.guild,
+            'guild_id': self.guild_id,
+            'user': interaction.user,
+            'author': interaction.user,
+            'channel': interaction.channel,
+            'respond': interaction.followup.send,
+        })()
         await stopstream(ctx)
         
         self.stop()
