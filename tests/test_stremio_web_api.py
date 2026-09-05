@@ -98,23 +98,13 @@ async def test_stremio_static_and_api_endpoints(mock_bot):
 
 @pytest.mark.asyncio
 async def test_stremio_slash_commands():
-    from bot import anime_command, stream
+    from bot import stream
 
     ctx = AsyncMock()
     ctx.guild = MagicMock()
     ctx.guild_id = 123
     ctx.author.voice.channel.id = 456
     ctx.channel_id = 789
-
-    # Test /anime command
-    with patch("bot.safe_defer", new=AsyncMock()), patch("bot.safe_respond", new=AsyncMock()) as mock_respond:
-        await anime_command(ctx)
-        assert mock_respond.called
-        kwargs = mock_respond.call_args[1]
-        embed = kwargs["embed"]
-        assert "Stremio & Anime" in embed.title
-        view = kwargs["view"]
-        assert view.children[0].url.endswith("/stremio")
 
     # Test /stream stremio command
     with patch("bot.safe_defer", new=AsyncMock()):
@@ -123,4 +113,13 @@ async def test_stremio_slash_commands():
         kwargs = ctx.interaction.edit_original_response.call_args[1]
         embed = kwargs["embed"]
         assert "Stremio & Anime" in embed.title
+
+    # Test /stream anime command
+    with patch("bot.safe_defer", new=AsyncMock()):
+        await stream(ctx, canal="anime")
+        assert ctx.interaction.edit_original_response.called
+        kwargs = ctx.interaction.edit_original_response.call_args[1]
+        embed = kwargs["embed"]
+        assert "Stremio & Anime" in embed.title
+
 

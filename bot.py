@@ -2933,24 +2933,6 @@ async def stream_autocomplete(ctx: discord.AutocompleteContext):
 
 
 @bot.slash_command(
-    name="anime",
-    description="Abre el buscador interactivo de Anime & Stremio para Go Live",
-)
-async def anime_command(ctx):
-    """Slash command to open the Stremio & Anime web search interface."""
-    await safe_defer(ctx)
-    _track_command(ctx, "anime")
-    stremio_url = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55:8080/stremio")
-    embed = discord.Embed(
-        title="🎬 Buscador Interactivo Stremio & Anime",
-        description="Buscá anime, películas y series con **TorBox Directo ⚡** y transmitilas a tu canal de voz en 1-click.",
-        color=0x8B5CF6,
-    )
-    view = StremioWebUIOverlayView(stremio_url)
-    await safe_respond(ctx, embed=embed, view=view)
-
-
-@bot.slash_command(
     name="stream",
     description="Transmití un canal de IPTV, Stremio o Anime en tu canal de voz (Go Live)",
 )
