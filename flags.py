@@ -42,7 +42,6 @@ COMMAND_FLAGS: dict[str, str] = {
     "restart": "text",
     "verstream": "text",
     "clip": "text",
-    "stremio": "text",
     "anime": "text",
 }
 

@@ -2933,13 +2933,13 @@ async def stream_autocomplete(ctx: discord.AutocompleteContext):
 
 
 @bot.slash_command(
-    name="stremio",
-    description="Abre el buscador interactivo de Stremio & Anime para Go Live",
+    name="anime",
+    description="Abre el buscador interactivo de Anime & Stremio para Go Live",
 )
-async def stremio_command(ctx):
+async def anime_command(ctx):
     """Slash command to open the Stremio & Anime web search interface."""
     await safe_defer(ctx)
-    _track_command(ctx, "stremio")
+    _track_command(ctx, "anime")
     stremio_url = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55:8080/stremio")
     embed = discord.Embed(
         title="🎬 Buscador Interactivo Stremio & Anime",
@@ -2948,15 +2948,6 @@ async def stremio_command(ctx):
     )
     view = StremioWebUIOverlayView(stremio_url)
     await safe_respond(ctx, embed=embed, view=view)
-
-
-@bot.slash_command(
-    name="anime",
-    description="Abre el buscador interactivo de Anime & Stremio para Go Live",
-)
-async def anime_command(ctx):
-    """Slash command shortcut for /stremio."""
-    await stremio_command(ctx)
 
 
 @bot.slash_command(
