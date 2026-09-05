@@ -331,7 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="stream-item" data-url="${esc(s.url)}" data-title="${esc(s.title)}">
         <div class="stream-info">
           <div class="stream-name">
-            ${s.is_direct ? '<span class="direct-tag">⚡ TorBox Directo</span>' : ''}
+            ${s.is_direct ? '<span class="direct-tag">⚡ Stream Directo</span>' : ''}
             ${esc(s.title)}
           </div>
           <div class="stream-meta">

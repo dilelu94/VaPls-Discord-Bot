@@ -162,7 +162,7 @@ async def search_stremio_torrents(query: str, limit: int = 10) -> list[TorrentSt
     # 1. Resolve query to IMDb ID using Cinemeta
     imdb_id = None
     try:
-        search_url = f"https://v3-cinemeta.strem.fun/catalog/movie/top/search={urllib.parse.quote(clean_query)}.json"
+        search_url = f"https://v3-cinemeta.strem.io/catalog/movie/top/search={urllib.parse.quote(clean_query)}.json"
         req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             data = json.loads(resp.read().decode())
@@ -236,9 +236,9 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
 
     endpoints = []
     if type_filter in ("all", "movie"):
-        endpoints.append(("movie", f"https://v3-cinemeta.strem.fun/catalog/movie/top/search={encoded}.json"))
+        endpoints.append(("movie", f"https://v3-cinemeta.strem.io/catalog/movie/top/search={encoded}.json"))
     if type_filter in ("all", "series"):
-        endpoints.append(("series", f"https://v3-cinemeta.strem.fun/catalog/series/top/search={encoded}.json"))
+        endpoints.append(("series", f"https://v3-cinemeta.strem.io/catalog/series/top/search={encoded}.json"))
     if type_filter in ("all", "anime"):
         endpoints.append(("anime", f"https://anime-kitsu.strem.fun/catalog/anime/kitsu-anime-list/search={encoded}.json"))
 
@@ -291,7 +291,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
     if item_id.startswith("kitsu:") or item_type == "anime":
         url = f"https://anime-kitsu.strem.fun/meta/anime/{item_id}.json"
     else:
-        url = f"https://v3-cinemeta.strem.fun/meta/{item_type}/{item_id}.json"
+        url = f"https://v3-cinemeta.strem.io/meta/{item_type}/{item_id}.json"
 
     meta_data = {}
     try:
