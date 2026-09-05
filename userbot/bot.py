@@ -2549,9 +2549,12 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient):
         sock = getattr(vc, "socket", None) or getattr(getattr(vc, "_connection", None), "socket", None)
         if sock and endpoint_ip and voice_port:
             import struct
-            rtp_ping = struct.pack("!BBHII", 0x80, 120, 1, 1, ssrc) + b"\xf8\xff\xfe"
-            sock.sendto(rtp_ping, (endpoint_ip, voice_port))
-            log.info(f"[VOICE] Sent initial UDP NAT ping to {endpoint_ip}:{voice_port} (ssrc={ssrc})")
+            nat_ping = bytearray(74)
+            struct.pack_into(">H", nat_ping, 0, 0x0001)
+            struct.pack_into(">H", nat_ping, 2, 70)
+            struct.pack_into(">I", nat_ping, 4, ssrc)
+            sock.sendto(bytes(nat_ping), (endpoint_ip, voice_port))
+            log.info(f"[VOICE] Sent IP discovery UDP NAT ping to {endpoint_ip}:{voice_port} (ssrc={ssrc})")
     except Exception as e:
         log.exception(f"[VOICE] listen() failed: {e}")
         analytics.capture_exception(e, properties={"action": "voice_listen_failed"})

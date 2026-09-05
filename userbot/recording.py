@@ -122,7 +122,7 @@ async def pcm_to_ogg_opus(pcm: bytes,
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-f", "s16le", "-ar", str(sample_rate), "-ac", str(channels), "-i", "pipe:0",
-        "-c:a", "libopus", "-b:a", "64k", "-application", "voip",
+        "-c:a", "libopus", "-b:a", "96k", "-application", "audio",
         "-f", "ogg", "pipe:1",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
