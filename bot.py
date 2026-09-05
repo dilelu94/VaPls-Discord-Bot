@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Main Discord bot entrypoint for VaPls.
 
 Handles slash commands, voice playback, greeting triggers, analytics, and the

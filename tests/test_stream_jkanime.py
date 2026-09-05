@@ -98,3 +98,11 @@ def test_parse_stream_query():
         300.0,
     )
     assert bot.parse_stream_query("chainsaw man") == ("chainsaw man", 0.0)
+
+
+def test_stream_slash_command_option_types():
+    cmds = [cmd for cmd in bot.bot.pending_application_commands if cmd.name == "stream"]
+    assert len(cmds) == 1
+    command = cmds[0]
+    for option in command.options:
+        assert not isinstance(option._raw_type, str)
