@@ -166,14 +166,16 @@ def _parse_ffprobe_json(data: dict, url: str) -> MediaTracksInfo:
 
 
 def _run_ffprobe_sync(url: str, timeout: float = 6.0) -> str | None:
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     cmd = [
         "ffprobe",
         "-v", "quiet",
         "-print_format", "json",
         "-show_streams",
-        "-user_agent", "Mozilla/5.0",
-        "-probesize", "5000000",
-        "-analyzeduration", "5000000",
+        "-user_agent", ua,
+        "-headers", f"User-Agent: {ua}\r\n",
+        "-probesize", "2000000",
+        "-analyzeduration", "2000000",
         "-i", url,
     ]
     try:

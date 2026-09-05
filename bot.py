@@ -1999,18 +1999,7 @@ async def start_stream_with_track_select(
 
     tracks_info = await inspect_media_tracks(stream_url, timeout=5.0)
 
-    # For non-IPTV streams (direct URL, MKV, Torrent, JKAnime), provide fallback track choices if ffprobe didn't report multiple tracks
-    if source_type != "iptv":
-        if len(tracks_info.audio_tracks) < 2:
-            existing_indices = {t.index for t in tracks_info.audio_tracks}
-            for idx, name in [(0, "Pista 1 (Predeterminada)"), (1, "Pista 2 (Audio Secundario)"), (2, "Pista 3"), (3, "Pista 4")]:
-                if idx not in existing_indices:
-                    tracks_info.audio_tracks.append(AudioTrack(index=idx, stream_index=idx, language="und", title=name))
-        if len(tracks_info.subtitle_tracks) == 0:
-            for idx, name in [(0, "Subtítulo 1 (Pista 1)"), (1, "Subtítulo 2 (Pista 2)"), (2, "Subtítulo 3 (Pista 3)")]:
-                tracks_info.subtitle_tracks.append(SubtitleTrack(index=idx, stream_index=idx, language="und", title=name))
-
-    if tracks_info.has_multiple_audios or tracks_info.has_subtitles or source_type != "iptv":
+    if tracks_info.has_multiple_audios or tracks_info.has_subtitles:
         async def _on_start_selected(interaction: discord.Interaction, audio_trk: int, sub_trk: int):
             success, status_msg, is_live = await start_iptv_stream_logic(
                 guild_id, voice_channel, stream_url, title, start_sec=start_sec,
