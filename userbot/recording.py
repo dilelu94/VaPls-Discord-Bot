@@ -133,21 +133,45 @@ import time
 from typing import Dict, Deque, Tuple, Optional, List
 
 
-class RollingAudioBuffer:
-    """Thread-safe rolling buffer storing timestamped mono PCM frames per guild.
+class _AudioSegment:
+    """Contiguous PCM audio segment for a speaker.
 
-    Keeps frames up to ``max_seconds`` (default 600.0s = 10m).
+    Combines consecutive RTP voice packets from the same speaker into a single
+    unbroken PCM bytearray, removing micro-gaps and crackling caused by packet
+    arrival network jitter.
+    """
+    __slots__ = ("start_time", "last_time", "user_id", "pcm")
+
+    def __init__(self, start_time: float, last_time: float, user_id: int, pcm: bytes):
+        self.start_time = start_time
+        self.last_time = last_time
+        self.user_id = user_id
+        self.pcm = bytearray(pcm)
+
+
+class RollingAudioBuffer:
+    """Thread-safe rolling buffer storing contiguous PCM audio segments per guild.
+
+    Keeps speech segments up to ``max_seconds`` (default 600.0s = 10m).
+    Packet jitter (< 150ms gap) between successive frames from the same speaker
+    is absorbed by appending directly into contiguous PCM bytearrays.
     """
 
-    def __init__(self, max_seconds: float = 600.0, rms_threshold: int = 15):
+    def __init__(self, max_seconds: float = 600.0, rms_threshold: int = 15, max_gap: float = 0.150):
         self.max_seconds = max_seconds
         self.rms_threshold = rms_threshold
-        # guild_id -> deque of (timestamp_sec, user_id, mono_pcm_bytes)
-        self._buffers: Dict[int, Deque[Tuple[float, int, bytes]]] = {}
+        self.max_gap = max_gap
+        # guild_id -> deque of _AudioSegment
+        self._buffers: Dict[int, Deque[_AudioSegment]] = {}
         self._lock = threading.Lock()
 
     def add_frame(self, guild_id: int, user_id: int, pcm: bytes, timestamp: Optional[float] = None) -> None:
-        """Add a mono PCM frame for a guild and prune old frames."""
+        """Add a mono PCM frame for a guild and prune old segments.
+
+        If ``pcm`` arrives within ``max_gap`` seconds of the latest segment from
+        ``user_id``, it is appended to that segment's PCM buffer to maintain
+        100% contiguous audio.
+        """
         if not pcm or not guild_id:
             return
         now = timestamp if timestamp is not None else time.monotonic()
@@ -156,12 +180,26 @@ class RollingAudioBuffer:
             if guild_id not in self._buffers:
                 self._buffers[guild_id] = deque()
             buf = self._buffers[guild_id]
-            buf.append((now, user_id, pcm))
-            while buf and buf[0][0] < cutoff:
+
+            # Find latest segment for this user_id
+            target_seg: Optional[_AudioSegment] = None
+            for seg in reversed(buf):
+                if seg.user_id == user_id:
+                    target_seg = seg
+                    break
+
+            if target_seg is not None and (now - target_seg.last_time) <= self.max_gap:
+                target_seg.pcm.extend(pcm)
+                target_seg.last_time = now
+            else:
+                buf.append(_AudioSegment(start_time=now, last_time=now, user_id=user_id, pcm=pcm))
+
+            # Prune segments older than max_seconds
+            while buf and buf[0].last_time < cutoff:
                 buf.popleft()
 
     def get_raw_frames(self, guild_id: int, duration_seconds: Optional[float] = None, now: Optional[float] = None) -> List[Tuple[float, int, bytes]]:
-        """Return raw timestamped frames within the requested duration window."""
+        """Return raw timestamped contiguous speech segments within requested window."""
         now_ts = now if now is not None else time.monotonic()
         dur = duration_seconds if duration_seconds is not None else self.max_seconds
         cutoff = now_ts - dur
@@ -169,7 +207,11 @@ class RollingAudioBuffer:
             buf = self._buffers.get(guild_id)
             if not buf:
                 return []
-            return [f for f in buf if f[0] >= cutoff]
+            result: List[Tuple[float, int, bytes]] = []
+            for seg in buf:
+                if seg.last_time >= cutoff:
+                    result.append((seg.start_time, seg.user_id, bytes(seg.pcm)))
+            return result
 
     def get_clip(self, guild_id: int, duration_seconds: float = 600.0, now: Optional[float] = None, sample_rate: int = INPUT_SAMPLE_RATE, width: int = INPUT_WIDTH) -> Tuple[bytes, bool]:
         """Extract and mix audio frames for `guild_id` within the requested duration.
@@ -214,4 +256,5 @@ class RollingAudioBuffer:
         """Clear all guild buffers."""
         with self._lock:
             self._buffers.clear()
+
 

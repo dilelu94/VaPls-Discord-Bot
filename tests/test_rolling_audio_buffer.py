@@ -91,3 +91,26 @@ def test_empty_or_silence_buffer():
     buf.add_frame(999, 1, pcm_silence, timestamp=now - 2.0)
     mixed, has_voice = buf.get_clip(999, duration_seconds=10.0, now=now)
     assert has_voice is False
+
+
+def test_jitter_frame_merging_into_contiguous_segment():
+    buf = RollingAudioBuffer(max_seconds=600.0, max_gap=0.150)
+    guild_id = 777
+    user_id = 888
+    now = time.monotonic()
+    frame1 = b"\x11\x22" * 480  # 10ms frame
+    frame2 = b"\x33\x44" * 480  # 10ms frame
+    frame3 = b"\x55\x66" * 480  # 10ms frame
+
+    # Add frame1 at t=0, frame2 at t=0.021s (jittered), frame3 at t=0.040s (jittered)
+    buf.add_frame(guild_id, user_id, frame1, timestamp=now - 5.0)
+    buf.add_frame(guild_id, user_id, frame2, timestamp=now - 4.979)
+    buf.add_frame(guild_id, user_id, frame3, timestamp=now - 4.960)
+
+    # Should merge into 1 contiguous segment containing frame1+frame2+frame3
+    raw = buf.get_raw_frames(guild_id, now=now)
+    assert len(raw) == 1
+    assert raw[0][0] == now - 5.0
+    assert raw[0][1] == user_id
+    assert raw[0][2] == frame1 + frame2 + frame3
+
