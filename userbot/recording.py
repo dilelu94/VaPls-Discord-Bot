@@ -198,7 +198,7 @@ class RollingAudioBuffer:
             while buf and buf[0].last_time < cutoff:
                 buf.popleft()
 
-    def get_raw_frames(self, guild_id: int, duration_seconds: Optional[float] = None, now: Optional[float] = None) -> List[Tuple[float, int, bytes]]:
+    def get_raw_frames(self, guild_id: int, duration_seconds: Optional[float] = None, now: Optional[float] = None, sample_rate: int = INPUT_SAMPLE_RATE, width: int = INPUT_WIDTH) -> List[Tuple[float, int, bytes]]:
         """Return raw timestamped contiguous speech segments within requested window."""
         now_ts = now if now is not None else time.monotonic()
         dur = duration_seconds if duration_seconds is not None else self.max_seconds
@@ -210,7 +210,16 @@ class RollingAudioBuffer:
             result: List[Tuple[float, int, bytes]] = []
             for seg in buf:
                 if seg.last_time >= cutoff:
-                    result.append((seg.start_time, seg.user_id, bytes(seg.pcm)))
+                    start = seg.start_time
+                    pcm = bytes(seg.pcm)
+                    if start < cutoff:
+                        drop_seconds = cutoff - start
+                        drop_bytes = int(drop_seconds * sample_rate) * width
+                        drop_bytes -= drop_bytes % width
+                        if 0 < drop_bytes < len(pcm):
+                            pcm = pcm[drop_bytes:]
+                            start = cutoff
+                    result.append((start, seg.user_id, pcm))
             return result
 
     def get_clip(self, guild_id: int, duration_seconds: float = 600.0, now: Optional[float] = None, sample_rate: int = INPUT_SAMPLE_RATE, width: int = INPUT_WIDTH) -> Tuple[bytes, bool]:
