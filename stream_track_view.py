@@ -132,13 +132,17 @@ class StreamTrackSelectView(discord.ui.View):
     @discord.ui.button(label="▶ Transmitir en Go Live", style=discord.ButtonStyle.success, row=2)
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.edit_message(
-            content="⏳ Iniciando transmisión con la configuración seleccionada...",
+            content="⏳ Preparando e iniciando transmisión...",
             embed=None,
             view=None,
         )
+
+        if self.selected_subtitle_track >= 0 and not self.extracted_sub_file and not self._extract_task:
+            self.trigger_sub_extraction(self.selected_subtitle_track)
+
         if self._extract_task and not self._extract_task.done():
             try:
-                await asyncio.wait_for(asyncio.shield(self._extract_task), timeout=15.0)
+                await asyncio.wait_for(asyncio.shield(self._extract_task), timeout=35.0)
             except Exception as e:
                 log.warning("Subtitle extraction wait timeout or error: %s", e)
 
