@@ -1037,9 +1037,6 @@ class H264VideoPlayer(threading.Thread):
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
             vf_str = f"subtitles=f='{esc_sub}',{vf_str}"
-        elif sub_idx >= 0:
-            esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-            vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
 
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"

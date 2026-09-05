@@ -26,7 +26,10 @@ def mock_encoder():
         post_codec=["-preset", "ultrafast"],
         vf="scale=1280x720,format=yuv420p",
     )
-    with patch.object(vp, "_ENCODER", dummy), patch.object(vp, "_extract_subtitle_file", return_value="/tmp/mock_sub.ass"):
+    with patch.object(vp, "_ENCODER", dummy), \
+         patch.object(vp, "_extract_subtitle_file", return_value="/tmp/mock_sub.ass"), \
+         patch("os.path.exists", return_value=True), \
+         patch("os.path.getsize", return_value=100):
         yield
 
 

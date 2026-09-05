@@ -220,6 +220,7 @@ async def extract_subtitle_file(stream_url: str, stream_index: int, timeout: flo
         "-y",
         "-hide_banner",
         "-loglevel", "warning",
+        "-fflags", "+fastseek+nobuffer",
         "-user_agent", ua,
         "-headers", f"User-Agent: {ua}\r\n",
         "-probesize", "1000000",
@@ -242,6 +243,11 @@ async def extract_subtitle_file(stream_url: str, stream_index: int, timeout: flo
             return out_path
     except Exception as e:
         log.warning("Failed extracting subtitle stream %d: %s", stream_index, e)
+        if os.path.exists(out_path) and os.path.getsize(out_path) == 0:
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
     
     return None
 
