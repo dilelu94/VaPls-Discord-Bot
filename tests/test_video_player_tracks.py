@@ -55,11 +55,21 @@ def test_ffmpeg_cmd_subtitle_burn_in_filter():
     vf_idx = cmd_nosub.index("-vf")
     assert "subtitles=" not in cmd_nosub[vf_idx + 1]
 
-    # Subtitle track 1 selected (HTTP URL -> filter_complex overlay)
+    # Subtitle track 1 selected
     p_sub = H264VideoPlayer("http://example.com/video.mkv", vc, subtitle_track=1)
     cmd_sub = p_sub._ffmpeg_cmd()
-    assert "-filter_complex" in cmd_sub
-    fc_idx = cmd_sub.index("-filter_complex")
-    fc_str = cmd_sub[fc_idx + 1]
-    assert "[0:v:0][0:s:1]overlay," in fc_str
+    assert "-vf" in cmd_sub
+    vf_idx = cmd_sub.index("-vf")
+    vf_str = cmd_sub[vf_idx + 1]
+    assert "subtitles=f=" in vf_str
+
+    # Explicit subtitle_file parameter
+    with patch("os.path.exists", return_value=True), patch("os.path.getsize", return_value=100):
+        p_subfile = H264VideoPlayer("http://example.com/video.mkv", vc, subtitle_file="/tmp/custom_sub.srt")
+        cmd_subfile = p_subfile._ffmpeg_cmd()
+        assert "-vf" in cmd_subfile
+        vf_idx = cmd_subfile.index("-vf")
+        vf_str = cmd_subfile[vf_idx + 1]
+        assert "subtitles=f='/tmp/custom_sub.srt'" in vf_str
+
 

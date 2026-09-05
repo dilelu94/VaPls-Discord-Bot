@@ -55,7 +55,7 @@ logging.getLogger("discord.client").setLevel(logging.WARNING)
 client = discord.Client(chunk_guilds_at_startup=False)
 
 class GoLiveStream:
-    def __init__(self, bot, guild_id, channel_id, vc, url, start_sec: float = 0.0, audio_track: int = 0, subtitle_track: int = -1):
+    def __init__(self, bot, guild_id, channel_id, vc, url, start_sec: float = 0.0, audio_track: int = 0, subtitle_track: int = -1, subtitle_file: Optional[str] = None):
         self.bot = bot
         self.guild_id = guild_id
         self.channel_id = channel_id
@@ -64,6 +64,7 @@ class GoLiveStream:
         self.start_sec = start_sec
         self.audio_track = audio_track
         self.subtitle_track = subtitle_track
+        self.subtitle_file = subtitle_file
         self.conn = None
         self.video_player = None
         self.audio_sender = None
@@ -207,6 +208,7 @@ class GoLiveStream:
             start_time=self.start_sec,
             audio_track=self.audio_track,
             subtitle_track=self.subtitle_track,
+            subtitle_file=self.subtitle_file,
         )
         self.conn = getattr(client, "live_connections", {}).get(self.guild_id)
         self.video_player = getattr(client, "video_players", {}).get(self.guild_id)
@@ -596,6 +598,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
         start_sec = float(data.get("start_sec", 0.0))
         audio_track = int(data.get("audio_track", 0))
         subtitle_track = int(data.get("subtitle_track", -1))
+        subtitle_file = data.get("subtitle_file")
     except Exception as e:
         log.warning("[STREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
@@ -604,7 +607,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": "empty url"}, status=400)
     stream_title = str(data.get("channel_name", "")).strip() or "Stream"
     log.info(
-        "[STREAM] guild=%s channel=%s url=%s title=%s start_sec=%.1f audio_track=%d subtitle_track=%d",
+        "[STREAM] guild=%s channel=%s url=%s title=%s start_sec=%.1f audio_track=%d subtitle_track=%d subtitle_file=%s",
         guild_id,
         channel_id,
         url[:120],
@@ -612,6 +615,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
         start_sec,
         audio_track,
         subtitle_track,
+        subtitle_file,
     )
 
     if not client.is_ready():
@@ -664,7 +668,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
             task.cancel()
         await _set_nickname(guild, f"GoLive - {stream_title}")
 
-    stream = GoLiveStream(client, guild_id, channel_id, vc, url, start_sec=start_sec, audio_track=audio_track, subtitle_track=subtitle_track)
+    stream = GoLiveStream(client, guild_id, channel_id, vc, url, start_sec=start_sec, audio_track=audio_track, subtitle_track=subtitle_track, subtitle_file=subtitle_file)
     try:
         await stream.start()
     except Exception as e:

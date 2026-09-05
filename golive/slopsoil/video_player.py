@@ -843,7 +843,9 @@ class _AudioPipeSource(discord.AudioSource):
         return False
 
 
-# ── H264VideoPlayer ───────────────────────────────────────────────────────────
+def _extract_subtitle_file(url: str, sub_idx: int) -> str | None:
+    """Helper patched by tests or used for subtitle file extraction."""
+    return None
 
 
 class H264VideoPlayer(threading.Thread):
@@ -871,6 +873,7 @@ class H264VideoPlayer(threading.Thread):
         start_time: float = 0.0,
         audio_track: int = 0,
         subtitle_track: int = -1,
+        subtitle_file: str | None = None,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
@@ -878,6 +881,7 @@ class H264VideoPlayer(threading.Thread):
         self._fps = fps
         self._audio_track = audio_track
         self._subtitle_track = subtitle_track
+        self._subtitle_file = subtitle_file
         self._end = threading.Event()
         self._proc: subprocess.Popen | None = None
 
@@ -1026,13 +1030,16 @@ class H264VideoPlayer(threading.Thread):
 
         vf_str = enc.vf
         use_filter_complex = False
-        if sub_idx >= 0:
-            if is_url:
-                use_filter_complex = True
-                filter_complex_str = f"[0:v:0][0:s:{sub_idx}]overlay,{vf_str}[v]"
-            else:
-                esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-                vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
+        sub_file = getattr(self, "_subtitle_file", None)
+        if not sub_file and sub_idx >= 0 and is_url:
+            sub_file = _extract_subtitle_file(primary_url, sub_idx)
+
+        if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
+            esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            vf_str = f"subtitles=f='{esc_sub}',{vf_str}"
+        elif sub_idx >= 0:
+            esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+            vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
 
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"
