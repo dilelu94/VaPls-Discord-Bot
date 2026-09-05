@@ -11,6 +11,7 @@ import asyncio
 import base64
 import json
 import os
+import re
 import time
 import uuid
 import types
@@ -2055,7 +2056,40 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/privacy", privacyPage)
     app.router.add_get("/delete-data", deleteDataPage)
 
-    # ---- Stremio & Anime Web UI Endpoints ----
+    # ---- Stremio & Anime Web UI Endpoints (Security Enhanced) ----
+    _stremio_rate_limit: dict[str, list[float]] = {}
+
+    def _check_stremio_rate_limit(request: web.Request) -> bool:
+        ip = request.remote or "unknown"
+        now = time.time()
+        timestamps = _stremio_rate_limit.setdefault(ip, [])
+        _stremio_rate_limit[ip] = [t for t in timestamps if now - t < 60.0]
+        if len(_stremio_rate_limit[ip]) >= 40:
+            return False
+        _stremio_rate_limit[ip].append(now)
+        return True
+
+    def _clean_stremio_id(item_id: str) -> Optional[str]:
+        raw = (item_id or "").strip()
+        if not raw or len(raw) > 64:
+            return None
+        if not re.match(r"^[a-zA-Z0-9_:\.\-]+$", raw):
+            return None
+        return raw
+
+    def _clean_stremio_type(t: str) -> str:
+        raw = (t or "").strip().lower()
+        return raw if raw in {"all", "movie", "series", "anime"} else "all"
+
+    def _clean_stream_url(url: str) -> Optional[str]:
+        raw = (url or "").strip()
+        if not raw or len(raw) > 2048:
+            return None
+        low = raw.lower()
+        if not (low.startswith("http://") or low.startswith("https://") or low.startswith("magnet:?") or low.startswith("torrent:")):
+            return None
+        return raw
+
     async def stremioIndex(request: web.Request) -> web.Response:
         web_dir = os.path.join(os.path.dirname(__file__), "web")
         index_path = os.path.join(web_dir, "index.html")
@@ -2065,8 +2099,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.Response(status=404, text="Web UI not found")
 
     async def apiStremioSearch(request: web.Request) -> web.Response:
-        q = request.query.get("q", "").strip()
-        t = request.query.get("type", "all").strip()
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        q = request.query.get("q", "").strip()[:100]
+        q = re.sub(r"[\x00-\x1f\x7f]", "", q)
+        t = _clean_stremio_type(request.query.get("type", "all"))
         if not q:
             return web.json_response([])
         from torrent_search import search_stremio_catalog
@@ -2074,30 +2112,42 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.json_response(res)
 
     async def apiStremioMeta(request: web.Request) -> web.Response:
-        item_id = request.query.get("id", "").strip()
-        item_type = request.query.get("type", "series").strip()
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        item_id = _clean_stremio_id(request.query.get("id", ""))
+        item_type = _clean_stremio_type(request.query.get("type", "series"))
         if not item_id:
-            return web.json_response({"error": "missing id"}, status=400)
+            return web.json_response({"error": "missing or invalid id"}, status=400)
         from torrent_search import get_stremio_meta
         res = await get_stremio_meta(item_type, item_id)
         return web.json_response(res)
 
     async def apiStremioStreams(request: web.Request) -> web.Response:
-        item_id = request.query.get("id", "").strip()
-        item_type = request.query.get("type", "series").strip()
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        item_id = _clean_stremio_id(request.query.get("id", ""))
+        item_type = _clean_stremio_type(request.query.get("type", "series"))
         try:
-            season = int(request.query.get("season", 1))
-            episode = int(request.query.get("episode", 1))
+            season = max(1, min(int(request.query.get("season", 1)), 1000))
+            episode = max(1, min(int(request.query.get("episode", 1)), 2000))
         except ValueError:
             season, episode = 1, 1
-        imdb_id = request.query.get("imdb_id", None)
+
+        raw_imdb = request.query.get("imdb_id", None)
+        imdb_id = _clean_stremio_id(raw_imdb) if raw_imdb else None
+
         if not item_id:
-            return web.json_response({"error": "missing id"}, status=400)
+            return web.json_response({"error": "missing or invalid id"}, status=400)
         from torrent_search import get_stremio_streams
         res = await get_stremio_streams(item_type, item_id, season, episode, imdb_id)
         return web.json_response(res)
 
     async def apiStremioVoiceChannels(request: web.Request) -> web.Response:
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
         channels_out = []
         for g in bot.guilds:
             for ch in g.voice_channels:
@@ -2113,13 +2163,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
         return web.json_response({"channels": channels_out})
 
     async def apiStremioPlay(request: web.Request) -> web.Response:
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
         try:
             body = await request.json()
-            channel_id = str(body["channel_id"])
-            stream_url = str(body["url"])
-            title = str(body.get("title", "Stream Stremio"))
+            channel_id = str(body.get("channel_id", "")).strip()
+            raw_url = str(body.get("url", "")).strip()
+            raw_title = str(body.get("title", "Stream Stremio")).strip()[:120]
         except Exception:
             return web.json_response({"error": "invalid json payload"}, status=400)
+
+        if not re.match(r"^\d{17,20}$", channel_id):
+            return web.json_response({"error": "invalid channel_id"}, status=400)
+
+        stream_url = _clean_stream_url(raw_url)
+        if not stream_url:
+            return web.json_response({"error": "invalid or unsafe stream url"}, status=400)
 
         relay_url = getattr(config, "GOLIVE_RELAY_URL", "http://127.0.0.1:8082")
         relay_secret = getattr(config, "GOLIVE_RELAY_SECRET", "")
@@ -2132,7 +2192,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 payload = {
                     "channel_id": channel_id,
                     "url": stream_url,
-                    "title": title,
+                    "title": raw_title,
                 }
                 async with sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=15) as resp:
                     data = await resp.json()

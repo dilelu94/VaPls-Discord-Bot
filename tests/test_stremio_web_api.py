@@ -87,7 +87,7 @@ async def test_stremio_static_and_api_endpoints(mock_bot):
         with patch("aiohttp.ClientSession.post", return_value=mock_relay_resp):
             resp_play = await client.post(
                 "/api/stremio/play",
-                json={"channel_id": "456", "url": "https://torrentio.strem.fun/resolve/torbox/1/2", "title": "Naruto"},
+                json={"channel_id": "123456789012345678", "url": "https://torrentio.strem.fun/resolve/torbox/1/2", "title": "Naruto"},
             )
             assert resp_play.status == 200
             play_json = await resp_play.json()
@@ -121,5 +121,34 @@ async def test_stremio_slash_commands():
         kwargs = ctx.interaction.edit_original_response.call_args[1]
         embed = kwargs["embed"]
         assert "Stremio & Anime" in embed.title
+
+
+@pytest.mark.asyncio
+async def test_stremio_security_validations(mock_bot):
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        # Rejects path traversal / invalid characters in item_id
+        resp_meta = await client.get("/api/stremio/meta?id=../../etc/passwd&type=movie")
+        assert resp_meta.status == 400
+
+        # Rejects invalid stream URL protocol (e.g. file://)
+        resp_play_file = await client.post(
+            "/api/stremio/play",
+            json={"channel_id": "123456789012345678", "url": "file:///etc/passwd", "title": "Test"},
+        )
+        assert resp_play_file.status == 400
+
+        # Rejects invalid non-numeric channel_id
+        resp_play_chan = await client.post(
+            "/api/stremio/play",
+            json={"channel_id": "invalid_chan", "url": "https://example.com/video.mp4", "title": "Test"},
+        )
+        assert resp_play_chan.status == 400
+    finally:
+        await client.close()
+
 
 

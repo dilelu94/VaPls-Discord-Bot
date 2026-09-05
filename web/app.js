@@ -1,8 +1,16 @@
 /**
- * VaPls Stremio & Anime Web App - Frontend Logic
+ * VaPls Stremio & Anime Web App - Frontend Logic with HTML Escaping Security
  */
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Security Helper: HTML Escaping to prevent XSS attacks
+  function esc(str) {
+    if (str === null || str === undefined) return '';
+    const d = document.createElement('div');
+    d.textContent = String(str);
+    return d.innerHTML;
+  }
+
   // DOM Elements
   const searchInput = document.getElementById('searchInput');
   const clearSearch = document.getElementById('clearSearch');
@@ -149,10 +157,10 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    voiceStatusText.textContent = `${voiceChannels.length} canal(es) de voz disponible(s)`;
+    voiceStatusText.textContent = `${esc(voiceChannels.length)} canal(es) de voz disponible(s)`;
     voiceChannelSelect.innerHTML = voiceChannels.map(ch => `
-      <option value="${ch.id}" data-guild="${ch.guild_id}">
-        🔊 ${ch.guild_name ? ch.guild_name + ' -> ' : ''}${ch.name} (${ch.members_count} miembros)
+      <option value="${esc(ch.id)}" data-guild="${esc(ch.guild_id)}">
+        🔊 ${ch.guild_name ? esc(ch.guild_name) + ' -> ' : ''}${esc(ch.name)} (${esc(ch.members_count)} miembros)
       </option>
     `).join('');
   }
@@ -160,14 +168,19 @@ document.addEventListener('DOMContentLoaded', () => {
   async function performSearch(query, filter) {
     showLoader();
     try {
-      const resp = await fetch(`/api/stremio/search?q=${encodeURIComponent(query)}&type=${filter}`);
+      const resp = await fetch(`/api/stremio/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(filter)}`);
+      if (resp.status === 429) {
+        showToast('⚠️ Demasiadas peticiones. Aguardá unos segundos.');
+        showEmptyState();
+        return;
+      }
       if (!resp.ok) throw new Error('Search failed');
       const results = await resp.json();
 
       if (!results.length) {
         catalogGrid.innerHTML = `
           <div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--text-muted);">
-            No se encontraron resultados para "${query}". Probá buscar otro título.
+            No se encontraron resultados para "${esc(query)}". Probá buscar otro título.
           </div>
         `;
         showCatalog();
@@ -188,13 +201,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderCatalogGrid(items) {
     catalogGrid.innerHTML = items.map(item => `
-      <div class="card" data-id="${item.id}" data-type="${item.type}">
-        <img class="card-poster" src="${item.poster || 'https://via.placeholder.com/300x450?text=No+Poster'}" alt="${item.title}" loading="lazy">
+      <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
+        <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
         <div class="card-content">
-          <div class="card-title">${item.title}</div>
+          <div class="card-title">${esc(item.title)}</div>
           <div class="card-meta">
-            <span class="badge ${item.type}">${item.type.toUpperCase()}</span>
-            <span>${item.year || ''}</span>
+            <span class="badge ${esc(item.type)}">${esc(item.type.toUpperCase())}</span>
+            <span>${esc(item.year || '')}</span>
           </div>
         </div>
       </div>
@@ -222,26 +235,25 @@ document.addEventListener('DOMContentLoaded', () => {
     episodeSection.style.display = 'none';
 
     try {
-      const resp = await fetch(`/api/stremio/meta?id=${encodeURIComponent(id)}&type=${type}`);
+      const resp = await fetch(`/api/stremio/meta?id=${encodeURIComponent(id)}&type=${encodeURIComponent(type)}`);
       if (!resp.ok) throw new Error('Failed to fetch meta');
       currentMeta = await resp.json();
 
-      modalTitle.textContent = currentMeta.title;
+      modalTitle.textContent = currentMeta.title || '';
       modalPoster.src = currentMeta.poster || 'https://via.placeholder.com/300x450?text=No+Poster';
       
       if (currentMeta.banner) {
-        modalBanner.style.backgroundImage = `url('${currentMeta.banner}')`;
+        modalBanner.style.backgroundImage = `url('${esc(currentMeta.banner)}')`;
       } else {
         modalBanner.style.backgroundImage = 'none';
       }
 
-      modalTypeBadge.textContent = currentMeta.type.toUpperCase();
-      modalTypeBadge.className = `badge ${currentMeta.type}`;
+      modalTypeBadge.textContent = (currentMeta.type || '').toUpperCase();
+      modalTypeBadge.className = `badge ${esc(currentMeta.type)}`;
       modalYear.textContent = currentMeta.year || '';
       modalGenres.textContent = (currentMeta.genres || []).join(' • ');
       modalDescription.textContent = currentMeta.description || 'Sin descripción disponible.';
 
-      // Handle Episodes
       if (currentMeta.episodes && currentMeta.episodes.length > 0) {
         setupEpisodePicker(currentMeta.episodes);
         episodeSection.style.display = 'block';
@@ -264,7 +276,7 @@ document.addEventListener('DOMContentLoaded', () => {
       seasonsMap[s].push(ep);
     });
 
-    seasonSelect.innerHTML = Object.keys(seasonsMap).map(s => `<option value="${s}">Temporada ${s}</option>`).join('');
+    seasonSelect.innerHTML = Object.keys(seasonsMap).map(s => `<option value="${esc(s)}">Temporada ${esc(s)}</option>`).join('');
     updateEpisodeOptions();
   }
 
@@ -274,7 +286,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const filteredEps = currentMeta.episodes.filter(e => (e.season || 1) === selectedSeason);
 
     episodeSelect.innerHTML = filteredEps.map(e => `
-      <option value="${e.episode || 1}">Episodio ${e.episode || 1} - ${e.title}</option>
+      <option value="${esc(e.episode || 1)}">Episodio ${esc(e.episode || 1)} - ${esc(e.title)}</option>
     `).join('');
 
     if (filteredEps.length > 0) {
@@ -295,7 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const episode = episodeSelect.value ? parseInt(episodeSelect.value) : 1;
 
     try {
-      const url = `/api/stremio/streams?id=${encodeURIComponent(currentMeta.id)}&type=${currentMeta.type}&season=${season}&episode=${episode}&imdb_id=${encodeURIComponent(currentMeta.imdb_id || '')}`;
+      const url = `/api/stremio/streams?id=${encodeURIComponent(currentMeta.id)}&type=${encodeURIComponent(currentMeta.type)}&season=${season}&episode=${episode}&imdb_id=${encodeURIComponent(currentMeta.imdb_id || '')}`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error('Failed to fetch streams');
       const streams = await resp.json();
@@ -316,14 +328,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderStreams(streams) {
     streamList.innerHTML = streams.map((s, idx) => `
-      <div class="stream-item" data-url="${s.url}" data-title="${s.title}">
+      <div class="stream-item" data-url="${esc(s.url)}" data-title="${esc(s.title)}">
         <div class="stream-info">
           <div class="stream-name">
             ${s.is_direct ? '<span class="direct-tag">⚡ TorBox Directo</span>' : ''}
-            ${s.title}
+            ${esc(s.title)}
           </div>
           <div class="stream-meta">
-            ${s.quality ? `[${s.quality}]` : ''} ${s.seeders >= 0 ? `👤 ${s.seeders}` : ''} ${s.size ? `💾 ${s.size}` : ''} ${s.details || ''}
+            ${s.quality ? `[${esc(s.quality)}]` : ''} ${s.seeders >= 0 ? `👤 ${esc(s.seeders)}` : ''} ${s.size ? `💾 ${esc(s.size)}` : ''} ${esc(s.details || '')}
           </div>
         </div>
       </div>
@@ -338,7 +350,6 @@ document.addEventListener('DOMContentLoaded', () => {
         startStreamBtn.disabled = false;
       });
 
-      // Auto-select first stream (especially if direct TorBox)
       if (idx === 0) {
         item.click();
       }
@@ -379,7 +390,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast('🚀 ¡Transmisión Go Live iniciada en Discord!');
         hideModal();
       } else {
-        showToast(`❌ Error: ${res.error || 'No se pudo iniciar el stream'}`);
+        showToast(`❌ Error: ${esc(res.error || 'No se pudo iniciar el stream')}`);
       }
     } catch (e) {
       showToast('❌ Error de conexión al servidor del bot.');
