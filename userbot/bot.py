@@ -211,6 +211,17 @@ def _install_dave_patch():
             ssrc_map = (getattr(vc, "_ssrc_to_id", None) or getattr(vc, "ssrc_user_map", {}) or getattr(state, "_ssrc_to_id", {})) if vc else {}
             uid = ssrc_map.get(packet.ssrc) if ssrc_map else None
 
+            # Fallback SSRC resolution if ssrc_map is empty or missing entry
+            if not uid and vc:
+                if len(ssrc_map) == 1:
+                    uid = next(iter(ssrc_map.values()))
+                else:
+                    channel = getattr(vc, "channel", None)
+                    if channel and hasattr(channel, "members"):
+                        non_bots = [m.id for m in channel.members if not getattr(m, "bot", False) and m.id != getattr(getattr(vc, "user", None), "id", None)]
+                        if len(non_bots) == 1:
+                            uid = non_bots[0]
+
             if is_video:
                 payload = raw
                 if dave is not None and uid and davey is not None:
@@ -233,7 +244,9 @@ def _install_dave_patch():
             _dave_stats["total"] += 1
             payload = raw
             decrypted_ok = False
-            if davey is not None and dave is not None:
+            dave_ready = getattr(dave, "ready", False) if dave is not None else False
+
+            if davey is not None and dave is not None and dave_ready:
                 try:
                     decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
                     if decrypted and decrypted != raw:
@@ -242,8 +255,12 @@ def _install_dave_patch():
                         decrypted_ok = True
                     else:
                         _dave_stats["dave_skip"] += 1
+                        # If DAVE is ready in an E2EE channel but decryption skipped,
+                        # raw is encrypted ciphertext. Use Opus silence to avoid loud static.
+                        payload = _OPUS_SILENCE
                 except Exception as e:
                     _dave_stats["dave_fail"] += 1
+                    payload = _OPUS_SILENCE
             else:
                 _dave_stats["dave_skip"] += 1
 
@@ -252,7 +269,7 @@ def _install_dave_patch():
                     f"[DAVE-STATS] total={_dave_stats['total']} ok={_dave_stats['dave_ok']} "
                     f"skip={_dave_stats['dave_skip']} fail={_dave_stats['dave_fail']} | "
                     f"ssrc={getattr(packet, 'ssrc', None)} -> uid={uid} | "
-                    f"dave_exists={dave is not None} ready={getattr(dave, 'ready', False)} "
+                    f"dave_exists={dave is not None} ready={dave_ready} "
                     f"decrypted_ok={decrypted_ok} | ssrc_map_len={len(ssrc_map)}"
                 )
 
@@ -265,8 +282,14 @@ def _install_dave_patch():
         "xsalsa20_poly1305_suffix",
         "xsalsa20_poly1305_lite",
         "aead_xchacha20_poly1305_rtpsize",
+        "aead_aes256_gcm_rtpsize",
+        "aead_aes256_gcm",
     ]:
         _wrap_method(f"_decrypt_rtp_{mode}")
+
+    for attr in dir(PacketDecryptor):
+        if attr.startswith("_decrypt_rtp_"):
+            _wrap_method(attr)
 
 
 def _install_opus_resilience_patch():
@@ -518,19 +541,29 @@ class TranscriberSink(voice_recv.AudioSink):
         )
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
-        if _SENSITIVITY_PRESET == 0:
-            return
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
         guild_id = getattr(getattr(source, "guild", None), "id", None)
         if guild_id is not None:
             self.user_guilds[user_id] = guild_id
-        # Mute non-requesters while a music vote is open in this guild.
-        if not _is_speaker_allowed(guild_id, user_id):
-            return
         pcm_data = data.pcm
         if not pcm_data:
+            return
+
+        # Always feed rolling buffer for /clip command before any wake/sensitivity filters
+        try:
+            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            gid = guild_id or self.user_guilds.get(user_id)
+            if gid:
+                _rolling_audio_buffer.add_frame(gid, user_id, mono)
+        except Exception:
+            mono = None
+
+        if _SENSITIVITY_PRESET == 0:
+            return
+        # Mute non-requesters while a music vote is open in this guild.
+        if not _is_speaker_allowed(guild_id, user_id):
             return
 
         self.packet_count += 1
@@ -545,10 +578,8 @@ class TranscriberSink(voice_recv.AudioSink):
             log.info(f"[WHISPER] {self.packet_count} packets in {elapsed:.1f}s")
 
         try:
-            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
-            gid = guild_id or self.user_guilds.get(user_id)
-            if gid:
-                _rolling_audio_buffer.add_frame(gid, user_id, mono)
+            if mono is None:
+                mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
             rms = audioop.rms(mono, 2)
             now = time.time()
 
@@ -1306,21 +1337,31 @@ class WakeWordSink(voice_recv.AudioSink):
     # ---- packet ingestion -------------------------------------------------
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
-        if _SENSITIVITY_PRESET == 0:
-            return
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
         guild_id = getattr(getattr(source, "guild", None), "id", None)
         if guild_id is not None:
             self.user_guilds[user_id] = guild_id
+        pcm_data = data.pcm
+        if not pcm_data:
+            return
+
+        # Always feed rolling buffer for /clip command before any wake/sensitivity filters
+        try:
+            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
+            gid = guild_id or self.user_guilds.get(user_id)
+            if gid:
+                _rolling_audio_buffer.add_frame(gid, user_id, mono)
+        except Exception:
+            mono = None
+
+        if _SENSITIVITY_PRESET == 0:
+            return
         # Mute non-requesters while a music vote is open in this guild — the
         # main bot toggles _vote_restrictions via the /restrict_speaker relay
         # endpoint. Sits before any audio work so non-requesters cost zero.
         if not _is_speaker_allowed(guild_id, user_id):
-            return
-        pcm_data = data.pcm
-        if not pcm_data:
             return
         # Pause processing for everyone except the user that fired the wake
         # word while we're still capturing + transcribing. Saves CPU on the
@@ -1343,10 +1384,8 @@ class WakeWordSink(voice_recv.AudioSink):
             )
 
         try:
-            mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
-            gid = guild_id or self.user_guilds.get(user_id)
-            if gid:
-                _rolling_audio_buffer.add_frame(gid, user_id, mono)
+            if mono is None:
+                mono = audioop.tomono(pcm_data, 2, 0.5, 0.5)
             data_16k, new_state = audioop.ratecv(
                 mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
             )
