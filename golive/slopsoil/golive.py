@@ -235,7 +235,7 @@ class GoLiveConnection:
         )
         server_fut = main_ws.wait_for(
             "STREAM_SERVER_UPDATE",
-            predicate=lambda d: d.get("stream_key", "") == stream_key,
+            predicate=lambda d: d.get("stream_key", "") == stream_key and bool(d.get("endpoint")),
         )
 
         async def _send_json_safe(ws, data):
@@ -284,11 +284,11 @@ class GoLiveConnection:
             self._stream_key,
         )
 
-        endpoint = server_data["endpoint"]
+        endpoint = server_data.get("endpoint") or ""
         if endpoint.startswith("wss://"):
             endpoint = endpoint[6:]
         self.endpoint = endpoint
-        self.token = server_data["token"]
+        self.token = server_data.get("token")
         log.info("STREAM_SERVER_UPDATE received: endpoint=%s", endpoint)
 
         # Create UDP socket before WebSocket connect — initial_connection() uses

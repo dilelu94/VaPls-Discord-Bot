@@ -260,7 +260,7 @@ class GoLiveWatcherConnection:
             _wait_for_gateway_event(
                 self._bot,
                 "STREAM_SERVER_UPDATE",
-                lambda d: str(self.target_user_id) in str(d.get("stream_key", "")),
+                lambda d: str(self.target_user_id) in str(d.get("stream_key", "")) and bool(d.get("endpoint")),
                 timeout=5.0,
             )
         )
