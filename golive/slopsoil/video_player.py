@@ -1025,16 +1025,11 @@ class H264VideoPlayer(threading.Thread):
             audio_map = f"0:a:{a_idx}?"
 
         vf_str = enc.vf
+        use_filter_complex = False
         if sub_idx >= 0:
             if is_url:
-                if not hasattr(self, "_temp_sub_file") or not self._temp_sub_file:
-                    self._temp_sub_file = _extract_subtitle_file(primary_url, sub_idx)
-                sub_file = getattr(self, "_temp_sub_file", None)
-                if sub_file:
-                    esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-                    vf_str = f"subtitles=f='{esc_sub}',{vf_str}"
-                else:
-                    log.warning("Skipping subtitle filter for HTTP URL because local subtitle extraction was unavailable")
+                use_filter_complex = True
+                filter_complex_str = f"[0:v:0][0:s:{sub_idx}]overlay,{vf_str}[v]"
             else:
                 esc_url = primary_url.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
                 vf_str = f"subtitles=f='{esc_url}':stream_index={sub_idx},{vf_str}"
@@ -1046,16 +1041,28 @@ class H264VideoPlayer(threading.Thread):
             if is_url
             else []
         )
-        video_out_args = [
-            "-map", "0:v:0",
-            "-vf", vf_str,
-            "-c:v", enc.name,
-            *enc.post_codec,
-            "-r", str(int(self._fps)),
-            "-g", str(int(self._fps)),
-            "-f", "h264",
-            "pipe:1",
-        ]
+        if use_filter_complex:
+            video_out_args = [
+                "-filter_complex", filter_complex_str,
+                "-map", "[v]",
+                "-c:v", enc.name,
+                *enc.post_codec,
+                "-r", str(int(self._fps)),
+                "-g", str(int(self._fps)),
+                "-f", "h264",
+                "pipe:1",
+            ]
+        else:
+            video_out_args = [
+                "-map", "0:v:0",
+                "-vf", vf_str,
+                "-c:v", enc.name,
+                *enc.post_codec,
+                "-r", str(int(self._fps)),
+                "-g", str(int(self._fps)),
+                "-f", "h264",
+                "pipe:1",
+            ]
 
         return [
             "ffmpeg",
