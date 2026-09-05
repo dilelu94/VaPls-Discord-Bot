@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 
@@ -89,7 +91,8 @@ class SubtitleTrack:
     @property
     def display_name(self) -> str:
         lang_str = format_language(self.language)
-        forced_str = " (Forzados)" if self.is_forced else ""
+        is_f = self.is_forced or "forced" in self.title.lower()
+        forced_str = " (Solo carteles)" if is_f else " (Diálogo completo)"
         title_str = f" [{self.title}]" if self.title else ""
         
         if lang_str != "Desconocido":
@@ -98,6 +101,7 @@ class SubtitleTrack:
             return f"Sub {self.index + 1}: {self.title}{forced_str}"
         else:
             return f"Subtítulo {self.index + 1}{forced_str}"
+
 
 
 
@@ -198,3 +202,46 @@ async def inspect_media_tracks(url: str, timeout: float = 6.0) -> MediaTracksInf
         log.warning("inspect_media_tracks error for %s: %s", url[:100], exc)
 
     return MediaTracksInfo(url=url)
+
+
+async def extract_subtitle_file(stream_url: str, stream_index: int, timeout: float = 25.0) -> str | None:
+    """Asynchronously extract a subtitle track from media URL using FFmpeg to a temporary .srt file."""
+    if stream_index < 0:
+        return None
+    url_hash = hashlib.md5(f"{stream_url}_{stream_index}".encode()).hexdigest()[:10]
+    out_path = f"/tmp/vapls_sub_{url_hash}.srt"
+    
+    if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+        return out_path
+        
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-user_agent", ua,
+        "-headers", f"User-Agent: {ua}\r\n",
+        "-probesize", "1000000",
+        "-analyzeduration", "1000000",
+        "-i", stream_url,
+        "-vn", "-an",
+        "-map", f"0:{stream_index}",
+        "-c:s", "srt",
+        out_path
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode == 0 and os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+            log.info("Successfully extracted subtitle stream %d to %s", stream_index, out_path)
+            return out_path
+    except Exception as e:
+        log.warning("Failed extracting subtitle stream %d: %s", stream_index, e)
+    
+    return None
+

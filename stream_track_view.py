@@ -46,6 +46,10 @@ class AudioTrackSelect(discord.ui.Select):
         await interaction.response.edit_message(view=self.view)
 
 
+import asyncio
+import inspect
+from media_inspector import MediaTracksInfo, extract_subtitle_file, format_language
+
 class SubtitleTrackSelect(discord.ui.Select):
     def __init__(self, tracks_info: MediaTracksInfo):
         options = [
@@ -58,9 +62,8 @@ class SubtitleTrackSelect(discord.ui.Select):
         ]
         for track in tracks_info.subtitle_tracks[:24]:  # max 24 + 1 = 25
             lang_name = format_language(track.language)
-            desc = f"Subtítulos en {lang_name}"
-            if track.is_forced:
-                desc += " (Subtítulos forzados)"
+            is_f = track.is_forced or "forced" in track.title.lower()
+            desc = f"Solo carteles / forzados en {lang_name}" if is_f else f"Diálogo completo en {lang_name}"
             options.append(
                 discord.SelectOption(
                     label=track.display_name[:100],
@@ -79,9 +82,11 @@ class SubtitleTrackSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        self.view.selected_subtitle_track = int(self.values[0])
+        sub_idx = int(self.values[0])
+        self.view.selected_subtitle_track = sub_idx
         for opt in self.options:
             opt.default = (opt.value == self.values[0])
+        self.view.trigger_sub_extraction(sub_idx)
         await interaction.response.edit_message(view=self.view)
 
 
@@ -89,7 +94,7 @@ class StreamTrackSelectView(discord.ui.View):
     def __init__(
         self,
         tracks_info: MediaTracksInfo,
-        on_start_callback: Callable[[discord.Interaction, int, int], None],
+        on_start_callback: Callable[..., None],
         timeout: float = 60.0,
     ):
         super().__init__(timeout=timeout)
@@ -97,12 +102,32 @@ class StreamTrackSelectView(discord.ui.View):
         self.on_start_callback = on_start_callback
         self.selected_audio_track: int = 0
         self.selected_subtitle_track: int = -1
+        self.extracted_sub_file: Optional[str] = None
+        self._extract_task: Optional[asyncio.Task] = None
 
         if len(tracks_info.audio_tracks) > 1:
             self.add_item(AudioTrackSelect(tracks_info))
 
         if len(tracks_info.subtitle_tracks) > 0:
             self.add_item(SubtitleTrackSelect(tracks_info))
+
+    def trigger_sub_extraction(self, sub_index: int) -> None:
+        if sub_index < 0 or not getattr(self.tracks_info, "url", None):
+            self.extracted_sub_file = None
+            return
+
+        sub_track = next((t for t in self.tracks_info.subtitle_tracks if t.index == sub_index), None)
+        stream_idx = sub_track.stream_index if sub_track else sub_index
+
+        async def _extract():
+            res = await extract_subtitle_file(self.tracks_info.url, stream_idx)
+            if res:
+                self.extracted_sub_file = res
+
+        try:
+            self._extract_task = asyncio.create_task(_extract())
+        except Exception as e:
+            log.warning("Could not create subtitle extraction task: %s", e)
 
     @discord.ui.button(label="▶ Transmitir en Go Live", style=discord.ButtonStyle.success, row=2)
     async def start_button(self, button: discord.ui.Button, interaction: discord.Interaction):
@@ -111,10 +136,22 @@ class StreamTrackSelectView(discord.ui.View):
             embed=None,
             view=None,
         )
+        if self._extract_task and not self._extract_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(self._extract_task), timeout=15.0)
+            except Exception as e:
+                log.warning("Subtitle extraction wait timeout or error: %s", e)
+
         try:
-            await self.on_start_callback(
-                interaction, self.selected_audio_track, self.selected_subtitle_track
-            )
+            sig = inspect.signature(self.on_start_callback)
+            if len(sig.parameters) >= 4:
+                await self.on_start_callback(
+                    interaction, self.selected_audio_track, self.selected_subtitle_track, self.extracted_sub_file
+                )
+            else:
+                await self.on_start_callback(
+                    interaction, self.selected_audio_track, self.selected_subtitle_track
+                )
         except Exception as e:
             log.exception("Error in stream track selection start callback")
             await interaction.followup.send(f"❌ Error iniciando transmisión: {e}", ephemeral=True)
@@ -122,3 +159,4 @@ class StreamTrackSelectView(discord.ui.View):
     async def on_timeout(self):
         for item in self.children:
             item.disabled = True
+

@@ -1918,6 +1918,7 @@ async def start_iptv_stream_logic(
     start_sec: float = 0.0,
     audio_track: int = 0,
     subtitle_track: int = -1,
+    subtitle_file: Optional[str] = None,
 ) -> tuple[bool, str, bool]:
     """Sends the HTTP request to the GoLive relay to start streaming a channel.
 
@@ -1938,9 +1939,10 @@ async def start_iptv_stream_logic(
         "start_sec": start_sec,
         "audio_track": audio_track,
         "subtitle_track": subtitle_track,
+        "subtitle_file": subtitle_file,
     }
     log.info(
-        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s start_sec=%.1f audio_track=%d subtitle_track=%d",
+        "[STREAM_LOGIC] POST %s guild=%s channel=%s url=%s start_sec=%.1f audio_track=%d subtitle_track=%d subtitle_file=%s",
         url,
         guild_id,
         voice_channel.id,
@@ -1948,6 +1950,7 @@ async def start_iptv_stream_logic(
         start_sec,
         audio_track,
         subtitle_track,
+        subtitle_file,
     )
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     is_live = True
@@ -2004,10 +2007,10 @@ async def start_stream_with_track_select(
     tracks_info = await inspect_media_tracks(stream_url, timeout=5.0)
 
     if tracks_info.has_multiple_audios or tracks_info.has_subtitles:
-        async def _on_start_selected(interaction: discord.Interaction, audio_trk: int, sub_trk: int):
+        async def _on_start_selected(interaction: discord.Interaction, audio_trk: int, sub_trk: int, sub_file: Optional[str] = None):
             success, status_msg, is_live = await start_iptv_stream_logic(
                 guild_id, voice_channel, stream_url, title, start_sec=start_sec,
-                audio_track=audio_trk, subtitle_track=sub_trk,
+                audio_track=audio_trk, subtitle_track=sub_trk, subtitle_file=sub_file,
             )
             if success:
                 _active_sources[guild_id] = {"type": source_type, "url": stream_url}

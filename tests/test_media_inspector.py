@@ -75,7 +75,7 @@ def test_parse_ffprobe_json_extracts_tracks():
     assert s1.index == 1
     assert s1.stream_index == 4
     assert s1.is_forced is True
-    assert "(Forzados)" in s1.display_name
+    assert ("(Solo carteles)" in s1.display_name or "(Forzados)" in s1.display_name)
 
 
 def test_single_audio_no_subs():
