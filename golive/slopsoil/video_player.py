@@ -1020,6 +1020,9 @@ class H264VideoPlayer(threading.Thread):
             primary_url = self._url
             is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
             input_args = []
+            if is_url:
+                ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
             # -http_persistent 0 prevents connection reuse between HLS segments,
             # but FFmpeg rejects it for direct file downloads (MKV, MP4 from CDN).
             # Only apply for live streams.
