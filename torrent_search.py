@@ -23,6 +23,11 @@ STREMIO_RESOLVE_RE = re.compile(
     r"https?://[^/]+/resolve/[^/]+/[^/]+/([a-fA-F0-9]{40})", re.IGNORECASE
 )
 
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+}
+
 
 @dataclass
 class TorrentStreamItem:
@@ -93,13 +98,11 @@ def resolve_redirect_url(url: str) -> str:
     try:
         req = urllib.request.Request(
             url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            },
+            headers=BROWSER_HEADERS,
         )
         with urllib.request.urlopen(req, timeout=6.0) as resp:
             final_url = resp.geturl()
-            if final_url and final_url != url and not final_url.endswith(("/configure", ".legal/")):
+            if final_url and final_url != url:
                 log.info("[STREAM RESOLVE] Followed redirect: %s -> %s", url, final_url)
                 return final_url
     except Exception as e:
@@ -185,7 +188,7 @@ async def search_stremio_torrents(query: str, limit: int = 10) -> list[TorrentSt
     imdb_id = None
     try:
         search_url = f"https://v3-cinemeta.strem.io/catalog/movie/top/search={urllib.parse.quote(clean_query)}.json"
-        req = urllib.request.Request(search_url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(search_url, headers=BROWSER_HEADERS)
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             data = json.loads(resp.read().decode())
             metas = data.get("metas", [])
@@ -200,7 +203,7 @@ async def search_stremio_torrents(query: str, limit: int = 10) -> list[TorrentSt
             debrid_config = getattr(config, "TORRENTIO_CONFIG", "torbox=90f73123-7565-4ae3-b672-aa96bc026c50")
             prefix = f"{debrid_config}/" if debrid_config else ""
             torrentio_url = f"https://torrentio.strem.fun/{prefix}stream/movie/{imdb_id}.json"
-            req = urllib.request.Request(torrentio_url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(torrentio_url, headers=BROWSER_HEADERS)
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 tdata = json.loads(resp.read().decode())
                 streams = tdata.get("streams", [])
@@ -266,7 +269,7 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
 
     for cat_type, url in endpoints:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
             with urllib.request.urlopen(req, timeout=4.0) as resp:
                 data = json.loads(resp.read().decode())
                 metas = data.get("metas", [])
@@ -317,7 +320,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
 
     meta_data = {}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(url, headers=BROWSER_HEADERS)
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             data = json.loads(resp.read().decode())
             meta_data = data.get("meta", {})
@@ -407,7 +410,7 @@ def get_stremio_streams_sync(
 
     for url in urls_to_try:
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            req = urllib.request.Request(url, headers=BROWSER_HEADERS)
             with urllib.request.urlopen(req, timeout=5.0) as resp:
                 tdata = json.loads(resp.read().decode())
                 raw_streams = tdata.get("streams", [])
