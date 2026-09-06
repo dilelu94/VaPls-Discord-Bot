@@ -91,10 +91,50 @@ def is_torrent_input(text: str) -> bool:
     return False
 
 
+def resolve_torbox_url(url: str) -> Optional[str]:
+    """Resolves a torrentio/torbox resolve URL directly using TorBox official API."""
+    if "resolve/torbox/" not in url:
+        return None
+    try:
+        parts = url.split("resolve/torbox/")[1].split("/")
+        token = parts[0]
+        infohash = parts[1].lower()
+
+        req = urllib.request.Request(
+            f"https://api.torbox.app/v1/api/torrents/mylist?hash={infohash}",
+            headers={"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            data = json.loads(resp.read().decode())
+            torrents = data.get("data", [])
+            matched = next((t for t in torrents if str(t.get("hash", "")).lower() == infohash), None)
+            if not matched:
+                return None
+            torrent_id = matched.get("id")
+
+        req_dl = urllib.request.Request(
+            f"https://api.torbox.app/v1/api/torrents/requestdl?token={token}&torrent_id={torrent_id}",
+            headers={"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req_dl, timeout=5.0) as resp:
+            dldata = json.loads(resp.read().decode())
+            link = dldata.get("data")
+            if link and link.startswith("http"):
+                log.info("[TORBOX RESOLVE API] Successfully resolved %s -> %s", infohash[:8], link)
+                return link
+    except Exception as e:
+        log.warning("[TORBOX RESOLVE API] Error resolving %s: %s", url, e)
+    return None
+
+
 def resolve_redirect_url(url: str) -> str:
     """Follow HTTP 302 redirects to find the direct CDN stream URL."""
     if not url or not url.startswith(("http://", "https://")):
         return url
+    if "resolve/torbox/" in url:
+        tb_res = resolve_torbox_url(url)
+        if tb_res:
+            return tb_res
     try:
         req = urllib.request.Request(
             url,
