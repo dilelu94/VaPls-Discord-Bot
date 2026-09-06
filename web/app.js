@@ -344,24 +344,67 @@ document.addEventListener('DOMContentLoaded', () => {
     const season = seasonSelect.value ? parseInt(seasonSelect.value) : 1;
     const episode = episodeSelect.value ? parseInt(episodeSelect.value) : 1;
 
+    let streams = [];
+
     try {
       const url = `/api/stremio/streams?id=${encodeURIComponent(currentMeta.id)}&type=${encodeURIComponent(currentMeta.type)}&season=${season}&episode=${episode}&imdb_id=${encodeURIComponent(currentMeta.imdb_id || '')}`;
       const resp = await fetch(url);
-      if (!resp.ok) throw new Error('Failed to fetch streams');
-      const streams = await resp.json();
-
-      streamLoader.style.display = 'none';
-
-      if (!streams || !streams.length) {
-        streamList.innerHTML = '<div style="padding: 12px; color: var(--text-muted);">No se encontraron enlaces de streaming para esta opción.</div>';
-        return;
+      if (resp.ok) {
+        streams = await resp.json();
       }
+    } catch (e) {}
 
-      renderStreams(streams);
-    } catch (e) {
-      streamLoader.style.display = 'none';
-      streamList.innerHTML = '<div style="padding: 12px; color: var(--accent-pink);">Error al obtener streams.</div>';
+    // Fallback: If server returned no streams, fetch directly from client browser
+    if (!streams || !streams.length) {
+      try {
+        const debrid = 'torbox=90f73123-7565-4ae3-b672-aa96bc026c50';
+        const targetId = currentMeta.imdb_id || (currentMeta.id && currentMeta.id.startsWith('tt') ? currentMeta.id : null);
+        let clientUrl = '';
+        if (targetId) {
+          clientUrl = currentMeta.type === 'movie'
+            ? `https://torrentio.strem.fun/${debrid}/stream/movie/${targetId}.json`
+            : `https://torrentio.strem.fun/${debrid}/stream/series/${targetId}:${season}:${episode}.json`;
+        } else if (currentMeta.id && currentMeta.id.startsWith('kitsu:')) {
+          clientUrl = `https://torrentio.strem.fun/${debrid}/stream/series/${currentMeta.id}:${episode}.json`;
+        }
+
+        if (clientUrl) {
+          const clientResp = await fetch(clientUrl);
+          if (clientResp.ok) {
+            const cdata = await clientResp.json();
+            const rawStreams = cdata.streams || [];
+            streams = rawStreams.map(s => {
+              const directUrl = s.url || '';
+              const infohash = s.infoHash || '';
+              const titleRaw = s.title || s.name || 'Torrent Stream';
+              const lines = titleRaw.split('\n').map(l => l.trim()).filter(Boolean);
+              const mainTitle = lines[0] || 'Torrent Stream';
+              const magnet = infohash ? `magnet:?xt=urn:btih:${infohash}&dn=${encodeURIComponent(mainTitle)}` : '';
+              return {
+                name: s.name || 'Torrentio',
+                title: mainTitle,
+                quality: mainTitle.includes('2160P') || mainTitle.includes('4K') ? '4K' : (mainTitle.includes('1080P') ? '1080p' : 'HD'),
+                seeders: -1,
+                size: '',
+                details: lines.slice(1).join(' '),
+                url: directUrl || magnet,
+                infohash: infohash || 'torbox',
+                is_direct: directUrl.includes('torrentio.strem.fun/resolve/torbox/') || directUrl.includes('tb-cdn')
+              };
+            });
+          }
+        }
+      } catch (err) {}
     }
+
+    streamLoader.style.display = 'none';
+
+    if (!streams || !streams.length) {
+      streamList.innerHTML = '<div style="padding: 12px; color: var(--text-muted);">No se encontraron enlaces de streaming para esta opción.</div>';
+      return;
+    }
+
+    renderStreams(streams);
   }
 
   function renderStreams(streams) {

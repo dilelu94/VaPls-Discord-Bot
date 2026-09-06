@@ -354,23 +354,31 @@ def get_stremio_streams_sync(
         meta = get_stremio_meta_sync(item_type, item_id)
         series_imdb = meta.get("imdb_id")
 
-    urls_to_try = []
-    if series_imdb:
-        if item_type == "movie":
-            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/movie/{series_imdb}.json")
-            urls_to_try.append(f"https://torrentio.strem.fun/stream/movie/{series_imdb}.json")
-        elif item_type == "series":
-            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{series_imdb}:{season}:{episode}.json")
-            urls_to_try.append(f"https://torrentio.strem.fun/stream/series/{series_imdb}:{season}:{episode}.json")
-        else: # anime or all
-            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{series_imdb}:{season}:{episode}.json")
-            urls_to_try.append(f"https://torrentio.strem.fun/stream/series/{series_imdb}:{season}:{episode}.json")
-            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/movie/{series_imdb}.json")
-            urls_to_try.append(f"https://torrentio.strem.fun/stream/movie/{series_imdb}.json")
+    provider_bases = [
+        "https://knightcrawler.elfhosted.com/",
+        "https://comet.elfhosted.com/",
+        "https://mediafusion.elfhosted.com/",
+        "https://torrentio.strem.fun/",
+    ]
 
-    if item_id.startswith("kitsu:"):
-        urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{item_id}:{episode}.json")
-        urls_to_try.append(f"https://torrentio.strem.fun/stream/series/{item_id}:{episode}.json")
+    urls_to_try = []
+    for b in provider_bases:
+        if series_imdb:
+            if item_type == "movie":
+                urls_to_try.append(f"{b}{prefix}stream/movie/{series_imdb}.json")
+                urls_to_try.append(f"{b}stream/movie/{series_imdb}.json")
+            elif item_type == "series":
+                urls_to_try.append(f"{b}{prefix}stream/series/{series_imdb}:{season}:{episode}.json")
+                urls_to_try.append(f"{b}stream/series/{series_imdb}:{season}:{episode}.json")
+            else: # anime or all
+                urls_to_try.append(f"{b}{prefix}stream/series/{series_imdb}:{season}:{episode}.json")
+                urls_to_try.append(f"{b}stream/series/{series_imdb}:{season}:{episode}.json")
+                urls_to_try.append(f"{b}{prefix}stream/movie/{series_imdb}.json")
+                urls_to_try.append(f"{b}stream/movie/{series_imdb}.json")
+
+        if item_id.startswith("kitsu:"):
+            urls_to_try.append(f"{b}{prefix}stream/series/{item_id}:{episode}.json")
+            urls_to_try.append(f"{b}stream/series/{item_id}:{episode}.json")
 
     streams_out = []
     seen_urls = set()
