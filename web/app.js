@@ -13,7 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Session Token Security
   const urlParams = new URLSearchParams(window.location.search);
-  const sessionToken = urlParams.get('token') || '';
+  let sessionToken = urlParams.get('token') || '';
+  if (!sessionToken) {
+    const pathMatch = window.location.pathname.match(/\/stremio\/([a-f0-9]{32})/i);
+    if (pathMatch) sessionToken = pathMatch[1];
+  }
 
   async function apiFetch(url, options = {}) {
     options.headers = options.headers || {};
@@ -29,7 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (resp.status === 403) {
       let errMsg = '🔒 Sesión expirada o inválida. Volvé a ejecutar /stream stremio en Discord.';
       try {
-        const data = await resp.json();
+        const cloned = resp.clone();
+        const data = await cloned.json();
         if (data.error) errMsg = data.error;
       } catch (e) {}
       showToast(errMsg);
