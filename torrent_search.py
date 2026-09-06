@@ -86,6 +86,27 @@ def is_torrent_input(text: str) -> bool:
     return False
 
 
+def resolve_redirect_url(url: str) -> str:
+    """Follow HTTP 302 redirects to find the direct CDN stream URL."""
+    if not url or not url.startswith(("http://", "https://")):
+        return url
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            },
+        )
+        with urllib.request.urlopen(req, timeout=6.0) as resp:
+            final_url = resp.geturl()
+            if final_url and final_url != url and not final_url.endswith(("/configure", ".legal/")):
+                log.info("[STREAM RESOLVE] Followed redirect: %s -> %s", url, final_url)
+                return final_url
+    except Exception as e:
+        log.warning("[STREAM RESOLVE] Redirect lookup for %s failed: %s", url, e)
+    return url
+
+
 def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
     """Resolves an input string to a standardized magnet URI or direct URL.
 
@@ -103,7 +124,8 @@ def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
             if unquoted.endswith((".mkv", ".mp4", ".avi", ".mov")):
                 title = unquoted
                 break
-        return raw, title
+        resolved = resolve_redirect_url(raw)
+        return resolved, title
 
     # Case 2: Pure 40-char infohash
     if is_infohash(raw):
