@@ -394,6 +394,8 @@ def get_stremio_streams_sync(
                     infohash = s.get("infoHash", "")
                     if not direct_url and not infohash:
                         continue
+                    if direct_url and ("/configure" in direct_url or "invalid_config" in direct_url):
+                        continue
                     if direct_url and direct_url in seen_urls:
                         continue
                     if direct_url:

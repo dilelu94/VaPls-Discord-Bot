@@ -151,6 +151,9 @@ class GoLiveStream:
             "HTTP Error 400",
             "HTTP Error 403",
             "HTTP Error 404",
+            "Unsupported URL",
+            "is not a valid URL",
+            "ExtractorError",
         )
 
         is_direct = (
