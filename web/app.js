@@ -529,27 +529,9 @@ document.addEventListener('DOMContentLoaded', () => {
     startStreamBtn.disabled = true;
     startStreamBtn.textContent = '⏳ Conectando Go Live...';
 
-    let finalUrl = selectedStreamUrl;
-    if (finalUrl && (finalUrl.includes('torrentio.strem.fun/resolve/') || finalUrl.includes('elfhosted.com'))) {
-      startStreamBtn.textContent = '⚡ Resolviendo enlace CDN...';
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 6000);
-        const res = await fetch(finalUrl, { signal: controller.signal });
-        if (res.ok && res.url && !res.url.includes('torrentio.strem.fun') && !res.url.includes('/configure')) {
-          console.log('[CDN Resolved in Browser]:', res.url);
-          finalUrl = res.url;
-        }
-        controller.abort();
-        clearTimeout(timeoutId);
-      } catch (err) {
-        console.warn('[Browser CDN resolution fallback]:', err);
-      }
-    }
-
     const payload = {
       token: sessionToken,
-      url: finalUrl,
+      url: selectedStreamUrl,
       title: currentMeta ? currentMeta.title : 'Stream Stremio',
       channel_id: channelId,
       guild_id: guildId,
@@ -567,7 +549,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const res = await resp.json();
       console.log('[Stremio Transmit Response]', resp.status, res);
 
-      if (resp.ok && res.status === 'ok') {
+      if (resp.ok && (res.started || res.status === 'ok' || res.success)) {
         showToast('🚀 ¡Transmisión Go Live iniciada en Discord!');
         hideModal();
       } else {
