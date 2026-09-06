@@ -164,8 +164,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function fetchVoiceChannels() {
+    const voiceStatusPill = document.getElementById('voiceStatusPill');
     try {
       const resp = await apiFetch('/api/stremio/voice-channels');
+      if (resp.status === 403) {
+        voiceStatusText.textContent = '🔒 Sesión expirada';
+        if (voiceStatusPill) voiceStatusPill.setAttribute('title', 'Debés ejecutar /stream stremio en Discord');
+        voiceChannelSelect.innerHTML = '<option value="">🔒 Ejecutá /stream stremio en Discord</option>';
+        return;
+      }
       if (!resp.ok) throw new Error('Network error');
       const data = await resp.json();
       voiceChannels = data.channels || [];
@@ -188,20 +195,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const fullTooltipParts = [];
     const pillParts = [];
+    let defaultChannelId = null;
 
     voiceChannels.forEach(ch => {
       const members = ch.members || [];
       const memberCount = ch.members_count || members.length;
       const allMembersStr = members.join(', ');
-      fullTooltipParts.push(`${ch.name} (${memberCount}): ${allMembersStr || 'Sin nombres'}`);
+      fullTooltipParts.push(`${ch.name} (${memberCount} conectados): ${allMembersStr || 'Sin otros usuarios'}`);
 
       let truncatedMembers = '';
-      if (members.length <= 3) {
+      if (members.length === 0) {
+        truncatedMembers = '0 conectados';
+      } else if (members.length <= 3) {
         truncatedMembers = members.join(', ');
       } else {
         truncatedMembers = `${members.slice(0, 2).join(', ')} +${members.length - 2} más`;
       }
       pillParts.push(`${ch.name}: ${truncatedMembers}`);
+
+      if (ch.is_default && !defaultChannelId) {
+        defaultChannelId = ch.id;
+      }
     });
 
     const pillDisplay = pillParts.join(' | ');
@@ -216,18 +230,25 @@ document.addEventListener('DOMContentLoaded', () => {
       const members = ch.members || [];
       const allMembersStr = members.join(', ');
       let displayMembers = '';
-      if (members.length <= 3) {
-        displayMembers = members.join(', ');
-      } else {
-        displayMembers = `${members.slice(0, 2).join(', ')} +${members.length - 2} más`;
+      if (members.length > 0) {
+        if (members.length <= 3) {
+          displayMembers = members.join(', ');
+        } else {
+          displayMembers = `${members.slice(0, 2).join(', ')} +${members.length - 2} más`;
+        }
       }
       const optionLabel = `🔊 ${ch.guild_name ? ch.guild_name + ' → ' : ''}${ch.name}${displayMembers ? ' (' + displayMembers + ')' : ''}`;
+      const isSelected = ch.id === defaultChannelId ? 'selected' : '';
       return `
-        <option value="${esc(ch.id)}" data-guild="${esc(ch.guild_id)}" title="${esc(ch.name)}: ${esc(allMembersStr)}">
+        <option value="${esc(ch.id)}" data-guild="${esc(ch.guild_id)}" ${isSelected} title="${esc(ch.name)}: ${esc(allMembersStr)}">
           ${esc(optionLabel)}
         </option>
       `;
     }).join('');
+
+    if (defaultChannelId) {
+      voiceChannelSelect.value = defaultChannelId;
+    }
   }
 
   async function performSearch(query, filter) {

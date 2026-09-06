@@ -2164,6 +2164,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def stremioIndex(request: web.Request) -> web.Response:
         token = request.query.get("token", "").strip()
+        if not token and "token" in request.match_info:
+            token = request.match_info["token"].strip()
+
         sess = session_manager.get_session(token)
         if not sess:
             return web.Response(
@@ -2178,6 +2181,18 @@ def makeApp(bot: discord.Bot) -> web.Application:
             with open(index_path, "r", encoding="utf-8") as f:
                 return web.Response(text=f.read(), content_type="text/html")
         return web.Response(status=404, text="Web UI not found")
+
+    async def stremioStatic(request: web.Request) -> web.Response:
+        filename = request.match_info.get("filename", "")
+        if not filename or filename == "index.html":
+            return await stremioIndex(request)
+
+        safe_name = os.path.basename(filename)
+        web_dir = os.path.join(os.path.dirname(__file__), "web")
+        file_path = os.path.join(web_dir, safe_name)
+        if os.path.isfile(file_path):
+            return web.FileResponse(file_path)
+        return web.Response(status=404, text="File not found")
 
     async def apiStremioSearch(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
@@ -2247,17 +2262,24 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if not _check_stremio_rate_limit(request):
             return web.json_response({"error": "too many requests"}, status=429)
 
-        if not _validate_stremio_session(request):
+        sess = _validate_stremio_session(request)
+        if not sess:
             return web.json_response(
                 {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
                 status=403,
             )
 
         channels_out = []
+        added_ids = set()
+
         for g in bot.guilds:
             for ch in g.voice_channels:
-                non_bots = [m for m in ch.members if not m.bot and m.id not in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}]
-                if non_bots:
+                non_bots = [
+                    m for m in ch.members
+                    if not m.bot and m.id not in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
+                ]
+                if non_bots or ch.id == sess.channel_id:
+                    added_ids.add(ch.id)
                     channels_out.append({
                         "id": str(ch.id),
                         "name": ch.name,
@@ -2265,7 +2287,31 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         "guild_name": g.name,
                         "members_count": len(non_bots),
                         "members": [str(getattr(m, "display_name", None) or getattr(m, "name", "Usuario")) for m in non_bots],
+                        "is_default": (ch.id == sess.channel_id),
                     })
+
+        # Ensure session channel is included if missed in guilds loop
+        if sess.channel_id not in added_ids:
+            try:
+                ch = bot.get_channel(sess.channel_id)
+                if ch:
+                    g = getattr(ch, "guild", None)
+                    non_bots = [
+                        m for m in getattr(ch, "members", [])
+                        if not m.bot and m.id not in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
+                    ]
+                    channels_out.insert(0, {
+                        "id": str(ch.id),
+                        "name": ch.name,
+                        "guild_id": str(g.id) if g else str(sess.guild_id),
+                        "guild_name": g.name if g else "Servidor de Discord",
+                        "members_count": len(non_bots),
+                        "members": [str(getattr(m, "display_name", None) or getattr(m, "name", "Usuario")) for m in non_bots],
+                        "is_default": True,
+                    })
+            except Exception as e:
+                logger.warning("[STREMIO VOICE CHANNELS] Could not fetch channel %s: %s", sess.channel_id, e)
+
         return web.json_response({"channels": channels_out})
 
     async def apiStremioPlay(request: web.Request) -> web.Response:
@@ -2354,7 +2400,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     app.router.add_get("/stremio", stremioIndex)
     app.router.add_get("/stremio/", stremioIndex)
-    app.router.add_static("/stremio", os.path.join(os.path.dirname(__file__), "web"))
+    app.router.add_get("/stremio/index.html", stremioIndex)
+    app.router.add_get("/stremio/{token:[a-f0-9]{32}}", stremioIndex)
+    app.router.add_get("/stremio/{filename}", stremioStatic)
 
     app.router.add_get("/api/stremio/search", apiStremioSearch)
     app.router.add_get("/api/stremio/meta", apiStremioMeta)
