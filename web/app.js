@@ -529,12 +529,19 @@ document.addEventListener('DOMContentLoaded', () => {
     startStreamBtn.disabled = true;
     startStreamBtn.textContent = '⏳ Conectando Go Live...';
 
+    const seasonVal = seasonSelect && seasonSelect.value ? parseInt(seasonSelect.value) : 1;
+    const episodeVal = episodeSelect && episodeSelect.value ? parseInt(episodeSelect.value) : 1;
+
     const payload = {
       token: sessionToken,
       url: selectedStreamUrl,
       title: currentMeta ? currentMeta.title : 'Stream Stremio',
       channel_id: channelId,
       guild_id: guildId,
+      imdb_id: currentMeta ? (currentMeta.imdb_id || currentMeta.id) : null,
+      type: currentMeta ? currentMeta.type : 'movie',
+      season: seasonVal,
+      episode: episodeVal,
     };
 
     console.log('[Stremio Transmit Request]', payload);

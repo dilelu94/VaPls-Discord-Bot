@@ -2388,9 +2388,16 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.warning("[STREMIO TRANSMIT] Could not resolve guild_id for channel_id %s", channel_id)
             return web.json_response({"error": "could not resolve guild_id for channel"}, status=400)
 
+        imdb_id = body.get("imdb_id")
+        item_type = body.get("type")
+        season = body.get("season")
+        episode = body.get("episode")
+
         logger.info(
-            "[STREMIO TRANSMIT] Transmit requested: title='%s' | channel_id=%s | guild_id=%s | url='%s'",
+            "[STREMIO TRANSMIT] Transmit requested: title='%s' | imdb_id=%s | type=%s | channel_id=%s | guild_id=%s | url='%s'",
             raw_title,
+            imdb_id,
+            item_type,
             channel_id,
             guild_id,
             stream_url,
@@ -2410,6 +2417,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "url": stream_url,
                     "title": raw_title,
                     "channel_name": raw_title,
+                    "imdb_id": imdb_id,
+                    "type": item_type,
+                    "season": season,
+                    "episode": episode,
                 }
                 async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=90) as resp:
                     data = await resp.json()

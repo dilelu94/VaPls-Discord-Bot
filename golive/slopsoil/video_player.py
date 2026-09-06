@@ -557,8 +557,15 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 60.0) -> str
     return None
 
 
-def _fetch_opensubtitles_file(query: str, timeout: float = 6.0) -> str | None:
-    """Fetch Spanish subtitle track from OpenSubtitles REST API as fallback external subtitle."""
+def _fetch_opensubtitles_file(
+    query: str | None = None,
+    imdb_id: str | None = None,
+    item_type: str | None = "movie",
+    season: int | None = 1,
+    episode: int | None = 1,
+    timeout: float = 6.0,
+) -> str | None:
+    """Fetch Spanish subtitle track using IMDb ID or Cinemeta title search + Stremio OpenSubtitles v3 addon."""
     import urllib.request
     import urllib.parse
     import json
@@ -567,52 +574,80 @@ def _fetch_opensubtitles_file(query: str, timeout: float = 6.0) -> str | None:
     import uuid
     import re
 
-    if not query or len(query.strip()) < 3:
+    resolved_imdb = imdb_id
+    resolved_type = item_type or "movie"
+
+    if not resolved_imdb and query and len(query.strip()) >= 2:
+        clean = re.sub(r"[._]", " ", query.strip())
+        words = [
+            w for w in clean.split()
+            if w.lower() not in (
+                "1080p", "720p", "4k", "2160p", "web", "web-dl", "webrip", "hdrip",
+                "h264", "hevc", "x264", "x265", "aac", "multi", "repack", "proper",
+                "quintessence", "varyg", "eztv", "eztvx", "to", "mkv", "mp4", "avi", "stream"
+            )
+        ]
+        clean_query = " ".join(words) or query.strip()
+        enc = urllib.parse.quote(clean_query)
+        for cat in ("series", "movie"):
+            url_cat = f"https://v3-cinemeta.strem.io/catalog/{cat}/top/search={enc}.json"
+            try:
+                req = urllib.request.Request(url_cat, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                    metas = data.get("metas", [])
+                    if metas:
+                        resolved_imdb = metas[0].get("imdb_id") or metas[0].get("id")
+                        resolved_type = cat
+                        log.info("[CINEMETA] Search %r -> match %r (IMDb: %s, type: %s)", clean_query, metas[0].get("name"), resolved_imdb, cat)
+                        break
+            except Exception as exc:
+                log.debug("[CINEMETA] Catalog %s search error for %r: %s", cat, clean_query, exc)
+
+    if not resolved_imdb:
+        log.info("[OPENSUBTITLES] No IMDb ID available or resolved for query %r", query)
         return None
 
-    clean = re.sub(r"[._]", " ", query.strip())
-    words = [
-        w for w in clean.split()
-        if w.lower() not in (
-            "1080p", "720p", "4k", "2160p", "web", "web-dl", "webrip", "hdrip",
-            "h264", "hevc", "x264", "x265", "aac", "multi", "repack", "proper",
-            "quintessence", "varyg", "eztv", "eztvx", "to", "mkv", "mp4", "avi"
-        )
-    ]
-    clean_query = " ".join(words)
-    if not clean_query:
-        clean_query = query.strip()
+    sub_key = str(resolved_imdb)
+    if resolved_type == "series" and ":" not in sub_key:
+        s_num = season or 1
+        e_num = episode or 1
+        sub_key = f"{sub_key}:{s_num}:{e_num}"
 
-    enc_query = urllib.parse.quote(clean_query)
-    url = f"https://rest.opensubtitles.org/search/query-{enc_query}/sublanguageid-spa"
+    sub_url = f"https://opensubtitles-v3.strem.io/subtitles/{resolved_type}/{sub_key}.json"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "TemporaryUserAgent"})
+        req = urllib.request.Request(sub_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
-            if not isinstance(data, list) or not data:
-                log.info("[OPENSUBTITLES] No Spanish subtitles found for query %r", clean_query)
+            subs = data.get("subtitles", [])
+            spa_subs = [s for s in subs if str(s.get("lang", "")).lower() in ("spa", "es", "spanish", "spa-la", "es-es", "es-mx")]
+            if not spa_subs:
+                log.info("[OPENSUBTITLES] No Spanish subtitles found out of %d total tracks for %s", len(subs), sub_key)
                 return None
 
-            best = data[0]
-            dl_link = best.get("SubDownloadLink")
-            if not dl_link:
+            best = spa_subs[0]
+            dl_url = best.get("url")
+            if not dl_url:
                 return None
 
-            log.info("[OPENSUBTITLES] Found Spanish subtitle: %s -> %s", best.get("SubFileName"), dl_link)
-            req_dl = urllib.request.Request(dl_link, headers={"User-Agent": "TemporaryUserAgent"})
+            log.info("[OPENSUBTITLES] Found Spanish subtitle: %s -> %s", best.get("subtitleFileName") or best.get("id"), dl_url)
+            req_dl = urllib.request.Request(dl_url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req_dl, timeout=timeout) as dl_resp:
-                gz_bytes = dl_resp.read()
-                srt_text = gzip.decompress(gz_bytes).decode("utf-8", errors="ignore")
+                raw_bytes = dl_resp.read()
+                if raw_bytes[:2] == b"\x1f\x8b":
+                    srt_text = gzip.decompress(raw_bytes).decode("utf-8", errors="ignore")
+                else:
+                    srt_text = raw_bytes.decode("utf-8", errors="ignore")
 
                 sub_path = os.path.join(tempfile.gettempdir(), f"vapls_opensub_{uuid.uuid4().hex[:8]}.srt")
                 with open(sub_path, "w", encoding="utf-8") as f:
                     f.write(srt_text)
 
                 if os.path.exists(sub_path) and os.path.getsize(sub_path) > 0:
-                    log.info("[OPENSUBTITLES] Extracted %d bytes to %s", os.path.getsize(sub_path), sub_path)
+                    log.info("[OPENSUBTITLES] Downloaded %d bytes to %s", os.path.getsize(sub_path), sub_path)
                     return sub_path
     except Exception as exc:
-        log.warning("[OPENSUBTITLES] Failed to fetch subtitles for %r: %s", clean_query, exc)
+        log.warning("[OPENSUBTITLES] Failed to fetch subtitles for key %s: %s", sub_key, exc)
     return None
 
 
@@ -937,6 +972,11 @@ class H264VideoPlayer(threading.Thread):
         audio_track: int = 0,
         subtitle_track: int = -1,
         subtitle_file: str | None = None,
+        title: str = "Stream",
+        imdb_id: str | None = None,
+        item_type: str | None = None,
+        season: int | None = None,
+        episode: int | None = None,
     ) -> None:
         super().__init__(name="H264VideoPlayer", daemon=True)
         self._url = url
@@ -945,6 +985,11 @@ class H264VideoPlayer(threading.Thread):
         self._audio_track = audio_track
         self._subtitle_track = subtitle_track
         self._subtitle_file = subtitle_file
+        self._title = title
+        self._imdb_id = imdb_id
+        self._item_type = item_type
+        self._season = season
+        self._episode = episode
         self._end = threading.Event()
         self._proc: subprocess.Popen | None = None
 
@@ -1128,7 +1173,13 @@ class H264VideoPlayer(threading.Thread):
             sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=8.0)
             if not sub_file:
                 search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
-                sub_file = _fetch_opensubtitles_file(search_q)
+                sub_file = _fetch_opensubtitles_file(
+                    query=search_q,
+                    imdb_id=getattr(self, "_imdb_id", None),
+                    item_type=getattr(self, "_item_type", None) or "movie",
+                    season=getattr(self, "_season", None) or 1,
+                    episode=getattr(self, "_episode", None) or 1,
+                )
 
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")

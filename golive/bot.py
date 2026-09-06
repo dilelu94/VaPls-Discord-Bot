@@ -83,7 +83,23 @@ client._connection.parsers["STREAM_SERVER_UPDATE"] = _parse_stream_server_update
 client._connection.parsers["STREAM_CREATE"] = _parse_stream_create
 
 class GoLiveStream:
-    def __init__(self, bot, guild_id, channel_id, vc, url, start_sec: float = 0.0, audio_track: int = 0, subtitle_track: int = -1, subtitle_file: Optional[str] = None):
+    def __init__(
+        self,
+        bot,
+        guild_id,
+        channel_id,
+        vc,
+        url,
+        start_sec: float = 0.0,
+        audio_track: int = 0,
+        subtitle_track: int = -1,
+        subtitle_file: Optional[str] = None,
+        title: Optional[str] = None,
+        imdb_id: Optional[str] = None,
+        item_type: Optional[str] = None,
+        season: Optional[int] = None,
+        episode: Optional[int] = None,
+    ):
         self.bot = bot
         self.guild_id = guild_id
         self.channel_id = channel_id
@@ -93,6 +109,11 @@ class GoLiveStream:
         self.audio_track = audio_track
         self.subtitle_track = subtitle_track
         self.subtitle_file = subtitle_file
+        self.title = title or "Stream"
+        self.imdb_id = imdb_id
+        self.item_type = item_type
+        self.season = season
+        self.episode = episode
         self.conn = None
         self.video_player = None
         self.audio_sender = None
@@ -232,7 +253,8 @@ class GoLiveStream:
         
         target_url, title, is_live = await self._resolve_stream_url(self.url)
         self.target_url = target_url
-        self.title = title
+        if not self.title or self.title == "Stream":
+            self.title = title
         self.is_live = is_live
 
         log.info("[STREAM] Establishing GoLive connection...")
@@ -259,6 +281,10 @@ class GoLiveStream:
             audio_track=self.audio_track,
             subtitle_track=self.subtitle_track,
             subtitle_file=self.subtitle_file,
+            imdb_id=self.imdb_id,
+            item_type=self.item_type,
+            season=self.season,
+            episode=self.episode,
         )
         self.conn = getattr(client, "live_connections", {}).get(self.guild_id)
         self.video_player = getattr(client, "video_players", {}).get(self.guild_id)
@@ -656,20 +682,27 @@ async def _relay_stream(request: web.Request) -> web.Response:
         start_sec = float(data.get("start_sec", 0.0))
         audio_track = int(data.get("audio_track", 0))
         subtitle_track = int(data.get("subtitle_track", -1))
-        subtitle_file = data.get("subtitle_file")
+        stream_title = str(data.get("channel_name", "") or data.get("title", "")).strip() or "Stream"
+        imdb_id = str(data.get("imdb_id", "")).strip() or None
+        item_type = str(data.get("type", "") or data.get("item_type", "")).strip() or None
+        season = int(data["season"]) if data.get("season") is not None else None
+        episode = int(data["episode"]) if data.get("episode") is not None else None
     except Exception as e:
         log.warning("[STREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
     if not url:
         log.warning("[STREAM] empty url")
         return web.json_response({"error": "empty url"}, status=400)
-    stream_title = str(data.get("channel_name", "")).strip() or "Stream"
     log.info(
-        "[STREAM] guild=%s channel=%s url=%s title=%s start_sec=%.1f audio_track=%d subtitle_track=%d subtitle_file=%s",
+        "[STREAM] guild=%s channel=%s url=%s title=%s imdb=%s type=%s s=%s e=%s start_sec=%.1f audio_track=%d subtitle_track=%d subtitle_file=%s",
         guild_id,
         channel_id,
         url[:120],
         stream_title,
+        imdb_id,
+        item_type,
+        season,
+        episode,
         start_sec,
         audio_track,
         subtitle_track,
@@ -726,7 +759,11 @@ async def _relay_stream(request: web.Request) -> web.Response:
             task.cancel()
         await _set_nickname(guild, f"GoLive - {stream_title}")
 
-    stream = GoLiveStream(client, guild_id, channel_id, vc, url, start_sec=start_sec, audio_track=audio_track, subtitle_track=subtitle_track, subtitle_file=subtitle_file)
+    stream = GoLiveStream(
+        client, guild_id, channel_id, vc, url,
+        start_sec=start_sec, audio_track=audio_track, subtitle_track=subtitle_track, subtitle_file=subtitle_file,
+        title=stream_title, imdb_id=imdb_id, item_type=item_type, season=season, episode=episode,
+    )
     try:
         await stream.start()
     except Exception as e:

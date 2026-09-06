@@ -136,6 +136,7 @@ async def start_stream(
         video_player = H264VideoPlayer(
             url=url, voice_client=vc, fps=_stream_fps(),
             live=live, audio=audio, probe_size=probe_size,
+            title=title,
         )
         bot.video_players[guild.id] = video_player
         video_player.start()
@@ -217,6 +218,10 @@ async def start_live_stream(
     audio_track: int = 0,
     subtitle_track: int = -1,
     subtitle_file: str | None = None,
+    imdb_id: str | None = None,
+    item_type: str | None = None,
+    season: int | None = None,
+    episode: int | None = None,
 ) -> None:
     """
     Connect to voice and begin a go-live screenshare stream.
@@ -268,6 +273,7 @@ async def start_live_stream(
         url=url, voice_client=proxy_vc, fps=_stream_fps(),  # type: ignore[arg-type]
         live=live, audio=audio, probe_size=probe_size, start_time=start_time,
         audio_track=audio_track, subtitle_track=subtitle_track, subtitle_file=subtitle_file,
+        title=title, imdb_id=imdb_id, item_type=item_type, season=season, episode=episode,
     )
     bot.video_players[guild.id] = video_player
     video_player.start()
