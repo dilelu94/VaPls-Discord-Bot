@@ -43,9 +43,10 @@ def test_resolve_stremio_or_magnet_url_with_stremio_link():
         "8c03a030ad101b5d2c5102a5c0845bb41b9f2960/"
         "%5BAnime%20Time%5D%20JoJo's%20Bizarre%20Adventure%20Part%206%20-%20Stone%20Ocean%20-%2026.mkv"
     )
-    resolved, title = resolve_stremio_or_magnet_url(stremio_url)
-    assert resolved.startswith("http")
-    assert "JoJo" in title
+    with patch("torrent_search.resolve_torbox_url", return_value="https://nexus-100.tb-cdn.cx/dld/test.mkv"):
+        resolved, title = resolve_stremio_or_magnet_url(stremio_url)
+        assert resolved.startswith("http")
+        assert "JoJo" in title
 
 
 
