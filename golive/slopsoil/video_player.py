@@ -1040,7 +1040,7 @@ class H264VideoPlayer(threading.Thread):
         sub_file = getattr(self, "_subtitle_file", None)
         if not sub_file and sub_idx < 0 and is_url:
             try:
-                import sys, os
+                import sys
                 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
                 if root_dir not in sys.path:
                     sys.path.insert(0, root_dir)
