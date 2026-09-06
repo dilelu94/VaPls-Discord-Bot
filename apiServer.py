@@ -2347,20 +2347,26 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.warning("[STREMIO TRANSMIT] Invalid or unsafe stream_url: '%s'", raw_url)
             return web.json_response({"error": "invalid or unsafe stream url"}, status=400)
 
-        if stream_url.startswith(("http://", "https://")) and not ("tb-cdn" in stream_url or stream_url.endswith((".mp4", ".mkv", ".avi", ".m3u8"))):
-            from torrent_search import resolve_redirect_url
-            try:
-                resolved = await asyncio.to_thread(resolve_redirect_url, stream_url)
-                if resolved and ("/configure" in resolved or ".legal/" in resolved):
-                    logger.warning("[STREMIO TRANSMIT] Stream URL redirected to configuration page: %s", resolved)
-                    return web.json_response(
-                        {"error": "El enlace seleccionado no contiene video o requiere configuración en Stremio."},
-                        status=400,
-                    )
-                if resolved:
-                    stream_url = resolved
-            except Exception as e:
-                logger.warning("[STREMIO TRANSMIT] Redirect resolution error: %s", e)
+        if stream_url.startswith(("http://", "https://")):
+            needs_resolve = (
+                "resolve/" in stream_url.lower()
+                or "torbox" in stream_url.lower()
+                or not ("tb-cdn" in stream_url or stream_url.endswith((".mp4", ".mkv", ".avi", ".m3u8")))
+            )
+            if needs_resolve and "tb-cdn" not in stream_url:
+                from torrent_search import resolve_redirect_url
+                try:
+                    resolved = await asyncio.to_thread(resolve_redirect_url, stream_url)
+                    if resolved and ("/configure" in resolved or ".legal/" in resolved):
+                        logger.warning("[STREMIO TRANSMIT] Stream URL redirected to configuration page: %s", resolved)
+                        return web.json_response(
+                            {"error": "El enlace seleccionado no contiene video o requiere configuración en Stremio."},
+                            status=400,
+                        )
+                    if resolved:
+                        stream_url = resolved
+                except Exception as e:
+                    logger.warning("[STREMIO TRANSMIT] Redirect resolution error: %s", e)
 
         # Resolve guild_id automatically if missing
         guild_id = str(raw_guild_id).strip() if raw_guild_id else str(sess.guild_id or "")

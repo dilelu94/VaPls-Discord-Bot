@@ -133,6 +133,21 @@ class GoLiveStream:
         if not url.startswith(("http://", "https://")):
             return target_url, title, is_live
 
+        if ("resolve/" in url.lower() or "torbox" in url.lower()) and "tb-cdn" not in url:
+            try:
+                import sys, os
+                root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+                if root_dir not in sys.path:
+                    sys.path.insert(0, root_dir)
+                from torrent_search import resolve_redirect_url
+                resolved = resolve_redirect_url(url)
+                if resolved and resolved != url:
+                    log.info("[STREAM] Resolved stream URL in GoLive: %s -> %s", url[:60], resolved)
+                    url = resolved
+                    target_url = resolved
+            except Exception as re_err:
+                log.warning("[STREAM] Failed to resolve stream URL in GoLive %s: %s", url, re_err)
+
         from urllib.parse import urlparse
         import aiohttp
         from ytdlp import _yt_extract_url
