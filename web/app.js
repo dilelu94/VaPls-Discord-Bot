@@ -401,9 +401,16 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) {}
 
-    // Filter out configure/HTML pages
+    // Filter out configure/HTML pages and dummy broken streams
     if (Array.isArray(streams)) {
-      streams = streams.filter(s => s.url && !s.url.includes('/configure') && !s.url.includes('.legal/'));
+      streams = streams.filter(s => {
+        const titleLower = (s.title || '').toLowerCase();
+        const nameLower = (s.name || '').toLowerCase();
+        const url = s.url || '';
+        if (titleLower.includes('[❌]') || nameLower.includes('[❌]') || titleLower.includes('deprecated') || titleLower.includes('[😿]')) return false;
+        if (url.includes('/configure') || url.includes('.legal/') || url.includes('elfhosted.com/playback')) return false;
+        return true;
+      });
     }
 
     // Fallback: If server returned no streams, fetch directly from client browser

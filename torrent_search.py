@@ -380,9 +380,6 @@ def get_stremio_streams_sync(
         series_imdb = meta.get("imdb_id")
 
     provider_bases = [
-        "https://knightcrawler.elfhosted.com/",
-        "https://comet.elfhosted.com/",
-        "https://mediafusion.elfhosted.com/",
         "https://torrentio.strem.fun/",
     ]
 
@@ -417,9 +414,15 @@ def get_stremio_streams_sync(
                 for s in raw_streams:
                     direct_url = s.get("url", "")
                     infohash = s.get("infoHash", "")
+                    name_raw = str(s.get("name", ""))
+                    title_raw = str(s.get("title", name_raw or "Torrent Stream"))
+                    combined_check = f"{name_raw} {title_raw}".lower()
+
                     if not direct_url and not infohash:
                         continue
-                    if direct_url and ("/configure" in direct_url or "invalid_config" in direct_url):
+                    if "[❌]" in name_raw or "[❌]" in title_raw or "deprecated" in combined_check or "[😿]" in name_raw:
+                        continue
+                    if direct_url and ("/configure" in direct_url or "invalid_config" in direct_url or "elfhosted.com/playback" in direct_url):
                         continue
                     if direct_url and direct_url in seen_urls:
                         continue
