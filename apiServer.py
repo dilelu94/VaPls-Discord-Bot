@@ -33,6 +33,7 @@ from users import USERS
 import storyManager
 import transferCommand
 import tts
+from stremio_sessions import session_manager, StremioSession
 
 logger = logging.getLogger("apiServer")
 
@@ -2056,7 +2057,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/privacy", privacyPage)
     app.router.add_get("/delete-data", deleteDataPage)
 
-    # ---- Stremio & Anime Web UI Endpoints (Security Enhanced) ----
+    # ---- Stremio & Anime Web UI Endpoints (Security Enhanced with Token Gating) ----
     _stremio_rate_limit: dict[str, list[float]] = {}
 
     def _check_stremio_rate_limit(request: web.Request) -> bool:
@@ -2090,7 +2091,87 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return None
         return raw
 
+    def _validate_stremio_session(
+        request: web.Request, body_json: Optional[dict] = None
+    ) -> Optional[StremioSession]:
+        token = request.query.get("token")
+        if not token:
+            token = request.headers.get("X-Stremio-Token")
+        if not token and body_json and isinstance(body_json, dict):
+            token = body_json.get("token")
+        if not token:
+            return None
+        return session_manager.get_session(str(token).strip())
+
+    def _build_stremio_access_denied_html() -> str:
+        return """<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acceso Denegado - Stremio & Anime</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f0c20;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .card {
+    background: rgba(26, 22, 48, 0.85);
+    border: 1px solid rgba(139, 92, 246, 0.4);
+    border-radius: 16px;
+    padding: 40px 32px;
+    max-width: 480px;
+    width: 100%;
+    text-align: center;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(12px);
+  }
+  .icon { font-size: 54px; margin-bottom: 16px; }
+  h1 { font-size: 1.5rem; color: #f43f5e; margin-bottom: 12px; font-weight: 700; }
+  p { font-size: 0.95rem; color: #94a3b8; line-height: 1.5; margin-bottom: 20px; }
+  .cmd {
+    background: #090616;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 12px 18px;
+    font-family: monospace;
+    font-size: 1.1rem;
+    color: #a78bfa;
+    margin-bottom: 20px;
+    display: inline-block;
+  }
+  .footer { font-size: 0.8rem; color: #64748b; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">🔒</div>
+  <h1>Acceso Denegado / Enlace Expirado</h1>
+  <p>Este buscador interactivo requiere un token de acceso válido generado desde Discord por motivos de seguridad.</p>
+  <div class="cmd">/stream stremio</div>
+  <p>Ejecutá el comando en Discord para obtener un nuevo enlace válido por 24 horas.</p>
+  <div class="footer">VaPls Discord Bot &bull; Go Live Streaming</div>
+</div>
+</body>
+</html>"""
+
     async def stremioIndex(request: web.Request) -> web.Response:
+        token = request.query.get("token", "").strip()
+        sess = session_manager.get_session(token)
+        if not sess:
+            return web.Response(
+                status=403,
+                content_type="text/html",
+                text=_build_stremio_access_denied_html(),
+            )
+
         web_dir = os.path.join(os.path.dirname(__file__), "web")
         index_path = os.path.join(web_dir, "index.html")
         if os.path.exists(index_path):
@@ -2101,6 +2182,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
     async def apiStremioSearch(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
             return web.json_response({"error": "too many requests"}, status=429)
+
+        if not _validate_stremio_session(request):
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
 
         q = request.query.get("q", "").strip()[:100]
         q = re.sub(r"[\x00-\x1f\x7f]", "", q)
@@ -2115,6 +2202,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if not _check_stremio_rate_limit(request):
             return web.json_response({"error": "too many requests"}, status=429)
 
+        if not _validate_stremio_session(request):
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
+
         item_id = _clean_stremio_id(request.query.get("id", ""))
         item_type = _clean_stremio_type(request.query.get("type", "series"))
         if not item_id:
@@ -2126,6 +2219,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
     async def apiStremioStreams(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
             return web.json_response({"error": "too many requests"}, status=429)
+
+        if not _validate_stremio_session(request):
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
 
         item_id = _clean_stremio_id(request.query.get("id", ""))
         item_type = _clean_stremio_type(request.query.get("type", "series"))
@@ -2147,6 +2246,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
     async def apiStremioVoiceChannels(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
             return web.json_response({"error": "too many requests"}, status=429)
+
+        if not _validate_stremio_session(request):
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
 
         channels_out = []
         for g in bot.guilds:
@@ -2170,13 +2275,22 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         try:
             body = await request.json()
-            channel_id = str(body.get("channel_id", "")).strip()
-            raw_url = str(body.get("url", "")).strip()
-            raw_title = str(body.get("title", "Stream Stremio")).strip()[:120]
-            raw_guild_id = body.get("guild_id")
         except Exception as e:
             logger.warning("[STREMIO TRANSMIT] Invalid JSON payload from %s: %s", request.remote, e)
-            return web.json_response({"error": "invalid json payload"}, status=400)
+            body = {}
+
+        sess = _validate_stremio_session(request, body)
+        if not sess:
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
+
+        raw_channel_id = str(body.get("channel_id", "")).strip()
+        channel_id = raw_channel_id if raw_channel_id else str(sess.channel_id)
+        raw_url = str(body.get("url", "")).strip()
+        raw_title = str(body.get("title", "Stream Stremio")).strip()[:120]
+        raw_guild_id = body.get("guild_id")
 
         if not re.match(r"^\d{17,20}$", channel_id):
             logger.warning("[STREMIO TRANSMIT] Invalid channel_id: '%s'", channel_id)
@@ -2188,7 +2302,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return web.json_response({"error": "invalid or unsafe stream url"}, status=400)
 
         # Resolve guild_id automatically if missing
-        guild_id = str(raw_guild_id).strip() if raw_guild_id else ""
+        guild_id = str(raw_guild_id).strip() if raw_guild_id else str(sess.guild_id or "")
         if not guild_id:
             try:
                 ch = bot.get_channel(int(channel_id))
@@ -2219,7 +2333,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         relay_secret = getattr(config, "GOLIVE_RELAY_SECRET", "")
 
         try:
-            async with aiohttp.ClientSession() as sess:
+            async with aiohttp.ClientSession() as http_sess:
                 headers = {"Content-Type": "application/json"}
                 if relay_secret:
                     headers["X-API-Secret"] = relay_secret
@@ -2230,7 +2344,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "title": raw_title,
                     "channel_name": raw_title,
                 }
-                async with sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=15) as resp:
+                async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=15) as resp:
                     data = await resp.json()
                     logger.info("[STREMIO TRANSMIT] GoLive relay response (%s): %s", resp.status, data)
                     return web.json_response(data, status=resp.status)

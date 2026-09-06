@@ -2975,12 +2975,22 @@ async def stream(
         return
 
     if canal is not None and canal.strip().lower() in ("stremio", "anime", "stremio anime"):
-        stremio_url = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55:8080/stremio")
+        stremio_base = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55/stremio")
+        from stremio_sessions import session_manager
+        sess = session_manager.create_session(
+            author_id=ctx.author.id,
+            author_name=getattr(ctx.author, "display_name", ctx.author.name),
+            channel_id=voice_channel.id,
+            guild_id=ctx.guild.id if ctx.guild else 0,
+            ttl_hours=24.0,
+        )
+        stremio_url = f"{stremio_base}?token={sess.token}"
         embed = discord.Embed(
             title="🎬 Buscador Interactivo Stremio & Anime",
-            description="Buscá anime, películas y series con **TorBox Directo ⚡** y transmitilas a tu canal de voz en 1-click.",
+            description="Buscá anime, películas y series y transmitilas al instante a tu canal de voz.",
             color=0x8B5CF6,
         )
+        embed.set_footer(text="🔒 Este enlace es único y vence en 24 horas.")
         view = StremioWebUIOverlayView(stremio_url)
         await ctx.interaction.edit_original_response(embed=embed, view=view)
         return

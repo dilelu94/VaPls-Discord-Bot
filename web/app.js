@@ -11,6 +11,32 @@ document.addEventListener('DOMContentLoaded', () => {
     return d.innerHTML;
   }
 
+  // Session Token Security
+  const urlParams = new URLSearchParams(window.location.search);
+  const sessionToken = urlParams.get('token') || '';
+
+  async function apiFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    if (sessionToken) {
+      options.headers['X-Stremio-Token'] = sessionToken;
+    }
+    let finalUrl = url;
+    if (sessionToken && url.startsWith('/api/stremio/')) {
+      const sep = url.includes('?') ? '&' : '?';
+      finalUrl = `${url}${sep}token=${encodeURIComponent(sessionToken)}`;
+    }
+    const resp = await fetch(finalUrl, options);
+    if (resp.status === 403) {
+      let errMsg = '🔒 Sesión expirada o inválida. Volvé a ejecutar /stream stremio en Discord.';
+      try {
+        const data = await resp.json();
+        if (data.error) errMsg = data.error;
+      } catch (e) {}
+      showToast(errMsg);
+    }
+    return resp;
+  }
+
   // DOM Elements
   const searchInput = document.getElementById('searchInput');
   const clearSearch = document.getElementById('clearSearch');
@@ -139,7 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function fetchVoiceChannels() {
     try {
-      const resp = await fetch('/api/stremio/voice-channels');
+      const resp = await apiFetch('/api/stremio/voice-channels');
       if (!resp.ok) throw new Error('Network error');
       const data = await resp.json();
       voiceChannels = data.channels || [];
@@ -207,7 +233,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function performSearch(query, filter) {
     showLoader();
     try {
-      const resp = await fetch(`/api/stremio/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(filter)}`);
+      const resp = await apiFetch(`/api/stremio/search?q=${encodeURIComponent(query)}&type=${encodeURIComponent(filter)}`);
       if (resp.status === 429) {
         showToast('⚠️ Demasiadas peticiones. Aguardá unos segundos.');
         showEmptyState();
@@ -274,7 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
     episodeSection.style.display = 'none';
 
     try {
-      const resp = await fetch(`/api/stremio/meta?id=${encodeURIComponent(id)}&type=${encodeURIComponent(type)}`);
+      const resp = await apiFetch(`/api/stremio/meta?id=${encodeURIComponent(id)}&type=${encodeURIComponent(type)}`);
       if (!resp.ok) throw new Error('Failed to fetch meta');
       currentMeta = await resp.json();
 
@@ -348,7 +374,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     try {
       const url = `/api/stremio/streams?id=${encodeURIComponent(currentMeta.id)}&type=${encodeURIComponent(currentMeta.type)}&season=${season}&episode=${episode}&imdb_id=${encodeURIComponent(currentMeta.imdb_id || '')}`;
-      const resp = await fetch(url);
+      const resp = await apiFetch(url);
       if (resp.ok) {
         streams = await resp.json();
       }
@@ -453,6 +479,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startStreamBtn.textContent = '⏳ Conectando Go Live...';
 
     const payload = {
+      token: sessionToken,
       url: selectedStreamUrl,
       title: currentMeta ? currentMeta.title : 'Stream Stremio',
       channel_id: channelId,
@@ -462,7 +489,7 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('[Stremio Transmit Request]', payload);
 
     try {
-      const resp = await fetch('/api/stremio/play', {
+      const resp = await apiFetch('/api/stremio/play', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
