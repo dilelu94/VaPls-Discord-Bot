@@ -35,6 +35,8 @@ _parent_dir = os.path.dirname(_userbot_dir)
 if _parent_dir in sys.path:
     sys.path.remove(_parent_dir)
 sys.path.insert(0, _parent_dir)
+if _userbot_dir not in sys.path:
+    sys.path.insert(0, _userbot_dir)
 
 _config_path = os.path.join(_userbot_dir, "config.py")
 _spec = importlib.util.spec_from_file_location("userbot_config", _config_path)
