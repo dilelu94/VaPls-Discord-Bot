@@ -485,16 +485,22 @@ def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
         return False
 
 
-def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 30.0) -> str | None:
+def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 45.0) -> str | None:
     """Extract embedded subtitle track from HTTP stream URL to a local temporary SRT/ASS file."""
     import tempfile
     import uuid
+    reconnect_args = (
+        ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        if url.startswith(("http://", "https://"))
+        else []
+    )
     sub_path_srt = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.srt")
     cmd_srt = [
         "ffmpeg",
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
+        *reconnect_args,
         "-probesize", "1500000",
         "-analyzeduration", "1500000",
         "-i", url,
@@ -517,6 +523,7 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 30.0) -> str
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
+        *reconnect_args,
         "-probesize", "1500000",
         "-analyzeduration", "1500000",
         "-i", url,
@@ -839,10 +846,6 @@ class _AudioPipeSource(discord.AudioSource):
     def is_opus(self) -> bool:
         return False
 
-
-def _extract_subtitle_file(url: str, sub_idx: int) -> str | None:
-    """Helper patched by tests or used for subtitle file extraction."""
-    return None
 
 
 class H264VideoPlayer(threading.Thread):

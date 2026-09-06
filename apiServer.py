@@ -2411,7 +2411,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "title": raw_title,
                     "channel_name": raw_title,
                 }
-                async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=15) as resp:
+                async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=45) as resp:
                     data = await resp.json()
                     logger.info("[STREMIO TRANSMIT] GoLive relay response (%s): %s", resp.status, data)
                     return web.json_response(data, status=resp.status)
