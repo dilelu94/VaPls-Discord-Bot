@@ -682,6 +682,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
         start_sec = float(data.get("start_sec", 0.0))
         audio_track = int(data.get("audio_track", 0))
         subtitle_track = int(data.get("subtitle_track", -1))
+        subtitle_file = data.get("subtitle_file")
         stream_title = str(data.get("channel_name", "") or data.get("title", "")).strip() or "Stream"
         imdb_id = str(data.get("imdb_id", "")).strip() or None
         item_type = str(data.get("type", "") or data.get("item_type", "")).strip() or None

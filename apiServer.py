@@ -2423,7 +2423,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "episode": episode,
                 }
                 async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=90) as resp:
-                    data = await resp.json()
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        raw_t = await resp.text()
+                        data = {"error": f"Error en relay ({resp.status}): {raw_t[:120]}"}
                     logger.info("[STREMIO TRANSMIT] GoLive relay response (%s): %s", resp.status, data)
                     return web.json_response(data, status=resp.status)
         except Exception as e:
