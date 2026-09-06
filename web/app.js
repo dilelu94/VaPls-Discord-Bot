@@ -401,46 +401,77 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     } catch (e) {}
 
+    // Filter out configure/HTML pages
+    if (Array.isArray(streams)) {
+      streams = streams.filter(s => s.url && !s.url.includes('/configure') && !s.url.includes('.legal/'));
+    }
+
     // Fallback: If server returned no streams, fetch directly from client browser
     if (!streams || !streams.length) {
       try {
         const debrid = 'torbox=90f73123-7565-4ae3-b672-aa96bc026c50';
         const targetId = currentMeta.imdb_id || (currentMeta.id && currentMeta.id.startsWith('tt') ? currentMeta.id : null);
-        let clientUrl = '';
+        const urlsToFetch = [];
         if (targetId) {
-          clientUrl = currentMeta.type === 'movie'
-            ? `https://torrentio.strem.fun/${debrid}/stream/movie/${targetId}.json`
-            : `https://torrentio.strem.fun/${debrid}/stream/series/${targetId}:${season}:${episode}.json`;
+          if (currentMeta.type === 'movie') {
+            urlsToFetch.push(`https://torrentio.strem.fun/${debrid}/stream/movie/${targetId}.json`);
+            urlsToFetch.push(`https://torrentio.strem.fun/stream/movie/${targetId}.json`);
+          } else {
+            urlsToFetch.push(`https://torrentio.strem.fun/${debrid}/stream/series/${targetId}:${season}:${episode}.json`);
+            urlsToFetch.push(`https://torrentio.strem.fun/stream/series/${targetId}:${season}:${episode}.json`);
+          }
         } else if (currentMeta.id && currentMeta.id.startsWith('kitsu:')) {
-          clientUrl = `https://torrentio.strem.fun/${debrid}/stream/series/${currentMeta.id}:${episode}.json`;
+          urlsToFetch.push(`https://torrentio.strem.fun/${debrid}/stream/series/${currentMeta.id}:${episode}.json`);
+          urlsToFetch.push(`https://torrentio.strem.fun/stream/series/${currentMeta.id}:${episode}.json`);
         }
 
-        if (clientUrl) {
-          const clientResp = await fetch(clientUrl);
-          if (clientResp.ok) {
-            const cdata = await clientResp.json();
-            const rawStreams = cdata.streams || [];
-            streams = rawStreams.map(s => {
-              const directUrl = s.url || '';
-              const infohash = s.infoHash || '';
-              const titleRaw = s.title || s.name || 'Torrent Stream';
-              const lines = titleRaw.split('\n').map(l => l.trim()).filter(Boolean);
-              const mainTitle = lines[0] || 'Torrent Stream';
-              const magnet = infohash ? `magnet:?xt=urn:btih:${infohash}&dn=${encodeURIComponent(mainTitle)}` : '';
-              return {
-                name: s.name || 'Torrentio',
-                title: mainTitle,
-                quality: mainTitle.includes('2160P') || mainTitle.includes('4K') ? '4K' : (mainTitle.includes('1080P') ? '1080p' : 'HD'),
-                seeders: -1,
-                size: '',
-                details: lines.slice(1).join(' '),
-                url: directUrl || magnet,
-                infohash: infohash || 'torbox',
-                is_direct: directUrl.includes('torrentio.strem.fun/resolve/torbox/') || directUrl.includes('tb-cdn')
-              };
+        const fetchPromises = urlsToFetch.map(u => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null));
+        const results = await Promise.all(fetchPromises);
+        
+        const extracted = [];
+        const seenUrls = new Set();
+
+        for (const cdata of results) {
+          if (!cdata || !cdata.streams) continue;
+          for (const s of cdata.streams) {
+            const directUrl = s.url || '';
+            const infohash = s.infoHash || '';
+            if (!directUrl && !infohash) continue;
+            if (directUrl && (directUrl.includes('/configure') || directUrl.includes('.legal/'))) continue;
+            if (directUrl && seenUrls.has(directUrl)) continue;
+            if (directUrl) seenUrls.add(directUrl);
+
+            const titleRaw = s.title || s.name || 'Torrent Stream';
+            const lines = titleRaw.split('\n').map(l => l.trim()).filter(Boolean);
+            const mainTitle = lines[0] || 'Torrent Stream';
+            const magnet = infohash ? `magnet:?xt=urn:btih:${infohash}&dn=${encodeURIComponent(mainTitle)}` : '';
+            
+            let seeders = -1;
+            let sizeStr = '';
+            for (const line of lines.slice(1)) {
+              if (line.includes('👤') || line.toLowerCase().includes('seeders')) {
+                const m = line.match(/(\d+)/);
+                if (m) seeders = parseInt(m[1]);
+              }
+              if (line.includes('💾') || line.includes('GB') || line.includes('MB')) {
+                sizeStr = line.replace('💾', '').trim();
+              }
+            }
+
+            extracted.push({
+              name: s.name || 'Torrentio',
+              title: mainTitle,
+              quality: mainTitle.includes('2160P') || mainTitle.includes('4K') ? '4K' : (mainTitle.includes('1080P') ? '1080p' : 'HD'),
+              seeders: seeders,
+              size: sizeStr,
+              details: lines.slice(1).join(' '),
+              url: directUrl || magnet,
+              infohash: infohash || 'torbox',
+              is_direct: directUrl.includes('torrentio.strem.fun/resolve/torbox/') || directUrl.includes('tb-cdn')
             });
           }
         }
+        streams = extracted;
       } catch (err) {}
     }
 
@@ -499,9 +530,27 @@ document.addEventListener('DOMContentLoaded', () => {
     startStreamBtn.disabled = true;
     startStreamBtn.textContent = '⏳ Conectando Go Live...';
 
+    let finalUrl = selectedStreamUrl;
+    if (finalUrl && (finalUrl.includes('torrentio.strem.fun/resolve/') || finalUrl.includes('elfhosted.com'))) {
+      startStreamBtn.textContent = '⚡ Resolviendo enlace CDN...';
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
+        const res = await fetch(finalUrl, { signal: controller.signal });
+        if (res.ok && res.url && !res.url.includes('torrentio.strem.fun') && !res.url.includes('/configure')) {
+          console.log('[CDN Resolved in Browser]:', res.url);
+          finalUrl = res.url;
+        }
+        controller.abort();
+        clearTimeout(timeoutId);
+      } catch (err) {
+        console.warn('[Browser CDN resolution fallback]:', err);
+      }
+    }
+
     const payload = {
       token: sessionToken,
-      url: selectedStreamUrl,
+      url: finalUrl,
       title: currentMeta ? currentMeta.title : 'Stream Stremio',
       channel_id: channelId,
       guild_id: guildId,
