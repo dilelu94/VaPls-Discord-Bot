@@ -485,7 +485,7 @@ def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
         return False
 
 
-def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 45.0) -> str | None:
+def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 12.0) -> str | None:
     """Extract embedded subtitle track from HTTP stream URL to a local temporary SRT/ASS file."""
     import tempfile
     import uuid
@@ -501,6 +501,8 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 45.0) -> str
         "-hide_banner",
         "-loglevel", "quiet",
         *reconnect_args,
+        "-discard:v", "all",
+        "-discard:a", "all",
         "-probesize", "1500000",
         "-analyzeduration", "1500000",
         "-i", url,
@@ -524,6 +526,8 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 45.0) -> str
         "-hide_banner",
         "-loglevel", "quiet",
         *reconnect_args,
+        "-discard:v", "all",
+        "-discard:a", "all",
         "-probesize", "1500000",
         "-analyzeduration", "1500000",
         "-i", url,
