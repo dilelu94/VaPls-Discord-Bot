@@ -349,23 +349,28 @@ def get_stremio_streams_sync(
     debrid_config = getattr(config, "TORRENTIO_CONFIG", "torbox=90f73123-7565-4ae3-b672-aa96bc026c50")
     prefix = f"{debrid_config}/" if debrid_config else ""
 
-    target_imdb = imdb_id
-    if not target_imdb and item_id.startswith("tt"):
-        target_imdb = item_id
-
-    if not target_imdb and item_id.startswith("kitsu:"):
+    series_imdb = item_id if item_id.startswith("tt") else (imdb_id if imdb_id and imdb_id.startswith("tt") else None)
+    if not series_imdb and item_id.startswith("kitsu:"):
         meta = get_stremio_meta_sync(item_type, item_id)
-        target_imdb = meta.get("imdb_id")
+        series_imdb = meta.get("imdb_id")
 
     urls_to_try = []
-    if target_imdb:
+    if series_imdb:
         if item_type == "movie":
-            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/movie/{target_imdb}.json")
-        else:
-            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{target_imdb}:{season}:{episode}.json")
+            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/movie/{series_imdb}.json")
+            urls_to_try.append(f"https://torrentio.strem.fun/stream/movie/{series_imdb}.json")
+        elif item_type == "series":
+            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{series_imdb}:{season}:{episode}.json")
+            urls_to_try.append(f"https://torrentio.strem.fun/stream/series/{series_imdb}:{season}:{episode}.json")
+        else: # anime or all
+            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{series_imdb}:{season}:{episode}.json")
+            urls_to_try.append(f"https://torrentio.strem.fun/stream/series/{series_imdb}:{season}:{episode}.json")
+            urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/movie/{series_imdb}.json")
+            urls_to_try.append(f"https://torrentio.strem.fun/stream/movie/{series_imdb}.json")
 
     if item_id.startswith("kitsu:"):
         urls_to_try.append(f"https://torrentio.strem.fun/{prefix}stream/series/{item_id}:{episode}.json")
+        urls_to_try.append(f"https://torrentio.strem.fun/stream/series/{item_id}:{episode}.json")
 
     streams_out = []
     seen_urls = set()

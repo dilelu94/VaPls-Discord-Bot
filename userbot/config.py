@@ -219,7 +219,18 @@ WAKE_SOUND_THROTTLE_SECONDS = float(os.getenv("WAKE_SOUND_THROTTLE_SECONDS", "0.
 # automatically on first use.
 ACTIVITY_DB_PATH = os.getenv("ACTIVITY_DB_PATH", "data/activity.db")
 
-# Path to persist the chosen sensitivity preset across userbot restarts.
-SENSITIVITY_STATE_PATH = os.getenv("SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json")
+# --- ASMR ambient playback --------------------------------------------------
+# De vez en cuando en momentos aleatorios, el userbot reproduce un audio de la
+# carpeta "asmr" a un volumen aleatorio entre 50% y 90%.
+# Requisitos: 1 vez al día máximo, solo si hay un humano en el VC que lleve al
+# menos 30 min (1800s) conectado y ni el userbot ni el usuario estén muteados.
+ASMR_ENABLED = os.getenv("ASMR_ENABLED", "true").lower() == "true"
+ASMR_SUBDIR = os.getenv("ASMR_SUBDIR", "asmr")
+ASMR_MIN_VOLUME = float(os.getenv("ASMR_MIN_VOLUME", "0.50"))
+ASMR_MAX_VOLUME = float(os.getenv("ASMR_MAX_VOLUME", "0.90"))
+ASMR_MIN_CONNECTED_SECONDS = float(os.getenv("ASMR_MIN_CONNECTED_SECONDS", "1800"))
+ASMR_STATE_PATH = os.getenv("ASMR_STATE_PATH", "data/asmr_state.json")
+ASMR_CHANCE_PER_MINUTE = float(os.getenv("ASMR_CHANCE_PER_MINUTE", "0.05"))
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+

@@ -2159,6 +2159,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         "guild_id": str(g.id),
                         "guild_name": g.name,
                         "members_count": len(non_bots),
+                        "members": [str(getattr(m, "display_name", None) or getattr(m, "name", "Usuario")) for m in non_bots],
                     })
         return web.json_response({"channels": channels_out})
 

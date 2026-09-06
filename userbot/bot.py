@@ -64,6 +64,7 @@ discord.voice_state.davey = davey_compat
 discord.gateway.davey = davey_compat
 davey_compat.patch_reinit(discord.voice_state)
 
+import asmr
 import greeting
 from transcript_channel import (
     resolve_transcript_channel as _resolve_transcript_channel_impl,
@@ -2653,6 +2654,9 @@ async def on_ready():
             "will not be able to identify the VaPls bot's slash commands; "
             "indio playback will not work until this is configured.",
         )
+    if not getattr(client, "_asmr_task_started", False):
+        client._asmr_task_started = True
+        asyncio.create_task(asmr.asmr_loop(client), name="asmr-loop")
     await asyncio.sleep(2)
     for guild in client.guilds:
         if not _guild_allowed(guild.id):
@@ -2707,6 +2711,11 @@ async def on_voice_state_update(member, before, after):
                 except Exception:
                     pass
         return
+    try:
+        asmr.on_voice_state_update(member, before, after)
+    except Exception:
+        pass
+
     if member.bot or member.id in config.IGNORE_USER_IDS:
         return
 

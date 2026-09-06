@@ -117,6 +117,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `geminiClient.py`: cliente Gemini.
 - `analytics.py`: wrapper PostHog.
 - `greeting.py` / `users.py`: saludos.
+- `userbot/asmr.py`: audios ambientales ASMR del Indio.
 
 ## 🔬 Detalles de Implementación Clave
 
@@ -341,6 +342,20 @@ userbot). **El preset se persiste en disco (`data/sensitivity_preset.json`) para
 frase y dispare un falso positivo, se agrega esa frase al pool de filler (para que
 tenga dónde caer) o se ajusta `_WAKE_PATTERNS`. Los logs `[WAKE]`/`[VOSK]`
 imprimen el texto que VOSK escuchó en cada disparo para guiar ese ajuste.
+
+## 🎧 Audios ambientales ASMR del Indio
+
+El userbot (*Indio*) incluye una función de reproducción ambiental de audios ASMR en canales de voz en momentos aleatorios.
+
+### Funcionamiento y Reglas
+- **Frecuencia**: Se reproduce como máximo **1 vez al día** (cooldown de 24 horas y verificación por fecha del día, persistido en `data/asmr_state.json`).
+- **Volumen**: Se reproduce a un **volumen aleatorio entre 50% y 90%** (filtro FFmpeg `-af "volume=..."` con valor dinámico entre `0.50` y `0.90`).
+- **Carpeta de origen**: Busca audios en el subdirectorio `asmr` de `CUSTOM_AUDIO_PATH` (ej. `audio_output/asmr/`), así como en `audio_output/asmr/` y `asmr/`. Si la carpeta contiene audios válidos, selecciona uno al azar.
+- **Condiciones obligatorias para reproducir**:
+  1. Hay al menos un usuario humano (no bot) conectado en el canal de voz donde está el userbot.
+  2. El usuario lleva al menos **30 minutos (1800 segundos)** de conexión continua en el canal.
+  3. Ni el userbot ni el usuario están muteados ni ensordecidos (`self_mute`, `mute`, `self_deaf`, `deaf` desactivados).
+- **Momentos aleatorios**: Un bucle en segundo plano (`asmr_loop` en `userbot/asmr.py`) evalúa las condiciones periódicamente y aplica una probabilidad aleatoria por minuto (`ASMR_CHANCE_PER_MINUTE`, default 5%).
 
 ## 📁 lsyncd (sync local PC → soundpad del server)
 

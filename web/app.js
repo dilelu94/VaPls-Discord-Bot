@@ -151,18 +151,57 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderVoiceChannelPicker() {
+    const voiceStatusPill = document.getElementById('voiceStatusPill');
+
     if (!voiceChannels.length) {
       voiceStatusText.textContent = 'Sin usuarios en voz';
+      if (voiceStatusPill) voiceStatusPill.setAttribute('title', 'No hay usuarios conectados en voz');
       voiceChannelSelect.innerHTML = '<option value="">Sin canal de voz activo</option>';
       return;
     }
 
-    voiceStatusText.textContent = `${esc(voiceChannels.length)} canal(es) de voz disponible(s)`;
-    voiceChannelSelect.innerHTML = voiceChannels.map(ch => `
-      <option value="${esc(ch.id)}" data-guild="${esc(ch.guild_id)}">
-        🔊 ${ch.guild_name ? esc(ch.guild_name) + ' -> ' : ''}${esc(ch.name)} (${esc(ch.members_count)} miembros)
-      </option>
-    `).join('');
+    const fullTooltipParts = [];
+    const pillParts = [];
+
+    voiceChannels.forEach(ch => {
+      const members = ch.members || [];
+      const memberCount = ch.members_count || members.length;
+      const allMembersStr = members.join(', ');
+      fullTooltipParts.push(`${ch.name} (${memberCount}): ${allMembersStr || 'Sin nombres'}`);
+
+      let truncatedMembers = '';
+      if (members.length <= 3) {
+        truncatedMembers = members.join(', ');
+      } else {
+        truncatedMembers = `${members.slice(0, 2).join(', ')} +${members.length - 2} más`;
+      }
+      pillParts.push(`${ch.name}: ${truncatedMembers}`);
+    });
+
+    const pillDisplay = pillParts.join(' | ');
+    const fullTooltip = fullTooltipParts.join('\n');
+
+    voiceStatusText.textContent = pillDisplay;
+    if (voiceStatusPill) {
+      voiceStatusPill.setAttribute('title', fullTooltip);
+    }
+
+    voiceChannelSelect.innerHTML = voiceChannels.map(ch => {
+      const members = ch.members || [];
+      const allMembersStr = members.join(', ');
+      let displayMembers = '';
+      if (members.length <= 3) {
+        displayMembers = members.join(', ');
+      } else {
+        displayMembers = `${members.slice(0, 2).join(', ')} +${members.length - 2} más`;
+      }
+      const optionLabel = `🔊 ${ch.guild_name ? ch.guild_name + ' → ' : ''}${ch.name}${displayMembers ? ' (' + displayMembers + ')' : ''}`;
+      return `
+        <option value="${esc(ch.id)}" data-guild="${esc(ch.guild_id)}" title="${esc(ch.name)}: ${esc(allMembersStr)}">
+          ${esc(optionLabel)}
+        </option>
+      `;
+    }).join('');
   }
 
   async function performSearch(query, filter) {
@@ -259,9 +298,8 @@ document.addEventListener('DOMContentLoaded', () => {
         episodeSection.style.display = 'block';
       } else {
         episodeSection.style.display = 'none';
+        await fetchStreams();
       }
-
-      await fetchStreams();
     } catch (e) {
       modalTitle.textContent = 'Error al cargar detalles';
       streamLoader.style.display = 'none';
