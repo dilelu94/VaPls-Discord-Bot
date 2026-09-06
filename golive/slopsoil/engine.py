@@ -279,11 +279,11 @@ async def start_live_stream(
         audio_sender: GoLiveAudioSender | None = None
         try:
             # Open audio FIFO — blocks in a thread until FFmpeg opens the write end
-            log.info("waiting for audio FIFO from FFmpeg (up to 45 s)...")
+            log.info("waiting for audio FIFO from FFmpeg (up to 90 s)...")
             try:
                 f = await asyncio.wait_for(
                     asyncio.to_thread(open, video_player.audio_fifo, "rb"),
-                    timeout=45.0,
+                    timeout=90.0,
                 )
             except TimeoutError:
                 log.error("go-live: timed out waiting for audio FIFO")
