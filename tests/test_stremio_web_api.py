@@ -161,7 +161,8 @@ async def test_stremio_valid_token_access(mock_bot):
         mock_relay_resp.json = AsyncMock(return_value={"status": "ok", "message": "Streaming started"})
         mock_relay_resp.__aenter__.return_value = mock_relay_resp
 
-        with patch("aiohttp.ClientSession.post", return_value=mock_relay_resp):
+        with patch("aiohttp.ClientSession.post", return_value=mock_relay_resp), \
+             patch("torrent_search.resolve_redirect_url", return_value="https://nexus-001.tb-cdn.io/stream.mkv"):
             resp_play = await client.post(
                 "/api/stremio/play",
                 json={"token": token, "channel_id": "123456789012345678", "url": "https://torrentio.strem.fun/resolve/torbox/1/2", "title": "Naruto"},
