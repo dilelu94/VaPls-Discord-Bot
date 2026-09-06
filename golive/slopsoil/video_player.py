@@ -1126,10 +1126,9 @@ class H264VideoPlayer(threading.Thread):
 
         if not sub_file and sub_idx >= 0 and is_url:
             sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=8.0)
-
-        if not sub_file and is_url:
-            search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
-            sub_file = _fetch_opensubtitles_file(search_q)
+            if not sub_file:
+                search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
+                sub_file = _fetch_opensubtitles_file(search_q)
 
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
