@@ -156,6 +156,10 @@ class GoLiveStream:
         is_direct = (
             any(_path.endswith(ext) for ext in _DIRECT_MEDIA_EXTS)
             or ".m3u8" in url.lower()
+            or "resolve/" in url.lower()
+            or "torbox" in url.lower()
+            or "tb-cdn" in url.lower()
+            or url.lower().startswith(("magnet:?", "torrent:"))
         )
 
         # For extensionless URLs (e.g. CDN /dld/<uuid>?token=...) sniff
@@ -620,8 +624,16 @@ async def _relay_stream(request: web.Request) -> web.Response:
         return web.json_response({"error": "unauthorized"}, status=401)
     try:
         data = await request.json()
-        guild_id = int(data["guild_id"])
         channel_id = int(data["channel_id"])
+        raw_guild_id = data.get("guild_id")
+        if not raw_guild_id:
+            ch = client.get_channel(channel_id)
+            guild_id = ch.guild.id if ch and getattr(ch, "guild", None) else None
+        else:
+            guild_id = int(raw_guild_id)
+        if not guild_id:
+            log.warning("[STREAM] missing or unresolvable guild_id for channel %s", channel_id)
+            return web.json_response({"error": "missing or unresolvable guild_id"}, status=400)
         url = str(data["url"]).strip()
         start_sec = float(data.get("start_sec", 0.0))
         audio_track = int(data.get("audio_track", 0))

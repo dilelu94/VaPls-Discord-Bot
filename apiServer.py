@@ -2165,6 +2165,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
     async def apiStremioPlay(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
+            logger.warning("[STREMIO TRANSMIT] Rate limit exceeded for %s", request.remote)
             return web.json_response({"error": "too many requests"}, status=429)
 
         try:
@@ -2172,15 +2173,47 @@ def makeApp(bot: discord.Bot) -> web.Application:
             channel_id = str(body.get("channel_id", "")).strip()
             raw_url = str(body.get("url", "")).strip()
             raw_title = str(body.get("title", "Stream Stremio")).strip()[:120]
-        except Exception:
+            raw_guild_id = body.get("guild_id")
+        except Exception as e:
+            logger.warning("[STREMIO TRANSMIT] Invalid JSON payload from %s: %s", request.remote, e)
             return web.json_response({"error": "invalid json payload"}, status=400)
 
         if not re.match(r"^\d{17,20}$", channel_id):
+            logger.warning("[STREMIO TRANSMIT] Invalid channel_id: '%s'", channel_id)
             return web.json_response({"error": "invalid channel_id"}, status=400)
 
         stream_url = _clean_stream_url(raw_url)
         if not stream_url:
+            logger.warning("[STREMIO TRANSMIT] Invalid or unsafe stream_url: '%s'", raw_url)
             return web.json_response({"error": "invalid or unsafe stream url"}, status=400)
+
+        # Resolve guild_id automatically if missing
+        guild_id = str(raw_guild_id).strip() if raw_guild_id else ""
+        if not guild_id:
+            try:
+                ch = bot.get_channel(int(channel_id))
+                if ch and getattr(ch, "guild", None):
+                    guild_id = str(ch.guild.id)
+            except Exception:
+                pass
+
+        if not guild_id:
+            for g in bot.guilds:
+                if g.get_channel(int(channel_id)):
+                    guild_id = str(g.id)
+                    break
+
+        if not guild_id:
+            logger.warning("[STREMIO TRANSMIT] Could not resolve guild_id for channel_id %s", channel_id)
+            return web.json_response({"error": "could not resolve guild_id for channel"}, status=400)
+
+        logger.info(
+            "[STREMIO TRANSMIT] Transmit requested: title='%s' | channel_id=%s | guild_id=%s | url='%s'",
+            raw_title,
+            channel_id,
+            guild_id,
+            stream_url,
+        )
 
         relay_url = getattr(config, "GOLIVE_RELAY_URL", "http://127.0.0.1:8082")
         relay_secret = getattr(config, "GOLIVE_RELAY_SECRET", "")
@@ -2191,15 +2224,18 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 if relay_secret:
                     headers["X-API-Secret"] = relay_secret
                 payload = {
+                    "guild_id": guild_id,
                     "channel_id": channel_id,
                     "url": stream_url,
                     "title": raw_title,
+                    "channel_name": raw_title,
                 }
                 async with sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=15) as resp:
                     data = await resp.json()
+                    logger.info("[STREMIO TRANSMIT] GoLive relay response (%s): %s", resp.status, data)
                     return web.json_response(data, status=resp.status)
         except Exception as e:
-            logger.error("Failed to relay stremio stream request: %s", e)
+            logger.error("[STREMIO TRANSMIT] Failed to relay stremio stream request: %s", e)
             return web.json_response({"error": str(e)}, status=500)
 
     app.router.add_get("/stremio", stremioIndex)

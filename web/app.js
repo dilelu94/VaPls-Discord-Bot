@@ -452,14 +452,16 @@ document.addEventListener('DOMContentLoaded', () => {
     startStreamBtn.disabled = true;
     startStreamBtn.textContent = '⏳ Conectando Go Live...';
 
-    try {
-      const payload = {
-        url: selectedStreamUrl,
-        title: currentMeta ? currentMeta.title : 'Stream Stremio',
-        channel_id: channelId,
-        guild_id: guildId,
-      };
+    const payload = {
+      url: selectedStreamUrl,
+      title: currentMeta ? currentMeta.title : 'Stream Stremio',
+      channel_id: channelId,
+      guild_id: guildId,
+    };
 
+    console.log('[Stremio Transmit Request]', payload);
+
+    try {
       const resp = await fetch('/api/stremio/play', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -467,6 +469,8 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       const res = await resp.json();
+      console.log('[Stremio Transmit Response]', resp.status, res);
+
       if (resp.ok && res.status === 'ok') {
         showToast('🚀 ¡Transmisión Go Live iniciada en Discord!');
         hideModal();
@@ -474,6 +478,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast(`❌ Error: ${esc(res.error || 'No se pudo iniciar el stream')}`);
       }
     } catch (e) {
+      console.error('[Stremio Transmit Network Error]', e);
       showToast('❌ Error de conexión al servidor del bot.');
     } finally {
       startStreamBtn.disabled = false;
