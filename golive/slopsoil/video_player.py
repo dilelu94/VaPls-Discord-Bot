@@ -557,6 +557,65 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 60.0) -> str
     return None
 
 
+def _fetch_opensubtitles_file(query: str, timeout: float = 6.0) -> str | None:
+    """Fetch Spanish subtitle track from OpenSubtitles REST API as fallback external subtitle."""
+    import urllib.request
+    import urllib.parse
+    import json
+    import gzip
+    import tempfile
+    import uuid
+    import re
+
+    if not query or len(query.strip()) < 3:
+        return None
+
+    clean = re.sub(r"[._]", " ", query.strip())
+    words = [
+        w for w in clean.split()
+        if w.lower() not in (
+            "1080p", "720p", "4k", "2160p", "web", "web-dl", "webrip", "hdrip",
+            "h264", "hevc", "x264", "x265", "aac", "multi", "repack", "proper",
+            "quintessence", "varyg", "eztv", "eztvx", "to", "mkv", "mp4", "avi"
+        )
+    ]
+    clean_query = " ".join(words)
+    if not clean_query:
+        clean_query = query.strip()
+
+    enc_query = urllib.parse.quote(clean_query)
+    url = f"https://rest.opensubtitles.org/search/query-{enc_query}/sublanguageid-spa"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "TemporaryUserAgent"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            if not isinstance(data, list) or not data:
+                log.info("[OPENSUBTITLES] No Spanish subtitles found for query %r", clean_query)
+                return None
+
+            best = data[0]
+            dl_link = best.get("SubDownloadLink")
+            if not dl_link:
+                return None
+
+            log.info("[OPENSUBTITLES] Found Spanish subtitle: %s -> %s", best.get("SubFileName"), dl_link)
+            req_dl = urllib.request.Request(dl_link, headers={"User-Agent": "TemporaryUserAgent"})
+            with urllib.request.urlopen(req_dl, timeout=timeout) as dl_resp:
+                gz_bytes = dl_resp.read()
+                srt_text = gzip.decompress(gz_bytes).decode("utf-8", errors="ignore")
+
+                sub_path = os.path.join(tempfile.gettempdir(), f"vapls_opensub_{uuid.uuid4().hex[:8]}.srt")
+                with open(sub_path, "w", encoding="utf-8") as f:
+                    f.write(srt_text)
+
+                if os.path.exists(sub_path) and os.path.getsize(sub_path) > 0:
+                    log.info("[OPENSUBTITLES] Extracted %d bytes to %s", os.path.getsize(sub_path), sub_path)
+                    return sub_path
+    except Exception as exc:
+        log.warning("[OPENSUBTITLES] Failed to fetch subtitles for %r: %s", clean_query, exc)
+    return None
+
+
 def _detect_encoder() -> _EncoderConfig | None:
     """Pick the best available H.264 encoder. Returns None if nothing works."""
     try:
@@ -1066,7 +1125,11 @@ class H264VideoPlayer(threading.Thread):
                 log.warning("[AUTO SUBTITLES] Error during auto-subtitle detection: %s", auto_sub_err)
 
         if not sub_file and sub_idx >= 0 and is_url:
-            sub_file = _extract_subtitle_file(primary_url, sub_idx)
+            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=8.0)
+
+        if not sub_file and is_url:
+            search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
+            sub_file = _fetch_opensubtitles_file(search_q)
 
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
