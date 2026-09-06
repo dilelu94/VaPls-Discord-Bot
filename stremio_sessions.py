@@ -25,7 +25,7 @@ class StremioSession:
 
 
 class StremioSessionManager:
-    def __init__(self, default_ttl_hours: float = 24.0):
+    def __init__(self, default_ttl_hours: float = 10 / 60.0):
         self.sessions: dict[str, StremioSession] = {}
         self.default_ttl_hours = default_ttl_hours
 

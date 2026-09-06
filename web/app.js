@@ -107,19 +107,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showEmptyState();
   });
 
-  tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      tabBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      currentFilter = btn.dataset.type;
-      
-      const query = searchInput.value.trim();
-      if (query) {
-        performSearch(query, currentFilter);
-      }
-    });
-  });
-
   chipBtns.forEach(chip => {
     chip.addEventListener('click', () => {
       searchInput.value = chip.textContent.trim();

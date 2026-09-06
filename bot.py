@@ -2982,7 +2982,7 @@ async def stream(
             author_name=getattr(ctx.author, "display_name", ctx.author.name),
             channel_id=voice_channel.id,
             guild_id=ctx.guild.id if ctx.guild else 0,
-            ttl_hours=24.0,
+            ttl_hours=10 / 60.0,
         )
         stremio_url = f"{stremio_base}?token={sess.token}"
         embed = discord.Embed(
