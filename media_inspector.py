@@ -204,6 +204,19 @@ async def inspect_media_tracks(url: str, timeout: float = 6.0) -> MediaTracksInf
     return MediaTracksInfo(url=url)
 
 
+def inspect_media_tracks_sync(url: str, timeout: float = 6.0) -> MediaTracksInfo:
+    """Synchronous inspection of media URL with ffprobe."""
+    try:
+        raw_json = _run_ffprobe_sync(url, timeout)
+        if raw_json:
+            parsed = json.loads(raw_json)
+            return _parse_ffprobe_json(parsed, url)
+    except Exception as exc:
+        log.warning("inspect_media_tracks_sync error for %s: %s", url[:100], exc)
+
+    return MediaTracksInfo(url=url)
+
+
 async def extract_subtitle_file(stream_url: str, stream_index: int, timeout: float = 25.0) -> str | None:
     """Asynchronously extract a subtitle track from media URL using FFmpeg to a temporary .srt file."""
     if stream_index < 0:

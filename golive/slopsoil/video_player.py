@@ -485,7 +485,7 @@ def _test_encoder(name: str, pre_input: list[str], vf: str = "") -> bool:
         return False
 
 
-def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 3.5) -> str | None:
+def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 20.0) -> str | None:
     """Extract embedded subtitle track from HTTP stream URL to a local temporary SRT/ASS file."""
     import tempfile
     import uuid
@@ -496,11 +496,13 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 3.5) -> str 
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
+        "-fflags", "+fastseek+nobuffer",
         "-user_agent", ua,
         "-headers", f"User-Agent: {ua}\r\n",
         "-probesize", "1500000",
         "-analyzeduration", "1500000",
         "-i", url,
+        "-vn", "-an",
         "-map", f"0:s:{sub_idx}?",
         "-c:s", "srt",
         sub_path_srt,
@@ -519,11 +521,13 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 3.5) -> str 
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
+        "-fflags", "+fastseek+nobuffer",
         "-user_agent", ua,
         "-headers", f"User-Agent: {ua}\r\n",
         "-probesize", "1500000",
         "-analyzeduration", "1500000",
         "-i", url,
+        "-vn", "-an",
         "-map", f"0:s:{sub_idx}?",
         "-c:s", "copy",
         sub_path_ass,
@@ -1034,6 +1038,33 @@ class H264VideoPlayer(threading.Thread):
         vf_str = enc.vf
         use_filter_complex = False
         sub_file = getattr(self, "_subtitle_file", None)
+        if not sub_file and sub_idx < 0 and is_url:
+            try:
+                import sys, os
+                root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+                if root_dir not in sys.path:
+                    sys.path.insert(0, root_dir)
+                from media_inspector import inspect_media_tracks_sync
+                info = inspect_media_tracks_sync(primary_url, timeout=5.0)
+                if info and info.has_subtitles:
+                    spa_subs = [s for s in info.subtitle_tracks if s.language.lower() in ("spa", "es", "spanish")]
+                    if spa_subs:
+                        best_spa = next((s for s in spa_subs if "latin" in s.title.lower()), None)
+                        if not best_spa:
+                            best_spa = next((s for s in spa_subs if not s.is_forced and "sdh" not in s.title.lower()), spa_subs[0])
+                        sub_idx = best_spa.index
+                        log.info("[AUTO SUBTITLES] Auto-selected Spanish subtitle track %d (%s)", sub_idx, best_spa.display_name)
+                    else:
+                        eng_subs = [s for s in info.subtitle_tracks if s.language.lower() in ("eng", "en", "english")]
+                        if eng_subs:
+                            sub_idx = eng_subs[0].index
+                            log.info("[AUTO SUBTITLES] Auto-selected English subtitle track %d (%s)", sub_idx, eng_subs[0].display_name)
+                        else:
+                            sub_idx = info.subtitle_tracks[0].index
+                            log.info("[AUTO SUBTITLES] Fallback to first subtitle track %d (%s)", sub_idx, info.subtitle_tracks[0].display_name)
+            except Exception as auto_sub_err:
+                log.warning("[AUTO SUBTITLES] Error during auto-subtitle detection: %s", auto_sub_err)
+
         if not sub_file and sub_idx >= 0 and is_url:
             sub_file = _extract_subtitle_file(primary_url, sub_idx)
 
