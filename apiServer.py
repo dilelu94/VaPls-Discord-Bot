@@ -2347,7 +2347,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.warning("[STREMIO TRANSMIT] Invalid or unsafe stream_url: '%s'", raw_url)
             return web.json_response({"error": "invalid or unsafe stream url"}, status=400)
 
-        if stream_url.startswith(("http://", "https://")):
+        if stream_url.startswith(("http://", "https://")) and not ("tb-cdn" in stream_url or stream_url.endswith((".mp4", ".mkv", ".avi", ".m3u8"))):
             from torrent_search import resolve_redirect_url
             try:
                 resolved = await asyncio.to_thread(resolve_redirect_url, stream_url)
