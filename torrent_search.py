@@ -240,7 +240,7 @@ async def search_stremio_torrents(query: str, limit: int = 10) -> list[TorrentSt
     # 2. Fetch streams from Torrentio if IMDb ID was found
     if imdb_id:
         try:
-            debrid_config = getattr(config, "TORRENTIO_CONFIG", "torbox=90f73123-7565-4ae3-b672-aa96bc026c50")
+            debrid_config = getattr(config, "TORRENTIO_CONFIG", "")
             prefix = f"{debrid_config}/" if debrid_config else ""
             torrentio_url = f"https://torrentio.strem.fun/{prefix}stream/movie/{imdb_id}.json"
             req = urllib.request.Request(torrentio_url, headers=BROWSER_HEADERS)
@@ -411,7 +411,7 @@ def get_stremio_streams_sync(
     imdb_id: Optional[str] = None
 ) -> list[dict]:
     """Fetch TorBox / Torrentio streams for movie, series, or anime."""
-    debrid_config = getattr(config, "TORRENTIO_CONFIG", "torbox=90f73123-7565-4ae3-b672-aa96bc026c50")
+    debrid_config = getattr(config, "TORRENTIO_CONFIG", "")
     prefix = f"{debrid_config}/" if debrid_config else ""
 
     series_imdb = item_id if item_id.startswith("tt") else (imdb_id if imdb_id and imdb_id.startswith("tt") else None)

@@ -30,7 +30,7 @@ else:
 YT_DLP_POT_BASE_URL = os.getenv("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416")
 
 # TorBox / Torrentio Debrid configuration for fast HTTP stream searching
-TORBOX_TOKEN = os.getenv("TORBOX_TOKEN", "90f73123-7565-4ae3-b672-aa96bc026c50").strip()
+TORBOX_TOKEN = os.getenv("TORBOX_TOKEN", "").strip()
 TORRENTIO_CONFIG = os.getenv("TORRENTIO_CONFIG", f"torbox={TORBOX_TOKEN}" if TORBOX_TOKEN else "").strip()
 STREMIO_WEB_URL = os.getenv("STREMIO_WEB_URL", "http://141.148.84.55/stremio").strip()
 

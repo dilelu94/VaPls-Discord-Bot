@@ -408,19 +408,15 @@ document.addEventListener('DOMContentLoaded', () => {
     // Fallback: If server returned no streams, fetch directly from client browser
     if (!streams || !streams.length) {
       try {
-        const debrid = 'torbox=90f73123-7565-4ae3-b672-aa96bc026c50';
         const targetId = currentMeta.imdb_id || (currentMeta.id && currentMeta.id.startsWith('tt') ? currentMeta.id : null);
         const urlsToFetch = [];
         if (targetId) {
           if (currentMeta.type === 'movie') {
-            urlsToFetch.push(`https://torrentio.strem.fun/${debrid}/stream/movie/${targetId}.json`);
             urlsToFetch.push(`https://torrentio.strem.fun/stream/movie/${targetId}.json`);
           } else {
-            urlsToFetch.push(`https://torrentio.strem.fun/${debrid}/stream/series/${targetId}:${season}:${episode}.json`);
             urlsToFetch.push(`https://torrentio.strem.fun/stream/series/${targetId}:${season}:${episode}.json`);
           }
         } else if (currentMeta.id && currentMeta.id.startsWith('kitsu:')) {
-          urlsToFetch.push(`https://torrentio.strem.fun/${debrid}/stream/series/${currentMeta.id}:${episode}.json`);
           urlsToFetch.push(`https://torrentio.strem.fun/stream/series/${currentMeta.id}:${episode}.json`);
         }
 

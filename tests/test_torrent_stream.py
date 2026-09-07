@@ -29,7 +29,7 @@ def test_is_infohash():
 
 def test_is_stremio_resolve_url():
     url = (
-        "https://torrentio.strem.fun/resolve/torbox/90f73123-7565-4ae3-b672-aa96bc026c50/"
+        "https://torrentio.strem.fun/resolve/torbox/fake_torbox_token_12345/"
         "8c03a030ad101b5d2c5102a5c0845bb41b9f2960/"
         "%5BAnime%20Time%5D%20JoJo's%20Bizarre%20Adventure%20Part%206%20-%20Stone%20Ocean%20-%2026.mkv/25/"
         "%5BAnime%20Time%5D%20JoJo's%20Bizarre%20Adventure%20Part%206%20-%20Stone%20Ocean%20-%2026.mkv"
@@ -39,7 +39,7 @@ def test_is_stremio_resolve_url():
 
 def test_resolve_stremio_or_magnet_url_with_stremio_link():
     stremio_url = (
-        "https://torrentio.strem.fun/resolve/torbox/90f73123-7565-4ae3-b672-aa96bc026c50/"
+        "https://torrentio.strem.fun/resolve/torbox/fake_torbox_token_12345/"
         "8c03a030ad101b5d2c5102a5c0845bb41b9f2960/"
         "%5BAnime%20Time%5D%20JoJo's%20Bizarre%20Adventure%20Part%206%20-%20Stone%20Ocean%20-%2026.mkv"
     )
