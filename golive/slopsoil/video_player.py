@@ -578,14 +578,16 @@ def _fetch_opensubtitles_file(
     resolved_type = item_type or "movie"
 
     if not resolved_imdb and query and len(query.strip()) >= 2:
-        clean = re.sub(r"[._]", " ", query.strip())
+        clean = re.sub(r"\[.*?\]|\(.*?\)", " ", query.strip())
+        clean = re.sub(r"[._-]", " ", clean)
         words = [
             w for w in clean.split()
             if w.lower() not in (
                 "1080p", "720p", "4k", "2160p", "web", "web-dl", "webrip", "hdrip",
                 "h264", "hevc", "x264", "x265", "aac", "multi", "repack", "proper",
-                "quintessence", "varyg", "eztv", "eztvx", "to", "mkv", "mp4", "avi", "stream"
-            )
+                "quintessence", "varyg", "eztv", "eztvx", "to", "mkv", "mp4", "avi", "stream",
+                "nf", "dl", "aac2", "0"
+            ) and not re.match(r"^s\d+e\d+$", w, re.I)
         ]
         clean_query = " ".join(words) or query.strip()
         enc = urllib.parse.quote(clean_query)
@@ -1170,16 +1172,16 @@ class H264VideoPlayer(threading.Thread):
                 log.warning("[AUTO SUBTITLES] Error during auto-subtitle detection: %s", auto_sub_err)
 
         if not sub_file and sub_idx >= 0 and is_url:
-            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=8.0)
+            search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
+            sub_file = _fetch_opensubtitles_file(
+                query=search_q,
+                imdb_id=getattr(self, "_imdb_id", None),
+                item_type=getattr(self, "_item_type", None) or "movie",
+                season=getattr(self, "_season", None) or 1,
+                episode=getattr(self, "_episode", None) or 1,
+            )
             if not sub_file:
-                search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
-                sub_file = _fetch_opensubtitles_file(
-                    query=search_q,
-                    imdb_id=getattr(self, "_imdb_id", None),
-                    item_type=getattr(self, "_item_type", None) or "movie",
-                    season=getattr(self, "_season", None) or 1,
-                    episode=getattr(self, "_episode", None) or 1,
-                )
+                sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=12.0)
 
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
