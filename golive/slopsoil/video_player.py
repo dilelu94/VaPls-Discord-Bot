@@ -622,17 +622,32 @@ def _fetch_opensubtitles_file(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             subs = data.get("subtitles", [])
-            spa_subs = [s for s in subs if str(s.get("lang", "")).lower() in ("spa", "es", "spanish", "spa-la", "es-es", "es-mx")]
-            if not spa_subs:
-                log.info("[OPENSUBTITLES] No Spanish subtitles found out of %d total tracks for %s", len(subs), sub_key)
+            def score_sub(s: dict) -> int:
+                lang = str(s.get("lang", "")).lower()
+                name = str(s.get("subtitleFileName", "") or s.get("id", "") or s.get("lang", "")).lower()
+                # 1. Latino
+                if lang in ("spa-la", "es-mx", "es-ar", "es-cl", "es-co") or any(k in name for k in ("latino", "latin america", "latin", "spa-la", "es-mx")):
+                    return 300
+                # 2. Español
+                if lang in ("spa", "es", "spanish", "es-es", "castellano") or any(k in name for k in ("spanish", "espanol", "español")):
+                    return 200
+                # 3. Inglés
+                if lang in ("eng", "en", "english") or "english" in name:
+                    return 100
+                return 0
+
+            scored = [(score_sub(s), s) for s in subs if score_sub(s) > 0]
+            if not scored:
+                log.info("[OPENSUBTITLES] No Latino/Spanish/English subtitles found out of %d total tracks for %s", len(subs), sub_key)
                 return None
 
-            best = spa_subs[0]
+            scored.sort(key=lambda x: x[0], reverse=True)
+            best_score, best = scored[0]
             dl_url = best.get("url")
             if not dl_url:
                 return None
 
-            log.info("[OPENSUBTITLES] Found Spanish subtitle: %s -> %s", best.get("subtitleFileName") or best.get("id"), dl_url)
+            log.info("[OPENSUBTITLES] Found subtitle (score %d, lang %s): %s -> %s", best_score, best.get("lang"), best.get("subtitleFileName") or best.get("id"), dl_url)
             req_dl = urllib.request.Request(dl_url, headers={"User-Agent": "Mozilla/5.0"})
             with urllib.request.urlopen(req_dl, timeout=timeout) as dl_resp:
                 raw_bytes = dl_resp.read()
@@ -1153,21 +1168,37 @@ class H264VideoPlayer(threading.Thread):
                 from media_inspector import inspect_media_tracks_sync
                 info = inspect_media_tracks_sync(primary_url, timeout=5.0)
                 if info and info.has_subtitles:
-                    spa_subs = [s for s in info.subtitle_tracks if s.language.lower() in ("spa", "es", "spanish")]
-                    if spa_subs:
-                        best_spa = next((s for s in spa_subs if "latin" in s.title.lower()), None)
-                        if not best_spa:
-                            best_spa = next((s for s in spa_subs if not s.is_forced and "sdh" not in s.title.lower()), spa_subs[0])
-                        sub_idx = best_spa.index
-                        log.info("[AUTO SUBTITLES] Auto-selected Spanish subtitle track %d (%s)", sub_idx, best_spa.display_name)
+                    def score_track(tr) -> int:
+                        lang = str(getattr(tr, "language", "")).lower()
+                        title = str(getattr(tr, "title", "")).lower()
+                        disp = str(getattr(tr, "display_name", "")).lower()
+                        combined = f"{lang} {title} {disp}"
+
+                        score = 0
+                        # 1. Latino
+                        if any(k in combined for k in ("latin", "latino", "spa-la", "es-mx", "es-ar", "es-cl", "es-co")):
+                            score = 300
+                        # 2. Español
+                        elif any(k in combined for k in ("spa", "es", "spanish", "es-es", "castellano", "español", "espanol")):
+                            score = 200
+                        # 3. Inglés
+                        elif any(k in combined for k in ("eng", "en", "english")):
+                            score = 100
+
+                        if score > 0:
+                            if getattr(tr, "is_forced", False) or "sdh" in title or "cc" in title:
+                                score -= 10
+                        return score
+
+                    scored_tracks = [(score_track(tr), tr) for tr in info.subtitle_tracks if score_track(tr) > 0]
+                    if scored_tracks:
+                        scored_tracks.sort(key=lambda x: x[0], reverse=True)
+                        best_score, best_tr = scored_tracks[0]
+                        sub_idx = best_tr.index
+                        log.info("[AUTO SUBTITLES] Auto-selected subtitle track %d (score %d, %s)", sub_idx, best_score, best_tr.display_name)
                     else:
-                        eng_subs = [s for s in info.subtitle_tracks if s.language.lower() in ("eng", "en", "english")]
-                        if eng_subs:
-                            sub_idx = eng_subs[0].index
-                            log.info("[AUTO SUBTITLES] Auto-selected English subtitle track %d (%s)", sub_idx, eng_subs[0].display_name)
-                        else:
-                            sub_idx = info.subtitle_tracks[0].index
-                            log.info("[AUTO SUBTITLES] Fallback to first subtitle track %d (%s)", sub_idx, info.subtitle_tracks[0].display_name)
+                        sub_idx = info.subtitle_tracks[0].index
+                        log.info("[AUTO SUBTITLES] Fallback to first subtitle track %d (%s)", sub_idx, info.subtitle_tracks[0].display_name)
             except Exception as auto_sub_err:
                 log.warning("[AUTO SUBTITLES] Error during auto-subtitle detection: %s", auto_sub_err)
 
