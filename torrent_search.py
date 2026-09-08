@@ -100,31 +100,70 @@ def resolve_torbox_url(url: str) -> Optional[str]:
         parts = url.split("resolve/torbox/")[1].split("/")
         token = parts[0]
         infohash = parts[1].lower()
+        return resolve_torbox_hash(token, infohash)
+    except Exception as e:
+        log.warning("[TORBOX RESOLVE API] Error parsing %s: %s", url, e)
+    return None
 
+
+def resolve_torbox_hash(token: str, infohash: str) -> Optional[str]:
+    """Resolves an infohash to a direct TorBox CDN stream URL using TorBox official API."""
+    if not token or not infohash:
+        return None
+    infohash = infohash.lower().strip()
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}
+
+    # 1. Try checking existing torrents in user's library
+    try:
         req = urllib.request.Request(
             f"https://api.torbox.app/v1/api/torrents/mylist?hash={infohash}",
-            headers={"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"},
+            headers=headers,
         )
         with urllib.request.urlopen(req, timeout=5.0) as resp:
             data = json.loads(resp.read().decode())
             torrents = data.get("data", [])
             matched = next((t for t in torrents if str(t.get("hash", "")).lower() == infohash), None)
-            if not matched:
-                return None
-            torrent_id = matched.get("id")
-
-        req_dl = urllib.request.Request(
-            f"https://api.torbox.app/v1/api/torrents/requestdl?token={token}&torrent_id={torrent_id}",
-            headers={"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"},
-        )
-        with urllib.request.urlopen(req_dl, timeout=5.0) as resp:
-            dldata = json.loads(resp.read().decode())
-            link = dldata.get("data")
-            if link and link.startswith("http"):
-                log.info("[TORBOX RESOLVE API] Successfully resolved %s -> %s", infohash[:8], link)
-                return link
+            if matched and matched.get("id"):
+                torrent_id = matched["id"]
+                req_dl = urllib.request.Request(
+                    f"https://api.torbox.app/v1/api/torrents/requestdl?token={token}&torrent_id={torrent_id}",
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req_dl, timeout=5.0) as rdl:
+                    link = json.loads(rdl.read().decode()).get("data")
+                    if link and link.startswith("http"):
+                        log.info("[TORBOX API] Found in mylist: %s -> %s", infohash[:8], link[:60])
+                        return link
     except Exception as e:
-        log.warning("[TORBOX RESOLVE API] Error resolving %s: %s", url, e)
+        log.debug("[TORBOX API] MyList check error for %s: %s", infohash[:8], e)
+
+    # 2. If not in mylist, create/request cached torrent on TorBox
+    try:
+        magnet = f"magnet:?xt=urn:btih:{infohash}"
+        post_data = urllib.parse.urlencode({"magnet": magnet, "seed": 1}).encode()
+        post_headers = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+        req_create = urllib.request.Request(
+            "https://api.torbox.app/v1/api/torrents/createtorrent",
+            data=post_data,
+            headers=post_headers,
+        )
+        with urllib.request.urlopen(req_create, timeout=8.0) as rc:
+            cdata = json.loads(rc.read().decode())
+            c_info = cdata.get("data") or {}
+            torrent_id = c_info.get("torrent_id") or c_info.get("id")
+            if torrent_id:
+                req_dl = urllib.request.Request(
+                    f"https://api.torbox.app/v1/api/torrents/requestdl?token={token}&torrent_id={torrent_id}",
+                    headers=headers,
+                )
+                with urllib.request.urlopen(req_dl, timeout=5.0) as rdl:
+                    link = json.loads(rdl.read().decode()).get("data")
+                    if link and link.startswith("http"):
+                        log.info("[TORBOX API] Created/cached torrent: %s -> %s", infohash[:8], link[:60])
+                        return link
+    except Exception as e:
+        log.warning("[TORBOX API] Create torrent error for %s: %s", infohash[:8], e)
+
     return None
 
 
@@ -204,8 +243,10 @@ def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
         title = f"Torrent ({hash_val[:8]})" if hash_val else "Torrent Stream"
         tb_token = getattr(config, "TORBOX_TOKEN", "")
         if hash_val and tb_token:
-            stremio_url = f"https://torrentio.strem.fun/torbox={tb_token}/resolve/torbox/{tb_token}/{hash_val}/0/0"
-            resolved = resolve_redirect_url(stremio_url)
+            resolved = resolve_torbox_hash(tb_token, hash_val)
+            if not resolved or not resolved.startswith(("http://", "https://")):
+                stremio_url = f"https://torrentio.strem.fun/torbox={tb_token}/resolve/torbox/{tb_token}/{hash_val}/0/0"
+                resolved = resolve_redirect_url(stremio_url)
             if resolved and resolved.startswith(("http://", "https://")):
                 log.info("[TORBOX RESOLVE] Infohash %s resolved to CDN stream: %s", hash_val[:8], resolved[:60])
                 return resolved, title
@@ -219,8 +260,10 @@ def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
         hash_val = extract_infohash(raw)
         tb_token = getattr(config, "TORBOX_TOKEN", "")
         if hash_val and tb_token:
-            stremio_url = f"https://torrentio.strem.fun/torbox={tb_token}/resolve/torbox/{tb_token}/{hash_val}/0/0"
-            resolved = resolve_redirect_url(stremio_url)
+            resolved = resolve_torbox_hash(tb_token, hash_val)
+            if not resolved or not resolved.startswith(("http://", "https://")):
+                stremio_url = f"https://torrentio.strem.fun/torbox={tb_token}/resolve/torbox/{tb_token}/{hash_val}/0/0"
+                resolved = resolve_redirect_url(stremio_url)
             if resolved and resolved.startswith(("http://", "https://")):
                 log.info("[TORBOX RESOLVE] Magnet link %s resolved to CDN stream: %s", hash_val[:8], resolved[:60])
                 return resolved, dn
