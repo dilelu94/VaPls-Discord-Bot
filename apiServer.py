@@ -2347,14 +2347,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.warning("[STREMIO TRANSMIT] Invalid or unsafe stream_url: '%s'", raw_url)
             return web.json_response({"error": "invalid or unsafe stream url"}, status=400)
 
-        if stream_url.startswith(("http://", "https://")):
+        from torrent_search import resolve_redirect_url, resolve_stremio_or_magnet_url, is_torrent_input
+        if stream_url.startswith("magnet:") or is_torrent_input(stream_url):
+            try:
+                res_url, res_title = await asyncio.to_thread(resolve_stremio_or_magnet_url, stream_url)
+                if res_url and res_url.startswith(("http://", "https://")):
+                    stream_url = res_url
+                    if res_title and res_title != "Stream Directo":
+                        raw_title = res_title
+            except Exception as e:
+                logger.warning("[STREMIO TRANSMIT] Magnet stream resolution error: %s", e)
+        elif stream_url.startswith(("http://", "https://")):
             needs_resolve = (
                 "resolve/" in stream_url.lower()
                 or "torbox" in stream_url.lower()
                 or not ("tb-cdn" in stream_url or stream_url.endswith((".mp4", ".mkv", ".avi", ".m3u8")))
             )
             if needs_resolve and "tb-cdn" not in stream_url:
-                from torrent_search import resolve_redirect_url
                 try:
                     resolved = await asyncio.to_thread(resolve_redirect_url, stream_url)
                     if resolved and ("/configure" in resolved or ".legal/" in resolved):

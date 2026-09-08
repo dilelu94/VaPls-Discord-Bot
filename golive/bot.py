@@ -152,7 +152,26 @@ class GoLiveStream:
         is_live = True
 
         if not url.startswith(("http://", "https://")):
-            return target_url, title, is_live
+            if url.startswith("magnet:") or "urn:btih:" in url.lower():
+                try:
+                    import sys, os
+                    root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+                    if root_dir not in sys.path:
+                        sys.path.insert(0, root_dir)
+                    from torrent_search import resolve_stremio_or_magnet_url
+                    res_url, res_title = resolve_stremio_or_magnet_url(url)
+                    if res_url and res_url.startswith(("http://", "https://")):
+                        url = res_url
+                        target_url = res_url
+                        if res_title:
+                            title = res_title
+                    else:
+                        return target_url, title, is_live
+                except Exception as ex:
+                    log.warning("[STREAM] Failed to resolve magnet in GoLive %s: %s", url, ex)
+                    return target_url, title, is_live
+            else:
+                return target_url, title, is_live
 
         if ("resolve/" in url.lower() or "torbox" in url.lower()) and "tb-cdn" not in url:
             try:

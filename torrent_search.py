@@ -24,8 +24,9 @@ STREMIO_RESOLVE_RE = re.compile(
 )
 
 BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
 }
 
 
@@ -150,6 +151,33 @@ def resolve_redirect_url(url: str) -> str:
     return url
 
 
+import base64
+
+
+def extract_infohash(text: str) -> Optional[str]:
+    """Extract 40-character hex infohash from magnet link, base32 infohash, or infohash string."""
+    if not text:
+        return None
+    raw = text.strip()
+    m40 = re.search(r"urn:btih:([a-fA-F0-9]{40})", raw, re.IGNORECASE)
+    if m40:
+        return m40.group(1).lower()
+    m32 = re.search(r"urn:btih:([a-z2-7]{32})", raw, re.IGNORECASE)
+    if m32:
+        try:
+            return base64.b32decode(m32.group(1).upper()).hex().lower()
+        except Exception:
+            pass
+    if HEX_INFOHASH_RE.fullmatch(raw):
+        return raw.lower()
+    if B32_INFOHASH_RE.fullmatch(raw):
+        try:
+            return base64.b32decode(raw.upper()).hex().lower()
+        except Exception:
+            pass
+    return None
+
+
 def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
     """Resolves an input string to a standardized magnet URI or direct URL.
 
@@ -170,16 +198,32 @@ def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
         resolved = resolve_redirect_url(raw)
         return resolved, title
 
-    # Case 2: Pure 40-char infohash
+    # Case 2: Pure infohash
     if is_infohash(raw):
-        hash_val = raw.lower()
-        magnet = f"magnet:?xt=urn:btih:{hash_val}"
-        return magnet, f"Torrent ({hash_val[:8]})"
+        hash_val = extract_infohash(raw)
+        title = f"Torrent ({hash_val[:8]})" if hash_val else "Torrent Stream"
+        tb_token = getattr(config, "TORBOX_TOKEN", "")
+        if hash_val and tb_token:
+            stremio_url = f"https://torrentio.strem.fun/torbox={tb_token}/resolve/torbox/{tb_token}/{hash_val}/0/0"
+            resolved = resolve_redirect_url(stremio_url)
+            if resolved and resolved.startswith(("http://", "https://")):
+                log.info("[TORBOX RESOLVE] Infohash %s resolved to CDN stream: %s", hash_val[:8], resolved[:60])
+                return resolved, title
+        magnet = f"magnet:?xt=urn:btih:{hash_val}" if hash_val else raw
+        return magnet, title
 
     # Case 3: Standard magnet link
     if is_magnet_link(raw):
         parsed = urllib.parse.parse_qs(urllib.parse.urlparse(raw).query)
         dn = parsed.get("dn", ["Magnet Stream"])[0]
+        hash_val = extract_infohash(raw)
+        tb_token = getattr(config, "TORBOX_TOKEN", "")
+        if hash_val and tb_token:
+            stremio_url = f"https://torrentio.strem.fun/torbox={tb_token}/resolve/torbox/{tb_token}/{hash_val}/0/0"
+            resolved = resolve_redirect_url(stremio_url)
+            if resolved and resolved.startswith(("http://", "https://")):
+                log.info("[TORBOX RESOLVE] Magnet link %s resolved to CDN stream: %s", hash_val[:8], resolved[:60])
+                return resolved, dn
         return raw, dn
 
     # Case 4: Prefix 'torrent:'
