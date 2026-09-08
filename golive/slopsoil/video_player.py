@@ -1128,38 +1128,19 @@ class H264VideoPlayer(threading.Thread):
             "-probesize", str(self._probe_size),
             "-analyzeduration", str(self._probe_size),
         ]
-        a_idx = max(0, getattr(self, "_audio_track", 0))
+        user_audio_track = getattr(self, "_audio_track", -1)
+        a_idx = max(0, user_audio_track if user_audio_track >= 0 else 0)
         sub_idx = getattr(self, "_subtitle_track", -1)
 
         if isinstance(self._url, (tuple, list)):
             primary_url = self._url[0]
             is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
-            input_args = []
-            for u in self._url:
-                is_u = u.startswith(("http://", "https://", "rtmp://", "rtsp://"))
-                if is_u and self._live and "googlevideo.com" not in u:
-                    input_args += ["-http_persistent", "0"]
-                input_args += ["-i", u]
-            audio_map = f"1:a:{a_idx}?"
         else:
             primary_url = self._url
             is_url = primary_url.startswith(("http://", "https://", "rtmp://", "rtsp://"))
-            input_args = []
-            if is_url:
-                ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
-            # -http_persistent 0 prevents connection reuse between HLS segments,
-            # but FFmpeg rejects it for direct file downloads (MKV, MP4 from CDN).
-            # Only apply for live streams.
-            if is_url and self._live and "googlevideo.com" not in primary_url:
-                input_args += ["-http_persistent", "0"]
-            input_args += ["-i", primary_url]
-            audio_map = f"0:a:{a_idx}?"
 
-        vf_str = enc.vf
-        use_filter_complex = False
         sub_file = getattr(self, "_subtitle_file", None)
-        if not sub_file and sub_idx < 0 and is_url:
+        if is_url:
             try:
                 import sys
                 root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -1167,7 +1148,33 @@ class H264VideoPlayer(threading.Thread):
                     sys.path.insert(0, root_dir)
                 from media_inspector import inspect_media_tracks_sync
                 info = inspect_media_tracks_sync(primary_url, timeout=5.0)
-                if info and info.has_subtitles:
+
+                # Auto-select audio track (Japanese original -> English -> First track, avoiding Spanish dub)
+                if info and info.has_multiple_audios and user_audio_track < 0:
+                    def score_audio(tr) -> int:
+                        lang = str(getattr(tr, "language", "")).lower()
+                        title = str(getattr(tr, "title", "")).lower()
+                        disp = str(getattr(tr, "display_name", "")).lower()
+                        combined = f"{lang} {title} {disp}"
+
+                        # 1. Japonés (idioma original)
+                        if any(k in combined for k in ("ja", "jpn", "japanese", "japonés", "japones")):
+                            return 300
+                        # 2. Inglés
+                        if any(k in combined for k in ("eng", "en", "english", "inglés", "ingles")):
+                            return 200
+                        # 3. Español (evitar doblaje si hay jpn/eng)
+                        if any(k in combined for k in ("spa", "es", "spanish", "español", "espanol")):
+                            return 10
+                        return 100
+
+                    scored_audios = [(score_audio(tr), tr) for tr in info.audio_tracks]
+                    scored_audios.sort(key=lambda x: x[0], reverse=True)
+                    best_aud_score, best_aud = scored_audios[0]
+                    a_idx = best_aud.index
+                    log.info("[AUTO AUDIO] Auto-selected audio track %d (score %d, %s)", a_idx, best_aud_score, best_aud.display_name)
+
+                if info and info.has_subtitles and not sub_file and sub_idx < 0:
                     def score_track(tr) -> int:
                         lang = str(getattr(tr, "language", "")).lower()
                         title = str(getattr(tr, "title", "")).lower()
@@ -1201,6 +1208,27 @@ class H264VideoPlayer(threading.Thread):
                         log.info("[AUTO SUBTITLES] Fallback to first subtitle track %d (%s)", sub_idx, info.subtitle_tracks[0].display_name)
             except Exception as auto_sub_err:
                 log.warning("[AUTO SUBTITLES] Error during auto-subtitle detection: %s", auto_sub_err)
+
+        if isinstance(self._url, (tuple, list)):
+            input_args = []
+            for u in self._url:
+                is_u = u.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+                if is_u and self._live and "googlevideo.com" not in u:
+                    input_args += ["-http_persistent", "0"]
+                input_args += ["-i", u]
+            audio_map = f"1:a:{a_idx}?"
+        else:
+            input_args = []
+            if is_url:
+                ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
+            if is_url and self._live and "googlevideo.com" not in primary_url:
+                input_args += ["-http_persistent", "0"]
+            input_args += ["-i", primary_url]
+            audio_map = f"0:a:{a_idx}?"
+
+        vf_str = enc.vf
+        use_filter_complex = False
 
         if not sub_file and sub_idx >= 0 and is_url:
             search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
