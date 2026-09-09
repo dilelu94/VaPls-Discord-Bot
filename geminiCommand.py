@@ -136,6 +136,14 @@ def _execute_vapls_chat_search(call_args: dict, user_prompt: str) -> str:
         limit=20,
     )
 
+    if not results and author_name:
+        results = chat_db.search_messages(
+            query=query,
+            author_name=None,
+            channel_name=channel_name,
+            limit=20,
+        )
+
     if not results:
         return f"[Resultados de búsqueda en el historial de chat para '{query}']: No se encontraron mensajes coincidentes."
 
@@ -2916,6 +2924,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "join_voice": ("JOIN_VOICE", None),
     "make_clip": ("MAKE_CLIP", "duration"),
     "save_memory": ("SAVE_MEMORY", None),
+    "search_chat_history": ("SEARCH_CHAT_HISTORY", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -2933,6 +2942,7 @@ _ACTION_FALLBACK_TEXT = {
     "JOIN_VOICE": "🎤 Ahí voy al canal de voz",
     "MAKE_CLIP": "🎬 Clip de audio",
     "SAVE_MEMORY": "De una, anotado",
+    "SEARCH_CHAT_HISTORY": "",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
