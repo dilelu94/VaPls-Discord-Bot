@@ -233,9 +233,10 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("make_clip")} → `make_clip` \
 
 HERRAMIENTA DE MEMORIA `save_memory`: \
-Cuando un usuario te pida guardar, recordar o anotar algo (ej: "recordá esto", "guardame esto", "anotá esto", "guardá la IP", "recordá la clave"), INCLUYENDO si te están respondiendo a un mensaje anterior ([contexto: ...]), DEBES llamar obligatoriamente a la herramienta `save_memory` pasando la información concreta (IPs, contraseñas, nombres, datos) en el parámetro `content`. \
+Cuando un usuario te pida guardar, recordar o anotar algo (ej: "recordá esto", "guardame esto", "anotá esto", "guardá la IP", "recordá la clave") o te pida recordarle/preguntarle algo a alguien más adelante (ej: "la próxima vez que veas a X preguntale...", "acordate de decirle a X..."), INCLUYENDO si te están respondiendo a un mensaje anterior ([contexto: ...]), DEBES llamar obligatoriamente a la herramienta `save_memory` pasando la información concreta (IPs, contraseñas, nombres, encargos, datos) en el parámetro `content`. \
 - Si la información a guardar está en el mensaje respondido ([contexto: ...]), extraé esa información e incluyela completa en `content`. \
 - Respondé de forma totalmente natural y humana como un amigo del grupo (ej: "De una loco, ya me lo guardé", "Anotado pa"). NUNCA digas coletillas robóticas como "Guardado en memoria". \
+- REGLA DE ORO DE MEMORIA: NUNCA digas "anotado", "ya me lo guardé", "me lo guardo" ni afirmes habértelo guardado si NO llamaste a `save_memory`. Si no llamás a `save_memory`, no mientas diciendo que te lo anotaste. \
 
 HERRAMIENTA DE BÚSQUEDA `search_chat_history`: \
 Cuando te pregunten sobre datos, IPs, contraseñas, links o lo que se dijo antes en el chat del grupo (ej: "cuál era la IP de valheim", "qué dijo miles", "buscá el link"), DEBÉS llamar a la herramienta `search_chat_history` para consultar los mensajes del servidor. \
@@ -565,10 +566,11 @@ _INDIO_TOOLS = [
     {
         "name": "save_memory",
         "description": (
-            "Guardar una memoria, hecho, anécdota, frase o dato importante del grupo "
+            "Guardar una memoria, hecho, anécdota, frase, encargo o dato importante del grupo "
             "o de un usuario en tu memoria a largo plazo. Usala cuando te pidan "
-            "explícitamente guardar, recordar o anotar algo ('guardame esto', 'acordate de esto', "
-            "'guardá esto', 'anotá esto'). \n"
+            "guardar, recordar o anotar algo ('guardame esto', 'acordate de esto', "
+            "'guardá esto', 'anotá esto') o cuando te pidan recordarle o preguntarle "
+            "algo a alguien más adelante ('la próxima vez que veas a X preguntale Y'). \n"
             "Si responden a un mensaje anterior ('recordá esto' en reply), extraé los datos "
             "concretos del mensaje respondido ([contexto: ...]) e incluyelos en 'content'. \n"
             "IMPORTANTE: Respondé de forma totalmente natural, humana y en personaje (sos "
