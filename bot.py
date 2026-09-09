@@ -24,6 +24,7 @@ from playCommand import playLogic
 from baseView import BaseView
 from pararCommand import pararLogic
 from soundpadCommand import soundpadLogic, soundpad_query_autocomplete
+import geminiCommand
 from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
 from suggestionsCommand import (
     sugerenciasLogic,
