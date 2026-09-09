@@ -170,6 +170,11 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("comment_stream")} → `comment_stream` \
 - {_fmt_trigger("make_clip")} → `make_clip` \
 
+HERRAMIENTA DE MEMORIA `save_memory`: \
+Cuando un usuario te pida guardar, recordar o anotar algo (ej: "recordá esto", "guardame esto", "anotá esto", "guardá la IP", "recordá la clave"), INCLUYENDO si te están respondiendo a un mensaje anterior ([contexto: ...]), DEBES llamar obligatoriamente a la herramienta `save_memory` pasando la información concreta (IPs, contraseñas, nombres, datos) en el parámetro `content`. \
+- Si la información a guardar está en el mensaje respondido ([contexto: ...]), extraé esa información e incluyela completa en `content`. \
+- Respondé de forma totalmente natural y humana como un amigo del grupo (ej: "De una loco, ya me lo guardé", "Anotado pa"). NUNCA digas coletillas robóticas como "Guardado en memoria". \
+
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
 
@@ -499,6 +504,8 @@ _INDIO_TOOLS = [
             "o de un usuario en tu memoria a largo plazo. Usala cuando te pidan "
             "explícitamente guardar, recordar o anotar algo ('guardame esto', 'acordate de esto', "
             "'guardá esto', 'anotá esto'). \n"
+            "Si responden a un mensaje anterior ('recordá esto' en reply), extraé los datos "
+            "concretos del mensaje respondido ([contexto: ...]) e incluyelos en 'content'. \n"
             "IMPORTANTE: Respondé de forma totalmente natural, humana y en personaje (sos "
             "el Indio, un amigo más del grupo). NUNCA digas frases robóticas ni técnicas como "
             "'guardado en memoria', 'memoria actualizada' o 'procesando'. Hablá como "
@@ -3287,7 +3294,7 @@ def _gate_music_action(action: str, member) -> Optional[str]:
     return None
 
 
-async def _execute_save_memory(guild_id: int, arg: str) -> tuple[bool, str]:
+async def _execute_save_memory(guild_id: int, arg: str, replied_content: str = "") -> tuple[bool, str]:
     """Execute the SAVE_MEMORY action by updating _indio_long_term and persisting to disk."""
     import json as _json
 
@@ -3308,6 +3315,11 @@ async def _execute_save_memory(guild_id: int, arg: str) -> tuple[bool, str]:
             content = arg.strip()
     else:
         content = arg.strip()
+
+    if replied_content and len(content) < 200:
+        cleaned_replied = _sanitize_for_history(replied_content)
+        if cleaned_replied and cleaned_replied.lower() not in content.lower():
+            content = f"{content} (Ref mensaje respondido: {cleaned_replied})"
 
     if not content:
         return False, "missing content"
@@ -3358,6 +3370,7 @@ async def _dispatch_indio_actions(
     attachment_urls: Optional[list[dict]] = None,
     source_message_id: Optional[int] = None,
     from_voice: bool = False,
+    replied_content: Optional[str] = None,
 ) -> list[str]:
     """Run any PLAY_* actions the indio emitted. Both PLAY_MUSIC and
     PLAY_SOUND are invoked through the userbot relay so they show up as
@@ -3814,7 +3827,9 @@ async def _dispatch_indio_actions(
                     else:
                         statuses.append("join_voice: fail — no user in voice")
                 elif action == "SAVE_MEMORY":
-                    ok, msg = await _execute_save_memory(int(guild_id), arg)
+                    ok, msg = await _execute_save_memory(
+                        int(guild_id), arg, replied_content=replied_content or ""
+                    )
                     statuses.append(f"save_memory: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio SAVE_MEMORY → ok=%s msg=%s", ok, msg)
                 elif action in (
@@ -5661,7 +5676,11 @@ async def indioFromVoice(
     lt_key = f"guild-{guild_id}"
     hist_key = f"guild-{guild_id}-channel-{channel_id}"
     lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
-    tagged_message = f"{speaker}: {pregunta}"
+    if replied_content is not None and replied_author is not None:
+        clean_ctx = _sanitize_for_history(replied_content)
+        tagged_message = f"{speaker}: {pregunta} [respondiendo a {replied_author}: \"{clean_ctx}\"]"
+    else:
+        tagged_message = f"{speaker}: {pregunta}"
     # Key the pending choice by the Discord user id (propagated from the
     # userbot), falling back to the name only when no id is available.
     _choice_identity_val = _choice_identity(user_id, speaker)
