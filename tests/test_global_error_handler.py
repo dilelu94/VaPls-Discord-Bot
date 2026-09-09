@@ -14,7 +14,7 @@ import analytics
 import errorHandler
 
 
-def make_ctx(*, response_done=False, command_name="dummy"):
+def _make_error_handler_ctx(*, response_done=False, command_name="dummy"):
     ctx = MagicMock(name="ApplicationContext")
     ctx.author = types.SimpleNamespace(id=1, display_name="t", name="t")
     ctx.guild = types.SimpleNamespace(id=100)
@@ -50,7 +50,7 @@ def _was_ephemeral(ctx) -> bool:
 
 @pytest.mark.asyncio
 async def test_network_error_shows_connection_message_and_captures():
-    ctx = make_ctx(command_name="play")
+    ctx = _make_error_handler_ctx(command_name="play")
     await errorHandler.handle(ctx, asyncio.TimeoutError())
 
     text = _text_sent(ctx).lower()
@@ -66,14 +66,14 @@ async def test_network_error_shows_connection_message_and_captures():
 
 @pytest.mark.asyncio
 async def test_aiohttp_client_error_also_classified_as_network():
-    ctx = make_ctx()
+    ctx = _make_error_handler_ctx()
     await errorHandler.handle(ctx, aiohttp.ClientError("boom"))
     assert analytics.capture_exception.call_args.kwargs["properties"]["error_kind"] == "network"
 
 
 @pytest.mark.asyncio
 async def test_forbidden_tells_user_about_permissions():
-    ctx = make_ctx()
+    ctx = _make_error_handler_ctx()
     resp = MagicMock(status=403, reason="Forbidden")
     await errorHandler.handle(ctx, discord.Forbidden(resp, "nope"))
 
@@ -83,7 +83,7 @@ async def test_forbidden_tells_user_about_permissions():
 
 @pytest.mark.asyncio
 async def test_generic_exception_falls_through_to_unhandled_message():
-    ctx = make_ctx()
+    ctx = _make_error_handler_ctx()
     await errorHandler.handle(ctx, RuntimeError("boom"))
 
     text = _text_sent(ctx).lower()
@@ -96,7 +96,7 @@ async def test_generic_exception_falls_through_to_unhandled_message():
 
 @pytest.mark.asyncio
 async def test_uses_followup_when_response_already_done():
-    ctx = make_ctx(response_done=True)
+    ctx = _make_error_handler_ctx(response_done=True)
     await errorHandler.handle(ctx, RuntimeError("x"))
 
     assert ctx.followup.send.called
@@ -105,7 +105,7 @@ async def test_uses_followup_when_response_already_done():
 
 @pytest.mark.asyncio
 async def test_uses_respond_when_response_not_yet_done():
-    ctx = make_ctx(response_done=False)
+    ctx = _make_error_handler_ctx(response_done=False)
     await errorHandler.handle(ctx, RuntimeError("x"))
 
     assert ctx.respond.called
@@ -116,7 +116,7 @@ async def test_uses_respond_when_response_not_yet_done():
 async def test_unwraps_application_command_invoke_error():
     """py-cord wraps callback errors in ApplicationCommandInvokeError —
     the handler must classify based on the *original* exception."""
-    ctx = make_ctx()
+    ctx = _make_error_handler_ctx()
     wrapper = types.SimpleNamespace(original=asyncio.TimeoutError())
     await errorHandler.handle(ctx, wrapper)
 
@@ -127,7 +127,7 @@ async def test_unwraps_application_command_invoke_error():
 async def test_user_still_gets_message_when_analytics_blows_up():
     """Analytics is best-effort; a failure there must not silence the user."""
     analytics.capture_exception.side_effect = RuntimeError("posthog down")
-    ctx = make_ctx()
+    ctx = _make_error_handler_ctx()
 
     await errorHandler.handle(ctx, RuntimeError("boom"))
 
@@ -139,7 +139,7 @@ async def test_user_still_gets_message_when_analytics_blows_up():
 async def test_handler_swallows_discord_send_failure():
     """If the interaction expired, sending will raise — handler must not
     propagate (would crash the event loop)."""
-    ctx = make_ctx()
+    ctx = _make_error_handler_ctx()
     ctx.respond.side_effect = RuntimeError("interaction expired")
 
     await errorHandler.handle(ctx, RuntimeError("boom"))  # must not raise

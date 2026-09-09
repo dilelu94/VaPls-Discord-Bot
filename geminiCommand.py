@@ -21,6 +21,7 @@ import random
 import re
 import tempfile
 import time
+from datetime import datetime
 import unicodedata
 from typing import Any, Optional
 from urllib.parse import urljoin
@@ -35,6 +36,7 @@ if not hasattr(discord, "ApplicationContext"):
 
 import analytics
 import config
+import chat_db
 import geminiClient
 from geminiClient import GeminiError as _GeminiError
 import gemini_keywords as _kw
@@ -81,10 +83,69 @@ amigable, directo, y respondés en español rioplatense (voseo). Usás emojis co
 moderación: uno o dos por respuesta máximo. Tus respuestas son concisas: por \
 defecto no más de 4 párrafos cortos. Si te piden código, lo devolvés bien \
 formateado en bloques de Discord (```lang ... ```). No inventás información: \
-si no sabés algo, lo decís. No tenés acceso a internet en tiempo real ni al \
-estado del servidor. No te hagas pasar por un humano: sos un bot y está bien \
-que se note.
+si no sabés algo, lo decís. Tenés acceso a buscar en el historial de chat del \
+servidor mediante tu herramienta `search_chat_history`. Si en la búsqueda un \
+mensaje aparece marcado como `[MENSAJE BORRADO EN DISCORD]`, debés indicarle al \
+usuario que dicho mensaje fue eliminado posteriormente del canal. No te hagas \
+pasar por un humano: sos un bot y está bien que se note.
 """
+
+_VAPLS_TOOLS = [
+    {
+        "name": "search_chat_history",
+        "description": (
+            "Buscar en el historial de chat guardado de los canales de Discord de VaPls. "
+            "Usá esta herramienta cuando el usuario pida buscar mensajes anteriores, "
+            "recordar lo que dijo alguien (ej: 'seba', 'miles'), o encontrar datos/links compartidos en el chat."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Palabras clave o términos a buscar en los mensajes (ej: 'valheim', 'link', 'contraseña').",
+                },
+                "author_name": {
+                    "type": "STRING",
+                    "description": "Nombre o apodo del autor del mensaje si se especificó (ej: 'seba', 'miles', 'chalo').",
+                },
+                "channel_name": {
+                    "type": "STRING",
+                    "description": "Nombre del canal si se especificó uno (ej: 'soreteposting', 'general').",
+                },
+            },
+            "required": ["query"],
+        },
+    }
+]
+
+
+def _execute_vapls_chat_search(call_args: dict, user_prompt: str) -> str:
+    """Execute SQLite chat search and format results for Gemini prompt context."""
+    query = str((call_args or {}).get("query") or "").strip()
+    if not query:
+        query = user_prompt
+    author_name = (call_args or {}).get("author_name")
+    channel_name = (call_args or {}).get("channel_name")
+
+    results = chat_db.search_messages(
+        query=query,
+        author_name=author_name,
+        channel_name=channel_name,
+        limit=20,
+    )
+
+    if not results:
+        return f"[Resultados de búsqueda en el historial de chat para '{query}']: No se encontraron mensajes coincidentes."
+
+    lines = [f"[Resultados de búsqueda en el historial de chat para '{query}']:"]
+    for r in results:
+        dt_str = datetime.fromtimestamp(r["created_at"]).strftime("%Y-%m-%d %H:%M")
+        ch_str = r.get("channel_name") or f"canal-{r['channel_id']}"
+        del_tag = " [MENSAJE BORRADO EN DISCORD]" if r.get("is_deleted") else ""
+        lines.append(f"- [{dt_str}] {r['author_name']} en #{ch_str}{del_tag}: {r['content']}")
+
+    return "\n".join(lines)
 
 
 def _fmt_trigger(tool: str) -> str:
@@ -5004,8 +5065,26 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str, router=None
             user_message=pregunta,
             system_instruction=VAPLS_SYSTEM,
             history=None,
+            tools=_VAPLS_TOOLS,
             on_retry=notifier,
         )
+
+        if reply.function_calls:
+            search_call = next(
+                (fc for fc in reply.function_calls if fc.get("name") == "search_chat_history"),
+                None,
+            )
+            if search_call:
+                args = search_call.get("args") or {}
+                search_context = _execute_vapls_chat_search(args, pregunta)
+                reply = await geminiClient.generate(
+                    user_message=pregunta,
+                    system_instruction=VAPLS_SYSTEM,
+                    history=None,
+                    volatile_context=search_context,
+                    on_retry=notifier,
+                )
+
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "vapls")
         # Cuando es rate-limit, mostramos solo al que invocó para no
