@@ -86,8 +86,9 @@ formateado en bloques de Discord (```lang ... ```). No inventás información: \
 si no sabés algo, lo decís. Tenés acceso a buscar en el historial de chat del \
 servidor mediante tu herramienta `search_chat_history`. Si en la búsqueda un \
 mensaje aparece marcado como `[MENSAJE BORRADO EN DISCORD]`, debés indicarle al \
-usuario que dicho mensaje fue eliminado posteriormente del canal. No te hagas \
-pasar por un humano: sos un bot y está bien que se note.
+usuario que dicho mensaje fue eliminado posteriormente del canal, pero mostrando \
+de todas formas cuál era el contenido del mensaje original. No te hagas pasar por un \
+humano: sos un bot y está bien que se note.
 """
 
 _VAPLS_TOOLS = [
@@ -2899,7 +2900,7 @@ _ACTION_FALLBACK_TEXT = {
     "COMMENT_STREAM": "📺 Mirando el stream",
     "JOIN_VOICE": "🎤 Ahí voy al canal de voz",
     "MAKE_CLIP": "🎬 Clip de audio",
-    "SAVE_MEMORY": "",
+    "SAVE_MEMORY": "De una, anotado",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
