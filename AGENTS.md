@@ -67,7 +67,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 | ------------------- | -------------------------------------------------------------------- |
 | **Host**            | `ubuntu@141.148.84.55`                                               |
 | **OS**              | Ubuntu 22.04 aarch64                                                 |
-| **Shape**           | Oracle VM.Standard.A1.Flex — 4 OCPU / 24 GB RAM / 4 Gbps NIC         |
+| **Shape**           | Oracle VM.Standard.A1.Flex — 2 OCPU / 12 GB RAM / 2 Gbps NIC         |
 | **SSH key (local)** | `/var/home/dilelu/.ssh/vapls`                                        |
 | **Repo path**       | `/home/ubuntu/vapls-discord-bot/`                                    |
 | **Services**        | `discord-bot.service` (main bot) + `indio-userbot.service` (userbot) |
@@ -96,7 +96,7 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 - **Lenguaje:** Python 3.10+
 - **Discord bot:** `py-cord`
 - **Userbot:** `discord.py-self` + `discord-ext-voice-recv`
-- **STT:** `faster-whisper` (CTranslate2, offline, modelo `small` int8 en el server ARM 4/24)
+- **STT:** `faster-whisper` (CTranslate2, offline, modelo `small` int8 en el server ARM 2/12)
 - **TTS:** `piper-tts` (modelo `es_ES-davefx-medium` nativo de voz masculina sin filtros)
 - **Audio:** `FFmpeg`, `audioop`
 - **HTTP:** `aiohttp`

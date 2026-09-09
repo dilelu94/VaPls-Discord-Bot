@@ -176,11 +176,11 @@ async def test_dispatch_edits_reply_with_failure_reason_when_resume_finds_no_pla
     assert "no" in combined.lower()  # failure indicator present
 
 
-async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
+async def test_dispatch_no_robotic_suffix_on_successful_resume(
     monkeypatch,
 ):
-    """A successful resume edits the reply to add a success marker — no
-    separate 'apology' or noise message is posted."""
+    """A successful resume does NOT edit the reply to append robotic suffixes —
+    Indio's natural human response is left clean."""
     import geminiCommand
     import playCommand
 
@@ -195,7 +195,6 @@ async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
         togglePausePlay=AsyncMock(),
     )
     monkeypatch.setattr(playCommand, "guildPlayers", {100: player}, raising=True)
-    # Relay for the #sick-tunes mirror returns a list (truthy).
     monkeypatch.setattr(
         geminiCommand, "_relay_to_userbot", AsyncMock(return_value=[999])
     )
@@ -212,12 +211,7 @@ async def test_dispatch_edits_reply_with_success_suffix_on_successful_resume(
         requester_member=_member_in_voice(),
     )
 
-    # Edit happened and includes a success marker (not a failure message).
-    assert edited, "expected the reply message to be edited"
-    combined = edited[0]
-    assert "dale, retomando" in combined  # base text preserved
-    # Success marker present; no apology language.
-    assert "listo" in combined.lower()
+    assert not edited, "expected the reply message NOT to be edited on success"
 
 
 async def test_dispatch_edits_relay_message_via_edit_endpoint_on_failure(monkeypatch):
@@ -311,8 +305,8 @@ async def test_dispatch_no_separate_channel_send_on_failure(monkeypatch):
     assert len(edited) == 1
 
 
-async def test_dispatch_music_success_adds_music_suffix(monkeypatch):
-    """PLAY_MUSIC success appends the music-specific success marker."""
+async def test_dispatch_music_success_leaves_reply_clean(monkeypatch):
+    """PLAY_MUSIC success leaves Indio's response clean without robotic suffixes."""
     import geminiCommand
 
     # Relay-based play succeeds.
@@ -332,14 +326,11 @@ async def test_dispatch_music_success_adds_music_suffix(monkeypatch):
         requester_member=_member_in_voice(),
     )
 
-    assert edited
-    combined = edited[0]
-    assert "dale, va Queen" in combined
-    assert "🎵" in combined  # music-specific suffix
+    assert not edited, "expected no robotic suffix edit on success"
 
 
-async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
-    """PLAY_SOUND success appends the sound-specific success marker."""
+async def test_dispatch_sound_success_leaves_reply_clean(monkeypatch):
+    """PLAY_SOUND success leaves Indio's response clean without robotic suffixes."""
     import geminiCommand
 
     monkeypatch.setattr(
@@ -358,10 +349,7 @@ async def test_dispatch_sound_success_adds_sound_suffix(monkeypatch):
         requester_member=_member_in_voice(),
     )
 
-    assert edited
-    combined = edited[0]
-    assert "tomá" in combined
-    assert "🔊" in combined  # sound-specific suffix
+    assert not edited, "expected no robotic suffix edit on success"
 
 
 async def test_dispatch_sound_rejected_when_music_playing(monkeypatch):

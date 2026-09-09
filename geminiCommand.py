@@ -3197,30 +3197,26 @@ def _failure_feedback(status: str) -> Optional[str]:
 # without leading punctuation; the joiner adds " — " when editing in place and
 # posts the bare line when it has to fall back to a standalone message.
 _ACTION_SUCCESS_SUFFIX = {
-    "PLAY_MUSIC": "listo 🎵",
-    "PLAY_SOUND": "listo 🔊",
-    "SKIP_MUSIC": "listo ✅",
-    "PAUSE_MUSIC": "listo ✅",
-    "RESUME_MUSIC": "listo ✅",
-    "STOP_MUSIC": "listo ✅",
+    "PLAY_MUSIC": "",
+    "PLAY_SOUND": "",
+    "SKIP_MUSIC": "",
+    "PAUSE_MUSIC": "",
+    "RESUME_MUSIC": "",
+    "STOP_MUSIC": "",
     "USE_IMAGE": "",
     "SPACEWAR_GUIDE": "",
     "DJ_MODE": "",
-    "DISCONNECT_INDIO": "listo 🚪",
-    "TROLL_MOVE_USER": "listo 🔀",
+    "DISCONNECT_INDIO": "",
+    "TROLL_MOVE_USER": "",
+    "COMMENT_STREAM": "",
+    "JOIN_VOICE": "",
+    "MAKE_CLIP": "",
     "SAVE_MEMORY": "",
 }
 
-# When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
-# HTTP 200 from Discord acknowledging the slash interaction — the actual
-# yt-dlp download / playback can still fail downstream and we won't learn
-# about it. Use a softer suffix so the indio doesn't falsely promise audio
-# the user might never hear. The fallback path (playFromIndio /
-# play_clip_by_query) runs in-process so the regular "listo" suffix still
-# applies there.
 _ACTION_RELAY_SUCCESS_SUFFIX = {
-    "PLAY_MUSIC": "le pasé el tema al /play 🎵",
-    "PLAY_SOUND": "le pasé el clip al /soundpad 🔊",
+    "PLAY_MUSIC": "",
+    "PLAY_SOUND": "",
 }
 
 

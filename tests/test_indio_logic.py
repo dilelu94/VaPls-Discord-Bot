@@ -184,16 +184,11 @@ def _fake_search(monkeypatch, candidates):
 # ---------------------------------------------------------------------------
 
 
-async def test_play_succeeds_reply_is_edited_with_success_marker(
+async def test_play_succeeds_reply_is_left_clean_without_robotic_suffix(
     indio, ctx_factory, patch_generate, reply_factory, monkeypatch, disable_relay
 ):
-    """When a control action (skip) succeeds, the Gemini pre-line reply is
-    EDITED to append a success marker — the user sees the final state without
-    a separate message.
-
-    Control verbs (skip/pause/resume/stop) bypass the music disambiguation
-    flow so they always go through _dispatch_indio_actions directly, making
-    them the clearest test surface for the edit-in-place behavior."""
+    """When a control action (skip) succeeds, Indio's natural human reply is
+    left clean without appending robotic success markers ('listo ✅')."""
     import playCommand
 
     fake_player = MagicMock()
@@ -224,11 +219,11 @@ async def test_play_succeeds_reply_is_edited_with_success_marker(
     # The skip boundary ran.
     fake_player.skipSong.assert_awaited()
 
-    # The final user-visible text must contain the original reply AND a
-    # success marker (edit happened in place).
+    # The final user-visible text must contain the original reply without robotic suffix.
     final = "\n".join(m for m in ctx.sent_messages if m is not None)
     assert "dale, salteo" in final
-    assert "listo" in final.lower() or "✅" in final
+    assert "listo" not in final.lower()
+    assert "✅" not in final
 
 
 async def test_play_fails_reply_is_edited_with_failure_indication(

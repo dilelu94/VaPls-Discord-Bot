@@ -14,7 +14,7 @@ USER_TOKEN = os.getenv("USER_TOKEN")
 # When false, the userbot will still connect and track activity but won't transcribe.
 WHISPER_ENABLED = os.getenv("WHISPER_ENABLED", "true").lower() == "true"
 # Model name (e.g. "tiny", "base", "small") or a HuggingFace repo. Resolved
-# via faster-whisper's standard download path. On the Ampere A1 4/24 server,
+# via faster-whisper's standard download path. On the Ampere A1 2/12 server,
 # "small" runs comfortably real-time with concurrency 5; "base" was the cap
 # on the old 1 GB E2.1.Micro. "tiny" produces garbage on rioplatense audio.
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
@@ -22,9 +22,9 @@ WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
 # Directory where faster-whisper caches downloaded models. Empty = library default.
 WHISPER_CACHE_DIR = os.getenv("WHISPER_CACHE_DIR", "")
-# CTranslate2 thread count for inference. Match the VM vCPU count (4 on the
-# Ampere A1 4/24 server) for best per-utterance throughput.
-WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "4"))
+# CTranslate2 thread count for inference. Match the VM vCPU count (2 on the
+# Ampere A1 2/12 server) for best per-utterance throughput.
+WHISPER_CPU_THREADS = int(os.getenv("WHISPER_CPU_THREADS", "2"))
 
 # Concurrency caps: how many overlapping utterances may be transcribed at
 # once. When the main bot is playing audio (music/soundpad), we throttle to

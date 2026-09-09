@@ -56,3 +56,23 @@ def test_extract_snapshot_ffmpeg_success():
             res_path = receiver.extract_snapshot(filename="test_snapshot.jpg")
             assert res_path == os.path.abspath(jpg_path)
             assert os.path.exists(jpg_path)
+
+
+def test_receiver_dave_decryption():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        receiver = StreamSnapshotReceiver(output_dir=tmpdir)
+        receiver.start_capture()
+
+        # Encrypted payload
+        encrypted_payload = b"\xaa\xbb\xcc\xdd"
+        pkt = make_rtp_packet(1, encrypted_payload)
+
+        # Mock DAVE session returning decrypted NAL type 5 payload
+        mock_dave = MagicMock()
+        mock_dave.decrypt_h264.return_value = b"\x05\x88\x84\x00\x00"
+
+        receiver.process_rtp_packet(pkt, dave_session=mock_dave, ssrc=12345, user_id=999)
+
+        mock_dave.decrypt_h264.assert_called_once_with(ssrc=12345, data=encrypted_payload, user_id=999)
+        assert b"\x00\x00\x00\x01\x05" in receiver._raw_nal_buffer
+

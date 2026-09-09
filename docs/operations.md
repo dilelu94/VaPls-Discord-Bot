@@ -2,7 +2,7 @@
 
 ## Server
 
-- **Producción**: Oracle Cloud Ampere A1 — 4 OCPU (Neoverse N1 aarch64) / 24 GB RAM.
+- **Producción**: Oracle Cloud Ampere A1 — 2 OCPU (Neoverse N1 aarch64) / 12 GB RAM.
 - **Stack**: Ubuntu 22.04+ aarch64. `faster-whisper` (CTranslate2 con wheels aarch64), `py-cord`, `discord.py-self`, `ffmpeg`.
 - **⚠️ Python 3.10 (constraint de runtime)**: el server corre **Python 3.10.12**
   (el `python3` que trae Ubuntu 22.04), en ambos venvs (`venv/`, `userbot/venv/`).

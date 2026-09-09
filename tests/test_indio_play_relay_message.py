@@ -57,13 +57,10 @@ def _member_in_voice(user_id=42, channel_id=99, channel_name=None):
     )
 
 
-async def test_play_music_via_relay_uses_softer_success_suffix(monkeypatch):
-    """Relay ack-only path: the edit must reflect "I handed it off" rather
-    than "I played it". The regular "listo" finality language is wrong
-    here because the bot has no confirmation playback actually started."""
+async def test_play_music_via_relay_uses_no_robotic_success_suffix(monkeypatch):
+    """Relay path: on success, the indio's reply should NOT be edited with robotic suffixes."""
     import geminiCommand
 
-    # Relay returns success — the only signal we have is the HTTP ack.
     monkeypatch.setattr(
         geminiCommand,
         "_invoke_slash_via_userbot",
@@ -82,24 +79,14 @@ async def test_play_music_via_relay_uses_softer_success_suffix(monkeypatch):
         requester_member=_member_in_voice(),
     )
 
-    assert edited, "expected the reply to be edited with a result line"
-    combined = edited[0]
-    assert "dale, va" in combined  # base text preserved
-    # Observable promise: the message must NOT carry the strong-success
-    # wording from the local-success path. "listo" reserved for cases
-    # where the bot actually knows the action completed.
-    assert "listo" not in combined.lower()
+    assert not edited, "successful action should not append robotic suffixes"
 
 
-async def test_play_music_via_fallback_keeps_strong_success_suffix(monkeypatch):
-    """Local fallback path: ``playFromIndio`` ran in-process and reports
-    the song was queued. That's a real confirmation, so the regular
-    "listo" finality language is appropriate."""
+async def test_play_music_via_fallback_uses_no_robotic_success_suffix(monkeypatch):
+    """Local fallback path: on success, the indio's reply should NOT be edited with robotic suffixes."""
     import geminiCommand
     import playCommand
 
-    # Relay fails so the dispatcher falls back to playFromIndio. That
-    # function returns (ok=True, msg) confirming the song was queued.
     monkeypatch.setattr(
         geminiCommand,
         "_invoke_slash_via_userbot",
@@ -123,18 +110,11 @@ async def test_play_music_via_fallback_keeps_strong_success_suffix(monkeypatch):
         requester_member=_member_in_voice(),
     )
 
-    assert edited, "expected the reply to be edited with a result line"
-    combined = edited[0]
-    assert "dale, va" in combined
-    # In-process success is a real confirmation — the strong finality
-    # wording is correct here.
-    assert "listo" in combined.lower()
+    assert not edited, "successful action should not append robotic suffixes"
 
 
-async def test_play_sound_via_relay_uses_softer_success_suffix(monkeypatch):
-    """Same uncertainty applies to PLAY_SOUND via relay: HTTP 200 from the
-    userbot only proves Discord accepted the slash, not that the clip
-    actually played in the voice channel."""
+async def test_play_sound_via_relay_uses_no_robotic_success_suffix(monkeypatch):
+    """PLAY_SOUND via relay: on success, the indio's reply should NOT be edited with robotic suffixes."""
     import geminiCommand
 
     monkeypatch.setattr(
@@ -154,18 +134,11 @@ async def test_play_sound_via_relay_uses_softer_success_suffix(monkeypatch):
         reply_text="va eso",
     )
 
-    assert edited, "expected the reply to be edited with a result line"
-    combined = edited[0]
-    assert "va eso" in combined
-    assert "listo" not in combined.lower()
+    assert not edited, "successful action should not append robotic suffixes"
 
 
-
-
-
-async def test_play_music_via_relay_includes_channel_mention(monkeypatch):
-    """Relay path: the success suffix should include a clickable link
-    to the designated play channel via Discord's ``<#id>`` mention format."""
+async def test_play_music_via_relay_success_remains_clean(monkeypatch):
+    """Relay path with voice context: on success, reply remains clean without robotic suffixes."""
     import geminiCommand
     import config
 
@@ -189,15 +162,11 @@ async def test_play_music_via_relay_includes_channel_mention(monkeypatch):
         from_voice=True,
     )
 
-    assert edited, "expected the reply to be edited with a result line"
-    combined = edited[0]
-    assert "<#451607097432604672>" in combined
-    assert "🎵" in combined
+    assert not edited, "successful action should not edit reply with robotic suffixes"
 
 
-async def test_play_music_via_fallback_includes_channel_mention(monkeypatch):
-    """Fallback path: the success suffix should include a clickable link
-    to the designated play channel via Discord's ``<#id>`` mention format."""
+async def test_play_music_via_fallback_success_remains_clean(monkeypatch):
+    """Fallback path with voice context: on success, reply remains clean without robotic suffixes."""
     import geminiCommand
     import config
     import playCommand
@@ -227,7 +196,5 @@ async def test_play_music_via_fallback_includes_channel_mention(monkeypatch):
         from_voice=True,
     )
 
-    assert edited, "expected the reply to be edited with a result line"
-    combined = edited[0]
-    assert "<#451607097432604672>" in combined
-    assert "🎵" in combined
+    assert not edited, "successful action should not edit reply with robotic suffixes"
+

@@ -82,8 +82,19 @@ class StreamSnapshotReceiver:
         header = rtp_data[:offset]
         raw_payload = rtp_data[offset:]
 
+        if dave_session is not None:
+            try:
+                if hasattr(dave_session, "decrypt_h264"):
+                    raw_payload = dave_session.decrypt_h264(ssrc=ssrc or 0, data=raw_payload, user_id=user_id)
+                elif hasattr(dave_session, "decrypt"):
+                    raw_payload = dave_session.decrypt(user_id=user_id or 0, media_type=1, packet=raw_payload)
+            except Exception as exc:
+                log.warning("[RECEIVER] DAVE decrypt_h264 exception: %s", exc)
+
+        decrypted_rtp = header + raw_payload
+
         # Depacketize RTP -> Annex-B NAL units
-        for nal in self.depacketizer.depacketize(rtp_data):
+        for nal in self.depacketizer.depacketize(decrypted_rtp):
             if len(nal) > 4:
                 nal_type = nal[4] & 0x1F
                 if nal_type in self._nal_counts:
