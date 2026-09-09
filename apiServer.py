@@ -2363,7 +2363,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 or "torbox" in stream_url.lower()
                 or not ("tb-cdn" in stream_url or stream_url.endswith((".mp4", ".mkv", ".avi", ".m3u8")))
             )
-            if needs_resolve and "tb-cdn" not in stream_url:
+            if needs_resolve:
                 try:
                     resolved = await asyncio.to_thread(resolve_redirect_url, stream_url)
                     if resolved and ("/configure" in resolved or ".legal/" in resolved):

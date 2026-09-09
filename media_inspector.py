@@ -234,7 +234,7 @@ async def extract_subtitle_file(stream_url: str, stream_index: int, timeout: flo
         "-hide_banner",
         "-loglevel", "warning",
         "-user_agent", ua,
-        "-headers", f"User-Agent: {ua}",
+        "-headers", f"User-Agent: {ua}\r\n",
         "-probesize", "1000000",
         "-analyzeduration", "1000000",
         "-i", stream_url,

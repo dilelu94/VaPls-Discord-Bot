@@ -111,7 +111,7 @@ def resolve_torbox_hash(token: str, infohash: str) -> Optional[str]:
     if not token or not infohash:
         return None
     infohash = infohash.lower().strip()
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": "Mozilla/5.0"}
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": BROWSER_HEADERS["User-Agent"]}
 
     # 1. Try checking existing torrents in user's library
     try:
