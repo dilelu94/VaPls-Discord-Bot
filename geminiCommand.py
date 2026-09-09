@@ -3936,7 +3936,8 @@ async def _dispatch_indio_actions(
                         _ACTION_SUCCESS_SUFFIX.get(primary_action, ""),
                     )
                     if (
-                        from_voice
+                        suffix
+                        and from_voice
                         and primary_action == "PLAY_MUSIC"
                         and config.INDIO_PLAY_CHANNEL_ID
                     ):
@@ -3945,7 +3946,8 @@ async def _dispatch_indio_actions(
                 else:
                     suffix = _ACTION_SUCCESS_SUFFIX.get(primary_action, "")
                     if (
-                        from_voice
+                        suffix
+                        and from_voice
                         and primary_action == "PLAY_MUSIC"
                         and config.INDIO_PLAY_CHANNEL_ID
                     ):
