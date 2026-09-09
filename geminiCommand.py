@@ -492,6 +492,37 @@ _INDIO_TOOLS = [
             },
         },
     },
+    {
+        "name": "save_memory",
+        "description": (
+            "Guardar una memoria, hecho, anécdota, frase o dato importante del grupo "
+            "o de un usuario en la memoria a largo plazo del Indio. Usar cuando "
+            "el usuario explícitamente pida guardar, recordar o anotar algo ('guardame esto', "
+            "'acordate de esto', 'guardá esto', 'anotá esto')."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "content": {
+                    "type": "STRING",
+                    "description": (
+                        "Resumen o texto del hecho, anécdota, frase o dato a recordar en "
+                        "formato claro en español."
+                    ),
+                },
+                "target_user": {
+                    "type": "STRING",
+                    "description": "Nombre de la persona referida (si aplica).",
+                },
+                "category": {
+                    "type": "STRING",
+                    "enum": ["evento", "anecdota", "chiste", "dato"],
+                    "description": "Categoría de la memoria a guardar.",
+                },
+            },
+            "required": ["content"],
+        },
+    },
 ]
 
 
@@ -2778,6 +2809,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "comment_stream": ("COMMENT_STREAM", "fast"),
     "join_voice": ("JOIN_VOICE", None),
     "make_clip": ("MAKE_CLIP", "duration"),
+    "save_memory": ("SAVE_MEMORY", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -2794,6 +2826,7 @@ _ACTION_FALLBACK_TEXT = {
     "COMMENT_STREAM": "📺 Mirando el stream",
     "JOIN_VOICE": "🎤 Ahí voy al canal de voz",
     "MAKE_CLIP": "🎬 Clip de audio",
+    "SAVE_MEMORY": "📝 Guardado en la memoria",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
@@ -3250,6 +3283,66 @@ def _gate_music_action(action: str, member) -> Optional[str]:
     if voice is None or getattr(voice, "channel", None) is None:
         return f"{prefix}: no voice"
     return None
+
+
+async def _execute_save_memory(guild_id: int, arg: str) -> tuple[bool, str]:
+    """Execute the SAVE_MEMORY action by updating _indio_long_term and persisting to disk."""
+    import json as _json
+
+    if not arg:
+        return False, "empty arg"
+
+    content = ""
+    target_user = ""
+    category = ""
+
+    if arg.startswith("{"):
+        try:
+            parsed = _json.loads(arg)
+            content = str(parsed.get("content") or "").strip()
+            target_user = str(parsed.get("target_user") or "").strip()
+            category = str(parsed.get("category") or "").strip().lower()
+        except Exception:
+            content = arg.strip()
+    else:
+        content = arg.strip()
+
+    if not content:
+        return False, "missing content"
+
+    lt_key = f"guild-{guild_id}"
+    async with _dispatch_lock_for(guild_id):
+        lt = dict(_indio_long_term.get(lt_key, {}))
+
+        if target_user:
+            users_dict = dict(lt.get("users") or {})
+            matched_key = target_user
+            for u_key in users_dict.keys():
+                if u_key.lower() == target_user.lower():
+                    matched_key = u_key
+                    break
+            u_data = dict(users_dict.get(matched_key) or {})
+            u_anec = list(u_data.get("anecdotas") or [])
+            if content not in u_anec:
+                u_anec.append(content)
+            u_data["anecdotas"] = u_anec
+            users_dict[matched_key] = u_data
+            lt["users"] = users_dict
+        elif category == "chiste":
+            chistes = list(lt.get("chistes_internos") or [])
+            if content not in chistes:
+                chistes.append(content)
+            lt["chistes_internos"] = chistes
+        else:
+            eventos = list(lt.get("eventos_del_grupo") or [])
+            if content not in eventos:
+                eventos.append(content)
+            lt["eventos_del_grupo"] = eventos
+
+        _indio_long_term[lt_key] = lt
+        await _persist_indio_state()
+
+    return True, f"saved '{content[:40]}'"
 
 
 async def _dispatch_indio_actions(
@@ -3718,6 +3811,10 @@ async def _dispatch_indio_actions(
                         logger.info("indio JOIN_VOICE target_ch=%s → ok=%s", getattr(target_ch, "name", target_ch.id), ok)
                     else:
                         statuses.append("join_voice: fail — no user in voice")
+                elif action == "SAVE_MEMORY":
+                    ok, msg = await _execute_save_memory(int(guild_id), arg)
+                    statuses.append(f"save_memory: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info("indio SAVE_MEMORY → ok=%s msg=%s", ok, msg)
                 elif action in (
                     "SKIP_MUSIC",
                     "PAUSE_MUSIC",
