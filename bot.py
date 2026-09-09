@@ -787,15 +787,6 @@ async def on_voice_state_update(member, before, after):
             _start_voice_session(guild_id, member.id, after.channel, after)
         if _streamers_in(after.channel):
             _watch_start.setdefault(guild_id, {})[member.id] = time.time()
-        if storyManager.check_voice_trigger(guild_id, after.channel):
-            asyncio.create_task(
-                storyManager.trigger_story(
-                    bot,
-                    guild_id,
-                    config.INDIO_STORY_CHANNEL_ID,
-                    trigger_type="voice",
-                )
-            )
 
     elif before.channel is not None and after.channel is None:
         _finalize_voice_session(guild_id, member.id)
