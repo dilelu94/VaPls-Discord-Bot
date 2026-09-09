@@ -237,6 +237,9 @@ Cuando un usuario te pida guardar, recordar o anotar algo (ej: "recordá esto", 
 - Si la información a guardar está en el mensaje respondido ([contexto: ...]), extraé esa información e incluyela completa en `content`. \
 - Respondé de forma totalmente natural y humana como un amigo del grupo (ej: "De una loco, ya me lo guardé", "Anotado pa"). NUNCA digas coletillas robóticas como "Guardado en memoria". \
 
+HERRAMIENTA DE BÚSQUEDA `search_chat_history`: \
+Cuando te pregunten sobre datos, IPs, contraseñas, links o lo que se dijo antes en el chat del grupo (ej: "cuál era la IP de valheim", "qué dijo miles", "buscá el link"), DEBÉS llamar a la herramienta `search_chat_history` para consultar los mensajes del servidor. \
+
 "play" / "metele play" / "pone play" sin artista → NUNCA es play_music, \
 es resume_music. \
 
@@ -595,6 +598,32 @@ _INDIO_TOOLS = [
                 },
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "search_chat_history",
+        "description": (
+            "Buscar en el historial de chat guardado de los canales de Discord de VaPls. "
+            "Usá esta herramienta cuando el usuario pida buscar mensajes anteriores, "
+            "recordar lo que dijo alguien (ej: 'seba', 'miles'), o encontrar datos/links/IPs compartidos en el chat."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "query": {
+                    "type": "STRING",
+                    "description": "Palabras clave o términos a buscar en los mensajes (ej: 'valheim', 'link', 'contraseña').",
+                },
+                "author_name": {
+                    "type": "STRING",
+                    "description": "Nombre o apodo del autor del mensaje si se especificó (ej: 'seba', 'miles', 'chalo').",
+                },
+                "channel_name": {
+                    "type": "STRING",
+                    "description": "Nombre del canal si se especificó uno (ej: 'soreteposting', 'general').",
+                },
+            },
+            "required": ["query"],
         },
     },
 ]
@@ -5367,6 +5396,24 @@ async def indioLogic(
             volatile_context=player_block or None,
             on_retry=notifier,
         )
+
+        if reply.function_calls:
+            search_call = next(
+                (fc for fc in reply.function_calls if fc.get("name") == "search_chat_history"),
+                None,
+            )
+            if search_call:
+                args = search_call.get("args") or {}
+                search_context = _execute_vapls_chat_search(args, pregunta)
+                combined_volatile = f"{player_block}\n\n{search_context}" if player_block else search_context
+                reply = await geminiClient.generate(
+                    user_message=tagged_message,
+                    system_instruction=system_instruction,
+                    history=_stamp_history_for_prompt(history_snapshot, time.time()),
+                    tools=_INDIO_TOOLS,
+                    volatile_context=combined_volatile,
+                    on_retry=notifier,
+                )
     except geminiClient.GeminiError as e:
         msg = _error_message(e.kind, e.status, "indio")
         is_rate_limited = e.kind == "http" and e.status == 429
@@ -5866,6 +5913,24 @@ async def indioFromVoice(
             volatile_context=volatile,
             image_parts=image_parts,
         )
+
+        if reply.function_calls:
+            search_call = next(
+                (fc for fc in reply.function_calls if fc.get("name") == "search_chat_history"),
+                None,
+            )
+            if search_call:
+                args = search_call.get("args") or {}
+                search_context = _execute_vapls_chat_search(args, pregunta)
+                combined_volatile = f"{volatile}\n\n{search_context}" if volatile else search_context
+                reply = await geminiClient.generate(
+                    user_message=tagged_message,
+                    system_instruction=system_instruction,
+                    history=_stamp_history_for_prompt(history_snapshot, time.time()),
+                    tools=_INDIO_TOOLS,
+                    volatile_context=combined_volatile,
+                    image_parts=image_parts,
+                )
     except geminiClient.GeminiError as e:
         # Posteamos el aviso (incluido el 429 "conseguite una key") via el
         # userbot cuando esta disponible, asi el "Indio real" es quien dice
