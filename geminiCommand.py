@@ -496,9 +496,14 @@ _INDIO_TOOLS = [
         "name": "save_memory",
         "description": (
             "Guardar una memoria, hecho, anécdota, frase o dato importante del grupo "
-            "o de un usuario en la memoria a largo plazo del Indio. Usar cuando "
-            "el usuario explícitamente pida guardar, recordar o anotar algo ('guardame esto', "
-            "'acordate de esto', 'guardá esto', 'anotá esto')."
+            "o de un usuario en tu memoria a largo plazo. Usala cuando te pidan "
+            "explícitamente guardar, recordar o anotar algo ('guardame esto', 'acordate de esto', "
+            "'guardá esto', 'anotá esto'). \n"
+            "IMPORTANTE: Respondé de forma totalmente natural, humana y en personaje (sos "
+            "el Indio, un amigo más del grupo). NUNCA digas frases robóticas ni técnicas como "
+            "'guardado en memoria', 'memoria actualizada' o 'procesando'. Hablá como "
+            "una persona real que le responde a un amigo (ej: 'De una loco, ya me lo guardé', "
+            "'Anotado pa', 'De una, me lo guardo para después')."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -2826,7 +2831,7 @@ _ACTION_FALLBACK_TEXT = {
     "COMMENT_STREAM": "📺 Mirando el stream",
     "JOIN_VOICE": "🎤 Ahí voy al canal de voz",
     "MAKE_CLIP": "🎬 Clip de audio",
-    "SAVE_MEMORY": "📝 Guardado en la memoria",
+    "SAVE_MEMORY": "",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
@@ -3203,6 +3208,7 @@ _ACTION_SUCCESS_SUFFIX = {
     "DJ_MODE": "",
     "DISCONNECT_INDIO": "listo 🚪",
     "TROLL_MOVE_USER": "listo 🔀",
+    "SAVE_MEMORY": "",
 }
 
 # When PLAY_MUSIC / PLAY_SOUND go through the userbot relay we only have an
