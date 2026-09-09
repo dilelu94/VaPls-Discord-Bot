@@ -914,6 +914,10 @@ async def on_message(message):
         if message.channel.id == config.INDIO_STORY_CHANNEL_ID:
             asyncio.create_task(storyManager.handle_first_msg_after_story(message, bot))
 
+        # Record chat messages in #soreteposting for Indio's memory (excluding commands and links)
+        if geminiCommand._is_soreteposting_channel(message.channel):
+            asyncio.create_task(geminiCommand.record_soreteposting_chat_message(message))
+
         asyncio.create_task(
             _classify_and_log_message(
                 message,

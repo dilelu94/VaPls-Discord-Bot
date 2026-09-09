@@ -4531,6 +4531,13 @@ _VOZ_MARKER_RE = re.compile(r"\[voz\]\s*", re.IGNORECASE)
 
 # Collapse 3+ blank lines into 2 (sanitization can leave extra whitespace).
 _MULTIBLANK_RE = re.compile(r"\n{3,}")
+_MULTISPACE_RE = re.compile(r" {2,}")
+
+
+_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+_WWW_URL_RE = re.compile(r"\bwww\.[^\s]+", re.IGNORECASE)
+_DISCORD_INVITE_RE = re.compile(r"\bdiscord\.(gg|com/invite)/[^\s]+", re.IGNORECASE)
+_COMMAND_PREFIX_RE = re.compile(r"^\s*[/!\.\$\?]")
 
 
 def _sanitize_for_history(text: str) -> str:
@@ -4543,6 +4550,7 @@ def _sanitize_for_history(text: str) -> str:
     - Strips Discord user/channel/role mentions ``<@123>`` / ``<#456>`` /
       ``<@&789>``: opaque numeric ids that the model can't interpret.
     - Strips ``[voz]`` markers from STT voice transcriptions.
+    - Strips web URLs and links (https://..., http://..., www....).
 
     The visible reply to Discord is NOT passed through this — emojis and
     mentions still render in the chat. Only the persisted memory is scrubbed,
@@ -4555,11 +4563,105 @@ def _sanitize_for_history(text: str) -> str:
     out = _CUSTOM_EMOJI_MARKUP_RE.sub("", out)
     out = _EMOJI_SHORTCODE_RE.sub("", out)
     out = _DISCORD_MENTION_RE.sub("", out)
+    out = _URL_RE.sub("", out)
+    out = _WWW_URL_RE.sub("", out)
+    out = _DISCORD_INVITE_RE.sub("", out)
+    out = _MULTISPACE_RE.sub(" ", out)
     out = _MULTIBLANK_RE.sub("\n\n", out)
     return out.strip()
 
 
-_URL_RE = re.compile(r"https?://[^\s]+", re.IGNORECASE)
+def is_command_message(text: str) -> bool:
+    """Check if text is a command (starts with /, !, ., $, ?)."""
+    if not text:
+        return False
+    return bool(_COMMAND_PREFIX_RE.match(text.strip()))
+
+
+def _is_soreteposting_channel(channel) -> bool:
+    """Check if a channel is the #soreteposting channel."""
+    if channel is None:
+        return False
+    cid = getattr(channel, "id", None)
+    if cid and cid in (config.INDIO_STORY_CHANNEL_ID, config.INDIO_REPLY_CHANNEL_ID):
+        return True
+    cname = (getattr(channel, "name", "") or "").lower()
+    return "soreteposting" in cname or "sorete-posting" in cname
+
+
+async def record_soreteposting_chat_message(message: discord.Message) -> bool:
+    """Record a chat message from #soreteposting into Indio's short-term history.
+
+    Ignores commands (messages starting with /, !, ., $, ?) and strips URLs.
+    If after sanitization the message text is empty, it is skipped.
+    """
+    if message is None or getattr(message, "author", None) is None:
+        return False
+    author = message.author
+    if author.bot or author.id in (config.USERBOT_USER_ID, config.GOLIVE_USER_ID):
+        return False
+
+    raw_content = (message.content or "").strip()
+    if not raw_content:
+        return False
+
+    # Ignore command messages (/play, !help, .cmd, /indio, etc.)
+    if is_command_message(raw_content):
+        logger.debug("record_soreteposting_chat_message: ignored command message: %r", raw_content[:40])
+        return False
+
+    speaker = getattr(author, "display_name", None) or getattr(author, "name", "alguien")
+
+    # Strip URLs and sanitize text for history
+    sanitized_text = _sanitize_for_history(raw_content)
+    if not sanitized_text:
+        logger.debug("record_soreteposting_chat_message: empty text after sanitization (e.g. link only)")
+        return False
+
+    guild = getattr(message, "guild", None)
+    guild_id = getattr(guild, "id", None)
+    if not guild_id:
+        return False
+
+    channel_id = getattr(message.channel, "id", None) or config.INDIO_STORY_CHANNEL_ID
+    hist_key = f"guild-{guild_id}-channel-{channel_id}"
+    lt_key = f"guild-{guild_id}"
+
+    tagged_message = f"{speaker}: {sanitized_text}"
+    user_turn = {
+        "role": "user",
+        "parts": [{"text": tagged_message[:_STORED_MSG_MAX_CHARS]}],
+        "ts": time.time(),
+    }
+
+    lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
+    if hist_key in _indio_compressing:
+        async with lock:
+            _indio_compress_queue.setdefault(hist_key, []).append(user_turn)
+        await _persist_indio_state()
+    else:
+        async with lock:
+            history = list(_indio_history.get(hist_key, []))
+            # Avoid duplicate consecutive identical turns
+            if history and history[-1].get("role") == "user":
+                last_text = history[-1].get("parts", [{}])[0].get("text", "")
+                if last_text == tagged_message[:_STORED_MSG_MAX_CHARS]:
+                    return False
+            history.append(user_turn)
+            if len(history) > _HISTORY_HARD_CAP:
+                history = history[-_HISTORY_HARD_CAP:]
+            _indio_history[hist_key] = history
+            _indio_last_seen[hist_key] = time.time()
+            size = len(history)
+        await _persist_indio_state()
+        logger.info(
+            "recorded soreteposting message from %s (%d chars, hist_key=%s, total=%d)",
+            speaker, len(sanitized_text), hist_key, size,
+        )
+        if size >= _HISTORY_COMPRESS_THRESHOLD:
+            _spawn(_maybe_compress(hist_key, lt_key))
+    return True
+
 _MARKDOWN_RE = re.compile(r"[*_~`#>]")
 
 
