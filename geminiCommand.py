@@ -1851,7 +1851,7 @@ def _indio_memory_key(ctx: discord.ApplicationContext) -> tuple[str, str]:
     guild = getattr(ctx, "guild", None)
     if guild is not None and getattr(guild, "id", None) is not None:
         lt_key = f"guild-{guild.id}"
-        hist_key = f"guild-{guild.id}-channel-{getattr(ctx, 'channel_id', 'unknown')}"
+        hist_key = f"guild-{guild.id}"
         return hist_key, lt_key
     key = f"dm-{getattr(ctx.author, 'id', 'unknown')}"
     return key, key
@@ -4730,7 +4730,7 @@ async def record_soreteposting_chat_message(message: discord.Message) -> bool:
         return False
 
     channel_id = getattr(message.channel, "id", None) or config.INDIO_STORY_CHANNEL_ID
-    hist_key = f"guild-{guild_id}-channel-{channel_id}"
+    hist_key = f"guild-{guild_id}"
     lt_key = f"guild-{guild_id}"
 
     tagged_message = f"{speaker}: {sanitized_text}"
@@ -5801,7 +5801,7 @@ async def indioFromVoice(
 
     _evict_stale_indio()
     lt_key = f"guild-{guild_id}"
-    hist_key = f"guild-{guild_id}-channel-{channel_id}"
+    hist_key = f"guild-{guild_id}"
     lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     if replied_content is not None and replied_author is not None:
         clean_ctx = _sanitize_for_history(replied_content)

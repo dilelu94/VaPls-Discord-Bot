@@ -89,7 +89,7 @@ async def test_record_soreteposting_chat_message_success(monkeypatch):
     res = await geminiCommand.record_soreteposting_chat_message(msg)
 
     assert res is True
-    hist_key = "guild-999-channel-451580655650996236"
+    hist_key = "guild-999"
     assert hist_key in geminiCommand._indio_history
     history = geminiCommand._indio_history[hist_key]
     assert len(history) == 1
@@ -131,7 +131,7 @@ async def test_record_soreteposting_chat_message_strips_links_and_ignores_link_o
     res_mixed = await geminiCommand.record_soreteposting_chat_message(msg_mixed)
     assert res_mixed is True
 
-    hist_key = "guild-999-channel-451580655650996236"
+    hist_key = "guild-999"
     history = geminiCommand._indio_history[hist_key]
     assert len(history) == 1
     assert "https://" not in history[0]["parts"][0]["text"]

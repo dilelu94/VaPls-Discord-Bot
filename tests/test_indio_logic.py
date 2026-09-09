@@ -17,8 +17,8 @@ from geminiCommand import indioLogic
 KEY = "guild-100"
 
 
-def history(gc, key=KEY, channel_id=42):
-    return gc._indio_history.get(f"{key}-channel-{channel_id}", [])
+def history(gc, key=KEY, channel_id=None):
+    return gc._indio_history.get(key, [])
 
 
 def texts(turns):
