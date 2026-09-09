@@ -264,3 +264,28 @@ async def test_indioFromVoice_voice_conversational_saves_history(
 
     assert len(history(indio, channel_id=111)) == 2
 
+
+def test_gate_save_memory_actions_injects_on_user_trigger():
+    from geminiCommand import _gate_save_memory_actions
+
+    actions = _gate_save_memory_actions([], "recordá que la IP es 1.2.3.4", "dale")
+    assert any(act == "SAVE_MEMORY" for act, _ in actions)
+    assert any("1.2.3.4" in arg for act, arg in actions if act == "SAVE_MEMORY")
+
+
+def test_gate_save_memory_actions_injects_on_model_confirmation():
+    from geminiCommand import _gate_save_memory_actions
+
+    actions = _gate_save_memory_actions([], "hola indio", "De una loco, anotado")
+    assert any(act == "SAVE_MEMORY" for act, _ in actions)
+
+
+def test_gate_save_memory_actions_preserves_existing_save_action():
+    from geminiCommand import _gate_save_memory_actions
+
+    actions = [("SAVE_MEMORY", "custom arg")]
+    res = _gate_save_memory_actions(actions, "recordá esto", "anotado")
+    assert len(res) == 1
+    assert res[0] == ("SAVE_MEMORY", "custom arg")
+
+

@@ -3194,6 +3194,44 @@ def _gate_play_music_actions(
     return kept
 
 
+_SAVE_MEMORY_TRIGGER_RE = re.compile(
+    r"\b(record[aá]|guard[aá](?:me|te)?|anot[aá](?:me|te)?|acordate|memoriz[aá])\b",
+    re.IGNORECASE,
+)
+_SAVE_MEMORY_CONFIRMATION_RE = re.compile(
+    r"\b(anotado|guardado|ya me lo guard[eé]|me lo guardo|tom[ao] nota)\b",
+    re.IGNORECASE,
+)
+
+
+def _gate_save_memory_actions(
+    actions: list[tuple[str, str]], raw_text: str, reply_text: str = ""
+) -> list[tuple[str, str]]:
+    """Garantiza determinísticamente que si el usuario pidió guardar/recordar algo,
+    o si la respuesta de Gemini contiene expresiones de guardado (ej. 'anotado',
+    'ya me lo guardé'), la acción SAVE_MEMORY esté presente en actions para
+    persistirla en disco. Si Gemini omitió la función en function_calls, Python
+    la inyecta en el pipeline de acciones."""
+    has_save_action = any(action == "SAVE_MEMORY" for action, _ in (actions or []))
+    if has_save_action:
+        return actions
+
+    user_triggered = bool(raw_text and _SAVE_MEMORY_TRIGGER_RE.search(raw_text))
+    model_confirmed = bool(reply_text and _SAVE_MEMORY_CONFIRMATION_RE.search(reply_text))
+
+    if user_triggered or model_confirmed:
+        content_to_save = raw_text.strip() if raw_text else reply_text.strip()
+        logger.info(
+            "indio SAVE_MEMORY inyectado determinísticamente por Python gate: (msg=%r, reply=%r)",
+            (raw_text or "")[:80],
+            (reply_text or "")[:80],
+        )
+        actions = list(actions or [])
+        actions.append(("SAVE_MEMORY", content_to_save))
+
+    return actions
+
+
 def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
     """The relay flow and Discord both require non-empty content. When the
     model emits only a function call (no accompanying text), substitute a
@@ -3339,8 +3377,12 @@ _dispatch_locks: dict[int, asyncio.Lock] = {}
 
 
 def _dispatch_lock_for(guild_id: int) -> asyncio.Lock:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
     lock = _dispatch_locks.get(guild_id)
-    if lock is None:
+    if lock is None or (loop is not None and getattr(lock, "_loop", None) is not None and lock._loop is not loop):
         lock = asyncio.Lock()
         _dispatch_locks[guild_id] = lock
     return lock
@@ -5498,6 +5540,7 @@ async def indioLogic(
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
+    pending_actions = _gate_save_memory_actions(pending_actions, pregunta, reply.text or "")
     clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     clean_reply = _ensure_reply_text(clean_reply, pending_actions)
     relayed_via_userbot = False
@@ -5986,6 +6029,7 @@ async def indioFromVoice(
     pending_actions = _actions_from_function_calls(reply.function_calls)
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
+    pending_actions = _gate_save_memory_actions(pending_actions, pregunta, reply.text or "")
     # Save flag BEFORE _maybe_disambiguate_music — that function consumes
     # pending_actions for single-match direct plays (returns []), which would
     # make the redirect check below miss the music action.
