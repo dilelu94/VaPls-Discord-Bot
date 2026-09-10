@@ -1,14 +1,21 @@
 """
 SQLite database storage for Discord chat history and FTS5 search in VaPls.
 
-Provides full-text search (FTS5) across chat messages, progress tracking
-for asynchronous channel history scraping, and live message indexing.
+Provides full-text search (FTS5) across chat messages and live message
+indexing. Historical backfilling was completed on 2026-09-10 (64 551 messages
+across 11 channels). From that point on, only new incoming messages are stored.
 """
 
 import logging
 import sqlite3
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import config
+
+if TYPE_CHECKING:
+    import discord
 
 logger = logging.getLogger(__name__)
 
@@ -68,16 +75,6 @@ def _schema() -> None:
             ON messages(author_id);
         CREATE INDEX IF NOT EXISTS idx_messages_guild
             ON messages(guild_id);
-
-        CREATE TABLE IF NOT EXISTS scrape_progress (
-            channel_id INTEGER PRIMARY KEY,
-            guild_id INTEGER NOT NULL DEFAULT 0,
-            channel_name TEXT NOT NULL DEFAULT '',
-            oldest_message_id INTEGER DEFAULT 0,
-            messages_scraped INTEGER DEFAULT 0,
-            completed INTEGER DEFAULT 0,
-            last_scraped_at INTEGER DEFAULT 0
-        );
     """)
 
     # Migration for existing databases without is_deleted column
@@ -102,12 +99,75 @@ def _schema() -> None:
     _conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Message filtering and formatting
+# ---------------------------------------------------------------------------
+
+def should_index_message(msg: "discord.Message") -> bool:
+    """Return True if a Discord message should be indexed into the DB.
+
+    Excludes bots, the userbot (Indio), the GoLive account, and messages
+    that contain neither text nor attachments.
+    """
+    if msg is None or not getattr(msg, "author", None):
+        return False
+
+    author = msg.author
+    if getattr(author, "bot", False):
+        return False
+    if author.id in (config.USERBOT_USER_ID, config.GOLIVE_USER_ID):
+        return False
+
+    content = (msg.content or "").strip()
+    has_attachments = bool(getattr(msg, "attachments", None))
+    if not content and not has_attachments:
+        return False
+
+    return True
+
+
+def format_message_dict(msg: "discord.Message") -> dict:
+    """Convert a discord.Message into a dict suitable for save_message()."""
+    author = getattr(msg, "author", None)
+    author_name = (
+        getattr(author, "display_name", None)
+        or getattr(author, "name", "alguien")
+        if author
+        else "alguien"
+    )
+    guild_id = getattr(getattr(msg, "guild", None), "id", 0)
+    channel_name = getattr(getattr(msg, "channel", None), "name", "")
+    created_at = (
+        int(msg.created_at.timestamp())
+        if hasattr(msg, "created_at") and msg.created_at
+        else int(time.time())
+    )
+
+    return {
+        "message_id": msg.id,
+        "guild_id": guild_id,
+        "channel_id": msg.channel.id,
+        "channel_name": channel_name,
+        "author_id": author.id if author else 0,
+        "author_name": author_name,
+        "content": msg.content or "",
+        "has_attachments": 1 if getattr(msg, "attachments", None) else 0,
+        "created_at": created_at,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Write helpers
+# ---------------------------------------------------------------------------
+
 def mark_message_deleted(message_id: int) -> bool:
     """Mark a message as deleted in the database."""
     if _conn is None:
         return False
     with _conn:
-        cur = _conn.execute("UPDATE messages SET is_deleted=1 WHERE message_id=?", (int(message_id),))
+        cur = _conn.execute(
+            "UPDATE messages SET is_deleted=1 WHERE message_id=?", (int(message_id),)
+        )
         return cur.rowcount > 0
 
 
@@ -118,14 +178,16 @@ def mark_messages_deleted_batch(message_ids: list[int]) -> int:
     count = 0
     with _conn:
         for mid in message_ids:
-            cur = _conn.execute("UPDATE messages SET is_deleted=1 WHERE message_id=?", (int(mid),))
+            cur = _conn.execute(
+                "UPDATE messages SET is_deleted=1 WHERE message_id=?", (int(mid),)
+            )
             if cur.rowcount > 0:
                 count += 1
     return count
 
 
 def save_messages_batch(messages: list[dict]) -> int:
-    """Save a batch of message dicts to database and FTS index.
+    """Save a batch of message dicts to the database and FTS index.
 
     Each dict must have:
     - message_id (int)
@@ -164,21 +226,11 @@ def save_messages_batch(messages: list[dict]) -> int:
                    (message_id, guild_id, channel_id, channel_name,
                     author_id, author_name, content, has_attachments, created_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    msg_id,
-                    guild_id,
-                    chan_id,
-                    chan_name,
-                    auth_id,
-                    auth_name,
-                    content,
-                    has_att,
-                    created_at,
-                ),
+                (msg_id, guild_id, chan_id, chan_name, auth_id, auth_name,
+                 content, has_att, created_at),
             )
             if cur.rowcount > 0:
                 inserted_count += 1
-                # Insert into FTS
                 try:
                     _conn.execute(
                         """INSERT OR REPLACE INTO messages_fts
@@ -197,72 +249,18 @@ def save_message(msg_data: dict) -> bool:
     return save_messages_batch([msg_data]) > 0
 
 
-def get_scrape_progress(channel_id: int) -> dict | None:
-    """Get scraping progress row for a channel."""
+def total_messages_indexed() -> int:
+    """Return the total number of messages currently stored."""
     if _conn is None:
-        return None
-    cur = _conn.execute(
-        """SELECT channel_id, guild_id, channel_name, oldest_message_id,
-                  messages_scraped, completed, last_scraped_at
-           FROM scrape_progress WHERE channel_id=?""",
-        (channel_id,),
-    )
+        return 0
+    cur = _conn.execute("SELECT COUNT(*) FROM messages")
     row = cur.fetchone()
-    return dict(row) if row else None
+    return row[0] if row else 0
 
 
-def update_scrape_progress(
-    channel_id: int,
-    guild_id: int,
-    channel_name: str,
-    oldest_message_id: int,
-    added_count: int,
-    completed: bool = False,
-) -> None:
-    """Update or insert progress for a channel after a batch scrape."""
-    if _conn is None:
-        return
-    now = int(time.time())
-    with _conn:
-        _conn.execute(
-            """INSERT INTO scrape_progress
-               (channel_id, guild_id, channel_name, oldest_message_id,
-                messages_scraped, completed, last_scraped_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(channel_id) DO UPDATE SET
-                   guild_id = excluded.guild_id,
-                   channel_name = excluded.channel_name,
-                   oldest_message_id = CASE
-                       WHEN excluded.oldest_message_id > 0 THEN excluded.oldest_message_id
-                       ELSE scrape_progress.oldest_message_id
-                   END,
-                   messages_scraped = scrape_progress.messages_scraped + ?,
-                   completed = CASE WHEN excluded.completed = 1 THEN 1 ELSE scrape_progress.completed END,
-                   last_scraped_at = ?""",
-            (
-                channel_id,
-                guild_id,
-                channel_name,
-                oldest_message_id,
-                added_count,
-                1 if completed else 0,
-                now,
-                added_count,
-                now,
-            ),
-        )
-
-
-def mark_scrape_completed(channel_id: int) -> None:
-    """Mark a channel's historical scraping as 100% completed."""
-    if _conn is None:
-        return
-    with _conn:
-        _conn.execute(
-            "UPDATE scrape_progress SET completed=1, last_scraped_at=? WHERE channel_id=?",
-            (int(time.time()), channel_id),
-        )
-
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
 
 def search_messages(
     query: str,
@@ -295,17 +293,19 @@ def search_messages(
     fts_working = False
     if clean_query:
         try:
-            # Escape or format FTS search terms (simple sanitization)
-            sanitized_fts = " ".join(f'"{token.replace(chr(34), "")}"' for token in clean_query.split())
+            sanitized_fts = " ".join(
+                f'"{token.replace(chr(34), "")}"' for token in clean_query.split()
+            )
             if sanitized_fts:
                 sql = """
                     SELECT m.message_id, m.guild_id, m.channel_id, m.channel_name,
-                           m.author_id, m.author_name, m.content, m.has_attachments, m.created_at, m.is_deleted
+                           m.author_id, m.author_name, m.content, m.has_attachments,
+                           m.created_at, m.is_deleted
                     FROM messages_fts f
                     JOIN messages m ON f.message_id = m.message_id
                     WHERE messages_fts MATCH ?
                 """
-                params = [sanitized_fts]
+                params: list = [sanitized_fts]
                 if author_filter:
                     sql += " AND m.author_name LIKE ?"
                     params.append(f"%{author_filter}%")

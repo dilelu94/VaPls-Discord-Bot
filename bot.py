@@ -54,7 +54,6 @@ import petGenerator
 # import geminiImage
 import geminiClient
 import chat_db
-import chat_scraper
 
 # Voice receive / VOSK transcription moved to the userbot in ./userbot/.
 # This bot is now output-only: it joins voice channels solely to play music,
@@ -532,13 +531,12 @@ async def on_ready():
     except Exception:
         log.exception("stream health checker startup failed")
 
-    # Start chat history database and background scraper.
+    # Initialize chat history database (live indexing only — historical scraping completed).
     try:
         chat_db.init_db()
-        chat_scraper.start_background_scrape(bot)
-        log.info("chat history db and background scraper initialized")
+        log.info("chat history db initialized")
     except Exception:
-        log.exception("chat history db / scraper startup failed")
+        log.exception("chat history db startup failed")
 
     # Start idle watchdogs for any already-connected voice clients on startup
     for vc in getattr(bot, "voice_clients", []) or []:
@@ -923,8 +921,8 @@ async def on_message(message):
             asyncio.create_task(geminiCommand.record_soreteposting_chat_message(message))
 
         # Record chat messages in chat_db FTS database
-        if chat_scraper.should_index_message(message):
-            chat_db.save_message(chat_scraper.format_message_dict(message))
+        if chat_db.should_index_message(message):
+            chat_db.save_message(chat_db.format_message_dict(message))
 
         asyncio.create_task(
             _classify_and_log_message(

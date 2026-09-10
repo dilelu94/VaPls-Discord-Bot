@@ -87,8 +87,10 @@ si no sabés algo, lo decís. Tenés acceso a buscar en el historial de chat del
 servidor mediante tu herramienta `search_chat_history`. Si en la búsqueda un \
 mensaje aparece marcado como `[MENSAJE BORRADO EN DISCORD]`, debés indicarle al \
 usuario que dicho mensaje fue eliminado posteriormente del canal, pero mostrando \
-de todas formas cuál era el contenido del mensaje original. No te hagas pasar por un \
-humano: sos un bot y está bien que se note.
+de todas formas cuál era el contenido del mensaje original. Cuando encontrás un \
+mensaje, siempre incluí el link directo que viene en el resultado (campo `link`) \
+para que el usuario pueda ir directamente al mensaje en Discord. No te hagas pasar \
+por un humano: sos un bot y está bien que se note.
 """
 
 _VAPLS_TOOLS = [
@@ -97,18 +99,29 @@ _VAPLS_TOOLS = [
         "description": (
             "Buscar en el historial de chat guardado de los canales de Discord de VaPls. "
             "Usá esta herramienta cuando el usuario pida buscar mensajes anteriores, "
-            "recordar lo que dijo alguien (ej: 'seba', 'miles'), o encontrar datos/links compartidos en el chat."
+            "recordar lo que dijo alguien, o encontrar datos/links compartidos en el chat. "
+            "IMPORTANTE: si el pedido menciona un usuario por nombre como fuente del mensaje "
+            "(ej: 'lo que dijo tobi', 'un mensaje de seba', 'tobi mencionó algo de dota'), "
+            "ese nombre va en `author_name`, NO en `query`. "
+            "`query` es solo el contenido o tema a buscar (ej: 'dota', 'ip valheim')."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "query": {
                     "type": "STRING",
-                    "description": "Palabras clave o términos a buscar en los mensajes (ej: 'valheim', 'link', 'contraseña').",
+                    "description": (
+                        "Palabras clave del CONTENIDO a buscar (ej: 'dota', 'valheim', 'ip', 'link'). "
+                        "NO pongas nombres de usuarios acá — eso va en author_name."
+                    ),
                 },
                 "author_name": {
                     "type": "STRING",
-                    "description": "Nombre o apodo del autor del mensaje si se especificó (ej: 'seba', 'miles', 'chalo').",
+                    "description": (
+                        "Nombre o apodo del USUARIO que envió el mensaje. Usalo cuando el pedido diga "
+                        "'lo que dijo X', 'un mensaje de X', 'X mencionó algo sobre...'. "
+                        "Ejemplos: 'tobi', 'seba', 'miles', 'chalo'."
+                    ),
                 },
                 "channel_name": {
                     "type": "STRING",
@@ -152,7 +165,18 @@ def _execute_vapls_chat_search(call_args: dict, user_prompt: str) -> str:
         dt_str = datetime.fromtimestamp(r["created_at"]).strftime("%Y-%m-%d %H:%M")
         ch_str = r.get("channel_name") or f"canal-{r['channel_id']}"
         del_tag = " [MENSAJE BORRADO EN DISCORD]" if r.get("is_deleted") else ""
-        lines.append(f"- [{dt_str}] {r['author_name']} en #{ch_str}{del_tag}: {r['content']}")
+        guild_id = r.get("guild_id") or 0
+        channel_id = r.get("channel_id") or 0
+        message_id = r.get("message_id") or 0
+        link = (
+            f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+            if guild_id and channel_id and message_id
+            else ""
+        )
+        link_str = f" | link: {link}" if link else ""
+        lines.append(
+            f"- [{dt_str}] {r['author_name']} en #{ch_str}{del_tag}{link_str}: {r['content']}"
+        )
 
     return "\n".join(lines)
 
@@ -618,18 +642,29 @@ _INDIO_TOOLS = [
         "description": (
             "Buscar en el historial de chat guardado de los canales de Discord de VaPls. "
             "Usá esta herramienta cuando el usuario pida buscar mensajes anteriores, "
-            "recordar lo que dijo alguien (ej: 'seba', 'miles'), o encontrar datos/links/IPs compartidos en el chat."
+            "recordar lo que dijo alguien, o encontrar datos/links/IPs compartidos en el chat. "
+            "IMPORTANTE: si el pedido menciona un usuario por nombre como fuente del mensaje "
+            "(ej: 'lo que dijo tobi', 'un mensaje de seba', 'tobi mencionó algo de dota'), "
+            "ese nombre va en `author_name`, NO en `query`. "
+            "`query` es solo el contenido o tema a buscar (ej: 'dota', 'ip valheim')."
         ),
         "parameters": {
             "type": "OBJECT",
             "properties": {
                 "query": {
                     "type": "STRING",
-                    "description": "Palabras clave o términos a buscar en los mensajes (ej: 'valheim', 'link', 'contraseña').",
+                    "description": (
+                        "Palabras clave del CONTENIDO a buscar (ej: 'dota', 'valheim', 'ip', 'link'). "
+                        "NO pongas nombres de usuarios acá — eso va en author_name."
+                    ),
                 },
                 "author_name": {
                     "type": "STRING",
-                    "description": "Nombre o apodo del autor del mensaje si se especificó (ej: 'seba', 'miles', 'chalo').",
+                    "description": (
+                        "Nombre o apodo del USUARIO que envió el mensaje. Usalo cuando el pedido diga "
+                        "'lo que dijo X', 'un mensaje de X', 'X mencionó algo sobre...'. "
+                        "Ejemplos: 'tobi', 'seba', 'miles', 'chalo'."
+                    ),
                 },
                 "channel_name": {
                     "type": "STRING",

@@ -3,6 +3,7 @@ Tests for chat_db.py module.
 """
 
 import time
+from unittest.mock import MagicMock
 import pytest
 import chat_db
 
@@ -69,31 +70,6 @@ def test_save_and_search_messages():
     assert len(res_chan) == 2
 
 
-def test_scrape_progress_tracking():
-    chan_id = 12345
-    progress = chat_db.get_scrape_progress(chan_id)
-    assert progress is None
-
-    chat_db.update_scrape_progress(
-        channel_id=chan_id,
-        guild_id=1,
-        channel_name="test-channel",
-        oldest_message_id=999,
-        added_count=100,
-        completed=False,
-    )
-
-    p1 = chat_db.get_scrape_progress(chan_id)
-    assert p1 is not None
-    assert p1["messages_scraped"] == 100
-    assert p1["oldest_message_id"] == 999
-    assert p1["completed"] == 0
-
-    chat_db.mark_scrape_completed(chan_id)
-    p2 = chat_db.get_scrape_progress(chan_id)
-    assert p2["completed"] == 1
-
-
 def test_mark_message_deleted():
     msg = {
         "message_id": 201,
@@ -118,3 +94,70 @@ def test_mark_message_deleted():
     assert len(res_after) == 1
     assert res_after[0]["is_deleted"] == 1
 
+
+def test_total_messages_indexed():
+    assert chat_db.total_messages_indexed() == 0
+    now = int(time.time())
+    chat_db.save_messages_batch([
+        {"message_id": 1, "guild_id": 1, "channel_id": 1, "channel_name": "x",
+         "author_id": 1, "author_name": "u", "content": "a", "created_at": now},
+        {"message_id": 2, "guild_id": 1, "channel_id": 1, "channel_name": "x",
+         "author_id": 1, "author_name": "u", "content": "b", "created_at": now},
+    ])
+    assert chat_db.total_messages_indexed() == 2
+
+
+def test_should_index_message_regular_user():
+    msg = MagicMock()
+    msg.author.bot = False
+    msg.author.id = 12345
+    msg.content = "Hola gente"
+    msg.attachments = []
+    assert chat_db.should_index_message(msg) is True
+
+
+def test_should_index_message_bot_excluded():
+    msg = MagicMock()
+    msg.author.bot = True
+    assert chat_db.should_index_message(msg) is False
+
+
+def test_should_index_message_empty_no_attachments():
+    msg = MagicMock()
+    msg.author.bot = False
+    msg.author.id = 12345
+    msg.content = "   "
+    msg.attachments = []
+    assert chat_db.should_index_message(msg) is False
+
+
+def test_should_index_message_with_attachment_no_text():
+    msg = MagicMock()
+    msg.author.bot = False
+    msg.author.id = 12345
+    msg.content = ""
+    msg.attachments = ["http://example.com/file.jpg"]
+    assert chat_db.should_index_message(msg) is True
+
+
+def test_format_message_dict():
+    from datetime import datetime, timezone
+    now_dt = datetime.now(timezone.utc)
+    msg = MagicMock()
+    msg.id = 9999
+    msg.guild.id = 1
+    msg.channel.id = 10
+    msg.channel.name = "soreteposting"
+    msg.author.bot = False
+    msg.author.id = 42
+    msg.author.display_name = "Seba"
+    msg.content = "probando"
+    msg.attachments = []
+    msg.created_at = now_dt
+
+    d = chat_db.format_message_dict(msg)
+    assert d["message_id"] == 9999
+    assert d["author_name"] == "Seba"
+    assert d["channel_name"] == "soreteposting"
+    assert d["content"] == "probando"
+    assert isinstance(d["created_at"], int)
