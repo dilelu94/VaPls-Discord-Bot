@@ -1516,20 +1516,8 @@ class WakeWordSink(voice_recv.AudioSink):
                 self._maybe_reset_on_silence(user_id, now)
 
             capture = self.captures.get(user_id)
-            if capture is None and _SENSITIVITY_PRESET == 4:
-                if is_voice and not self._wake_in_progress:
-                    self._wake_triggerer_id = user_id
-                    self._wake_in_progress = True
-                    self._start_capture(user_id, now, vosk_result=None, wake_confirm_pcm=None)
-                    capture = self.captures.get(user_id)
-                else:
-                    return
-
             if capture is not None:
                 self._extend_capture(user_id, capture, data_16k, rms, now)
-                return
-
-            if _SENSITIVITY_PRESET == 4:
                 return
 
             # While a wake transcription is still being processed, don't

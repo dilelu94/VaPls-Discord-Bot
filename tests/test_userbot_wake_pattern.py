@@ -253,7 +253,7 @@ def test_preset2_bare_indio_does_not_fire():
 
 
 def test_default_preset_is_4():
-    """Out of the box the userbot runs preset 4: direct pass-through to Groq STT."""
+    """Out of the box the userbot runs preset 4: VOSK pre-filtering with Groq Whisper confirmation."""
     assert _NS["_SENSITIVITY_PRESET"] == 4
 
 
