@@ -273,7 +273,12 @@ def _install_dave_patch():
             decrypted_ok = False
             dave_ready = getattr(dave, "ready", False) if dave is not None else False
 
-            if davey is not None and dave is not None and dave_ready:
+            has_dave_channel = (
+                (dave is not None) or
+                (vc is not None and getattr(getattr(vc, "_connection", None), "dave_protocol_version", 0) > 0)
+            )
+
+            if davey is not None and dave is not None and dave_ready and uid:
                 try:
                     decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
                     if decrypted and decrypted != raw:
@@ -282,14 +287,18 @@ def _install_dave_patch():
                         decrypted_ok = True
                     else:
                         _dave_stats["dave_skip"] += 1
-                        # If DAVE is ready in an E2EE channel but decryption skipped,
-                        # raw is encrypted ciphertext. Use Opus silence to avoid loud static.
-                        payload = _OPUS_SILENCE
+                        if has_dave_channel:
+                            payload = _OPUS_SILENCE
                 except Exception as e:
                     _dave_stats["dave_fail"] += 1
-                    payload = _OPUS_SILENCE
+                    if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
+                        log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
+                    if has_dave_channel:
+                        payload = _OPUS_SILENCE
             else:
                 _dave_stats["dave_skip"] += 1
+                if has_dave_channel:
+                    payload = _OPUS_SILENCE
 
             if _dave_stats["total"] % 200 == 1:
                 log.info(
