@@ -1812,22 +1812,10 @@ async def clip(
     name="verstream",
     description="Captura tu transmisión de video en vivo y le pide al Indio que la comente",
 )
-async def verstream(
-    ctx,
-    duracion: discord.Option(
-        float,
-        description="Duración de la muestra en segundos (por defecto 6.0s)",
-        required=False,
-        default=6.0,
-    ) = 6.0,
-    grabar_video: discord.Option(
-        bool,
-        description="Si es True, graba un video MP4 de 10s en lugar de una foto fija",
-        required=False,
-        default=False,
-    ) = False,
-):
-    """Slash command: captures a snapshot or MP4 video of the caller's live stream and asks Gemini to comment."""
+async def verstream(ctx):
+    """Slash command: captures a snapshot of the caller's live stream and asks Gemini to comment."""
+    duracion = 6.0
+    grabar_video = False
     await safe_defer(ctx)
     _track_command(ctx, "verstream")
 

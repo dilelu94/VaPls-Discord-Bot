@@ -777,7 +777,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
         form.add_field("temperature", "0.0")
         form.add_field(
             "prompt",
-            "Conversación en español rioplatense con voseo. Se menciona a 'indio' o 'che indio'.",
+            "che indio, Indio, VaPls, Discord, clipeá, contá un chiste",
         )
 
         headers = {"Authorization": f"Bearer {api_key}"}
