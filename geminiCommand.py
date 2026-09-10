@@ -3202,6 +3202,10 @@ _SAVE_MEMORY_CONFIRMATION_RE = re.compile(
     r"\b(anotado|guardado|ya me lo guard[eé]|me lo guardo|tom[ao] nota)\b",
     re.IGNORECASE,
 )
+_IS_QUESTION_RE = re.compile(
+    r"\?|\b(cu[áa]l(?:es)?|qu[é]|d[óo]nde|c[óo]mo|qui[ée]n(?:es)?|cu[áa]nto[sa]?|record[áa]s|acord[áa]s|sab[eé]s)\b",
+    re.IGNORECASE,
+)
 
 
 def _gate_save_memory_actions(
@@ -3211,13 +3215,15 @@ def _gate_save_memory_actions(
     o si la respuesta de Gemini contiene expresiones de guardado (ej. 'anotado',
     'ya me lo guardé'), la acción SAVE_MEMORY esté presente en actions para
     persistirla en disco. Si Gemini omitió la función en function_calls, Python
-    la inyecta en el pipeline de acciones."""
+    la inyecta en el pipeline de acciones. Las preguntas (consultas) quedan
+    excluidas."""
     has_save_action = any(action == "SAVE_MEMORY" for action, _ in (actions or []))
     if has_save_action:
         return actions
 
-    user_triggered = bool(raw_text and _SAVE_MEMORY_TRIGGER_RE.search(raw_text))
-    model_confirmed = bool(reply_text and _SAVE_MEMORY_CONFIRMATION_RE.search(reply_text))
+    is_question = bool(raw_text and _IS_QUESTION_RE.search(raw_text))
+    user_triggered = bool(raw_text and _SAVE_MEMORY_TRIGGER_RE.search(raw_text)) and not is_question
+    model_confirmed = bool(reply_text and _SAVE_MEMORY_CONFIRMATION_RE.search(reply_text)) and not is_question
 
     if user_triggered or model_confirmed:
         content_to_save = raw_text.strip() if raw_text else reply_text.strip()

@@ -289,3 +289,11 @@ def test_gate_save_memory_actions_preserves_existing_save_action():
     assert res[0] == ("SAVE_MEMORY", "custom arg")
 
 
+def test_gate_save_memory_actions_ignores_questions():
+    from geminiCommand import _gate_save_memory_actions
+
+    actions = _gate_save_memory_actions([], "indio ¿recordás cuál es la IP de valheim?", "ni idea")
+    assert not any(act == "SAVE_MEMORY" for act, _ in actions)
+
+
+
