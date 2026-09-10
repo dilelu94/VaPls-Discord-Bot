@@ -114,3 +114,42 @@ def test_jitter_frame_merging_into_contiguous_segment():
     assert raw[0][1] == user_id
     assert raw[0][2] == frame1 + frame2 + frame3
 
+
+def test_get_sink_guild_id_fallback():
+    class DummySource:
+        pass
+
+    class DummyVC:
+        guild = type("DummyGuild", (), {"id": 999})()
+
+    class DummySink:
+        def __init__(self):
+            self.user_guilds = {}
+            self.voice_client = DummyVC()
+
+    def get_sink_guild_id(sink, source, user_id: int):
+        guild_id = getattr(getattr(source, "guild", None), "id", None)
+        if guild_id is None and hasattr(sink, "user_guilds"):
+            guild_id = sink.user_guilds.get(user_id)
+        if guild_id is None:
+            vc = getattr(sink, "_voice_client", None) or getattr(sink, "voice_client", None)
+            if not vc and hasattr(sink, "_client_ref") and getattr(sink._client_ref, "guilds", None):
+                for g in sink._client_ref.guilds:
+                    v = g.voice_client
+                    if v and v.is_connected():
+                        vc = v
+                        break
+            if vc and getattr(vc, "guild", None):
+                guild_id = vc.guild.id
+        if guild_id is not None and hasattr(sink, "user_guilds"):
+            sink.user_guilds[user_id] = guild_id
+        return guild_id
+
+    sink = DummySink()
+    source = DummySource()
+    gid = get_sink_guild_id(sink, source, user_id=12345)
+    assert gid == 999
+    assert sink.user_guilds[12345] == 999
+
+
+

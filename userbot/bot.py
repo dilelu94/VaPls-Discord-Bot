@@ -475,7 +475,24 @@ _WAKE_WORD_TOKENS = (
 )
 
 
-# ---------- Sink: Whisper transcription per speaking user ----------------
+def _get_sink_guild_id(sink, source, user_id: int) -> Optional[int]:
+    """Retrieve or resolve guild_id for a voice audio source and sink."""
+    guild_id = getattr(getattr(source, "guild", None), "id", None)
+    if guild_id is None and hasattr(sink, "user_guilds"):
+        guild_id = sink.user_guilds.get(user_id)
+    if guild_id is None:
+        vc = getattr(sink, "_voice_client", None) or getattr(sink, "voice_client", None)
+        if not vc and hasattr(sink, "_client_ref") and getattr(sink._client_ref, "guilds", None):
+            for g in sink._client_ref.guilds:
+                v = g.voice_client
+                if v and v.is_connected():
+                    vc = v
+                    break
+        if vc and getattr(vc, "guild", None):
+            guild_id = vc.guild.id
+    if guild_id is not None and hasattr(sink, "user_guilds"):
+        sink.user_guilds[user_id] = guild_id
+    return guild_id
 
 
 class TranscriberSink(voice_recv.AudioSink):
@@ -583,9 +600,7 @@ class TranscriberSink(voice_recv.AudioSink):
         user_id = getattr(source, "id", None)
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
-        guild_id = getattr(getattr(source, "guild", None), "id", None)
-        if guild_id is not None:
-            self.user_guilds[user_id] = guild_id
+        guild_id = _get_sink_guild_id(self, source, user_id)
         pcm_data = data.pcm
         if not pcm_data:
             return
@@ -593,9 +608,8 @@ class TranscriberSink(voice_recv.AudioSink):
         # Always feed rolling buffer for /clip command before any wake/sensitivity filters
         try:
             mono = ensure_mono(pcm_data)
-            gid = guild_id or self.user_guilds.get(user_id)
-            if gid:
-                _rolling_audio_buffer.add_frame(gid, user_id, mono)
+            if guild_id:
+                _rolling_audio_buffer.add_frame(guild_id, user_id, mono)
         except Exception:
             mono = None
 
@@ -1457,9 +1471,7 @@ class WakeWordSink(voice_recv.AudioSink):
 
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
-        guild_id = getattr(getattr(source, "guild", None), "id", None)
-        if guild_id is not None:
-            self.user_guilds[user_id] = guild_id
+        guild_id = _get_sink_guild_id(self, source, user_id)
         pcm_data = data.pcm
         if not pcm_data:
             return
@@ -1467,9 +1479,8 @@ class WakeWordSink(voice_recv.AudioSink):
         # Always feed rolling buffer for /clip command before any wake/sensitivity filters
         try:
             mono = ensure_mono(pcm_data)
-            gid = guild_id or self.user_guilds.get(user_id)
-            if gid:
-                _rolling_audio_buffer.add_frame(gid, user_id, mono)
+            if guild_id:
+                _rolling_audio_buffer.add_frame(guild_id, user_id, mono)
         except Exception:
             mono = None
 
@@ -1573,7 +1584,7 @@ class WakeWordSink(voice_recv.AudioSink):
                     properties={
                         "speaker_id": user_id,
                         "matched_text": _matched_text,
-                        "guild_id": getattr(getattr(source, "guild", None), "id", None),
+                        "guild_id": guild_id,
                     },
                 )
                 # Preset 4: slice the exact "indio" audio (VOSK word span) so
@@ -2652,6 +2663,11 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient, force_restart: bool =
                 pass
         else:
             return
+    elif getattr(vc, "_sink", None) is not None:
+        try:
+            vc.stop_listening()
+        except Exception:
+            pass
     for _ in range(40):
         if vc.is_connected():
             break
