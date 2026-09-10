@@ -114,6 +114,15 @@ def _extract_wake_ns():
     assert m, "could not locate _whisper_confirms_indio"
     blocks.append(m.group(0))
 
+    # `_trim_to_wake_word`
+    m = re.search(
+        r"^def _trim_to_wake_word\(.*?(?=^def |\Z)",
+        src,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, "could not locate _trim_to_wake_word"
+    blocks.append(m.group(0))
+
     import unicodedata as _unicodedata
     import logging as _logging
     import json as _json
@@ -441,3 +450,17 @@ def test_whisper_confirms_indio_true(text):
 def test_whisper_confirms_indio_false(text):
     """_whisper_confirms_indio returns False when 'indio' is absent."""
     assert confirms(text) is False
+
+
+def test_trim_to_wake_word():
+    """_trim_to_wake_word strips leading pre-phrase text before the wake word."""
+    trim = _NS["_trim_to_wake_word"]
+    raw = "Si empezaron como la entretención, esta altura del partido, che indio qué opinás de las codornices"
+    trimmed = trim(raw)
+    assert trimmed == "che indio qué opinás de las codornices"
+
+    raw2 = "Hola buenas noches, indio contate un chiste"
+    assert trim(raw2) == "indio contate un chiste"
+
+    raw3 = "che indio dale"
+    assert trim(raw3) == "che indio dale"

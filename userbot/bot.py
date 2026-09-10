@@ -1968,6 +1968,7 @@ class WakeWordSink(voice_recv.AudioSink):
             )
             # VOSK matched a _WAKE_PATTERNS pair and STT confirmed "indio".
             # Only drop when transcript produced nothing substantive beyond filler.
+            text = _trim_to_wake_word(text)
             if not _has_text_beyond_wake_word(text):
                 log.info(f"[WAKE] user={user_id} only wake word / no question; skip")
                 return
@@ -1985,6 +1986,44 @@ class WakeWordSink(voice_recv.AudioSink):
             # Re-arm: other users (and this one) can fire the wake word again.
             self._wake_in_progress = False
             self._wake_triggerer_id = None
+
+
+def _trim_to_wake_word(text: str) -> str:
+    """Trim leading pre-phrase text that occurred before the wake word in the transcript.
+
+    Example:
+        >>> _trim_to_wake_word("Si empezaron como la entretención, che indio qué opinás de las codornices")
+        'che indio qué opinás de las codornices'
+    """
+    if not text:
+        return text
+
+    wake_phrases = [
+        "che indio",
+        "que indio",
+        "eh indio",
+        "ey indio",
+        "hey indio",
+        "indio",
+        "india",
+    ]
+
+    best_idx = -1
+
+    for phrase in wake_phrases:
+        pattern = r"\b" + re.escape(phrase) + r"\b"
+        m = re.search(pattern, text, flags=re.IGNORECASE)
+        if m:
+            idx = m.start()
+            if best_idx == -1 or idx < best_idx:
+                best_idx = idx
+
+    if best_idx > 0:
+        trimmed = text[best_idx:].strip()
+        trimmed = re.sub(r"^[^\wáéíóúñü]+", "", trimmed, flags=re.IGNORECASE)
+        return trimmed
+
+    return text
 
 
 def _has_text_beyond_wake_word(text: str) -> bool:
