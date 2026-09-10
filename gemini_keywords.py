@@ -158,10 +158,17 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
     ],
     "make_clip": [
         "clip",
+        "clipeá",
+        "clipea",
+        "clipeá esto",
+        "clipea esto",
+        "clipeame esto",
+        "clipealo",
+        "clipeame",
         "hacé un clip",
         "dame el clip",
         "grabá un clip de 5m",
-        "guardá los últimos 30s",
+        "guardá los últimos 1m",
     ],
 }
 

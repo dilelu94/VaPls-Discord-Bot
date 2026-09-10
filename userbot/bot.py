@@ -281,18 +281,15 @@ def _install_dave_patch():
             if davey is not None and dave is not None and dave_ready and uid:
                 try:
                     decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
-                    if decrypted and decrypted != raw:
+                    if decrypted:
                         payload = decrypted
-                        _dave_stats["dave_ok"] += 1
-                        decrypted_ok = True
-                    else:
-                        _dave_stats["dave_skip"] += 1
-                        # DAVE is ready but decrypt failed/skipped on ciphertext boundary (e.g. PTT press/release).
-                        # Mute this 20ms frame so libopus does not decode ciphertext into robotic static.
-                        payload = _OPUS_SILENCE
+                        if decrypted != raw:
+                            _dave_stats["dave_ok"] += 1
+                            decrypted_ok = True
+                        else:
+                            _dave_stats["dave_skip"] += 1
                 except Exception as e:
                     _dave_stats["dave_fail"] += 1
-                    payload = _OPUS_SILENCE
                     if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
                         log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
             else:
@@ -904,6 +901,9 @@ _PRESET_1_PATTERNS: tuple[tuple[str, str], ...] = (
     ("indio", "tirate"),
     ("indio", "tira"),  # VOSK-small drops trailing "te" → "tira"
     ("indio", "dale"),
+    ("indio", "clipea"),
+    ("indio", "clipeame"),
+    ("indio", "clip"),
 )
 
 # Preset 2: only "che indio" as invocation; all command-verb pairs kept.
@@ -919,6 +919,9 @@ _PRESET_2_PATTERNS: tuple[tuple[str, str], ...] = (
     ("indio", "tirate"),
     ("indio", "tira"),
     ("indio", "dale"),
+    ("indio", "clipea"),
+    ("indio", "clipeame"),
+    ("indio", "clip"),
 )
 
 # Preset 3: enlarged grammar-pool preset — same wake words as preset 1
@@ -1067,6 +1070,9 @@ def _build_vosk_grammar() -> str:
         "indio reproduce",
         "indio tirate",
         "indio dale",
+        "indio clipea",
+        "indio clipeame",
+        "indio clip",
         "indio por",  # collapsed "indio ponete/poneme"
         "indio tira",  # collapsed "indio tirate"
         # Third-person mentions ("el/él indio") — kept so VOSK doesn't
@@ -1089,6 +1095,10 @@ def _build_vosk_grammar() -> str:
         "tirate",
         "tira",
         "dale",
+        "clipea",
+        "clipeá",
+        "clipeame",
+        "clip",
         "por",
         "y",
         "i",

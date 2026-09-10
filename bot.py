@@ -1708,14 +1708,14 @@ async def entraindio(ctx):
 def parse_clip_duration(duracion_str: Optional[str]) -> float:
     """Parse duration strings like '10m', '5m', '30s', '600' into seconds (5s..600s).
 
-    Default: 30.0s (30 seconds).
+    Default: 60.0s (1 minute / 60 seconds).
     """
     if not duracion_str or not isinstance(duracion_str, str) or not duracion_str.strip():
-        return 30.0
+        return 60.0
     raw = duracion_str.strip().lower()
     m = re.match(r"^(\d+(?:\.\d+)?)\s*(m|min|minutos|s|seg|segundos)?$", raw)
     if not m:
-        return 30.0
+        return 60.0
     val = float(m.group(1))
     unit = m.group(2)
     if unit in ("m", "min", "minutos"):
@@ -1725,7 +1725,7 @@ def parse_clip_duration(duracion_str: Optional[str]) -> float:
     return min(max(seconds, 5.0), 600.0)
 
 
-async def clipLogic(ctx, duracion_str: Optional[str] = "30s") -> None:
+async def clipLogic(ctx, duracion_str: Optional[str] = "1m") -> None:
     """Extract rolling audio clip from userbot and attach as .ogg file in Discord response."""
     if not ctx.guild:
         await safe_respond(ctx, "❌ Este comando solo puede usarse en un servidor.")
@@ -1791,16 +1791,16 @@ async def clipLogic(ctx, duracion_str: Optional[str] = "30s") -> None:
 
 @bot.slash_command(
     name="clip",
-    description="Graba y envía los últimos segundos/minutos de audio del canal de voz (por defecto 30s)",
+    description="Graba y envía los últimos segundos/minutos de audio del canal de voz (por defecto 1m)",
 )
 async def clip(
     ctx,
     duracion: discord.Option(
         str,
-        description="Duración a extraer (ej: 30s, 1m, 5m, 10m; por defecto 30s)",
+        description="Duración a extraer (ej: 30s, 1m, 5m, 10m; por defecto 1m)",
         required=False,
-        default="30s",
-    ) = "30s",
+        default="1m",
+    ) = "1m",
 ):
     """Slash command: extract rolling audio recording from the userbot and upload as file."""
     await safe_defer(ctx)

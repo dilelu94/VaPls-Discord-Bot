@@ -557,9 +557,10 @@ _INDIO_TOOLS = [
     {
         "name": "make_clip",
         "description": (
-            "Grabar y extraer un clip de audio de los últimos segundos/minutos del canal de voz. "
+            "Grabar y extraer un clip de audio de los últimos segundos/minutos del canal de voz. \n"
             "Usala cuando el usuario pida 'hacé un clip', 'dame el clip', 'grabá el clip', "
-            "'clip de los últimos 5m', 'guardá el clip', 'clip', 'clip de los últimos 30s'."
+            "'clipeá', 'clipea', 'clipeá esto', 'clipea esto', 'clipealo', 'clipeame', "
+            "'clip de los últimos 5m', 'guardá el clip', 'clip', 'clip de los últimos 1m'."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -567,7 +568,7 @@ _INDIO_TOOLS = [
                 "duration": {
                     "type": "STRING",
                     "description": (
-                        "Duración a extraer (ej: '30s', '1m', '5m', '10m'). Por defecto '30s'."
+                        "Duración a extraer (ej: '30s', '1m', '5m', '10m'). Por defecto '1m'."
                     ),
                 },
             },
@@ -3817,7 +3818,7 @@ async def _dispatch_indio_actions(
                         statuses.append("disconnect: not in voice")
 
                 elif action == "MAKE_CLIP":
-                    dur_str = str(arg) if arg else "30s"
+                    dur_str = str(arg) if arg else "1m"
                     target_cid = (
                         getattr(reply_handle, "channel_id", None)
                         or config.INDIO_REPLY_CHANNEL_ID

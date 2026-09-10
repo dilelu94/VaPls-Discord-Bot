@@ -24,9 +24,9 @@ def test_parse_clip_duration():
     assert parse_clip_duration("1m") == 60.0
     assert parse_clip_duration("30s") == 30.0
     assert parse_clip_duration("600") == 600.0
-    assert parse_clip_duration(None) == 30.0
-    assert parse_clip_duration("") == 30.0
-    assert parse_clip_duration("invalid") == 30.0
+    assert parse_clip_duration(None) == 60.0
+    assert parse_clip_duration("") == 60.0
+    assert parse_clip_duration("invalid") == 60.0
     # Clamping
     assert parse_clip_duration("20m") == 600.0  # max 10m
     assert parse_clip_duration("1s") == 5.0     # min 5s
@@ -155,6 +155,8 @@ async def test_indio_dispatch_make_clip(monkeypatch):
     fake_channel = AsyncMock()
     fake_bot.get_channel.return_value = fake_channel
 
+    captured_payload = {}
+
     class DummyResponse:
         status = 200
         async def read(self):
@@ -168,6 +170,8 @@ async def test_indio_dispatch_make_clip(monkeypatch):
         def __init__(self, *args, **kwargs):
             pass
         def post(self, url, json=None, headers=None):
+            nonlocal captured_payload
+            captured_payload = json
             return DummyResponse()
         async def __aenter__(self):
             return self
@@ -176,11 +180,23 @@ async def test_indio_dispatch_make_clip(monkeypatch):
 
     monkeypatch.setattr("aiohttp.ClientSession", DummySession)
 
+    # Test with explicit duration vs default duration (which should default to 1m / 60s)
     statuses = await _dispatch_indio_actions(
         bot=fake_bot,
         guild_id=123,
-        actions=[("MAKE_CLIP", "30s")],
+        actions=[("MAKE_CLIP", None)],
     )
 
     assert any("make_clip: ok" in s for s in statuses)
     assert fake_channel.send.called
+    assert captured_payload.get("duration") == 60.0
+
+
+def test_clipea_keywords_registered():
+    import gemini_keywords as _kw
+    triggers = _kw.SYSTEM_TRIGGERS.get("make_clip", [])
+    assert "clipeá" in triggers
+    assert "clipea" in triggers
+    assert "clipeá esto" in triggers
+    assert "clipea esto" in triggers
+
