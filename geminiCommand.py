@@ -4833,6 +4833,7 @@ async def _speak_indio_reply(
     member: Optional[discord.Member],
     text: str,
     max_chars: int = 500,
+    force: bool = False,
 ) -> None:
     """Send text to the Userbot (Indio) HTTP relay so the Userbot account speaks the response in voice."""
     if not text or not guild_id:
@@ -4859,6 +4860,7 @@ async def _speak_indio_reply(
         "text": spoken,
         "channel_id": channel_id,
         "user_id": user_id,
+        "force": force,
     }
 
     headers = {}
@@ -6282,7 +6284,15 @@ async def indioFromVoice(
             dm_text = f"te respondi en <#{channel_id}>"
         _spawn(_relay_dm_user(int(user_id), dm_text))
 
-    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply))
+    is_tg = bool(
+        speaker_name
+        and (
+            speaker_name.startswith("[TG")
+            or speaker_name.startswith("TG/")
+            or "[TG" in speaker_name
+        )
+    )
+    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply, force=is_tg))
 
     analytics.capture(
         "indio voice invoked",

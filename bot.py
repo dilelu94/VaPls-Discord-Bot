@@ -2136,20 +2136,54 @@ async def _stream_health_checker():
                 _paused_streams.discard(guild_id)
 
 
+def _is_quack_effect(event) -> bool:
+    """Safely check if a voice channel effect event represents a quack soundboard sound."""
+    sound = getattr(event, "sound", None)
+    if sound:
+        name = getattr(sound, "name", None)
+        if name and str(name).lower() == "quack":
+            return True
+        sound_id = getattr(sound, "id", None)
+        if sound_id in (1, "1"):
+            return True
+
+    data = getattr(event, "data", {}) or {}
+    sound_name = str(data.get("sound_name", "")).lower()
+    if sound_name == "quack":
+        return True
+
+    sound_id = str(data.get("sound_id", ""))
+    if sound_id == "1":
+        return True
+
+    emoji = getattr(event, "emoji", None)
+    if emoji:
+        emoji_name = str(getattr(emoji, "name", "")).lower()
+        if emoji_name in ("🦆", "quack"):
+            return True
+
+    raw_emoji = data.get("emoji") or {}
+    if isinstance(raw_emoji, dict) and str(raw_emoji.get("name", "")).lower() in ("🦆", "quack"):
+        return True
+
+    return False
+
+
 @bot.event
 async def on_voice_channel_effect_send(event):
-    if not event.sound or event.sound.name.lower() != "quack":
+    if not _is_quack_effect(event):
         return
     if event.guild is None:
         return
     gid = event.guild.id
     src = _active_sources.get(gid)
-    if not src or src.get("type") != "youtube":
+    if not src:
         return
 
     now = time.time()
     last = _last_quack_time.get(gid, 0.0)
     if now - last < _QUACK_COOLDOWN:
+        log.info("[QUACK] Ignored spammed quack sound (cooldown %.1fs) in guild=%s", _QUACK_COOLDOWN, gid)
         return
     _last_quack_time[gid] = now
 
@@ -2161,6 +2195,7 @@ async def on_voice_channel_effect_send(event):
         else:
             _paused_streams.discard(gid)
         log.info("[QUACK] %s stream in guild=%s", action, gid)
+
 
 
 class StreamSeekModal(discord.ui.Modal):

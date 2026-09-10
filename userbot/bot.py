@@ -4474,6 +4474,7 @@ async def _relay_speak(request: web.Request) -> web.Response:
         text = str(data["text"])
         channel_id = data.get("channel_id")
         user_id = data.get("user_id")
+        force = bool(data.get("force", False))
     except Exception:
         return web.json_response({"error": "invalid body"}, status=400)
 
@@ -4499,6 +4500,12 @@ async def _relay_speak(request: web.Request) -> web.Response:
             if any(not getattr(mem, "bot", False) for mem in ch.members):
                 target_channel = ch
                 break
+
+    if target_channel is None and force:
+        if vc and vc.is_connected() and getattr(vc, "channel", None):
+            target_channel = vc.channel
+        elif guild.voice_channels:
+            target_channel = guild.voice_channels[0]
 
     if target_channel is not None:
         if vc is None or not vc.is_connected() or (getattr(vc, "channel", None) and vc.channel.id != target_channel.id):

@@ -213,6 +213,61 @@ def test_dave_patch_audio_decryption_fallback(monkeypatch):
         assert res == raw_packet
 
 
+@pytest.mark.asyncio
+async def test_relay_speak_forces_fallback_channel_when_force_is_true(monkeypatch, tmp_path):
+    import sys
+    import discord
+    if "discord.ext.voice_recv" not in sys.modules:
+        sys.modules["discord.ext.voice_recv"] = MagicMock()
+    if "discord.voice_state" not in sys.modules:
+        sys.modules["discord.voice_state"] = MagicMock()
+    try:
+        from userbot import bot as userbot_module
+        if isinstance(userbot_module, MagicMock) or not hasattr(userbot_module, "_relay_speak"):
+            pytest.skip("userbot module not fully loaded")
+    except Exception:
+        pytest.skip("userbot dependencies not present in this python environment")
+
+    fallback_ch = MagicMock(spec=discord.VoiceChannel)
+    fallback_ch.id = 999
+    fallback_ch.name = "General"
+    fallback_ch.members = []
+
+    mock_guild = MagicMock()
+    mock_guild.voice_channels = [fallback_ch]
+    mock_guild.get_channel.return_value = None
+    mock_guild.get_member.return_value = None
+
+    monkeypatch.setattr(userbot_module, "client", MagicMock(is_ready=lambda: True, get_guild=lambda gid: mock_guild))
+    monkeypatch.setattr(userbot_module.config, "RELAY_SECRET", "secret123")
+
+    joined = []
+    async def _mock_join(ch):
+        joined.append(ch)
+
+    monkeypatch.setattr(userbot_module, "_join_channel", _mock_join)
+
+    dummy_wav = tmp_path / "test.wav"
+    dummy_wav.write_bytes(b"RIFF....WAVE")
+    monkeypatch.setattr(tts, "generate_tts_wav", lambda text: str(dummy_wav))
+
+    class DummyReq:
+        headers = {"X-API-Secret": "secret123"}
+        async def json(self):
+            return {"guild_id": 123, "text": "mensaje de telegram", "force": True}
+
+    mock_vc = MagicMock()
+    mock_vc.is_connected.return_value = True
+    mock_vc.channel = fallback_ch
+    monkeypatch.setattr(userbot_module, "_vc_for_guild", lambda g: mock_vc if joined else None)
+
+    with patch("discord.FFmpegOpusAudio"):
+        resp = await userbot_module._relay_speak(DummyReq())
+        assert resp.status == 200
+        assert len(joined) == 1
+        assert joined[0].id == 999
+
+
 
 
 

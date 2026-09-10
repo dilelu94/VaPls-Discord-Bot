@@ -40,19 +40,9 @@ def _find_voice_client(bot, guild_id: int) -> Optional[discord.VoiceClient]:
 
 def _is_active(vc) -> bool:
     """Return True when the bot has a reason to stay in this voice channel."""
-    try:
-        if vc.is_playing():
-            return True
-    except Exception:
-        pass
-    try:
-        if vc.is_paused():
-            return True
-    except Exception:
-        pass
-
-    # Check human presence in the channel if members list is available
+    # Check human presence in the channel first: if 0 humans, channel is idle
     channel = getattr(vc, "channel", None)
+    humans = None
     if channel is not None:
         members = getattr(channel, "members", None)
         if members is not None and isinstance(members, (list, tuple, set)):
@@ -65,6 +55,17 @@ def _is_active(vc) -> bool:
             )
             if humans == 0:
                 return False
+
+    try:
+        if vc.is_playing():
+            return True
+    except Exception:
+        pass
+    try:
+        if vc.is_paused():
+            return True
+    except Exception:
+        pass
 
     try:
         from soundpadCommand import has_active_panel

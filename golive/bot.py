@@ -444,17 +444,17 @@ class GoLiveStream:
                             if self.queue:
                                 asyncio.create_task(self._prefetch_next())
                         else:
-                            log.info("[STREAM] No more videos in queue. Entering idle state for 60 seconds...")
+                            log.info("[STREAM] No more videos in queue. Entering idle state for 5 seconds...")
                             await self._stop_players()
                             
                             self.idle_event = asyncio.Event()
                             try:
-                                await asyncio.wait_for(self.idle_event.wait(), timeout=60.0)
+                                await asyncio.wait_for(self.idle_event.wait(), timeout=5.0)
                                 log.info("[STREAM] Woken up from idle state by new queued video!")
                                 continue
                             except asyncio.TimeoutError:
                                 log.info("[STREAM] Idle timeout reached. Closing stream.")
-                                disconnect_voice = False
+                                disconnect_voice = True
                                 break
         except asyncio.CancelledError:
             return
@@ -531,22 +531,19 @@ class GoLiveStream:
             except Exception as e:
                 log.warning("[STREAM] GoLive disconnect failed: %s", e)
 
-        # 2. Disconnect from voice channel if requested (e.g. by watchdog or stop command)
+        # 2. Disconnect from voice channel if requested (e.g. by watchdog or stream end)
         if disconnect_voice and self.vc:
             try:
-                if hasattr(self.vc, "_connection") and self.vc.is_connected():
+                if self.vc.is_connected():
                     log.info("[STREAM] Disconnecting voice client...")
-                    await asyncio.wait_for(
-                        self.vc._connection.disconnect(force=True, wait=False),
-                        timeout=3.0
-                    )
-                    self.vc.cleanup()
-                    log.info("[STREAM] VoiceClient disconnected and cleaned up")
-                elif self.vc.is_connected():
                     await asyncio.wait_for(self.vc.disconnect(force=True), timeout=3.0)
                     log.info("[STREAM] VoiceClient disconnected gracefully")
             except Exception as e:
                 log.warning("[STREAM] VoiceClient disconnect failed: %s", e)
+            try:
+                self.vc.cleanup()
+            except Exception:
+                pass
 
         log.info("[STREAM] Cleaning up players...")
         try:
@@ -986,15 +983,26 @@ async def _idle_watcher(guild_id: int):
                 log.info("[WATCHDOG] Voice client not connected anymore, stopping watchdog for guild=%s", guild_id)
                 break
 
-            if has_stream:
-                # Active streaming, reset idle timer
+            # Count human users in the voice channel
+            channel = getattr(vc, "channel", None)
+            humans = 0
+            if channel and hasattr(channel, "members"):
+                system_bots = {config.USERBOT_USER_ID, client.user.id}
+                humans = sum(
+                    1
+                    for m in channel.members
+                    if not getattr(m, "bot", True) and getattr(m, "id", None) not in system_bots
+                )
+
+            if has_stream and humans > 0:
+                # Active streaming with humans present, reset idle timer
                 idle_since = time.monotonic()
             else:
                 elapsed = time.monotonic() - idle_since
                 # Use a default timeout of 60 seconds
                 timeout = 60.0
                 if elapsed >= timeout:
-                    log.info("[WATCHDOG] Guild=%s idle for %.0fs, disconnecting voice client...", guild_id, elapsed)
+                    log.info("[WATCHDOG] Guild=%s idle for %.0fs (humans=%d), disconnecting voice client...", guild_id, elapsed, humans)
                     try:
                         await asyncio.wait_for(vc.disconnect(force=True), timeout=5.0)
                     except Exception as e:
