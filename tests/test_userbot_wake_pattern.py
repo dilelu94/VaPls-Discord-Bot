@@ -291,9 +291,9 @@ def test_preset0_grammar_is_unk_only():
 
 
 def test_invalid_sensitivity_preset_raises():
-    """Presets outside 0-4 must raise ValueError."""
+    """Presets outside 0-3 must raise ValueError."""
     with pytest.raises(ValueError):
-        set_sensitivity(5)
+        set_sensitivity(4)
     with pytest.raises(ValueError):
         set_sensitivity(-1)
 
@@ -397,48 +397,7 @@ def restore_preset():
     set_sensitivity(1)
 
 
-# ---------------------------------------------------------------------------
-# Preset 4 — same VOSK gating as preset 2 + Whisper confirmation layer
-# ---------------------------------------------------------------------------
 
-
-def test_preset4_che_indio_fires():
-    """Preset 4 VOSK layer: 'che indio' still triggers (same as preset 2)."""
-    set_sensitivity(4)
-    assert matches("che indio") is True
-
-
-@pytest.mark.parametrize("text", ["que indio", "eh indio"])
-def test_preset4_que_eh_indio_do_not_fire(text):
-    """Preset 4 VOSK layer: 'que indio' and 'eh indio' are not active patterns."""
-    set_sensitivity(4)
-    assert matches(text) is False
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "indio ponete",
-        "indio poneme",
-        "indio reproduci",
-        "indio reproducí",
-        "indio reproduce",
-        "indio tirate",
-        "indio dale",
-        "indio por",
-        "indio tira",
-    ],
-)
-def test_preset4_command_verbs_still_fire(text):
-    """Preset 4 VOSK layer: all command-verb patterns remain active."""
-    set_sensitivity(4)
-    assert matches(text) is True
-
-
-def test_preset4_bare_indio_does_not_fire():
-    """Preset 4: bare 'indio' alone must not trigger."""
-    set_sensitivity(4)
-    assert matches("indio") is False
 
 
 # ---------------------------------------------------------------------------

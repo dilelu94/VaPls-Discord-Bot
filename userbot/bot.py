@@ -887,19 +887,11 @@ _PRESET_2_PATTERNS: tuple[tuple[str, str], ...] = (
 # into a wake-word phrase. Tune the pool via _PRESET_3_FILLER below.
 _PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 
-# Preset 4: same VOSK gating as preset 2 (only "che indio" + command-verb
-# patterns, small grammar pool), but adds a second post-VOSK verification
-# layer: after VOSK fires, a dedicated short Whisper pass over the prebuffer
-# region must confirm the word "indio" is present. If Whisper can't hear
-# "indio", the whole event is discarded. Strict by design.
-_PRESET_4_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_2_PATTERNS
-
 _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
     0: _PRESET_0_PATTERNS,
     1: _PRESET_1_PATTERNS,
     2: _PRESET_2_PATTERNS,
     3: _PRESET_3_PATTERNS,
-    4: _PRESET_4_PATTERNS,
 }
 
 def _load_persisted_sensitivity() -> int:
@@ -910,7 +902,7 @@ def _load_persisted_sensitivity() -> int:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 preset = int(data.get("preset", 1))
-                if preset in (0, 1, 2, 3, 4):
+                if preset in (0, 1, 2, 3):
                     return preset
     except Exception:
         pass
@@ -1205,7 +1197,7 @@ def _new_vosk_recognizer():
 def _set_sensitivity(preset: int) -> None:
     """Switch the VOSK wake-word sensitivity preset at runtime.
 
-    Validates preset is in _PRESETS (0-4), updates the module-level
+    Validates preset is in _PRESETS (0-3), updates the module-level
     ``_SENSITIVITY_PRESET``, rebuilds ``_VOSK_GRAMMAR``, bumps
     ``_vosk_grammar_generation`` so that live per-user recognizers are
     detected as stale and rebuilt on next use, and persists the setting to disk.
@@ -1213,7 +1205,7 @@ def _set_sensitivity(preset: int) -> None:
     global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
     if preset not in _PRESETS:
         raise ValueError(
-            f"Invalid sensitivity preset {preset!r}; must be 0, 1, 2, 3, or 4."
+            f"Invalid sensitivity preset {preset!r}; must be 0, 1, 2, or 3."
         )
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
@@ -1827,40 +1819,6 @@ class WakeWordSink(voice_recv.AudioSink):
             # matter where in the phrase VOSK fired. If word timing wasn't
             # available we fall back to the trailing prebuffer slice. (Checking
             # the FULL transcript fails: Whisper drops the brief leading "che
-            # indio" when a command follows.)
-            if _SENSITIVITY_PRESET == 4:
-                if wake_confirm_pcm:
-                    wake_pcm = wake_confirm_pcm
-                elif prebuffer_len:
-                    wake_pcm = pcm_16k[:prebuffer_len]
-                else:
-                    wake_pcm = pcm_16k
-                wake_text = await asyncio.to_thread(_run_whisper_wake, wake_pcm)
-                if not _whisper_confirms_indio(wake_text):
-                    log.info(
-                        "[WAKE] user=%s preset4: 'indio' NOT confirmed in wake "
-                        "region (%r); discard",
-                        user_id,
-                        wake_text,
-                    )
-                    analytics.capture(
-                        "wake_word_rejected",
-                        properties={
-                            "speaker_id": user_id,
-                            "reason": "preset4_no_indio",
-                            "wake_text": wake_text,
-                        },
-                    )
-                    return
-                log.info(
-                    "[WAKE] user=%s preset4: 'indio' confirmed in wake region (%r)",
-                    user_id,
-                    wake_text,
-                )
-                # Wake sound was deferred at VOSK-detection time; play it now
-                # that the Whisper "indio" confirmation has passed.
-                self._schedule_wake_sound(user_id)
-
             t0 = time.monotonic()
             text = await _transcribe_pcm(pcm_16k)
             dt = time.monotonic() - t0

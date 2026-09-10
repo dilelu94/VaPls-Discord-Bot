@@ -312,37 +312,4 @@ def test_grammar_dropped_unrelated_filler():
         assert dropped not in tokens, f"grammar should not contain {dropped!r}"
 
 
-# ---- preset 4: grammar is identical to preset 2 --------------------------
 
-
-def test_preset4_grammar_equals_preset2_grammar():
-    """Preset 4 uses the same small grammar pool as preset 2."""
-    try:
-        set_sensitivity(2)
-        p2_grammar = json.loads(build_grammar())
-        set_sensitivity(4)
-        p4_grammar = json.loads(build_grammar())
-    finally:
-        set_sensitivity(1)
-    assert p4_grammar == p2_grammar
-
-
-def test_preset4_grammar_excludes_que_indio_and_eh_indio():
-    """Preset 4 shares preset 2's grammar: 'que indio'/'eh indio' must be absent."""
-    try:
-        set_sensitivity(4)
-        tokens = json.loads(build_grammar())
-    finally:
-        set_sensitivity(1)
-    assert "que indio" not in tokens
-    assert "eh indio" not in tokens
-
-
-def test_preset4_grammar_excludes_filler():
-    """Preset 4 grammar must not contain the large filler pool (e.g. 'boludo')."""
-    try:
-        set_sensitivity(4)
-        tokens = json.loads(build_grammar())
-    finally:
-        set_sensitivity(1)
-    assert "boludo" not in tokens
