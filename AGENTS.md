@@ -165,6 +165,7 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 
 - `/play`: reproduce música de YouTube.
 - `/soundpad`: panel de clips locales.
+- `/clip` `[duracion]`: extrae y envía los últimos segundos/minutos de audio del canal de voz como archivo `.ogg` (por defecto 1m / 60s, configurable entre 5s y 10m).
 - `/vapls`: respuestas Gemini sin memoria.
 - `/indio`: persona con memoria corta por guild + memoria de largo plazo destilada por Gemini.
 - `/parar`: detiene playback y desconecta.
