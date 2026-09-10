@@ -172,7 +172,7 @@ async def test_owner_no_deletes_story_msg(cfg, bot):
 
 async def test_reject_deletes_both_messages(cfg, bot, tmp_image):
     """❌ in the review channel — both story_msg and vote_msg are deleted
-    and daily limit is reset."""
+    and daily limit tracking is preserved so rejection does not trigger retries."""
     b, ch = bot
     state = _seed_review(guild_id=456)
     storyManager._stories_today[456] = 1
@@ -196,10 +196,9 @@ async def test_reject_deletes_both_messages(cfg, bot, tmp_image):
     # both deleted
     assert msg_delete.await_count == 2
 
-    # daily state reset
-    assert 456 not in storyManager._stories_today
-    assert 456 not in storyManager._last_story_at
-    assert 456 not in storyManager._messages_since_story
+    # daily story count and timestamp preserved to enforce max 1/day
+    assert storyManager._stories_today.get(456) == 1
+    assert storyManager._last_story_at.get(456) == 1000.0
 
 
 async def test_owner_bogus_text_keeps_pending(cfg, bot):

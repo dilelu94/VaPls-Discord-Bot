@@ -31,6 +31,20 @@ FFMPEG_NORMALIZE_OPTS = '-af "dynaudnorm=p=0.95:f=200"'
 _last_greeting: dict[int, float] = {}
 _last_wake_sound: dict[int, float] = {}
 
+_greeting_playing: bool = False
+
+
+def is_greeting_playing() -> bool:
+    """Return True if a user greeting audio is currently playing in voice."""
+    global _greeting_playing
+    return _greeting_playing
+
+
+def _on_greeting_end(err=None) -> None:
+    global _greeting_playing
+    _greeting_playing = False
+
+
 # In-memory pity state: {user_id: {rel_path: miss_count}}
 _pity_state: dict[int, dict[str, int]] = {}
 _pity_loaded = False
@@ -264,17 +278,6 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
         logger.info("[GREETING] vc never ready (channel=%s)", channel_id)
         return False
 
-    # If VC is currently playing (e.g. a 0.5s wake sound finishing), wait up to 3s
-    try:
-        deadline = time.monotonic() + 3.0
-        while vc.is_playing() and time.monotonic() < deadline:
-            await asyncio.sleep(0.2)
-        if vc.is_playing():
-            logger.info("[GREETING] vc already playing (channel=%s)", channel_id)
-            return False
-    except Exception:
-        return False
-
     member_count = 1
     try:
         channel = getattr(vc, "channel", None)
@@ -291,19 +294,36 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
         logger.warning("[GREETING] file missing: %s", path)
         return False
 
+    # Greeting audio has absolute priority over Indio's voice/audio.
+    # If VC is currently playing, interrupt it.
+    try:
+        if vc.is_playing():
+            logger.info(
+                "[GREETING] interrupting ongoing audio for user greeting priority (channel=%s, user=%s)",
+                channel_id, user_id,
+            )
+            vc.stop()
+            await asyncio.sleep(0.1)
+    except Exception:
+        logger.exception("[GREETING] error while stopping previous audio on vc (channel=%s)", channel_id)
+
     _last_greeting[channel_id] = now
     _last_user_greeting[(channel_id, user_id)] = now
+
+    global _greeting_playing
+    _greeting_playing = True
 
     try:
         try:
             source = discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS)
         except Exception:
             source = discord.FFmpegOpusAudio(path)
-        vc.play(source)
+        vc.play(source, after=_on_greeting_end)
         logger.info("[GREETING] playing %s (user=%s, channel=%s)",
                     path, user_id, channel_id)
         return True
     except Exception:
+        _greeting_playing = False
         logger.exception("[GREETING] play failed (channel=%s)", channel_id)
         return False
 

@@ -45,6 +45,7 @@ _story_dm_context: dict[int, dict] = {}
 
 _pending_owner_approvals: dict[int, dict] = {}
 _idle_scheduled: set[int] = set()
+_story_in_progress: set[int] = set()
 _last_voice_trigger: dict[int, float] = {}
 _last_attempt_at: dict[int, float] = {}
 _recent_stories: dict[int, list[str]] = {}
@@ -274,10 +275,17 @@ def _reset_daily() -> None:
 
 
 def _can_post_story(guild_id: int) -> bool:
+    if guild_id in _story_in_progress:
+        logger.info("story guard: guild %s already has a story generation in progress", guild_id)
+        return False
     _reset_daily()
     cnt = _stories_today.get(guild_id, 0)
     if cnt >= config.INDIO_MAX_STORIES_PER_DAY:
         logger.info("story guard: guild %s already hit daily max (%d)", guild_id, cnt)
+        return False
+    last = _last_story_at.get(guild_id, 0.0)
+    if last > 0.0 and time.strftime("%Y-%m-%d", time.localtime(last)) == _today():
+        logger.info("story guard: guild %s already posted a story today", guild_id)
         return False
     pending = [r for r in _pending_reviews.values() if r.get("guild_id") == guild_id]
     if pending:
@@ -287,7 +295,6 @@ def _can_post_story(guild_id: int) -> bool:
             pending[0].get("_msg_id", "?"),
         )
         return False
-    last = _last_story_at.get(guild_id, 0.0)
     if last == 0.0:
         return True
     since = _messages_since_story.get(guild_id, 0)
@@ -757,68 +764,71 @@ async def trigger_story(
             )
             return False
 
-    _last_attempt_at[guild_id] = time.time()
-    _state_flush()
-
-    pool_count = await imagePool.init_pool()
-    logger.info(
-        "story trigger(%s): pool has %d images",
-        trigger_type,
-        pool_count,
-    )
-
-    mgr = _init_image_mgr()
-    pending_paths = {
-        r.get("rel_path")
-        for r in list(_pending_reviews.values()) + list(_pending_owner_approvals.values())
-        if r.get("rel_path")
-    }
-    pick = imagePool.get_random_image(mgr, exclude_paths=pending_paths)
-    if pick is None:
-        logger.warning(
-            "story trigger(%s): no unprocessed images left in pool for guild %s",
-            trigger_type,
-            guild_id,
-        )
-        return False
-
-    rel_path = pick["rel_path"]
-    logger.info("story trigger(%s): picked image %s", trigger_type, rel_path)
-
-    story = await _generate_story(rel_path, guild_id)
-    if story is None:
-        logger.warning(
-            "story trigger(%s): gemini returned no story for %s", trigger_type, rel_path
-        )
-        return False
-
-    _add_recent_story(guild_id, story)
-
-    logger.info(
-        "story trigger(%s): gemini generated story (%d chars)", trigger_type, len(story)
-    )
-
-    ok = await _post_review(
-        config.INDIO_STORY_CHANNEL_ID, rel_path, story, guild_id, bot
-    )
-    if not ok:
-        logger.warning(
-            "story trigger(%s): post_review failed for guild %s", trigger_type, guild_id
-        )
-        return False
-
+    _story_in_progress.add(guild_id)
     _reset_daily()
     _stories_today[guild_id] = _stories_today.get(guild_id, 0) + 1
     _last_story_at[guild_id] = time.time()
+    _last_attempt_at[guild_id] = time.time()
     _messages_since_story[guild_id] = 0
     _state_flush()
-    logger.info(
-        "story trigger(%s): SUCCESS for guild %s (day total: %d)",
-        trigger_type,
-        guild_id,
-        _stories_today[guild_id],
-    )
-    return True
+
+    try:
+        pool_count = await imagePool.init_pool()
+        logger.info(
+            "story trigger(%s): pool has %d images",
+            trigger_type,
+            pool_count,
+        )
+
+        mgr = _init_image_mgr()
+        pending_paths = {
+            r.get("rel_path")
+            for r in list(_pending_reviews.values()) + list(_pending_owner_approvals.values())
+            if r.get("rel_path")
+        }
+        pick = imagePool.get_random_image(mgr, exclude_paths=pending_paths)
+        if pick is None:
+            logger.warning(
+                "story trigger(%s): no unprocessed images left in pool for guild %s",
+                trigger_type,
+                guild_id,
+            )
+            return False
+
+        rel_path = pick["rel_path"]
+        logger.info("story trigger(%s): picked image %s", trigger_type, rel_path)
+
+        story = await _generate_story(rel_path, guild_id)
+        if story is None:
+            logger.warning(
+                "story trigger(%s): gemini returned no story for %s", trigger_type, rel_path
+            )
+            return False
+
+        _add_recent_story(guild_id, story)
+
+        logger.info(
+            "story trigger(%s): gemini generated story (%d chars)", trigger_type, len(story)
+        )
+
+        ok = await _post_review(
+            config.INDIO_STORY_CHANNEL_ID, rel_path, story, guild_id, bot
+        )
+        if not ok:
+            logger.warning(
+                "story trigger(%s): post_review failed for guild %s", trigger_type, guild_id
+            )
+            return False
+
+        logger.info(
+            "story trigger(%s): SUCCESS for guild %s (day total: %d)",
+            trigger_type,
+            guild_id,
+            _stories_today[guild_id],
+        )
+        return True
+    finally:
+        _story_in_progress.discard(guild_id)
 
 
 _CONTEXT_EVAL_PROMPT = """\
@@ -944,12 +954,10 @@ async def handle_story_reaction(payload, bot) -> None:
 
     elif emoji == "❌":
         logger.info(
-            "[STORY] rejected by %s, cleaning up + resetting limit", payload.user_id
+            "[STORY] rejected by %s, cleaning up review messages", payload.user_id
         )
         _pending_reviews.pop(review["vote_msg_id"], None)
         _pending_reviews.pop(review["story_msg_id"], None)
-        _stories_today.pop(guild_id, None)
-        _last_story_at.pop(guild_id, None)
         _last_attempt_at[guild_id] = time.time()
         _messages_since_story.pop(guild_id, None)
         for mid in (review["vote_msg_id"], review["story_msg_id"]):
@@ -1320,19 +1328,5 @@ def record_chat_activity(guild_id: int) -> None:
 
 
 def check_voice_trigger(guild_id: int, channel) -> bool:
-    if not _can_post_story(guild_id):
-        return False
-    now = time.time()
-    if now - _last_voice_trigger.get(guild_id, 0.0) < 1800:
-        return False
-    if now - _last_attempt_at.get(guild_id, 0.0) < 3600:
-        return False
-    if channel is None:
-        return False
-    system_bots = {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}
-    humans = sum(1 for m in channel.members if not m.bot and m.id not in system_bots)
-    if humans >= config.INDIO_STORY_VOICE_MIN_MEMBERS:
-        _last_voice_trigger[guild_id] = now
-        _state_flush()
-        return True
+    """Voice joins never trigger story generation — stories are chat idle / daily only."""
     return False

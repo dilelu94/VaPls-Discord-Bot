@@ -28,6 +28,7 @@ def mock_encoder():
     )
     with patch.object(vp, "_ENCODER", dummy), \
          patch.object(vp, "_extract_subtitle_file", return_value="/tmp/mock_sub.ass"), \
+         patch.object(vp, "_fetch_opensubtitles_file", return_value="/tmp/mock_sub.srt"), \
          patch("os.path.exists", return_value=True), \
          patch("os.path.getsize", return_value=100):
         yield

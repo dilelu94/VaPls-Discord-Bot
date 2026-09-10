@@ -84,6 +84,8 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # existe, se siembra con GEMINI_API_KEYS del .env.
 GEMINI_KEYS_FILE = os.getenv("GEMINI_KEYS_FILE", "gemini_keys.json")
 GEMINI_KEYS_DONATION_URL = "https://aistudio.google.com/apikey"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_KEYS_FILE = os.getenv("GROQ_KEYS_FILE", "data/groq_keys.json")
 INDIO_MEMORY_PATH = os.getenv("INDIO_MEMORY_PATH", "data/indio_memory.json")
 INDIO_IMAGES_DIR = os.getenv("INDIO_IMAGES_DIR", "indio_images")
 INDIO_IMAGE_GUILD_ID = int(os.getenv("INDIO_IMAGE_GUILD_ID", "0"))
@@ -137,7 +139,7 @@ INDIO_STORY_CHANNEL_ID = int(os.getenv("INDIO_STORY_CHANNEL_ID", "45158065565099
 # Directorio donde se extraen las imágenes del pool.
 INDIO_STORY_POOL_DIR = os.getenv("INDIO_STORY_POOL_DIR", "indio_images/pool")
 # Máximo de stories por día (por servidor).
-INDIO_MAX_STORIES_PER_DAY = int(os.getenv("INDIO_MAX_STORIES_PER_DAY", "2"))
+INDIO_MAX_STORIES_PER_DAY = int(os.getenv("INDIO_MAX_STORIES_PER_DAY", "1"))
 # Minutos de inactividad en el chat para trigger idle.
 INDIO_IDLE_MINUTES = int(os.getenv("INDIO_IDLE_MINUTES", "240"))
 # Delay mínimo/máximo (segundos) entre detección idle y posteo real.

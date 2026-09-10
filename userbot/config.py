@@ -9,10 +9,17 @@ load_dotenv()
 # Network → any request → headers → authorization. Treat as a secret.
 USER_TOKEN = os.getenv("USER_TOKEN")
 
-# --- faster-whisper transcription -----------------------------------------
+# --- Groq Cloud STT & faster-whisper transcription -------------------------
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
+# Provider can be "groq", "local", or "none". Default to "groq" if GROQ_API_KEY is configured.
+_default_provider = "groq" if GROQ_API_KEY else "local"
+STT_PROVIDER = os.getenv("STT_PROVIDER", _default_provider).lower()
+
 # Master toggle to disable faster-whisper model loading (saves ~1.5GB RAM).
-# When false, the userbot will still connect and track activity but won't transcribe.
-WHISPER_ENABLED = os.getenv("WHISPER_ENABLED", "true").lower() == "true"
+# When STT_PROVIDER == "groq", local faster-whisper loading is disabled by default.
+_default_whisper_enabled = "true" if STT_PROVIDER == "local" else "false"
+WHISPER_ENABLED = os.getenv("WHISPER_ENABLED", _default_whisper_enabled).lower() == "true"
 # Model name (e.g. "tiny", "base", "small") or a HuggingFace repo. Resolved
 # via faster-whisper's standard download path. On the Ampere A1 2/12 server,
 # "small" runs comfortably real-time with concurrency 5; "base" was the cap

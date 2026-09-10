@@ -51,10 +51,12 @@ greeting, ubcfg = _load_userbot_greeting()
 @pytest.fixture(autouse=True)
 def _reset_throttle():
     greeting._last_greeting.clear()
+    greeting._last_user_greeting.clear()
     greeting._pity_state.clear()
     greeting._pity_loaded = True
     yield
     greeting._last_greeting.clear()
+    greeting._last_user_greeting.clear()
     greeting._pity_state.clear()
     greeting._pity_loaded = False
 
@@ -168,7 +170,7 @@ async def test_missing_audio_file_skipped(fake_users, monkeypatch):
     vc.play.assert_not_called()
 
 
-async def test_already_playing_vc_skipped(fake_users, _audio_dir, monkeypatch):
+async def test_already_playing_vc_interrupted_for_greeting(fake_users, _audio_dir, monkeypatch):
     audio = _audio_dir / "g.mp3"
     audio.write_bytes(b"fake")
     fake_users({42: {"greeting": "g.mp3"}})
@@ -176,8 +178,9 @@ async def test_already_playing_vc_skipped(fake_users, _audio_dir, monkeypatch):
                         lambda *a, **k: SimpleNamespace())
     vc = _make_vc(playing=True)
     played = await greeting.play_user_greeting(vc, user_id=42, channel_id=100)
-    assert played is False
-    vc.play.assert_not_called()
+    assert played is True
+    vc.stop.assert_called_once()
+    vc.play.assert_called_once()
 
 
 async def test_disabled_globally_short_circuits(fake_users, monkeypatch):

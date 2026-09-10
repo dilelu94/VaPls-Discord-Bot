@@ -15,12 +15,14 @@ Library stack: discord.py-self (user-token client) + discord-ext-voice-recv
 import asyncio
 import audioop
 import base64
+import io
 import json
 import logging
 import os
 import sys
 import threading
 import time
+import wave
 from typing import Any, Optional
 
 import aiohttp
@@ -32,11 +34,13 @@ import importlib.util
 
 _userbot_dir = os.path.dirname(os.path.abspath(__file__))
 _parent_dir = os.path.dirname(_userbot_dir)
+if _userbot_dir in sys.path:
+    sys.path.remove(_userbot_dir)
 if _parent_dir in sys.path:
     sys.path.remove(_parent_dir)
 sys.path.insert(0, _parent_dir)
 if _userbot_dir not in sys.path:
-    sys.path.insert(0, _userbot_dir)
+    sys.path.append(_userbot_dir)
 
 _config_path = os.path.join(_userbot_dir, "config.py")
 _spec = importlib.util.spec_from_file_location("userbot_config", _config_path)
@@ -44,6 +48,7 @@ config = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(config)
 
 sys.modules["userbot_config"] = config
+import groqKeys
 
 import discord.gateway
 try:
@@ -388,9 +393,12 @@ try:
     import numpy as np
 except Exception:
     np = None
-from faster_whisper import WhisperModel
+try:
+    from faster_whisper import WhisperModel
+except Exception:
+    WhisperModel = None
 
-if getattr(config, "WHISPER_ENABLED", False):
+if getattr(config, "WHISPER_ENABLED", False) and WhisperModel is not None:
     log.info(
         f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
         f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
@@ -406,7 +414,7 @@ if getattr(config, "WHISPER_ENABLED", False):
     )
     log.info("✅ Whisper model loaded.")
 else:
-    log.info("WHISPER_ENABLED=false. Speech-to-text disabled. (Model not loaded)")
+    log.info("WHISPER_ENABLED=false (or faster_whisper not present). Local Whisper model not loaded.")
     whisper_model = None
 
 import unicodedata
@@ -676,12 +684,12 @@ class TranscriberSink(voice_recv.AudioSink):
     ) -> None:
         try:
             t0 = time.monotonic()
-            text = await asyncio.to_thread(_run_whisper, pcm_16k)
+            text = await _transcribe_pcm(pcm_16k)
             dt = time.monotonic() - t0
             if not text:
                 return
             log.info(
-                f"[WHISPER][es] user_id={user_id} "
+                f"[STT][es] user_id={user_id} "
                 f"({duration:.1f}s audio, {dt * 1000:.0f}ms transcribe): {text}"
             )
             analytics.capture(
@@ -695,13 +703,72 @@ class TranscriberSink(voice_recv.AudioSink):
             )
             await on_transcript(user_id, text)
         except Exception as e:
-            log.exception("[WHISPER] transcribe failed")
+            log.exception("[STT] transcribe failed")
             analytics.capture_exception(
                 e, properties={"action": "whisper_transcribe_failed"}
             )
         finally:
             with self._active_lock:
                 self._active_count -= 1
+
+
+async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
+    """Send s16le 16k mono PCM bytes to Groq Cloud STT API (whisper-large-v3-turbo)."""
+    api_key = getattr(config, "GROQ_API_KEY", "")
+    if not pcm_16k_bytes or not api_key:
+        return ""
+    try:
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            wf.writeframes(pcm_16k_bytes)
+        wav_buf.seek(0)
+
+        form = aiohttp.FormData()
+        form.add_field(
+            "file",
+            wav_buf,
+            filename="audio.wav",
+            content_type="audio/wav",
+        )
+        form.add_field("model", getattr(config, "GROQ_MODEL", "whisper-large-v3-turbo"))
+        form.add_field("language", "es")
+        form.add_field(
+            "prompt",
+            "Conversación en español rioplatense con voseo. Se menciona a 'indio' o 'che indio'.",
+        )
+
+        headers = {"Authorization": f"Bearer {api_key}"}
+        session = await _get_http()
+        url = "https://api.groq.com/openai/v1/audio/transcriptions"
+        async with session.post(
+            url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=8.0)
+        ) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                text = data.get("text", "").strip()
+                log.info(f"[GROQ-STT] Transcribed {len(pcm_16k_bytes)} bytes: {text!r}")
+                return text
+            else:
+                body = await resp.text()
+                log.error(f"[GROQ-STT] Groq API returned HTTP {resp.status}: {body}")
+                return ""
+    except Exception as e:
+        log.exception(f"[GROQ-STT] Failed to transcribe audio via Groq API: {e}")
+        analytics.capture_exception(e, properties={"action": "groq_stt_failed"})
+        return ""
+
+
+async def _transcribe_pcm(pcm_16k_bytes: bytes) -> str:
+    """Transcribe s16le 16k mono PCM bytes using configured STT_PROVIDER (groq or local)."""
+    provider = getattr(config, "STT_PROVIDER", "local").lower()
+    if provider == "groq" or (provider == "local" and getattr(config, "GROQ_API_KEY", "")):
+        return await _run_groq_stt(pcm_16k_bytes)
+    elif provider == "local" and getattr(config, "WHISPER_ENABLED", False):
+        return await asyncio.to_thread(_run_whisper, pcm_16k_bytes)
+    return ""
 
 
 def _run_whisper(pcm_16k_bytes: bytes) -> str:
@@ -1795,11 +1862,11 @@ class WakeWordSink(voice_recv.AudioSink):
                 self._schedule_wake_sound(user_id)
 
             t0 = time.monotonic()
-            text = await asyncio.to_thread(_run_whisper, pcm_16k)
+            text = await _transcribe_pcm(pcm_16k)
             dt = time.monotonic() - t0
             if not text:
                 log.info(
-                    f"[WAKE] user={user_id} Whisper returned empty "
+                    f"[WAKE] user={user_id} STT returned empty "
                     f"({duration:.1f}s audio, {dt * 1000:.0f}ms); skip"
                 )
                 return
@@ -1808,6 +1875,24 @@ class WakeWordSink(voice_recv.AudioSink):
                 f"[WAKE][es] user_id={user_id} "
                 f"({duration:.1f}s audio, {dt * 1000:.0f}ms): {text}"
             )
+
+            # Strict post-STT verification: transcript MUST confirm the wake word ("che indio" / "indio").
+            if not _whisper_confirms_indio(text):
+                log.info(
+                    "[WAKE] user=%s: 'indio' NOT confirmed in STT transcript (%r); discarding VOSK false positive",
+                    user_id,
+                    text,
+                )
+                analytics.capture(
+                    "wake_word_rejected",
+                    properties={
+                        "speaker_id": user_id,
+                        "reason": "stt_no_indio_confirmation",
+                        "wake_text": text,
+                    },
+                )
+                return
+
             analytics.capture(
                 "whisper_transcription",
                 properties={
@@ -1818,12 +1903,8 @@ class WakeWordSink(voice_recv.AudioSink):
                     "via_wake_word": True,
                 },
             )
-            # VOSK already matched a restrictive _WAKE_PATTERNS pair before we
-            # got here, so we trust the trigger and forward whatever Whisper
-            # transcribed — typically the verb + object ("ponete un tema de
-            # Queen"), since the "indio" itself often lands outside the
-            # prebuffer window. Only drop when Whisper produced nothing
-            # substantive (empty or pure filler).
+            # VOSK matched a _WAKE_PATTERNS pair and STT confirmed "indio".
+            # Only drop when transcript produced nothing substantive beyond filler.
             if not _has_text_beyond_wake_word(text):
                 log.info(f"[WAKE] user={user_id} only wake word / no question; skip")
                 return
@@ -2867,6 +2948,91 @@ async def _handle_gemini_key_dm(message) -> bool:
     return True
 
 
+_GROQ_KEY_DM_RE = re.compile(r"\bgsk_[\w-]{30,100}\b")
+
+
+async def _handle_groq_key_dm(message) -> bool:
+    """If message is a DM containing Groq API keys (gsk_...), add locally to
+    groqKeys, forward to main bot's /groq-key endpoint if available, and reply."""
+    guild = getattr(message, "guild", None)
+    if guild is not None:
+        return False
+    text = message.content or ""
+    if not _GROQ_KEY_DM_RE.search(text):
+        return False
+
+    owner_id = str(message.author.id)
+    owner_name = getattr(message.author, "display_name", None) or getattr(
+        message.author, "name", "unknown"
+    )
+
+    # 1. Always process locally
+    extracted = groqKeys.extract_keys_from_text(text)
+    local_added = 0
+    local_dupes = 0
+    local_failed = 0
+
+    if extracted:
+        for k in extracted:
+            res = groqKeys.add_key(k, owner_id=owner_id, owner_name=owner_name)
+            if res.get("ok"):
+                local_added += 1
+            elif res.get("reason") == "already in pool":
+                local_dupes += 1
+            else:
+                local_failed += 1
+
+    # 2. Forward to main bot HTTP endpoint if configured
+    if config.MAIN_BOT_API_BASE and config.MAIN_BOT_API_SECRET:
+        payload = {
+            "text": text,
+            "owner_id": owner_id,
+            "owner_name": owner_name,
+            "source": "dm:userbot",
+        }
+        try:
+            session = await _get_http()
+            async with session.post(
+                f"{config.MAIN_BOT_API_BASE}/groq-key",
+                json=payload,
+                headers={"X-API-Secret": config.MAIN_BOT_API_SECRET},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status >= 400:
+                    body = await resp.text()
+                    log.warning(f"[GROQ-KEY-DM] HTTP {resp.status}: {body[:200]}")
+        except Exception as e:
+            log.exception("[GROQ-KEY-DM] forward failed")
+            analytics.capture_exception(
+                e, properties={"action": "groq_key_dm_forward_failed"}
+            )
+
+    # 3. Formulate reply
+    lines: list[str] = []
+    if local_added:
+        lines.append(f"⚡ Sumé {local_added} Groq API key(s) al pool. ¡Gracias {owner_name}!")
+    elif local_dupes:
+        lines.append(f"ℹ️ {local_dupes} Groq key(s) ya estaban cargadas.")
+    elif local_failed:
+        lines.append(f"❌ {local_failed} Groq key(s) no las pude sumar.")
+    else:
+        lines.append(f"⚡ Procesé la API key de Groq. ¡Gracias {owner_name}!")
+
+    try:
+        await message.channel.send("\n".join(lines))
+    except Exception as e:
+        log.exception("[GROQ-KEY-DM] reply failed")
+        analytics.capture_exception(
+            e, properties={"action": "groq_key_dm_reply_failed"}
+        )
+
+    log.info(
+        f"[GROQ-KEY-DM] from {owner_name} ({owner_id}): "
+        f"added={local_added} dupes={local_dupes} failed={local_failed}"
+    )
+    return True
+
+
 async def _handle_indio_image_dm(message) -> bool:
     """Relay image DMs to the main bot's /indio-image endpoint.
 
@@ -3202,6 +3368,9 @@ async def on_message(message):
         return
     # DM con keys de Gemini: lo procesamos y cortamos.
     if await _handle_gemini_key_dm(message):
+        return
+    # DM con keys de Groq: lo procesamos y cortamos.
+    if await _handle_groq_key_dm(message):
         return
     # DM: relay de imágenes al Indio vía VaPls /indio-image
     if await _handle_indio_image_dm(message):
@@ -4205,6 +4374,14 @@ async def _relay_speak(request: web.Request) -> web.Response:
             pass
 
     try:
+        # Wait if a user greeting is currently playing so TTS never interrupts greetings
+        try:
+            deadline = time.monotonic() + 10.0
+            while greeting.is_greeting_playing() and time.monotonic() < deadline:
+                await asyncio.sleep(0.25)
+        except Exception:
+            pass
+
         source = discord.FFmpegOpusAudio(wav_path, options=greeting.FFMPEG_NORMALIZE_OPTS)
         if vc.is_playing():
             vc.stop()

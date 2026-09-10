@@ -38,6 +38,7 @@ from apiServer import startApiServer
 import decifrarVoting
 import errorHandler
 import geminiKeys
+import groqKeys
 import iptv
 import jkanime
 import torrent_search
@@ -397,6 +398,7 @@ async def _classify_and_log_message(
 
 
 geminiKeys.load_from_disk()
+groqKeys.load_from_disk()
 
 intents = discord.Intents.default()
 intents.members = True
@@ -941,50 +943,65 @@ async def on_message(message):
         return
     if await adivinadorCommand.handle_dm_guess(message):
         return
-    found = geminiKeys.extract_keys_from_text(content)
-    if not found:
+    found_gemini = geminiKeys.extract_keys_from_text(content)
+    found_groq = groqKeys.extract_keys_from_text(content)
+    if not found_gemini and not found_groq:
         return
     owner_id = str(message.author.id)
     owner_name = getattr(message.author, "display_name", None) or getattr(
         message.author, "name", "unknown"
     )
-    added: list[str] = []
-    dupes: list[str] = []
-    failed: list[tuple[str, str]] = []
-    for k in found:
-        ok, reason = await geminiKeys.add_key(
-            k,
-            owner_id=owner_id,
-            owner_name=owner_name,
-            source="dm:bot",
-        )
-        if ok:
-            added.append(k)
-        elif reason == "already in pool":
-            dupes.append(k)
-        else:
-            failed.append((k, reason))
     lines: list[str] = []
-    if added:
-        lines.append(f"✅ Sumé {len(added)} key(s) al pool. ¡Gracias {owner_name}!")
-    if dupes:
-        lines.append(f"ℹ️ {len(dupes)} key(s) ya estaban cargadas.")
-    if failed:
-        lines.append(
-            "❌ Algunas no pude sumarlas:\n" + "\n".join(f"- {r}" for _, r in failed)
-        )
+
+    if found_gemini:
+        added_g, dupes_g, failed_g = [], [], []
+        for k in found_gemini:
+            ok, reason = await geminiKeys.add_key(
+                k, owner_id=owner_id, owner_name=owner_name, source="dm:bot"
+            )
+            if ok:
+                added_g.append(k)
+            elif reason == "already in pool":
+                dupes_g.append(k)
+            else:
+                failed_g.append((k, reason))
+        if added_g:
+            lines.append(f"✅ Sumé {len(added_g)} Gemini key(s) al pool. ¡Gracias {owner_name}!")
+        if dupes_g:
+            lines.append(f"ℹ️ {len(dupes_g)} Gemini key(s) ya estaban cargadas.")
+        if failed_g:
+            lines.append("❌ Algunas Gemini keys no las pude sumar:\n" + "\n".join(f"- {r}" for _, r in failed_g))
+
+    if found_groq:
+        added_gr, dupes_gr, failed_gr = [], [], []
+        for k in found_groq:
+            ok, reason = await groqKeys.add_key(
+                k, owner_id=owner_id, owner_name=owner_name, source="dm:bot"
+            )
+            if ok:
+                added_gr.append(k)
+            elif reason == "already in pool":
+                dupes_gr.append(k)
+            else:
+                failed_gr.append((k, reason))
+        if added_gr:
+            lines.append(f"⚡ Sumé {len(added_gr)} Groq API key(s) al pool. ¡Gracias {owner_name}!")
+        if dupes_gr:
+            lines.append(f"ℹ️ {len(dupes_gr)} Groq API key(s) ya estaban cargadas.")
+        if failed_gr:
+            lines.append("❌ Algunas Groq keys no las pude sumar:\n" + "\n".join(f"- {r}" for _, r in failed_gr))
+
     if lines:
         try:
             await message.channel.send("\n".join(lines))
         except Exception:
             log.exception("on_message: reply failed")
     log.info(
-        "gemini key DM from %s (%s): added=%d dupes=%d failed=%d",
+        "API key DM from %s (%s): gemini_added=%d groq_added=%d",
         owner_name,
         owner_id,
-        len(added),
-        len(dupes),
-        len(failed),
+        len(added_g) if found_gemini else 0,
+        len(added_gr) if found_groq else 0,
     )
 
 

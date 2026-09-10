@@ -27,6 +27,7 @@ import analytics
 import config
 import geminiCommand
 import geminiKeys
+import groqKeys
 import petGenerator
 from playCommand import guildPlayers
 from users import USERS
@@ -1300,6 +1301,37 @@ def makeApp(bot: discord.Bot) -> web.Application:
             }
         )
 
+    async def submitGroqKey(request: web.Request) -> web.Response:
+        """Receive one or more Groq API keys from the userbot (or loopback caller)
+        and add them to the pool.
+
+        Body JSON: {text, owner_id, owner_name, source?}.
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        text = str(data.get("text") or "")
+        owner_id = str(data.get("owner_id") or "")
+        owner_name = str(data.get("owner_name") or "unknown")
+        source = str(data.get("source") or "dm:userbot")
+        candidates = groqKeys.extract_keys_from_text(text)
+        results: list[dict] = []
+        for k in candidates:
+            ok, reason = await groqKeys.add_key(
+                k,
+                owner_id=owner_id,
+                owner_name=owner_name,
+                source=source,
+            )
+            results.append({"key_tail": k[-6:], "ok": ok, "reason": reason})
+        return web.json_response(
+            {
+                "found": len(candidates),
+                "results": results,
+            }
+        )
+
     async def submitIndioImage(request: web.Request) -> web.Response:
         """Relay endpoint for Indio image DM handling via userbot.
 
@@ -2044,6 +2076,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/debug-idle", debugIdle)
     app.router.add_get("/playing", playingState)
     app.router.add_post("/gemini-key", submitGeminiKey)
+    app.router.add_post("/groq-key", submitGroqKey)
     app.router.add_post("/indio-image", submitIndioImage)
     app.router.add_get("/channels", textChannels)
     app.router.add_get("/last-voice", lastVoice)
