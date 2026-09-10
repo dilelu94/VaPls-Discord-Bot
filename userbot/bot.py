@@ -1518,11 +1518,6 @@ class WakeWordSink(voice_recv.AudioSink):
         # endpoint. Sits before any audio work so non-requesters cost zero.
         if not _is_speaker_allowed(guild_id, user_id):
             return
-        # Pause processing for everyone except the user that fired the wake
-        # word while we're still capturing + transcribing. Saves CPU on the
-        # 4-vCPU ARM box when 4-5 people happen to talk simultaneously.
-        if self._wake_in_progress and user_id != self._wake_triggerer_id:
-            return
 
         self.packet_count += 1
         if self.packet_count == 1:
@@ -2042,6 +2037,9 @@ def _whisper_confirms_indio(text: str) -> bool:
     if not text:
         return False
     norm = _normalize(text)
+    # Reject 3rd person references (e.g. "el indio de chile", "del indio", "al indio", "un indio")
+    if re.search(r"\b(el|del|al|un)\s+(indio|india)\b", norm):
+        return False
     # Accept "indio" plus the close mis-spellings Whisper-small produces on the
     # short wake clip ("india"; "indió" already strips to "indio"). Substring
     # within a token so glued/punctuated forms ("cheindio", "indio,", "indios")

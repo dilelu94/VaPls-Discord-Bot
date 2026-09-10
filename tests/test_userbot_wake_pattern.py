@@ -123,6 +123,7 @@ def _extract_wake_ns():
 
     ns: dict = {
         "os": _os,
+        "re": re,
         "unicodedata": _unicodedata,
         "json": _json,
         # _set_sensitivity uses log.info; supply a no-op logger.
@@ -430,6 +431,10 @@ def test_whisper_confirms_indio_true(text):
         "",
         "el indo",  # typo — no "indio"
         "el individuo",  # contains "indi" but not "indio"/"india"
+        "el indio de chile",  # 3rd person reference
+        "hablan del indio solari",  # 3rd person reference
+        "al indio le gusta",  # 3rd person reference
+        "un indio paso caminando",  # 3rd person reference
         None,
     ],
 )
