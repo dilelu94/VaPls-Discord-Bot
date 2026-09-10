@@ -1867,7 +1867,7 @@ class WakeWordSink(voice_recv.AudioSink):
                 log.info(f"[WAKE] user={user_id} only wake word / no question; skip")
                 return
             await on_transcript(
-                user_id, text, via_wake_word=True, vosk_result=vosk_result
+                user_id, text, via_wake_word=True, vosk_result=vosk_result, pcm_bytes=pcm_16k
             )
         except Exception as e:
             log.exception("[WAKE] transcribe failed")
@@ -2159,6 +2159,7 @@ async def on_transcript(
     *,
     via_wake_word: bool = False,
     vosk_result: Optional[dict] = None,
+    pcm_bytes: Optional[bytes] = None,
 ):
     """Handle a completed transcription: post to transcript channel + optionally
     forward to the main bot and trigger the indio on wake word.
@@ -2185,7 +2186,25 @@ async def on_transcript(
             guild = getattr(chan, "guild", None)
             member = guild.get_member(user_id) if guild else None
             speaker_name = _name_for(user_id, member)
-            posted = await chan.send(f"🎙️ **{speaker_name}:** {text}")
+            content = f"🎙️ **{speaker_name}:** {text}"
+            file_to_send = None
+            if pcm_bytes:
+                try:
+                    wav_buf = io.BytesIO()
+                    with wave.open(wav_buf, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(2)
+                        wf.setframerate(16000)
+                        wf.writeframes(pcm_bytes)
+                    wav_buf.seek(0)
+                    file_to_send = discord.File(fp=wav_buf, filename=f"audio_escuchado_{user_id}.wav")
+                except Exception as ex_wav:
+                    log.warning(f"failed to format wav file attachment: {ex_wav}")
+
+            if file_to_send:
+                posted = await chan.send(content, file=file_to_send)
+            else:
+                posted = await chan.send(content)
             posted_channel_id = chan.id
             posted_guild_id = guild.id if guild else None
             # Capture the message id so the main bot can attach
