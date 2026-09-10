@@ -637,43 +637,8 @@ _INDIO_TOOLS = [
             "required": ["content"],
         },
     },
-    {
-        "name": "search_chat_history",
-        "description": (
-            "Buscar en el historial de chat guardado de los canales de Discord de VaPls. "
-            "Usá esta herramienta cuando el usuario pida buscar mensajes anteriores, "
-            "recordar lo que dijo alguien, o encontrar datos/links/IPs compartidos en el chat. "
-            "IMPORTANTE: si el pedido menciona un usuario por nombre como fuente del mensaje "
-            "(ej: 'lo que dijo tobi', 'un mensaje de seba', 'tobi mencionó algo de dota'), "
-            "ese nombre va en `author_name`, NO en `query`. "
-            "`query` es solo el contenido o tema a buscar (ej: 'dota', 'ip valheim')."
-        ),
-        "parameters": {
-            "type": "OBJECT",
-            "properties": {
-                "query": {
-                    "type": "STRING",
-                    "description": (
-                        "Palabras clave del CONTENIDO a buscar (ej: 'dota', 'valheim', 'ip', 'link'). "
-                        "NO pongas nombres de usuarios acá — eso va en author_name."
-                    ),
-                },
-                "author_name": {
-                    "type": "STRING",
-                    "description": (
-                        "Nombre o apodo del USUARIO que envió el mensaje. Usalo cuando el pedido diga "
-                        "'lo que dijo X', 'un mensaje de X', 'X mencionó algo sobre...'. "
-                        "Ejemplos: 'tobi', 'seba', 'miles', 'chalo'."
-                    ),
-                },
-                "channel_name": {
-                    "type": "STRING",
-                    "description": "Nombre del canal si se especificó uno (ej: 'soreteposting', 'general').",
-                },
-            },
-            "required": ["query"],
-        },
-    },
+    # search_chat_history: misma definición que en _VAPLS_TOOLS (una sola fuente de verdad)
+    _VAPLS_TOOLS[0],
 ]
 
 
