@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 import types
-from urllib.parse import urljoin, quote
+from urllib.parse import urljoin, urlparse, quote
 import logging
 from typing import Any, Optional
 
@@ -2047,8 +2047,76 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/pet/{user_id}", petEndpoint)
     app.router.add_post("/message", sendMessage)
     app.router.add_post("/play-audio", playAudio)
+    async def userbotSay(request: web.Request) -> web.Response:
+        """Proxy POST /userbot-say → userbot POST /say.
+
+        Allows the Telegram bridge and any other authorised caller to make
+        the Indio userbot speak in a Discord channel without needing direct
+        access to the userbot's loopback HTTP server.  The request body is
+        forwarded verbatim; the userbot's response (JSON) is returned as-is.
+
+        Required body fields (same as the userbot's /say endpoint):
+            channel_id (int): Discord text channel where the message is sent.
+            content (str): Text the userbot will post.
+
+        Optional body fields forwarded transparently:
+            guild_id, reference_id, tts, etc. (see userbot docs).
+
+        Auth:
+            Same X-API-Secret as every other endpoint (enforced by
+            authMiddleware).  The request to the userbot relay uses
+            config.INDIO_RELAY_SECRET.
+
+        Returns:
+            JSON response from the userbot relay, or an error response if
+            the relay is not configured or the forwarded request fails.
+
+        Async:
+            This function is a coroutine and must be awaited by aiohttp.
+        """
+        if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
+            return web.json_response(
+                {"error": "userbot relay not configured (INDIO_RELAY_URL/SECRET missing)"},
+                status=503,
+            )
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid JSON body"}, status=400)
+
+        # Build the /say URL from the relay base (e.g. http://127.0.0.1:8081)
+        parsed = urlparse(config.INDIO_RELAY_URL)
+        say_url = f"{parsed.scheme}://{parsed.netloc}/say"
+
+        timeout = aiohttp.ClientTimeout(total=config.INDIO_RELAY_TIMEOUT)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as sess:
+                async with sess.post(
+                    say_url,
+                    json=body,
+                    headers={"X-API-Secret": config.INDIO_RELAY_SECRET},
+                ) as resp:
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        data = {"status": await resp.text()}
+                    if resp.status >= 400:
+                        logger.warning(
+                            "userbot /say HTTP %d: %s", resp.status, str(data)[:200]
+                        )
+                    return web.json_response(data, status=resp.status)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "userbot /say timeout after %.1fs", config.INDIO_RELAY_TIMEOUT
+            )
+            return web.json_response({"error": "userbot relay timeout"}, status=504)
+        except Exception as exc:
+            logger.exception("userbot /say proxy failed")
+            return web.json_response({"error": str(exc)}, status=500)
+
     app.router.add_get("/queue", queue)
     app.router.add_post("/indio", indioVoice)
+    app.router.add_post("/userbot-say", userbotSay)
 
     async def debugIdle(request: web.Request) -> web.Response:
         from idleWatchdog import _watchdogs

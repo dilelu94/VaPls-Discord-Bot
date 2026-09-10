@@ -135,6 +135,51 @@ Returns the current playback queue.
 }
 ```
 
+### POST `/userbot-say`
+
+Proxy endpoint: forwards the request body verbatim to the Indio userbot's
+`POST /say` endpoint (`http://127.0.0.1:8081/say`) and returns the userbot's
+response.
+
+Use this to make the Indio userbot post a message in a Discord channel using
+its real user account, without requiring direct access to the userbot's loopback
+server. The VaPls main bot acts as the secure gateway.
+
+**Auth:** uses `INDIO_RELAY_URL` (base URL) and `INDIO_RELAY_SECRET` (shared
+secret). Returns `503` if either is not configured.
+
+**Body (JSON) — forwarded verbatim to the userbot**
+
+```json
+{
+  "channel_id": 451607097432604672,
+  "content": "Mensaje a postear con la cuenta del Indio"
+}
+```
+
+| Field        | Required | Description                                     |
+| ------------ | -------- | ----------------------------------------------- |
+| `channel_id` | yes      | Discord text channel where the message is sent  |
+| `content`    | yes      | Text the Indio userbot will post                |
+| `guild_id`   | no       | Guild ID (userbot uses it for context/logging)  |
+| `tts`        | no       | Set `true` to send as TTS message               |
+
+**Response** — JSON body returned by the userbot's `/say` endpoint:
+
+```json
+{ "ok": true }
+```
+
+**Errors**
+
+| Code | Meaning                                                    |
+| ---- | ---------------------------------------------------------- |
+| `400` | Request body is not valid JSON                            |
+| `503` | `INDIO_RELAY_URL` or `INDIO_RELAY_SECRET` not configured  |
+| `504` | Userbot relay timed out                                   |
+| `5xx` | Userbot relay returned an error                           |
+
+
 ## File transfer endpoints (`/upload`, `/dl`)
 
 These endpoints are **public** (no `X-API-Secret` required). The UUID token is the
