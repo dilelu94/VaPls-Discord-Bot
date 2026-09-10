@@ -21,6 +21,8 @@ from userbot import bot as userbot_bot
 async def test_run_groq_stt_success(monkeypatch):
     """Verify _run_groq_stt sends wav buffer and headers to Groq API and returns transcript."""
     monkeypatch.setattr(userbot_bot.config, "GROQ_API_KEY", "gsk_test_key_123")
+    monkeypatch.setattr(userbot_bot.groqKeys, "active_keys", lambda: ["gsk_test_key_123"])
+    monkeypatch.setattr(userbot_bot.groqKeys, "get_next_groq_key", lambda: "gsk_test_key_123")
     monkeypatch.setattr(userbot_bot.config, "GROQ_MODEL", "whisper-large-v3-turbo")
 
     fake_response = AsyncMock()

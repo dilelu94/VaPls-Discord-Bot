@@ -96,3 +96,27 @@ async def test_userbot_handle_groq_key_dm(monkeypatch):
     sent_text = message.channel.send.call_args[0][0]
     assert "⚡ Sumé 1 Groq API key(s) al pool" in sent_text
 
+
+@pytest.mark.asyncio
+async def test_key_rotation_and_cooldown():
+    """Verify get_next_groq_key rotates keys and respects cooldowns."""
+    key1 = "gsk_key11111111111111111111111111111111111111111111"
+    key2 = "gsk_key22222222222222222222222222222222222222222222"
+    key3 = "gsk_key33333333333333333333333333333333333333333333"
+
+    await groqKeys.add_key(key1, owner_id="1", owner_name="User1", source="test")
+    await groqKeys.add_key(key2, owner_id="2", owner_name="User2", source="test")
+    await groqKeys.add_key(key3, owner_id="3", owner_name="User3", source="test")
+
+    # Round robin
+    k_a = groqKeys.get_next_groq_key()
+    k_b = groqKeys.get_next_groq_key()
+    k_c = groqKeys.get_next_groq_key()
+    assert {k_a, k_b, k_c} == {key1, key2, key3}
+
+    # Cooldown key1
+    groqKeys.mark_key_cooldown(k_a, 60.0)
+    for _ in range(5):
+        nxt = groqKeys.get_next_groq_key()
+        assert nxt != k_a, "Key in cooldown should not be selected"
+

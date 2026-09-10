@@ -18,6 +18,7 @@ import os
 import re
 import tempfile
 import sys
+import time
 from typing import Optional
 
 import config
@@ -29,6 +30,8 @@ _GROQ_KEY_RE = re.compile(r"\bgsk_[\w-]{30,100}\b")
 
 _keys: list[dict] = []  # cada item: {"key", "owner_name", "owner_id", "note", "source"}
 _lock = asyncio.Lock()
+_next_key_idx: int = 0
+_key_cooldowns: dict[str, float] = {}  # key -> timestamp when available again
 
 
 def extract_keys_from_text(text: str) -> list[str]:
@@ -48,6 +51,37 @@ def extract_keys_from_text(text: str) -> list[str]:
 def active_keys() -> list[str]:
     """Return raw key strings currently in the pool."""
     return [item["key"] for item in _keys if item.get("key")]
+
+
+def get_next_groq_key() -> str:
+    """Return the next Groq API key in the pool using round-robin rotation, skipping keys in cooldown."""
+    global _next_key_idx
+    keys = active_keys()
+    if not keys:
+        return getattr(config, "GROQ_API_KEY", "")
+    now = time.time()
+    available = [k for k in keys if _key_cooldowns.get(k, 0.0) <= now]
+    if not available:
+        return min(keys, key=lambda k: _key_cooldowns.get(k, 0.0))
+    start = _next_key_idx % len(keys)
+    for offset in range(len(keys)):
+        candidate = keys[(start + offset) % len(keys)]
+        if candidate in available:
+            _next_key_idx = (start + offset + 1) % len(keys)
+            return candidate
+    return keys[0]
+
+
+def mark_key_cooldown(key: str, seconds: float = 60.0) -> None:
+    """Put a key into temporary cooldown (e.g. for rate limit HTTP 429)."""
+    if key:
+        _key_cooldowns[key] = time.time() + seconds
+
+
+def mark_key_dead(key: str) -> None:
+    """Put an invalid/expired key into 24h cooldown (HTTP 401/403)."""
+    if key:
+        _key_cooldowns[key] = time.time() + 86400.0
 
 
 def list_entries() -> list[dict]:

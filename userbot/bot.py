@@ -723,59 +723,102 @@ class TranscriberSink(voice_recv.AudioSink):
 
 
 async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
-    """Send s16le 16k mono PCM bytes to Groq Cloud STT API (whisper-large-v3-turbo)."""
-    api_key = getattr(config, "GROQ_API_KEY", "")
-    if not pcm_16k_bytes or not api_key:
+    """Send s16le 16k mono PCM bytes to Groq Cloud STT API with key rotation and retry on 429/401."""
+    if not pcm_16k_bytes:
         return ""
-    try:
-        wav_buf = io.BytesIO()
-        with wave.open(wav_buf, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(16000)
-            wf.writeframes(pcm_16k_bytes)
-        wav_buf.seek(0)
 
-        form = aiohttp.FormData()
-        form.add_field(
-            "file",
-            wav_buf,
-            filename="audio.wav",
-            content_type="audio/wav",
-        )
-        form.add_field("model", getattr(config, "GROQ_MODEL", "whisper-large-v3"))
-        form.add_field("language", "es")
-        form.add_field("temperature", "0.0")
-        form.add_field(
-            "prompt",
-            "che indio, Indio, VaPls, Discord, clipeá, contá un chiste",
-        )
+    pool = groqKeys.active_keys()
+    if not pool:
+        fallback = getattr(config, "GROQ_API_KEY", "")
+        if fallback:
+            pool = [fallback]
+        else:
+            return ""
 
-        headers = {"Authorization": f"Bearer {api_key}"}
-        session = await _get_http()
-        url = "https://api.groq.com/openai/v1/audio/transcriptions"
-        async with session.post(
-            url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=8.0)
-        ) as resp:
-            if resp.status == 200:
-                data = await resp.json()
-                text = data.get("text", "").strip()
-                log.info(f"[GROQ-STT] Transcribed {len(pcm_16k_bytes)} bytes: {text!r}")
-                return text
-            else:
-                body = await resp.text()
-                log.error(f"[GROQ-STT] Groq API returned HTTP {resp.status}: {body}")
-                return ""
-    except Exception as e:
-        log.exception(f"[GROQ-STT] Failed to transcribe audio via Groq API: {e}")
-        analytics.capture_exception(e, properties={"action": "groq_stt_failed"})
-        return ""
+    attempts = max(1, len(pool))
+    used_keys: set[str] = set()
+
+    for attempt in range(attempts):
+        api_key = groqKeys.get_next_groq_key()
+        if not api_key:
+            api_key = getattr(config, "GROQ_API_KEY", "")
+        if not api_key:
+            return ""
+        if api_key in used_keys and len(used_keys) >= len(pool):
+            break
+        used_keys.add(api_key)
+
+        try:
+            wav_buf = io.BytesIO()
+            with wave.open(wav_buf, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(pcm_16k_bytes)
+            wav_buf.seek(0)
+
+            form = aiohttp.FormData()
+            form.add_field(
+                "file",
+                wav_buf,
+                filename="audio.wav",
+                content_type="audio/wav",
+            )
+            form.add_field("model", getattr(config, "GROQ_MODEL", "whisper-large-v3"))
+            form.add_field("language", "es")
+            form.add_field("temperature", "0.0")
+            form.add_field(
+                "prompt",
+                "che indio, Indio, VaPls, Discord, clipeá, contá un chiste",
+            )
+
+            headers = {"Authorization": f"Bearer {api_key}"}
+            session = await _get_http()
+            url = "https://api.groq.com/openai/v1/audio/transcriptions"
+            async with session.post(
+                url, headers=headers, data=form, timeout=aiohttp.ClientTimeout(total=8.0)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    text = data.get("text", "").strip()
+                    log.info(
+                        f"[GROQ-STT] Transcribed {len(pcm_16k_bytes)} bytes using key "
+                        f"{api_key[:8]}...: {text!r}"
+                    )
+                    return text
+                elif resp.status == 429:
+                    body = await resp.text()
+                    log.warning(
+                        f"[GROQ-STT] Key {api_key[:8]}... rate-limited (HTTP 429): {body}; "
+                        f"putting on 60s cooldown and rotating key"
+                    )
+                    groqKeys.mark_key_cooldown(api_key, 60.0)
+                    continue
+                elif resp.status in (401, 403):
+                    body = await resp.text()
+                    log.error(
+                        f"[GROQ-STT] Key {api_key[:8]}... invalid/unauthorized (HTTP {resp.status}): {body}; "
+                        f"marking dead and rotating key"
+                    )
+                    groqKeys.mark_key_dead(api_key)
+                    continue
+                else:
+                    body = await resp.text()
+                    log.error(f"[GROQ-STT] Groq API returned HTTP {resp.status}: {body}")
+                    return ""
+        except Exception as e:
+            log.exception(f"[GROQ-STT] Failed to transcribe audio via Groq API: {e}")
+            analytics.capture_exception(e, properties={"action": "groq_stt_failed"})
+            return ""
+
+    return ""
 
 
 async def _transcribe_pcm(pcm_16k_bytes: bytes) -> str:
     """Transcribe s16le 16k mono PCM bytes using configured STT_PROVIDER (groq or local)."""
     provider = getattr(config, "STT_PROVIDER", "local").lower()
-    if provider == "groq" or (provider == "local" and getattr(config, "GROQ_API_KEY", "")):
+    has_groq = bool(groqKeys.active_keys() or getattr(config, "GROQ_API_KEY", ""))
+    if provider == "groq" or (provider == "local" and has_groq):
         return await _run_groq_stt(pcm_16k_bytes)
     elif provider == "local" and getattr(config, "WHISPER_ENABLED", False):
         return await asyncio.to_thread(_run_whisper, pcm_16k_bytes)
