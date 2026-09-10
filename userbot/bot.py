@@ -287,8 +287,12 @@ def _install_dave_patch():
                         decrypted_ok = True
                     else:
                         _dave_stats["dave_skip"] += 1
+                        # DAVE is ready but decrypt failed/skipped on ciphertext boundary (e.g. PTT press/release).
+                        # Mute this 20ms frame so libopus does not decode ciphertext into robotic static.
+                        payload = _OPUS_SILENCE
                 except Exception as e:
                     _dave_stats["dave_fail"] += 1
+                    payload = _OPUS_SILENCE
                     if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
                         log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
             else:
