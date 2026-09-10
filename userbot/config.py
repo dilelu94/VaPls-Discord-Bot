@@ -11,7 +11,7 @@ USER_TOKEN = os.getenv("USER_TOKEN")
 
 # --- Groq Cloud STT & faster-whisper transcription -------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "whisper-large-v3-turbo")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "whisper-large-v3")
 # Provider can be "groq", "local", or "none". Default to "groq" if GROQ_API_KEY is configured.
 _default_provider = "groq" if GROQ_API_KEY else "local"
 STT_PROVIDER = os.getenv("STT_PROVIDER", _default_provider).lower()

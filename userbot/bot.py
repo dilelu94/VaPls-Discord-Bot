@@ -152,12 +152,6 @@ def _install_dave_patch():
     _orig_callback = getattr(AudioReader, "callback", None)
     if _orig_callback is not None:
         def _patched_callback(self, packet_data: bytes) -> None:
-            if packet_data:
-                try:
-                    from golive.golive_watcher import dispatch_rtp_packet
-                    dispatch_rtp_packet(packet_data)
-                except Exception:
-                    pass
             return _orig_callback(self, packet_data)
         AudioReader.callback = _patched_callback
 
@@ -167,16 +161,6 @@ def _install_dave_patch():
             return
 
         def wrapped(self, packet):
-            raw_data = None
-            if isinstance(packet, (bytes, bytearray)):
-                raw_data = bytes(packet)
-            elif hasattr(packet, "data") and isinstance(packet.data, (bytes, bytearray)):
-                raw_data = bytes(packet.data)
-            elif hasattr(packet, "raw_data") and isinstance(packet.raw_data, (bytes, bytearray)):
-                raw_data = bytes(packet.raw_data)
-            elif isinstance(packet, tuple) and len(packet) >= 2:
-                raw_data = bytes(packet[0]) + bytes(packet[1])
-
             vc = getattr(self, "_voice_client", None)
             if vc is not None:
                 ssrc_map = getattr(vc, "_ssrc_to_id", None)
@@ -187,28 +171,6 @@ def _install_dave_patch():
                     return _OPUS_SILENCE
 
             raw = original(self, packet)
-
-            if raw_data:
-                try:
-                    from golive.golive_watcher import dispatch_rtp_packet
-                    dispatch_rtp_packet(raw_data)
-                except Exception:
-                    pass
-            elif raw:
-                try:
-                    from golive.golive_watcher import dispatch_rtp_packet
-                    if hasattr(packet, "header") and len(packet.header) >= 12:
-                        hdr = bytes(packet.header)
-                    else:
-                        hdr = b""
-                    if hdr:
-                        clean_hdr = bytes([hdr[0] & 0xF0]) + hdr[1:12]
-                        full_rtp = clean_hdr + raw
-                    else:
-                        full_rtp = raw
-                    dispatch_rtp_packet(full_rtp)
-                except Exception:
-                    pass
 
             is_video = hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77)
 
@@ -231,14 +193,20 @@ def _install_dave_patch():
 
             # Fallback SSRC resolution if ssrc_map is empty or missing entry
             if not uid and vc:
-                if len(ssrc_map) == 1:
-                    uid = next(iter(ssrc_map.values()))
-                else:
-                    channel = getattr(vc, "channel", None)
-                    if channel and hasattr(channel, "members"):
-                        non_bots = [m.id for m in channel.members if not getattr(m, "bot", False) and m.id != getattr(getattr(vc, "user", None), "id", None) and m.id not in config.IGNORE_USER_IDS]
-                        if len(non_bots) >= 1:
-                            uid = non_bots[0]
+                if getattr(packet, "ssrc", None):
+                    for offset in (1, 2, -1, -2):
+                        if (packet.ssrc - offset) in ssrc_map:
+                            uid = ssrc_map[packet.ssrc - offset]
+                            break
+                if not uid:
+                    if len(ssrc_map) == 1:
+                        uid = next(iter(ssrc_map.values()))
+                    else:
+                        channel = getattr(vc, "channel", None)
+                        if channel and hasattr(channel, "members"):
+                            non_bots = [m.id for m in channel.members if not getattr(m, "bot", False) and m.id != getattr(getattr(vc, "user", None), "id", None) and m.id not in config.IGNORE_USER_IDS]
+                            if len(non_bots) >= 1:
+                                uid = non_bots[0]
 
             if uid and vc and getattr(packet, "ssrc", None):
                 if hasattr(vc, "_add_ssrc") and callable(vc._add_ssrc):
@@ -264,6 +232,9 @@ def _install_dave_patch():
                         hdr = bytes(packet.header)
                         clean_hdr = bytes([hdr[0] & ~0x10]) + hdr[1:12]
                         dispatch_rtp_packet(clean_hdr + payload)
+                    elif hasattr(packet, "pt"):
+                        hdr = struct.pack("!BBHII", 0x80, packet.pt, packet.sequence & 0xFFFF, packet.timestamp & 0xFFFFFFFF, packet.ssrc)
+                        dispatch_rtp_packet(hdr + payload)
                 except Exception:
                     pass
                 return payload
@@ -772,7 +743,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
             filename="audio.wav",
             content_type="audio/wav",
         )
-        form.add_field("model", getattr(config, "GROQ_MODEL", "whisper-large-v3-turbo"))
+        form.add_field("model", getattr(config, "GROQ_MODEL", "whisper-large-v3"))
         form.add_field("language", "es")
         form.add_field("temperature", "0.0")
         form.add_field(
