@@ -172,7 +172,13 @@ def _install_dave_patch():
 
             raw = original(self, packet)
 
-            is_video = hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77)
+            pkt_pt = getattr(packet, "pt", None)
+            if pkt_pt is None and hasattr(packet, "header") and len(packet.header) >= 2:
+                pkt_pt = packet.header[1] & 0x7F
+            elif pkt_pt is None and isinstance(packet, (bytes, bytearray)) and len(packet) >= 2:
+                pkt_pt = packet[1] & 0x7F
+
+            is_video = (pkt_pt is not None) and (pkt_pt not in (120, 111, 121, 77))
 
             vc = getattr(self, "_voice_client", None)
             if not vc and hasattr(client, "voice_clients"):
@@ -769,7 +775,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
             form.add_field("temperature", "0.0")
             form.add_field(
                 "prompt",
-                "che indio, Indio, VaPls, Discord, clipeá, contá un chiste",
+                "Español rioplatense con voseo. Vocabulario: Indio, VaPls, Discord, clipeá, chiste.",
             )
 
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -1936,22 +1942,32 @@ class WakeWordSink(voice_recv.AudioSink):
                 f"({duration:.1f}s audio, {dt * 1000:.0f}ms): {text}"
             )
 
-            # Strict post-STT verification: transcript MUST confirm the wake word ("che indio" / "indio").
+            # Post-STT verification: transcript MUST confirm the wake word ("che indio" / "indio").
             if not _whisper_confirms_indio(text):
-                log.info(
-                    "[WAKE] user=%s: 'indio' NOT confirmed in STT transcript (%r); discarding VOSK false positive",
-                    user_id,
-                    text,
-                )
-                analytics.capture(
-                    "wake_word_rejected",
-                    properties={
-                        "speaker_id": user_id,
-                        "reason": "stt_no_indio_confirmation",
-                        "wake_text": text,
-                    },
-                )
-                return
+                _matched = (vosk_result.get("_matched_text") or "che indio") if vosk_result else ""
+                if _matched:
+                    log.info(
+                        "[WAKE] user=%s STT transcript %r missing 'indio', but VOSK matched %r; prepending wake word",
+                        user_id,
+                        text,
+                        _matched,
+                    )
+                    text = f"{_matched} {text}"
+                else:
+                    log.info(
+                        "[WAKE] user=%s: 'indio' NOT confirmed in STT transcript (%r); discarding false positive",
+                        user_id,
+                        text,
+                    )
+                    analytics.capture(
+                        "wake_word_rejected",
+                        properties={
+                            "speaker_id": user_id,
+                            "reason": "stt_no_indio_confirmation",
+                            "wake_text": text,
+                        },
+                    )
+                    return
 
             if _SENSITIVITY_PRESET == 4:
                 self._schedule_wake_sound(user_id)
