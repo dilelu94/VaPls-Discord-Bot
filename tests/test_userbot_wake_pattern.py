@@ -252,10 +252,9 @@ def test_preset2_bare_indio_does_not_fire():
 # ---------------------------------------------------------------------------
 
 
-def test_default_preset_is_1():
-    """Out of the box the userbot runs preset 1: maximum sensitivity.
-    The module-level variable must equal 1 before any test changes it."""
-    assert _NS["_SENSITIVITY_PRESET"] == 1
+def test_default_preset_is_4():
+    """Out of the box the userbot runs preset 4: direct pass-through to Groq STT."""
+    assert _NS["_SENSITIVITY_PRESET"] == 4
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +290,9 @@ def test_preset0_grammar_is_unk_only():
 
 
 def test_invalid_sensitivity_preset_raises():
-    """Presets outside 0-3 must raise ValueError."""
+    """Presets outside 0-4 must raise ValueError."""
     with pytest.raises(ValueError):
-        set_sensitivity(4)
+        set_sensitivity(5)
     with pytest.raises(ValueError):
         set_sensitivity(-1)
 
@@ -392,9 +391,9 @@ def test_preset1_grammar_includes_que_indio_and_eh_indio():
 
 @pytest.fixture(autouse=True)
 def restore_preset():
-    """Reset sensitivity to the default preset (1) after each test."""
+    """Reset sensitivity to the default preset (4) after each test."""
     yield
-    set_sensitivity(1)
+    set_sensitivity(4)
 
 
 

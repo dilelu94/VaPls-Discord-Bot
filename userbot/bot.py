@@ -292,6 +292,8 @@ def _install_dave_patch():
                     _dave_stats["dave_fail"] += 1
                     if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
                         log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
+                    if has_dave_channel:
+                        payload = _OPUS_SILENCE
             else:
                 _dave_stats["dave_skip"] += 1
 
@@ -930,27 +932,29 @@ _PRESET_2_PATTERNS: tuple[tuple[str, str], ...] = (
 # grammar so ambient speech has many buckets to land in instead of collapsing
 # into a wake-word phrase. Tune the pool via _PRESET_3_FILLER below.
 _PRESET_3_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
+_PRESET_4_PATTERNS: tuple[tuple[str, str], ...] = _PRESET_1_PATTERNS
 
 _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
     0: _PRESET_0_PATTERNS,
     1: _PRESET_1_PATTERNS,
     2: _PRESET_2_PATTERNS,
     3: _PRESET_3_PATTERNS,
+    4: _PRESET_4_PATTERNS,
 }
 
 def _load_persisted_sensitivity() -> int:
-    """Load the persisted sensitivity preset from disk, defaulting to 1."""
+    """Load the persisted sensitivity preset from disk, defaulting to 4."""
     try:
         path = getattr(config, "SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json") if "config" in globals() else "data/sensitivity_preset.json"
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                preset = int(data.get("preset", 1))
-                if preset in (0, 1, 2, 3):
+                preset = int(data.get("preset", 4))
+                if preset in (0, 1, 2, 3, 4):
                     return preset
     except Exception:
         pass
-    return 1
+    return 4
 
 
 def _save_persisted_sensitivity(preset: int) -> None:
@@ -1110,7 +1114,7 @@ def _build_vosk_grammar() -> str:
         "[unk]",
     ]
     # Invocation phrases — added only for presets that include them.
-    if preset == 1:
+    if preset in (1, 4):
         phrases = [
             "che indio",
             "que indio",
@@ -1256,7 +1260,7 @@ def _set_sensitivity(preset: int) -> None:
     global _SENSITIVITY_PRESET, _VOSK_GRAMMAR, _vosk_grammar_generation
     if preset not in _PRESETS:
         raise ValueError(
-            f"Invalid sensitivity preset {preset!r}; must be 0, 1, 2, or 3."
+            f"Invalid sensitivity preset {preset!r}; must be 0, 1, 2, 3, or 4."
         )
     _SENSITIVITY_PRESET = preset
     _VOSK_GRAMMAR = _build_vosk_grammar()
@@ -1541,6 +1545,12 @@ class WakeWordSink(voice_recv.AudioSink):
                 self._maybe_reset_on_silence(user_id, now)
 
             capture = self.captures.get(user_id)
+            if capture is None and _SENSITIVITY_PRESET == 4 and is_voice and not self._wake_in_progress:
+                self._wake_triggerer_id = user_id
+                self._wake_in_progress = True
+                self._start_capture(user_id, now, vosk_result=None, wake_confirm_pcm=None)
+                capture = self.captures.get(user_id)
+
             if capture is not None:
                 self._extend_capture(user_id, capture, data_16k, rms, now)
                 # While capturing we don't need to keep feeding VOSK — the
@@ -1925,6 +1935,9 @@ class WakeWordSink(voice_recv.AudioSink):
                     },
                 )
                 return
+
+            if _SENSITIVITY_PRESET == 4:
+                self._schedule_wake_sound(user_id)
 
             analytics.capture(
                 "whisper_transcription",

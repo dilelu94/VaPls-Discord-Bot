@@ -238,7 +238,8 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("disconnect_indio")} → `disconnect_indio` \
 - {_fmt_trigger("troll_move_user")} → `troll_move_user` \
 - {_fmt_trigger("comment_stream")} → `comment_stream` \
-- {_fmt_trigger("make_clip")} → `make_clip` \
+- {_fmt_trigger("make_clip")} con orden EXPLÍCITA de crear un clip de audio (palabras como 'clip', 'clipeá', 'clipea', 'grabá el audio') → `make_clip`. NUNCA llames a `make_clip` por inferencia o charla general sobre denuncias, chistes o quejas que no pidan explícitamente un clip. \
+
 
 HERRAMIENTA DE MEMORIA `save_memory`: \
 Cuando un usuario te pida guardar, recordar o anotar algo (ej: "recordá esto", "guardame esto", "anotá esto", "guardá la IP", "recordá la clave"), INCLUYENDO si te están respondiendo a un mensaje anterior ([contexto: ...]), DEBES llamar obligatoriamente a la herramienta `save_memory` pasando la información concreta (IPs, contraseñas, nombres, datos) en el parámetro `content`. \
@@ -558,9 +559,9 @@ _INDIO_TOOLS = [
         "name": "make_clip",
         "description": (
             "Grabar y extraer un clip de audio de los últimos segundos/minutos del canal de voz. \n"
-            "Usala cuando el usuario pida 'hacé un clip', 'dame el clip', 'grabá el clip', "
-            "'clipeá', 'clipea', 'clipeá esto', 'clipea esto', 'clipealo', 'clipeame', "
-            "'clip de los últimos 5m', 'guardá el clip', 'clip', 'clip de los últimos 1m'."
+            "USALA ÚNICAMENTE si el usuario incluye explícitamente palabras como 'clip', 'clipeá', 'clipea', "
+            "'clipeame', 'clipealo', 'hacé un clip', 'dame el clip' o 'grabá el audio'. NUNCA la uses por "
+            "inferencia o charla general sobre denuncias, chistes u otros temas si no dijeron 'clip'."
         ),
         "parameters": {
             "type": "OBJECT",

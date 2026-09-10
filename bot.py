@@ -3386,14 +3386,14 @@ async def adivinador(
 
 @bot.slash_command(
     name="sensibilidad",
-    description="Cambia la sensibilidad del wake-word del indio (presets 0-3)",
+    description="Cambia la sensibilidad del wake-word del indio (presets 0-4)",
 )
 async def sensibilidad(
     ctx,
     preset: discord.Option(
         int,
-        description="0=desactivar, 1=más sensible (default), 2=solo che indio, 3=pool grande",
-        choices=[0, 1, 2, 3],
+        description="0=apagado, 1=alta, 2=solo che indio, 3=con señuelos, 4=directo a Groq STT (default)",
+        choices=[0, 1, 2, 3, 4],
     ),
 ):
     """Slash command: switch the VOSK wake-word sensitivity preset.
