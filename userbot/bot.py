@@ -914,18 +914,18 @@ _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
 }
 
 def _load_persisted_sensitivity() -> int:
-    """Load the persisted sensitivity preset from disk, defaulting to 4."""
+    """Load the persisted sensitivity preset from disk, defaulting to 1."""
     try:
         path = getattr(config, "SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json") if "config" in globals() else "data/sensitivity_preset.json"
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                preset = int(data.get("preset", 4))
+                preset = int(data.get("preset", 1))
                 if preset in (0, 1, 2, 3, 4):
                     return preset
     except Exception:
         pass
-    return 4
+    return 1
 
 
 def _save_persisted_sensitivity(preset: int) -> None:
@@ -1516,8 +1516,20 @@ class WakeWordSink(voice_recv.AudioSink):
                 self._maybe_reset_on_silence(user_id, now)
 
             capture = self.captures.get(user_id)
+            if capture is None and _SENSITIVITY_PRESET == 4:
+                if is_voice and not self._wake_in_progress:
+                    self._wake_triggerer_id = user_id
+                    self._wake_in_progress = True
+                    self._start_capture(user_id, now, vosk_result=None, wake_confirm_pcm=None)
+                    capture = self.captures.get(user_id)
+                else:
+                    return
+
             if capture is not None:
                 self._extend_capture(user_id, capture, data_16k, rms, now)
+                return
+
+            if _SENSITIVITY_PRESET == 4:
                 return
 
             # While a wake transcription is still being processed, don't

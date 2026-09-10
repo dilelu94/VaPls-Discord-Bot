@@ -252,9 +252,9 @@ def test_preset2_bare_indio_does_not_fire():
 # ---------------------------------------------------------------------------
 
 
-def test_default_preset_is_4():
-    """Out of the box the userbot runs preset 4: VOSK pre-filtering with Groq Whisper confirmation."""
-    assert _NS["_SENSITIVITY_PRESET"] == 4
+def test_default_preset_is_1():
+    """Out of the box the userbot runs preset 1: maximum sensitivity VOSK gating."""
+    assert _NS["_SENSITIVITY_PRESET"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -391,9 +391,9 @@ def test_preset1_grammar_includes_que_indio_and_eh_indio():
 
 @pytest.fixture(autouse=True)
 def restore_preset():
-    """Reset sensitivity to the default preset (4) after each test."""
+    """Reset sensitivity to the default preset (1) after each test."""
     yield
-    set_sensitivity(4)
+    set_sensitivity(1)
 
 
 
