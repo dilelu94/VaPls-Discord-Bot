@@ -287,18 +287,12 @@ def _install_dave_patch():
                         decrypted_ok = True
                     else:
                         _dave_stats["dave_skip"] += 1
-                        if has_dave_channel:
-                            payload = _OPUS_SILENCE
                 except Exception as e:
                     _dave_stats["dave_fail"] += 1
                     if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
                         log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
-                    if has_dave_channel:
-                        payload = _OPUS_SILENCE
             else:
                 _dave_stats["dave_skip"] += 1
-                if has_dave_channel:
-                    payload = _OPUS_SILENCE
 
             if _dave_stats["total"] % 200 == 1:
                 log.info(
