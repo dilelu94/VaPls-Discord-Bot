@@ -226,9 +226,18 @@ def _install_dave_patch():
                 else:
                     channel = getattr(vc, "channel", None)
                     if channel and hasattr(channel, "members"):
-                        non_bots = [m.id for m in channel.members if not getattr(m, "bot", False) and m.id != getattr(getattr(vc, "user", None), "id", None)]
-                        if len(non_bots) == 1:
+                        non_bots = [m.id for m in channel.members if not getattr(m, "bot", False) and m.id != getattr(getattr(vc, "user", None), "id", None) and m.id not in config.IGNORE_USER_IDS]
+                        if len(non_bots) >= 1:
                             uid = non_bots[0]
+
+            if uid and vc and getattr(packet, "ssrc", None):
+                if hasattr(vc, "_add_ssrc") and callable(vc._add_ssrc):
+                    try:
+                        vc._add_ssrc(uid, packet.ssrc)
+                    except Exception:
+                        pass
+                if hasattr(vc, "_ssrc_to_id") and isinstance(vc._ssrc_to_id, dict):
+                    vc._ssrc_to_id[packet.ssrc] = uid
 
             if is_video:
                 payload = raw
@@ -1400,6 +1409,33 @@ class WakeWordSink(voice_recv.AudioSink):
 
     def write(self, source, data: voice_recv.VoiceData) -> None:
         user_id = getattr(source, "id", None)
+        if user_id is None:
+            ssrc = getattr(source, "ssrc", None) or (source if isinstance(source, int) else None)
+            vc = getattr(self, "_voice_client", None) or getattr(self, "voice_client", None)
+            if not vc and hasattr(self, "_client_ref") and getattr(self._client_ref, "guilds", None):
+                for g in self._client_ref.guilds:
+                    v = g.voice_client
+                    if v and v.is_connected():
+                        vc = v
+                        break
+            if vc:
+                ssrc_map = getattr(vc, "_ssrc_to_id", {}) or {}
+                if ssrc and ssrc in ssrc_map:
+                    user_id = ssrc_map[ssrc]
+                else:
+                    channel = getattr(vc, "channel", None)
+                    if channel and hasattr(channel, "members"):
+                        bot_id = getattr(getattr(self, "_client_ref", None), "user", None)
+                        bot_id = getattr(bot_id, "id", None)
+                        non_bots = [m for m in channel.members if not getattr(m, "bot", False) and m.id != bot_id and m.id not in config.IGNORE_USER_IDS]
+                        if len(non_bots) >= 1:
+                            user_id = non_bots[0].id
+                            if ssrc and hasattr(vc, "_add_ssrc") and callable(vc._add_ssrc):
+                                try:
+                                    vc._add_ssrc(user_id, ssrc)
+                                except Exception:
+                                    pass
+
         if user_id is None or user_id in config.IGNORE_USER_IDS:
             return
         guild_id = getattr(getattr(source, "guild", None), "id", None)
