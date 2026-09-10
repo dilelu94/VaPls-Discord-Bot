@@ -772,6 +772,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
         )
         form.add_field("model", getattr(config, "GROQ_MODEL", "whisper-large-v3-turbo"))
         form.add_field("language", "es")
+        form.add_field("temperature", "0.0")
         form.add_field(
             "prompt",
             "Conversación en español rioplatense con voseo. Se menciona a 'indio' o 'che indio'.",
