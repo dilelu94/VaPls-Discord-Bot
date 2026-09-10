@@ -1944,30 +1944,20 @@ class WakeWordSink(voice_recv.AudioSink):
 
             # Post-STT verification: transcript MUST confirm the wake word ("che indio" / "indio").
             if not _whisper_confirms_indio(text):
-                _matched = (vosk_result.get("_matched_text") or "che indio") if vosk_result else ""
-                if _matched:
-                    log.info(
-                        "[WAKE] user=%s STT transcript %r missing 'indio', but VOSK matched %r; prepending wake word",
-                        user_id,
-                        text,
-                        _matched,
-                    )
-                    text = f"{_matched} {text}"
-                else:
-                    log.info(
-                        "[WAKE] user=%s: 'indio' NOT confirmed in STT transcript (%r); discarding false positive",
-                        user_id,
-                        text,
-                    )
-                    analytics.capture(
-                        "wake_word_rejected",
-                        properties={
-                            "speaker_id": user_id,
-                            "reason": "stt_no_indio_confirmation",
-                            "wake_text": text,
-                        },
-                    )
-                    return
+                log.info(
+                    "[WAKE] user=%s: 'indio' NOT confirmed in STT transcript (%r); discarding false positive",
+                    user_id,
+                    text,
+                )
+                analytics.capture(
+                    "wake_word_rejected",
+                    properties={
+                        "speaker_id": user_id,
+                        "reason": "stt_no_indio_confirmation",
+                        "wake_text": text,
+                    },
+                )
+                return
 
             if _SENSITIVITY_PRESET == 4:
                 self._schedule_wake_sound(user_id)

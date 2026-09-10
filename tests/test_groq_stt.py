@@ -6,7 +6,10 @@ import aiohttp
 import discord
 
 if "discord.ext.voice_recv" not in sys.modules:
-    sys.modules["discord.ext.voice_recv"] = MagicMock()
+    mock_vr = types.ModuleType("discord.ext.voice_recv")
+    class AudioSink: pass
+    mock_vr.AudioSink = AudioSink
+    sys.modules["discord.ext.voice_recv"] = mock_vr
 if "discord.voice_state" not in sys.modules:
     mock_vs = types.ModuleType("discord.voice_state")
     mock_vs.VoiceConnectionState = MagicMock()
@@ -74,3 +77,30 @@ def test_whisper_confirms_indio_strict_verification():
     assert userbot_bot._whisper_confirms_indio("vamos a jugar una partida") is False
     assert userbot_bot._whisper_confirms_indio("el individuo caminaba por la calle") is False
     assert userbot_bot._whisper_confirms_indio("") is False
+
+
+@pytest.mark.asyncio
+async def test_transcribe_and_dispatch_rejects_false_positive(monkeypatch):
+    """Verify _transcribe_and_dispatch discards ambient speech when Groq Whisper doesn't confirm 'indio'."""
+    on_transcript_mock = AsyncMock()
+    monkeypatch.setattr(userbot_bot, "on_transcript", on_transcript_mock)
+
+    with patch.object(userbot_bot, "_transcribe_pcm", AsyncMock(return_value="que hacemos hoy a la noche")):
+        sink = userbot_bot.WakeWordSink(client_ref=MagicMock())
+        pcm_dummy = b"\x00\x00" * 16000  # 1s 16kHz mono PCM
+        vosk_res = {"_matched_text": "que indio", "text": "que hacemos hoy"}
+
+        await sink._transcribe_and_dispatch(
+            user_id=123,
+            pcm_16k=pcm_dummy,
+            duration=1.0,
+            vosk_result=vosk_res,
+        )
+
+        # Must NOT dispatch to on_transcript because Groq transcript lacked 'indio'
+        on_transcript_mock.assert_not_called()
+
+
+
+
+
