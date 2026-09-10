@@ -512,6 +512,15 @@ async def on_ready():
     except Exception:
         log.exception("scheduled daily stream task startup failed")
 
+    # Start Twitch autostream monitor task
+    try:
+        if not twitch_autostream_monitor.is_running():
+            twitch_autostream_monitor.start()
+        log.info("twitch autostream monitor task started")
+    except Exception:
+        log.exception("twitch autostream monitor task startup failed")
+
+
     # Start Israel alerts listener.
     global _alert_listener
     if config.ISRAEL_ALERTS_ENABLED and config.ISRAEL_ALERTS_CHANNEL_ID:
@@ -2988,8 +2997,8 @@ class StremioWebUIOverlayView(BaseView):
 async def stream_autocomplete(ctx: discord.AutocompleteContext):
     query = (ctx.value or "").strip().lower()
     options = []
-    if not query or "stremio".startswith(query) or "anime".startswith(query):
-        options.extend(["stremio", "anime"])
+    if not query or "stremio".startswith(query) or "anime".startswith(query) or "list".startswith(query):
+        options.extend(["stremio", "anime", "list"])
     try:
         iptv_opts = await iptv.search_autocomplete(query)
         options.extend(iptv_opts)
@@ -3000,19 +3009,27 @@ async def stream_autocomplete(ctx: discord.AutocompleteContext):
 
 @bot.slash_command(
     name="stream",
-    description="Transmití un canal de IPTV, Stremio o Anime en tu canal de voz (Go Live)",
+    description="Transmití un canal de IPTV/Stremio/Anime o gestioná el auto-stream de Twitch",
 )
 async def stream(
     ctx,
     canal: discord.Option(
         str,
-        description="Nombre del canal IPTV, 'stremio' / 'anime', o título a buscar (ej: stremio, ESPN, TN)",
+        description="Nombre/URL del canal, 'list', 'stremio', 'anime' (ej: soyverycherrii, ESPN, TN)",
         required=False,
         default=None,
         autocomplete=stream_autocomplete,
-    ),
+    ) = None,
+    accion: discord.Option(
+        str,
+        description="Acción de monitoreo automático (opcional: add, remove, list)",
+        required=False,
+        default=None,
+        choices=["add", "remove", "list"],
+    ) = None,
 ):
-    """Slash command: search iptv-org / JKAnime / Stremio and start a Go Live stream."""
+
+    """Slash command: search iptv-org / JKAnime / Stremio / Twitch and manage auto-streams."""
     will_redirect = (
         config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
     )
@@ -3030,7 +3047,90 @@ async def stream(
             if ch is not None and hasattr(ch, "send"):
                 redirect_ch = ch
 
-    _track_command(ctx, "stream", {"query_length": len(canal or "")})
+    _track_command(ctx, "stream", {"query_length": len(canal or ""), "accion": accion or ""})
+
+    action_type = (accion or "").strip().lower()
+    raw_canal = (canal or "").strip()
+
+    # Handle /stream list or /stream accion: list
+    if action_type == "list" or raw_canal.lower() in ("list", "programados", "lista", "auto"):
+        if not _autostream_monitored_channels:
+            await safe_respond(ctx, "📺 No hay canales de Twitch configurados para monitoreo automático.")
+            return
+
+        embed = discord.Embed(
+            title="📺 Monitor Automático de Transmisiones de Twitch",
+            description=f"Estado del monitor: **{'🟢 Activo' if config.TWITCH_AUTOSTREAM_ENABLED else '🔴 Inactivo'}** (Intervalo: `{config.TWITCH_AUTOSTREAM_CHECK_INTERVAL}s`)\n",
+            color=0x9146FF,
+        )
+
+        for ch in _autostream_monitored_channels:
+            url = _canonical_twitch_url(ch)
+            name = _extract_twitch_channel_name(url)
+            active_info = _autostream_active_streams.get(url)
+
+            if active_info:
+                status_str = f"🔴 **EN VIVO (Transmitiendo)** en <#{active_info['channel_id']}>"
+            else:
+                status_str = "⚪ Offline"
+
+            embed.add_field(
+                name=f"🎥 {name}",
+                value=f"URL: {url}\nEstado: {status_str}",
+                inline=False,
+            )
+
+        await safe_respond(ctx, embed=embed)
+        return
+
+    # Handle /stream canal: <url> accion: add OR /stream canal: "add <url>"
+    if action_type == "add" or raw_canal.lower().startswith(("add ", "agregar ")):
+        target_url = raw_canal if action_type == "add" else re.sub(r"^(?:add|agregar)\s+", "", raw_canal, flags=re.I)
+        if not target_url:
+            await safe_respond(ctx, "❌ Debés especificar la URL o nombre del canal de Twitch a agregar.")
+            return
+
+        url = _canonical_twitch_url(target_url)
+        name = _extract_twitch_channel_name(url)
+
+        if url in [_canonical_twitch_url(c) for c in _autostream_monitored_channels]:
+            await safe_respond(ctx, f"⚠️ El canal **{name}** (`{url}`) ya está en la lista de monitoreo.")
+            return
+
+        _autostream_monitored_channels.append(url)
+        await safe_respond(
+            ctx,
+            f"✅ Canal **{name}** (`{url}`) agregado al monitor automático de Twitch.",
+        )
+        return
+
+    # Handle /stream canal: <url> accion: remove OR /stream canal: "remove <url>"
+    if action_type == "remove" or raw_canal.lower().startswith(("remove ", "remover ", "delete ")):
+        target_url = raw_canal if action_type == "remove" else re.sub(r"^(?:remove|remover|delete)\s+", "", raw_canal, flags=re.I)
+        if not target_url:
+            await safe_respond(ctx, "❌ Debés especificar la URL o nombre del canal de Twitch a remover.")
+            return
+
+        url = _canonical_twitch_url(target_url)
+        name = _extract_twitch_channel_name(url)
+
+        target_idx = None
+        for i, c in enumerate(_autostream_monitored_channels):
+            if _canonical_twitch_url(c) == url:
+                target_idx = i
+                break
+
+        if target_idx is None:
+            await safe_respond(ctx, f"❌ El canal **{name}** (`{url}`) no se encuentra en la lista de monitoreo.")
+            return
+
+        _autostream_monitored_channels.pop(target_idx)
+        if url in _autostream_active_streams:
+            info = _autostream_active_streams.pop(url)
+            await stop_stream_for_guild(info["guild_id"])
+
+        await safe_respond(ctx, f"🗑️ Canal **{name}** eliminado del monitor automático.")
+        return
 
     voice_state = getattr(ctx.author, "voice", None)
     voice_channel = getattr(voice_state, "channel", None) if voice_state else None
@@ -3039,6 +3139,7 @@ async def stream(
             ctx, "❌ Tenés que estar en un canal de voz para iniciar un stream."
         )
         return
+
 
     if canal is not None and canal.strip().lower() in ("stremio", "anime", "stremio anime"):
         stremio_base = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55/stremio")
@@ -3318,57 +3419,47 @@ async def stream(
     )
 
 
-@bot.slash_command(
-    name="stopstream",
-    description="Detiene la transmisión de IPTV en curso",
-)
-async def stopstream(ctx):
-    """Slash command: stop the active Go Live stream.
-
-    Args:
-        ctx: Discord application context.
-
-    Side Effects:
-        POSTs to the userbot relay ``/stopstream`` which kills FFmpeg
-        and cleans up the video RTP session.
-    """
-    await safe_defer(ctx)
-    _track_command(ctx, "stopstream")
-
+async def stop_stream_for_guild(guild_id: int) -> tuple[bool, str]:
+    """Helper to stop active GoLive stream for a guild via HTTP relay."""
     if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
-        await safe_respond(ctx, "❌ El relay GoLive no está configurado.")
-        return
+        return False, "❌ El relay GoLive no está configurado."
 
     url = urljoin(config.GOLIVE_RELAY_URL, "/stopstream")
     headers = {"X-API-Secret": config.GOLIVE_RELAY_SECRET}
-    payload = {"guild_id": ctx.guild_id}
+    payload = {"guild_id": guild_id}
     timeout = aiohttp.ClientTimeout(total=config.GOLIVE_RELAY_TIMEOUT)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:
                 body = await resp.text()
                 if resp.status == 404:
-                    _active_sources.pop(ctx.guild_id, None)
-                    _paused_streams.discard(ctx.guild_id)
-                    await safe_respond(
-                        ctx, "❌ No hay ningún stream activo en este servidor."
-                    )
-                    return
+                    _active_sources.pop(guild_id, None)
+                    _paused_streams.discard(guild_id)
+                    return False, "❌ No hay ningún stream activo en este servidor."
                 if resp.status >= 400:
                     log.warning("stopstream relay HTTP %s: %s", resp.status, body[:200])
-                    await safe_respond(
-                        ctx, f"⚠️ No pude detener el stream (HTTP {resp.status})."
-                    )
-                    return
+                    return False, f"⚠️ No pude detener el stream (HTTP {resp.status})."
     except Exception as e:
         log.exception("stopstream relay failed")
-        await safe_respond(ctx, f"⚠️ Error deteniendo stream: {e}")
-        return
+        return False, f"⚠️ Error deteniendo stream: {e}"
 
-    _active_sources.pop(ctx.guild_id, None)
-    _paused_streams.discard(ctx.guild_id)
+    _active_sources.pop(guild_id, None)
+    _paused_streams.discard(guild_id)
+    return True, "🛑 Stream detenido."
 
-    await safe_respond(ctx, "🛑 Stream detenido.")
+
+@bot.slash_command(
+    name="stopstream",
+    description="Detiene la transmisión de IPTV en curso",
+)
+async def stopstream(ctx):
+    """Slash command: stop the active Go Live stream."""
+    await safe_defer(ctx)
+    _track_command(ctx, "stopstream")
+
+    success, msg = await stop_stream_for_guild(ctx.guild_id)
+    await safe_respond(ctx, msg)
+
 
 
 
@@ -4712,7 +4803,131 @@ async def scheduled_daily_stream():
 async def before_scheduled_stream():
     await bot.wait_until_ready()
 
+
+# --- Twitch Auto-Stream Detector -------------------------------------------
+_autostream_active_streams: dict[str, dict] = {}
+_autostream_monitored_channels: list[str] = list(config.TWITCH_AUTOSTREAM_CHANNELS)
+
+
+def _canonical_twitch_url(input_str: str) -> str:
+    s = input_str.strip()
+    if not s.startswith(("http://", "https://")):
+        s = f"https://www.twitch.tv/{s.lstrip('/')}"
+    s = re.sub(r"/schedule/?$", "", s, flags=re.I).rstrip("/")
+    return s
+
+
+def _extract_twitch_channel_name(url: str) -> str:
+    m = re.search(r"twitch\.tv/([a-zA-Z0-9_]+)", url, re.I)
+    return m.group(1) if m else url
+
+
+async def _check_twitch_live(channel_url: str) -> tuple[bool, str]:
+    """Check if a Twitch channel is currently broadcasting live."""
+    try:
+        from golive.ytdlp import _yt_extract_url
+        res = await _yt_extract_url(channel_url)
+        if res:
+            _, title, is_live = res
+            if is_live:
+                return True, title
+    except Exception as e:
+        log.warning("[TWITCH_AUTOSTREAM] Check live failed for %s: %s", channel_url, e)
+    return False, ""
+
+
+@tasks.loop(seconds=config.TWITCH_AUTOSTREAM_CHECK_INTERVAL)
+async def twitch_autostream_monitor():
+    """Background task monitoring Twitch channels for live broadcasts and starting/stopping GoLive."""
+    if not config.TWITCH_AUTOSTREAM_ENABLED or not _autostream_monitored_channels:
+        return
+
+    for raw_channel in list(_autostream_monitored_channels):
+        channel_url = _canonical_twitch_url(raw_channel)
+        channel_name = _extract_twitch_channel_name(channel_url)
+
+        is_live, title = await _check_twitch_live(channel_url)
+        active_info = _autostream_active_streams.get(channel_url)
+
+        if is_live:
+            if active_info is not None:
+                continue
+
+            target_guild = None
+            target_vc = None
+
+            max_humans = -1
+            for g in bot.guilds:
+                for vc in g.voice_channels:
+                    if _is_afk_channel(vc):
+                        continue
+                    humans = sum(1 for m in vc.members if not m.bot)
+                    if humans > max_humans and humans > 0:
+                        max_humans = humans
+                        target_guild = g
+                        target_vc = vc
+
+            if target_vc is None and config.TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID:
+                for g in bot.guilds:
+                    ch = g.get_channel(config.TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID)
+                    if isinstance(ch, discord.VoiceChannel):
+                        target_guild = g
+                        target_vc = ch
+                        break
+
+            if target_vc is None and bot.guilds:
+                g = bot.guilds[0]
+                for vc in g.voice_channels:
+                    if not _is_afk_channel(vc):
+                        target_guild = g
+                        target_vc = vc
+                        break
+
+            if target_guild is None or target_vc is None:
+                log.warning("[TWITCH_AUTOSTREAM] %s is LIVE but no target voice channel found.", channel_name)
+                continue
+
+            log.info(
+                "[TWITCH_AUTOSTREAM] %s is LIVE (%s)! Starting stream in guild=%s channel=%s",
+                channel_name,
+                title,
+                target_guild.id,
+                target_vc.name,
+            )
+
+            success, status_msg, _ = await start_iptv_stream_logic(
+                target_guild.id, target_vc, channel_url, f"Twitch: {channel_name}"
+            )
+
+            if success:
+                _autostream_active_streams[channel_url] = {
+                    "guild_id": target_guild.id,
+                    "channel_id": target_vc.id,
+                    "channel_name": channel_name,
+                    "title": title,
+                    "start_time": time.time(),
+                }
+                _active_sources[target_guild.id] = {"type": "twitch", "url": channel_url}
+                _paused_streams.discard(target_guild.id)
+                log.info("[TWITCH_AUTOSTREAM] Successfully started autostream for %s", channel_name)
+            else:
+                log.warning("[TWITCH_AUTOSTREAM] Failed starting autostream for %s: %s", channel_name, status_msg)
+
+        else:
+            if active_info is not None:
+                guild_id = active_info["guild_id"]
+                log.info("[TWITCH_AUTOSTREAM] %s went OFFLINE. Stopping stream in guild=%s", channel_name, guild_id)
+                await stop_stream_for_guild(guild_id)
+                _autostream_active_streams.pop(channel_url, None)
+
+
+@twitch_autostream_monitor.before_loop
+async def before_twitch_autostream():
+    await bot.wait_until_ready()
+
+
 if __name__ == "__main__":
+
     try:
         bot.run(config.TOKEN)
     finally:
