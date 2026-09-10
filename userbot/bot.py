@@ -213,6 +213,16 @@ def _install_dave_patch():
             is_video = hasattr(packet, "pt") and packet.pt not in (120, 111, 121, 77)
 
             vc = getattr(self, "_voice_client", None)
+            if not vc and hasattr(client, "voice_clients"):
+                for v in client.voice_clients:
+                    if v and v.is_connected():
+                        vc = v
+                        try:
+                            self._voice_client = v
+                        except Exception:
+                            pass
+                        break
+
             state = getattr(vc, "_connection", None) if vc else None
             dave = getattr(state, "dave_session", None) or getattr(vc, "dave_session", None)
 
