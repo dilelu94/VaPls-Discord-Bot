@@ -6,10 +6,9 @@ import aiohttp
 import discord
 
 if "discord.ext.voice_recv" not in sys.modules:
-    mock_vr = types.ModuleType("discord.ext.voice_recv")
-    class AudioSink: pass
-    mock_vr.AudioSink = AudioSink
-    sys.modules["discord.ext.voice_recv"] = mock_vr
+    class MockVoiceRecv(MagicMock):
+        class AudioSink: pass
+    sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
 if "discord.voice_state" not in sys.modules:
     mock_vs = types.ModuleType("discord.voice_state")
     mock_vs.VoiceConnectionState = MagicMock()

@@ -11,7 +11,11 @@ if repo_root not in sys.path:
 if userbot_dir not in sys.path:
     sys.path.append(userbot_dir)
 
-for _mod in ("discord.ext.voice_recv", "faster_whisper", "vosk", "davey"):
+if "discord.ext.voice_recv" not in sys.modules:
+    class MockVoiceRecv(MagicMock):
+        class AudioSink: pass
+    sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
+for _mod in ("faster_whisper", "vosk", "davey"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 

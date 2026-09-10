@@ -69,7 +69,9 @@ async def test_speak_indio_reply_posts_to_userbot_relay(monkeypatch):
 async def test_relay_speak_stops_existing_audio(monkeypatch, tmp_path):
     import sys
     if "discord.ext.voice_recv" not in sys.modules:
-        sys.modules["discord.ext.voice_recv"] = MagicMock()
+        class MockVoiceRecv(MagicMock):
+            class AudioSink: pass
+        sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
     if "discord.voice_state" not in sys.modules:
         sys.modules["discord.voice_state"] = MagicMock()
     try:
@@ -110,7 +112,9 @@ async def test_relay_speak_rejoins_channel_if_mismatched(monkeypatch, tmp_path):
     import sys
     import discord
     if "discord.ext.voice_recv" not in sys.modules:
-        sys.modules["discord.ext.voice_recv"] = MagicMock()
+        class MockVoiceRecv(MagicMock):
+            class AudioSink: pass
+        sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
     if "discord.voice_state" not in sys.modules:
         sys.modules["discord.voice_state"] = MagicMock()
     try:
@@ -162,7 +166,9 @@ async def test_userbot_voice_state_update_stops_audio_when_moved(monkeypatch):
     import sys
     import discord
     if "discord.ext.voice_recv" not in sys.modules:
-        sys.modules["discord.ext.voice_recv"] = MagicMock()
+        class MockVoiceRecv(MagicMock):
+            class AudioSink: pass
+        sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
     if "discord.voice_state" not in sys.modules:
         sys.modules["discord.voice_state"] = MagicMock()
     try:
@@ -218,7 +224,9 @@ async def test_relay_speak_forces_fallback_channel_when_force_is_true(monkeypatc
     import sys
     import discord
     if "discord.ext.voice_recv" not in sys.modules:
-        sys.modules["discord.ext.voice_recv"] = MagicMock()
+        class MockVoiceRecv(MagicMock):
+            class AudioSink: pass
+        sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
     if "discord.voice_state" not in sys.modules:
         sys.modules["discord.voice_state"] = MagicMock()
     try:

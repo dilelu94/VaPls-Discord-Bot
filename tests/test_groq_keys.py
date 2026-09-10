@@ -71,7 +71,9 @@ async def test_userbot_handle_groq_key_dm(monkeypatch):
     import types
 
     if "discord.ext.voice_recv" not in sys.modules:
-        sys.modules["discord.ext.voice_recv"] = MagicMock()
+        class MockVoiceRecv(MagicMock):
+            class AudioSink: pass
+        sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
     if "discord.voice_state" not in sys.modules:
         mock_vs = types.ModuleType("discord.voice_state")
         mock_vs.VoiceState = MagicMock()
