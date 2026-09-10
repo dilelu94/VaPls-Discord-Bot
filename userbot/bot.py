@@ -2579,17 +2579,24 @@ def _schedule_idle_leave(guild: discord.Guild) -> None:
     )
 
 
-async def _start_listening(vc: voice_recv.VoiceRecvClient):
+async def _start_listening(vc: voice_recv.VoiceRecvClient, force_restart: bool = False):
     """Ensure the sink is attached once the voice client is connected.
 
     Args:
         vc: Voice client to attach the sink to.
+        force_restart: If True, stop any existing sink before attaching a new one.
 
     Async:
         This function is a coroutine and must be awaited.
     """
     if vc.is_listening():
-        return
+        if force_restart:
+            try:
+                vc.stop_listening()
+            except Exception:
+                pass
+        else:
+            return
     for _ in range(40):
         if vc.is_connected():
             break
@@ -2680,7 +2687,7 @@ async def _join_channel(channel: discord.VoiceChannel):
         log.exception(f"[VOICE] Failed to join {channel.name}: {e}")
         analytics.capture_exception(e, properties={"action": "voice_join_failed"})
         return
-    await _start_listening(vc)
+    await _start_listening(vc, force_restart=True)
 
 
 async def _leave_if_empty(guild: discord.Guild):
@@ -2770,6 +2777,9 @@ async def on_voice_state_update(member, before, after):
                         vc.stop()
                 except Exception:
                     pass
+                await _start_listening(vc, force_restart=True)
+            else:
+                await _join_channel(after.channel)
         return
     try:
         asmr.on_voice_state_update(member, before, after)
