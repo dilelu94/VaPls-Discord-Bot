@@ -239,5 +239,13 @@ ASMR_MIN_CONNECTED_SECONDS = float(os.getenv("ASMR_MIN_CONNECTED_SECONDS", "1800
 ASMR_STATE_PATH = os.getenv("ASMR_STATE_PATH", "data/asmr_state.json")
 ASMR_CHANCE_PER_MINUTE = float(os.getenv("ASMR_CHANCE_PER_MINUTE", "0.05"))
 
+# --- Sensitivity preset persistence ---------------------------------------
+_repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SENSITIVITY_STATE_PATH = os.getenv(
+    "SENSITIVITY_STATE_PATH",
+    os.path.join(_repo_root, "data", "sensitivity_preset.json"),
+)
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
 

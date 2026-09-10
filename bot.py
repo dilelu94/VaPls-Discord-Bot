@@ -3413,7 +3413,7 @@ async def sensibilidad(
     ctx,
     preset: discord.Option(
         int,
-        description="0=apagado, 1=alta, 2=solo che indio, 3=con señuelos, 4=directo a Groq STT (default)",
+        description="0=apagado, 1=alta (default), 2=solo che indio, 3=con señuelos, 4=confirmación Whisper",
         choices=[0, 1, 2, 3, 4],
     ),
 ):
@@ -3421,7 +3421,7 @@ async def sensibilidad(
 
     Args:
         ctx: Discord application context.
-        preset: Integer 0-3 selecting the sensitivity preset.
+        preset: Integer 0-4 selecting the sensitivity preset.
 
     Side Effects:
         POSTs to the userbot relay ``/sensibilidad`` which updates the active
@@ -3463,6 +3463,7 @@ async def sensibilidad(
         1: "**Preset 1** (default) — más sensible: `che indio`, `que indio`, `eh indio` + verbos.",
         2: '**Preset 2** — menos sensible: solo `che indio` + verbos. Reduce falsos positivos de "que".',
         3: "**Preset 3** — menos sensible vía pool grande de frases, pero re-habilita `che/que/eh indio`. Editable a mano.",
+        4: "**Preset 4** — confirmación Whisper dedicada en post-VOSK.",
     }
     await safe_respond(
         ctx, f"🎙️ Sensibilidad actualizada → {_PRESET_DESCRIPTIONS[preset]}"

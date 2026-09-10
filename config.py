@@ -285,3 +285,11 @@ INSTAGRAM_PAGE_ID = os.getenv("INSTAGRAM_PAGE_ID", "")
 
 # Discord User ID of the GoLive userbot (golive.)
 GOLIVE_USER_ID = int(os.getenv("GOLIVE_USER_ID", "1541984338386620492"))
+
+# --- Twitch Auto-Stream Detector -------------------------------------------
+TWITCH_AUTOSTREAM_ENABLED = os.getenv("TWITCH_AUTOSTREAM_ENABLED", "true").lower() == "true"
+_raw_twitch_channels = os.getenv("TWITCH_AUTOSTREAM_CHANNELS", "https://www.twitch.tv/soyverycherrii")
+TWITCH_AUTOSTREAM_CHANNELS = [c.strip() for c in _raw_twitch_channels.split(",") if c.strip()]
+TWITCH_AUTOSTREAM_CHECK_INTERVAL = int(os.getenv("TWITCH_AUTOSTREAM_CHECK_INTERVAL", "120"))
+TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID = int(os.getenv("TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID", "0"))
+

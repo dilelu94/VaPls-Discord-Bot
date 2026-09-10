@@ -965,25 +965,32 @@ _PRESETS: dict[int, tuple[tuple[str, str], ...]] = {
 def _load_persisted_sensitivity() -> int:
     """Load the persisted sensitivity preset from disk, defaulting to 1."""
     try:
-        path = getattr(config, "SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json") if "config" in globals() else "data/sensitivity_preset.json"
+        path = getattr(config, "SENSITIVITY_STATE_PATH", None) if "config" in globals() else None
+        if not path:
+            path = os.path.join(_parent_dir, "data", "sensitivity_preset.json")
         if os.path.isfile(path):
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 preset = int(data.get("preset", 1))
                 if preset in (0, 1, 2, 3, 4):
                     return preset
-    except Exception:
-        pass
+    except Exception as e:
+        if "log" in globals() and hasattr(log, "warning"):
+            log.warning("[VOSK] failed to load sensitivity preset from disk: %s", e)
     return 1
 
 
 def _save_persisted_sensitivity(preset: int) -> None:
     """Save the chosen sensitivity preset to disk so it survives restarts."""
     try:
-        path = getattr(config, "SENSITIVITY_STATE_PATH", "data/sensitivity_preset.json") if "config" in globals() else "data/sensitivity_preset.json"
+        path = getattr(config, "SENSITIVITY_STATE_PATH", None) if "config" in globals() else None
+        if not path:
+            path = os.path.join(_parent_dir, "data", "sensitivity_preset.json")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump({"preset": preset}, f)
+        if "log" in globals() and hasattr(log, "info"):
+            log.info("[VOSK] persisted sensitivity preset %d to %s", preset, path)
     except Exception as e:
         if "log" in globals() and hasattr(log, "warning"):
             log.warning("[VOSK] failed to save sensitivity preset %d to disk: %s", preset, e)
