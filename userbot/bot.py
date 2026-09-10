@@ -2974,10 +2974,12 @@ async def _handle_groq_key_dm(message) -> bool:
 
     if extracted:
         for k in extracted:
-            res = groqKeys.add_key(k, owner_id=owner_id, owner_name=owner_name)
-            if res.get("ok"):
+            ok, reason = await groqKeys.add_key(
+                k, owner_id=owner_id, owner_name=owner_name, source="dm:userbot"
+            )
+            if ok:
                 local_added += 1
-            elif res.get("reason") == "already in pool":
+            elif reason == "already in pool":
                 local_dupes += 1
             else:
                 local_failed += 1

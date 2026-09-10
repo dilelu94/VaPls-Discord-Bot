@@ -193,6 +193,43 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now yt-dlp-update.timer
 echo "    yt-dlp-update.timer enabled and active"
 
+# ── 5f. Configure automatic data and configuration backup ──────────────────────
+echo "==> Configuring vapls-backup.service and vapls-backup.timer..."
+cat <<EOF | sudo tee /etc/systemd/system/vapls-backup.service > /dev/null
+[Unit]
+Description=Automated backup of VaPls data/ directory and secrets
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=$DEPLOY_DIR/scripts/backup.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat <<EOF | sudo tee /etc/systemd/system/vapls-backup.timer > /dev/null
+[Unit]
+Description=Automated backup timer for VaPls data and configuration (every 6h)
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now vapls-backup.timer
+echo "    vapls-backup.timer enabled and active"
+
+
 # ── 6. Restart services ───────────────────────────────────────────────────────
 echo "==> Restarting services..."
 SERVICES="discord-bot indio-userbot"

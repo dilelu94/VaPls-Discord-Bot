@@ -68,6 +68,11 @@ Userbot service example:
 
 - `userbot/indio-userbot.service` (ajusta `User`, rutas y `.env`).
 
+## Backups (Copia de seguridad)
+
+- **`scripts/backup.sh`**: Copia localmente la carpeta `data/` (`groq_keys.json`, `gemini_keys.json`, `users.json`, `indio_memory.json`, `pets.json`, etc.) y los archivos `.env` a `$HOME/vapls-backups/`. Si la clave SSH `/home/ubuntu/.ssh/free-02` está presente, sincroniza mediante `rsync` hacia el servidor secundario `free-02` (`ubuntu@193.122.210.127:~/backups/vapls-discord-bot/`).
+- **`vapls-backup.timer`**: Timer de systemd configurado por `scripts/deploy.sh` que ejecuta el backup automáticamente cada 6 horas (`OnCalendar=*-*-* 00,06,12,18:00:00`).
+
 ## Logging locations
 
 - `play.log`: rotación de logs específicos de `/play`.

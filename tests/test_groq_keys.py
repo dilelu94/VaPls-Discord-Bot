@@ -62,3 +62,37 @@ async def test_add_key_and_persistence(tmp_path):
     )
     assert ok_dupe is False
     assert reason_dupe == "already in pool"
+
+
+@pytest.mark.asyncio
+async def test_userbot_handle_groq_key_dm(monkeypatch):
+    """Verify _handle_groq_key_dm in userbot/bot.py extracts keys, updates pool, and replies."""
+    import sys
+    import types
+
+    if "discord.ext.voice_recv" not in sys.modules:
+        sys.modules["discord.ext.voice_recv"] = MagicMock()
+    if "discord.voice_state" not in sys.modules:
+        mock_vs = types.ModuleType("discord.voice_state")
+        mock_vs.VoiceState = MagicMock()
+        mock_vs.VoiceConnectionState = MagicMock()
+        sys.modules["discord.voice_state"] = mock_vs
+        import discord
+        discord.voice_state = mock_vs
+
+    from userbot.bot import _handle_groq_key_dm
+
+    valid_key = "gsk_userbotdmtest1234567890abcdef1234567890abcdef123"
+    message = AsyncMock()
+    message.guild = None
+    message.content = f"Hola indio acá va gsk_key: {valid_key}"
+    message.author.id = 99999
+    message.author.display_name = "Miles"
+
+    handled = await _handle_groq_key_dm(message)
+    assert handled is True
+    assert config.GROQ_API_KEY == valid_key
+    message.channel.send.assert_called_once()
+    sent_text = message.channel.send.call_args[0][0]
+    assert "⚡ Sumé 1 Groq API key(s) al pool" in sent_text
+
