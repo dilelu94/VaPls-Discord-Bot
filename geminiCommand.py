@@ -3195,15 +3195,7 @@ def _gate_play_music_actions(
 
 
 _SAVE_MEMORY_TRIGGER_RE = re.compile(
-    r"\b(record[aá]|guard[aá](?:me|te)?|anot[aá](?:me|te)?|acordate|memoriz[aá])\b",
-    re.IGNORECASE,
-)
-_SAVE_MEMORY_CONFIRMATION_RE = re.compile(
-    r"\b(anotado|guardado|ya me lo guard[eé]|me lo guardo|tom[ao] nota)\b",
-    re.IGNORECASE,
-)
-_IS_QUESTION_RE = re.compile(
-    r"\?|\b(cu[áa]l(?:es)?|qu[é]|d[óo]nde|c[óo]mo|qui[ée]n(?:es)?|cu[áa]nto[sa]?|record[áa]s|acord[áa]s|sab[eé]s)\b",
+    r"\b(record[aá]|guard[aá]|anot[aá])\s+esto\b",
     re.IGNORECASE,
 )
 
@@ -3211,26 +3203,19 @@ _IS_QUESTION_RE = re.compile(
 def _gate_save_memory_actions(
     actions: list[tuple[str, str]], raw_text: str, reply_text: str = ""
 ) -> list[tuple[str, str]]:
-    """Garantiza determinísticamente que si el usuario pidió guardar/recordar algo,
-    o si la respuesta de Gemini contiene expresiones de guardado (ej. 'anotado',
-    'ya me lo guardé'), la acción SAVE_MEMORY esté presente en actions para
-    persistirla en disco. Si Gemini omitió la función en function_calls, Python
-    la inyecta en el pipeline de acciones. Las preguntas (consultas) quedan
-    excluidas."""
+    """Garantiza determinísticamente que si el usuario dijo 'recordá esto' (o 'guardá/anotá esto'),
+    la acción SAVE_MEMORY se inyecte en actions para persistirla en disco."""
     has_save_action = any(action == "SAVE_MEMORY" for action, _ in (actions or []))
     if has_save_action:
         return actions
 
-    is_question = bool(raw_text and _IS_QUESTION_RE.search(raw_text))
-    user_triggered = bool(raw_text and _SAVE_MEMORY_TRIGGER_RE.search(raw_text)) and not is_question
-    model_confirmed = bool(reply_text and _SAVE_MEMORY_CONFIRMATION_RE.search(reply_text)) and not is_question
+    user_triggered = bool(raw_text and _SAVE_MEMORY_TRIGGER_RE.search(raw_text))
 
-    if user_triggered or model_confirmed:
-        content_to_save = raw_text.strip() if raw_text else reply_text.strip()
+    if user_triggered:
+        content_to_save = raw_text.strip()
         logger.info(
-            "indio SAVE_MEMORY inyectado determinísticamente por Python gate: (msg=%r, reply=%r)",
+            "indio SAVE_MEMORY inyectado determinísticamente por 'recordá esto' gate: (msg=%r)",
             (raw_text or "")[:80],
-            (reply_text or "")[:80],
         )
         actions = list(actions or [])
         actions.append(("SAVE_MEMORY", content_to_save))
