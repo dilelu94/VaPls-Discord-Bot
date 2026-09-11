@@ -683,18 +683,33 @@ def _start_voice_session(guild_id: int, user_id: int, channel, voice_state) -> N
         "deafened_secs": 0.0,
     }
 
+    asyncio.create_task(
+        _log_activity(
+            user_id,
+            guild_id,
+            "voice_join",
+            metadata={"channel_id": channel.id},
+        )
+    )
+
 
 def _finalize_voice_session(guild_id: int, user_id: int) -> None:
     guild_sessions = _voice_sessions.get(guild_id)
-    if guild_sessions is None:
-        return
-    sess = guild_sessions.pop(user_id, None)
-    
+    sess = guild_sessions.pop(user_id, None) if guild_sessions else None
+
     guild_macro = _macro_voice_sessions.get(guild_id, {})
     if user_id in guild_macro:
         guild_macro[user_id]["disconnect_time"] = time.time()
 
     if sess is None:
+        asyncio.create_task(
+            _log_activity(
+                user_id,
+                guild_id,
+                "voice_session",
+                duration_secs=0.0,
+            )
+        )
         return
     now = time.time()
     elapsed = now - sess["state_since"]

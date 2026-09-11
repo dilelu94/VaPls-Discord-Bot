@@ -24,3 +24,6 @@ GUILD_ALLOWLIST = (
 )
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+USERBOT_USER_ID = int(os.getenv("USERBOT_USER_ID", "519594605520486428"))
+

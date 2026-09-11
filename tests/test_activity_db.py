@@ -230,6 +230,18 @@ class TestQueries:
         assert "config" in data
         assert len(data["activity"]) >= 1
 
+    def test_get_last_voice_timestamps_includes_all_activity_sources(self):
+        """get_last_voice_timestamps returns max timestamp from activity_log, raw_activity_log, and user_mmr."""
+        adb.log_raw_activity(10, 100, "message")
+        adb.log_activity(20, 100, "voice_session", duration_secs=60)
+        
+        ts_map = adb.get_last_voice_timestamps(100)
+        assert 10 in ts_map
+        assert 20 in ts_map
+        assert ts_map[10] > 0
+        assert ts_map[20] > 0
+
+
 
 # ---- config tests ----------------------------------------------------------
 

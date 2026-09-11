@@ -1482,20 +1482,36 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     ) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            timestamps = data.get("timestamps", {})
+                            raw_ts = data.get("timestamps", {})
+                            timestamps = {str(k): int(v) for k, v in raw_ts.items() if v}
             except Exception:
                 pass
 
         now = int(time.time())
         users = []
         role_id = role.id
+        from bot import _macro_voice_sessions
+        guild_macro = _macro_voice_sessions.get(guild_id, {})
+
         async for m in guild.fetch_members(limit=None):
             if m.bot or not discord.utils.get(m.roles, id=role_id):
                 continue
-            uid = str(m.id)
-            ts = timestamps.get(uid)
-            if ts is None:
+            uid_str = str(m.id)
+
+            # If user is currently connected to a voice channel, they are online right now
+            if m.voice and m.voice.channel:
                 ts = now
+            else:
+                macro = guild_macro.get(m.id)
+                if macro and macro.get("disconnect_time") is None:
+                    ts = now
+                else:
+                    db_ts = timestamps.get(uid_str)
+                    if db_ts is not None:
+                        ts = int(db_ts)
+                    else:
+                        ts = now
+
             users.append(
                 {
                     "id": m.id,

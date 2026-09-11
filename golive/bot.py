@@ -987,7 +987,7 @@ async def _idle_watcher(guild_id: int):
             channel = getattr(vc, "channel", None)
             humans = 0
             if channel and hasattr(channel, "members"):
-                system_bots = {config.USERBOT_USER_ID, client.user.id}
+                system_bots = {getattr(config, "USERBOT_USER_ID", 519594605520486428), client.user.id}
                 humans = sum(
                     1
                     for m in channel.members
@@ -999,8 +999,8 @@ async def _idle_watcher(guild_id: int):
                 idle_since = time.monotonic()
             else:
                 elapsed = time.monotonic() - idle_since
-                # Use a default timeout of 60 seconds
-                timeout = 60.0
+                # Use a timeout of 15 seconds when stream ends, 60 seconds when idle
+                timeout = 15.0 if not has_stream else 60.0
                 if elapsed >= timeout:
                     log.info("[WATCHDOG] Guild=%s idle for %.0fs (humans=%d), disconnecting voice client...", guild_id, elapsed, humans)
                     try:

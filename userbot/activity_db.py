@@ -728,17 +728,47 @@ def get_all_data() -> dict:
 
 
 def get_last_voice_timestamps(guild_id: int) -> dict[int, int]:
-    """Return {user_id: last_unix_ts} from voice_session activity, grouped by user."""
+    """Return {user_id: last_unix_ts} from voice & activity tracking, grouped by user."""
     if _conn is None:
         return {}
+    res: dict[int, int] = {}
     cur = _conn.execute(
         """SELECT user_id, MAX(created_at) AS last_seen
            FROM activity_log
-           WHERE guild_id=? AND activity_type='voice_session'
+           WHERE guild_id=?
            GROUP BY user_id""",
         (guild_id,),
     )
-    return {row["user_id"]: row["last_seen"] for row in cur.fetchall()}
+    for row in cur.fetchall():
+        res[row["user_id"]] = int(row["last_seen"])
+
+    cur_raw = _conn.execute(
+        """SELECT user_id, MAX(created_at) AS last_seen
+           FROM raw_activity_log
+           WHERE guild_id=?
+           GROUP BY user_id""",
+        (guild_id,),
+    )
+    for row in cur_raw.fetchall():
+        uid = row["user_id"]
+        ts = int(row["last_seen"])
+        if uid not in res or ts > res[uid]:
+            res[uid] = ts
+
+    cur_mmr = _conn.execute(
+        """SELECT user_id, last_activity_at
+           FROM user_mmr
+           WHERE guild_id=?""",
+        (guild_id,),
+    )
+    for row in cur_mmr.fetchall():
+        uid = row["user_id"]
+        ts = int(row["last_activity_at"])
+        if ts > 0 and (uid not in res or ts > res[uid]):
+            res[uid] = ts
+
+    return res
+
 
 
 def get_premium_users() -> list[int]:
