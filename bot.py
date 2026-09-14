@@ -40,7 +40,6 @@ import errorHandler
 import geminiKeys
 import groqKeys
 import iptv
-import jkanime
 import torrent_search
 import decifrarVoting
 import adivinadorCommand
@@ -2802,212 +2801,7 @@ class IptvMultiSourceView(BaseView):
         return callback
 
 
-class JkanimeEpisodeView(BaseView):
-    """View for selecting an episode from a JKAnime anime."""
 
-    PAGE_SIZE = 25
-
-    def __init__(
-        self,
-        anime_info: dict,
-        voice_channel: discord.VoiceChannel,
-        redirect_ch=None,
-    ):
-        super().__init__(timeout=180)
-        self.anime_info = anime_info
-        self.voice_channel = voice_channel
-        self.redirect_ch = redirect_ch
-        self.selected_ep: int = 1
-        self.current_page: int = 0
-        self.setup_components()
-
-    def setup_components(self):
-        self.clear_items()
-        total_eps = self.anime_info.get("episodes", 1)
-        total_pages = max(1, (total_eps + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
-        self.current_page = max(0, min(self.current_page, total_pages - 1))
-
-        start_ep = self.current_page * self.PAGE_SIZE + 1
-        end_ep = min(start_ep + self.PAGE_SIZE - 1, total_eps)
-
-        ep_options = [
-            discord.SelectOption(
-                label=f"Episodio {ep}",
-                value=str(ep),
-                default=(ep == self.selected_ep),
-            )
-            for ep in range(start_ep, end_ep + 1)
-        ]
-
-        ep_select = discord.ui.Select(
-            placeholder=f"🎬 Elegí capítulo ({start_ep}-{end_ep})",
-            options=ep_options,
-            row=0,
-            custom_id="jkanime_ep_select",
-        )
-        ep_select.callback = self.on_ep_select
-        self.add_item(ep_select)
-
-        if total_pages > 1:
-            btn_prev = discord.ui.Button(
-                emoji="◀️",
-                style=discord.ButtonStyle.secondary,
-                row=1,
-                custom_id="jkanime_prev_page",
-                disabled=(self.current_page == 0),
-            )
-            btn_prev.callback = self.on_prev_page
-            self.add_item(btn_prev)
-
-            btn_page = discord.ui.Button(
-                label=f"Pág {self.current_page + 1}/{total_pages}",
-                style=discord.ButtonStyle.secondary,
-                row=1,
-                custom_id="jkanime_page_info",
-                disabled=True,
-            )
-            self.add_item(btn_page)
-
-            btn_next = discord.ui.Button(
-                emoji="▶️",
-                style=discord.ButtonStyle.secondary,
-                row=1,
-                custom_id="jkanime_next_page",
-                disabled=(self.current_page >= total_pages - 1),
-            )
-            btn_next.callback = self.on_next_page
-            self.add_item(btn_next)
-
-    def build_embed(self, status_text: str = None) -> discord.Embed:
-        embed = discord.Embed(
-            title=f"🌸 {self.anime_info.get('title', 'JKAnime')}",
-            description=f"**Total episodios:** {self.anime_info.get('episodes', 1)}\nSeleccioná el capítulo a transmitir en **{self.voice_channel.name}**.",
-            color=0xFF69B4,
-        )
-        if self.anime_info.get("image"):
-            embed.set_thumbnail(url=self.anime_info["image"])
-        if status_text:
-            embed.add_field(name="⚡ Estado", value=status_text, inline=False)
-        return embed
-
-    async def update_message(
-        self, interaction: discord.Interaction, status_text: str = None
-    ):
-        embed = self.build_embed(status_text)
-        self.bound_interaction = interaction
-        try:
-            if interaction.response.is_done():
-                res = await interaction.edit_original_response(embed=embed, view=self)
-                if res:
-                    self.message = res
-            else:
-                await interaction.response.edit_message(embed=embed, view=self)
-        except Exception:
-            pass
-
-    async def on_prev_page(self, interaction: discord.Interaction):
-        self.current_page = max(0, self.current_page - 1)
-        self.setup_components()
-        await self.update_message(interaction)
-
-    async def on_next_page(self, interaction: discord.Interaction):
-        total_eps = self.anime_info.get("episodes", 1)
-        total_pages = max(1, (total_eps + self.PAGE_SIZE - 1) // self.PAGE_SIZE)
-        self.current_page = min(total_pages - 1, self.current_page + 1)
-        self.setup_components()
-        await self.update_message(interaction)
-
-    async def on_ep_select(self, interaction: discord.Interaction):
-        ep_num = int(interaction.data["values"][0])
-        self.selected_ep = ep_num
-        self.setup_components()
-
-        voice_state = getattr(interaction.user, "voice", None)
-        voice_channel = getattr(voice_state, "channel", None) if voice_state else None
-        if voice_channel is None:
-            await interaction.response.send_message(
-                "❌ Tenés que estar en un canal de voz para iniciar un stream.",
-                ephemeral=True,
-            )
-            return
-
-        await interaction.response.defer()
-        slug = self.anime_info["slug"]
-        ep_url = f"https://jkanime.net/{slug}/{ep_num}/"
-        await self.update_message(
-            interaction,
-            status_text=f"🔄 Obteniendo capítulo {ep_num} desde JKAnime...",
-        )
-
-        stream_url, ep_title = await jkanime.extract_jkanime_stream(ep_url)
-        if not stream_url:
-            await self.update_message(
-                interaction,
-                status_text=f"🔴 Error: No se pudo extraer la señal del reproductor para el capítulo {ep_num}.",
-            )
-            return
-
-        await start_stream_with_track_select(
-            interaction,
-            interaction.guild_id,
-            voice_channel,
-            stream_url,
-            ep_title,
-            source_type="jkanime",
-            redirect_ch=self.redirect_ch,
-        )
-
-
-class JkanimeSearchView(BaseView):
-    """View displaying search results from JKAnime."""
-
-    def __init__(
-        self,
-        results: list[dict],
-        voice_channel: discord.VoiceChannel,
-        redirect_ch=None,
-    ):
-        super().__init__(timeout=180)
-        self.results = results
-        self.voice_channel = voice_channel
-        self.redirect_ch = redirect_ch
-        self.setup_components()
-
-    def setup_components(self):
-        self.clear_items()
-        options = [
-            discord.SelectOption(
-                label=r["title"][:100],
-                value=str(i),
-            )
-            for i, r in enumerate(self.results[:25])
-        ]
-        select = discord.ui.Select(
-            placeholder="🌸 Seleccioná un anime",
-            options=options,
-            row=0,
-            custom_id="jkanime_search_select",
-        )
-        select.callback = self.on_anime_select
-        self.add_item(select)
-
-    async def on_anime_select(self, interaction: discord.Interaction):
-        idx = int(interaction.data["values"][0])
-        if idx < 0 or idx >= len(self.results):
-            await interaction.response.send_message(
-                "❌ Anime no encontrado.", ephemeral=True
-            )
-            return
-
-        selected = self.results[idx]
-        await interaction.response.defer()
-
-        info = await jkanime.get_jkanime_anime_info(selected["slug"])
-        ep_view = JkanimeEpisodeView(
-            info, self.voice_channel, redirect_ch=self.redirect_ch
-        )
-        embed = ep_view.build_embed()
-        await interaction.edit_original_response(embed=embed, view=ep_view)
 
 
 class StremioWebUIOverlayView(BaseView):
@@ -3045,14 +2839,14 @@ async def stream(
     ctx,
     canal: discord.Option(
         str,
-        description="Nombre/URL del canal, 'add <url>', 'remove <url>', 'list', 'stremio', 'anime'",
+        description="Nombre/URL del canal, 'add <url>', 'remove <url>', 'list', 'stremio'",
         required=False,
         default=None,
         autocomplete=stream_autocomplete,
     ) = None,
 ):
 
-    """Slash command: search iptv-org / JKAnime / Stremio / Twitch and manage auto-streams."""
+    """Slash command: search iptv-org / Stremio / Twitch and manage auto-streams."""
     will_redirect = (
         config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
     )
@@ -3239,97 +3033,7 @@ async def stream(
             await safe_respond(ctx, embed=embed, view=view)
         return
 
-    # Check for direct JKAnime URL
-    if jkanime.is_jkanime_url(raw_canal):
-        clean_url = raw_canal.rstrip("/")
-        parts = clean_url.rsplit("/", 2)
-        if len(parts) >= 2 and parts[-1].isdigit():
-            ep_num = parts[-1]
-            ep_title = f"{parts[-2].replace('-', ' ').title()} - Episodio {ep_num}"
-            stream_url, ep_title_ext = await jkanime.extract_jkanime_stream(raw_canal)
-            if not stream_url:
-                await safe_respond(
-                    ctx, f"🔴 No se pudo extraer la señal de video para {ep_title}."
-                )
-                return
-            success, status_msg, is_live = await start_iptv_stream_logic(
-                ctx.guild_id, voice_channel, stream_url, ep_title_ext, start_sec=start_sec
-            )
-            if success:
-                _active_sources[ctx.guild_id] = {"type": "jkanime", "url": stream_url}
-                _paused_streams.discard(ctx.guild_id)
-                if redirect_ch:
-                    await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-                else:
-                    await safe_respond(ctx, status_msg)
-            else:
-                if redirect_ch:
-                    await redirect_ch.send(content=f"<@{ctx.author.id}> {status_msg}")
-                else:
-                    await safe_respond(ctx, status_msg)
-            return
-        else:
-            info = await jkanime.get_jkanime_anime_info(raw_canal)
-            view = JkanimeEpisodeView(info, voice_channel, redirect_ch=redirect_ch)
-            try:
-                await ctx.interaction.edit_original_response(
-                    embed=view.build_embed(), view=view
-                )
-            except Exception:
-                await safe_respond(ctx, embed=view.build_embed(), view=view)
-            return
 
-    # Check for anime prefix e.g. "anime: naruto 22" or "an: jojo part 6 cap 13"
-    if raw_canal.lower().startswith(("anime:", "an:")):
-        anime_query = re.sub(r"^(?:anime|an):\s*", "", raw_canal, flags=re.I).strip()
-        direct_ep_url, jk_results, _ = await jkanime.resolve_anime_and_episode(
-            anime_query
-        )
-        if direct_ep_url:
-            stream_url, ep_title_ext = await jkanime.extract_jkanime_stream(
-                direct_ep_url
-            )
-            if stream_url:
-                success, status_msg, is_live = await start_iptv_stream_logic(
-                    ctx.guild_id, voice_channel, stream_url, ep_title_ext, start_sec=start_sec
-                )
-                if success:
-                    _active_sources[ctx.guild_id] = {
-                        "type": "jkanime",
-                        "url": stream_url,
-                    }
-                    _paused_streams.discard(ctx.guild_id)
-                    if redirect_ch:
-                        await redirect_ch.send(
-                            content=f"<@{ctx.author.id}> {status_msg}"
-                        )
-                    else:
-                        await safe_respond(ctx, status_msg)
-                else:
-                    if redirect_ch:
-                        await redirect_ch.send(
-                            content=f"<@{ctx.author.id}> {status_msg}"
-                        )
-                    else:
-                        await safe_respond(ctx, status_msg)
-                return
-
-        if not jk_results:
-            await safe_respond(
-                ctx, f'❌ No encontré animes en JKAnime para "{anime_query}".'
-            )
-            return
-        view = JkanimeSearchView(jk_results, voice_channel, redirect_ch=redirect_ch)
-        embed = discord.Embed(
-            title=f'🌸 {len(jk_results)} animes encontrados para "{anime_query}"',
-            description="Seleccioná un anime para elegir el episodio a transmitir:",
-            color=0xFF69B4,
-        )
-        try:
-            await ctx.interaction.edit_original_response(embed=embed, view=view)
-        except Exception:
-            await safe_respond(ctx, embed=embed, view=view)
-        return
 
     if not raw_canal.startswith(("http://", "https://", "rtsp://", "rtmp://")):
         if re.match(r"^(?:www\.)?twitch\.tv/", raw_canal, re.I):
@@ -3356,56 +3060,9 @@ async def stream(
         source_type = "iptv"
         results = await iptv.search(canal, limit=5)
         if not results:
-            # Fallback to search in JKAnime
-            direct_ep_url, jk_results, _ = await jkanime.resolve_anime_and_episode(
-                canal
-            )
-            if direct_ep_url:
-                stream_url, ep_title_ext = await jkanime.extract_jkanime_stream(
-                    direct_ep_url
-                )
-                if stream_url:
-                    success, status_msg, is_live = await start_iptv_stream_logic(
-                        ctx.guild_id, voice_channel, stream_url, ep_title_ext, start_sec=start_sec
-                    )
-                    if success:
-                        _active_sources[ctx.guild_id] = {
-                            "type": "jkanime",
-                            "url": stream_url,
-                        }
-                        _paused_streams.discard(ctx.guild_id)
-                        if redirect_ch:
-                            await redirect_ch.send(
-                                content=f"<@{ctx.author.id}> {status_msg}"
-                            )
-                        else:
-                            await safe_respond(ctx, status_msg)
-                    else:
-                        if redirect_ch:
-                            await redirect_ch.send(
-                                content=f"<@{ctx.author.id}> {status_msg}"
-                            )
-                        else:
-                            await safe_respond(ctx, status_msg)
-                    return
-
-            if jk_results:
-                view = JkanimeSearchView(
-                    jk_results, voice_channel, redirect_ch=redirect_ch
-                )
-                embed = discord.Embed(
-                    title=f'🌸 {len(jk_results)} animes encontrados para "{canal}"',
-                    description="Seleccioná un anime para elegir el episodio a transmitir:",
-                    color=0xFF69B4,
-                )
-                try:
-                    await ctx.interaction.edit_original_response(embed=embed, view=view)
-                except Exception:
-                    await safe_respond(ctx, embed=embed, view=view)
-                return
             await safe_respond(
                 ctx,
-                f'❌ No encontré canales de IPTV ni animes en JKAnime para "{canal}". Probá con otro nombre.',
+                f'❌ No encontré canales de IPTV para "{canal}". Probá con otro nombre.',
             )
             return
 

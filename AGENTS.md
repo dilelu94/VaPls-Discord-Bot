@@ -112,16 +112,24 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 
 Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture.md)):
 
-- `bot.py`: entrada principal y slash commands.
-- `userbot/bot.py`: transcripción de voz y forwarding opcional.
-- `playCommand.py`: cola de música y yt-dlp.
-- `soundpadCommand.py`: UI de soundpad.
-- `geminiCommand.py`: `/vapls` y `/indio`.
-- `apiServer.py`: HTTP API.
-- `geminiClient.py`: cliente Gemini.
-- `analytics.py`: wrapper PostHog.
-- `greeting.py` / `users.py`: saludos.
-- `userbot/asmr.py`: audios ambientales ASMR del Indio.
+- `bot.py`: entrada principal, inicialización de discord client y registro de slash commands.
+- `userbot/bot.py`: transcripción de voz (DAVE/E2EE) con `faster-whisper`, VOSK wake-word detector, relay HTTP y actividad MMR.
+- `playCommand.py`: cola de música, reproducción con FFmpeg y yt-dlp.
+- `soundpadCommand.py`: UI e interacción con clips locales del soundpad.
+- `geminiCommand.py`: `/vapls` (sin memoria) e `/indio` (memoria por guild + memoria destilada).
+- `apiServer.py`: HTTP API en puerto 8080 (servicios de Telegram, upload de media, webhooks y admin panel).
+- `geminiClient.py`: cliente para la API de Gemini (modelos Flash / Flash-Lite / Pro).
+- `analytics.py` / `posthog_client.py`: wrapper y tracking de eventos con PostHog.
+- `greeting.py` / `users.py`: saludos, perfiles de personalidad de usuarios y lore del servidor.
+- `userbot/asmr.py`: audios ambientales ASMR del Indio en canales de voz.
+- `torrent_search.py` & `stremio_sessions.py`: Búsqueda de torrents/magnets y sesiones de Stremio Web UI para Go Live.
+- `suggestionsCommand.py` & `githubIssues.py`: Sistema de sugerencias `/sugerencias` integrado con GitHub Issues y clasificación IA.
+- `transferCommand.py`: Servicio `/transferir` para subida/descarga temporal de archivos pesados con auto-embed.
+- `storyManager.py`, `imagePool.py`, `imageManager.py`: Sistema de historias cómicas espontáneas del Indio y colección de imágenes por DM.
+- `adivinadorCommand.py`: Juego interactivo de trivia / adivinador en canales de texto.
+- `petGenerator.py` / `pet-renderer/`: Sistema de mascota virtual evolutiva (`/mascota`) con renderizado ASCII y GIF.
+- `israel_alerts.py`: Feed en tiempo real de alertas de emergencia (RedAlert Israel).
+- `chat_db.py`: Búsqueda de texto completo (SQLite FTS5) para el historial de mensajes de los canales de texto.
 
 ## 🔬 Detalles de Implementación Clave
 
@@ -168,22 +176,27 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 ## 🛠️ Comandos de Discord (Slash Commands)
 
 - `/play`: reproduce música de YouTube.
-- `/soundpad`: panel de clips locales.
+- `/soundpad`: panel interactivo de clips locales de audio.
 - `/clip` `[duracion]`: extrae y envía los últimos segundos/minutos de audio del canal de voz como archivo `.ogg` (por defecto 1m / 60s, configurable entre 5s y 10m).
-- `/vapls`: respuestas Gemini sin memoria.
-- `/indio`: persona con memoria corta por guild + memoria de largo plazo destilada por Gemini.
-- `/parar`: detiene playback y desconecta.
-- `/quit`: desconecta sin limpiar cola.
+- `/vapls`: respuestas de IA con Gemini sin memoria de conversación.
+- `/indio`: personalidad interactiva del Indio con memoria corta por guild + memoria de largo plazo destilada.
+- `/parar`: detiene el playback de audio y desconecta al bot.
+- `/quit`: desconecta al bot de voz sin limpiar la cola de reproducción.
 - `/entraindio`: hace que el userbot (Indio) entre al canal de voz del invocador (relay `/join`).
 - `/sensibilidad` `0|1|2|3|4`: cambia la sensibilidad del wake-word del Indio en caliente (ver abajo).
-- `/stream <canal>`: busca en iptv-org y transmite en Go Live dentro del canal de voz del invocador. Requiere el proceso `golive/bot.py` corriendo.
-- `/stopstream`: detiene el stream activo en el servidor.
-- `/banana` (Pausado/Inactivo): genera una imagen con Gemini (gratis, sin API key, usando Playwright). Actualmente en pausa por bloqueos de autenticación de Google.
+- `/stream <canal>`: busca canales de IPTV-org, torrents/magnets de Stremio, o gestiona el monitor automático de Twitch (`add`, `remove`, `list`) y los transmite en Go Live. Requiere el proceso `golive/bot.py` corriendo.
+- `/stopstream`: detiene la transmisión Go Live activa en el servidor.
+- `/sugerencias <idea>`: envía sugerencias clasificadas por IA hacia GitHub Issues.
+- `/sugerencias-ver`: inspecciona el listado de sugerencias activas.
+- `/transferir`: crea un enlace web temporal para subida y descarga de archivos pesados con auto-embed en Discord.
+- `/adivinador`: inicia una partida interactiva de trivia / adivinador en el canal de texto.
+- `/mascota`: panel interactivo para ver, alimentar y evolucionar la mascota virtual del usuario.
+- `/israel-alerts`: activa o desactiva el feed de alertas de emergencia de Israel en el canal.
+- `/banana` (Pausado/Inactivo): genera una imagen con Gemini web UI (Playwright).
 
-## 📺 GoLive / IPTV (`/stream`)
+## 📺 GoLive / IPTV / Stremio (`/stream`)
 
-El comando `/stream` busca canales en el playlist público de [iptv-org](https://github.com/iptv-org/iptv)
-y los transmite por Go Live dentro del canal de voz del invocador.
+El comando `/stream` busca canales en el playlist público de [iptv-org](https://github.com/iptv-org/iptv), torrents/magnets vía Stremio, o monitorea streams de Twitch, y los transmite por Go Live dentro del canal de voz del invocador.
 Basado en la arquitectura del proyecto de referencia [Slopsoil (`dev-topsoil/slopsoil`)](https://github.com/dev-topsoil/slopsoil).
 
 ### Arquitectura (3 procesos)
@@ -481,6 +494,15 @@ en cada push/PR, y deploya a producción al pasar (ver sección de servidor +
 [docs/operations.md](docs/operations.md#cicd-pipeline)).
 Pendiente para un segundo pase: `playCommand`, `apiServer`, `userbot` y extender
 `soundpadCommand`.
+
+## 🔍 Motor de Búsqueda de Mensajes (chat_db.py)
+
+El bot incluye una base de datos SQLite con soporte para **FTS5 (Full-Text Search)** que almacena e indexa automáticamente los mensajes de texto enviados en los canales (`on_message` en `bot.py`).
+
+### Características clave:
+- **Indexación FTS5**: Permite buscar frases, palabras compuestas (ej. `valheim` matchea `VaPlsValheimServer`) y búsquedas de múltiples términos no contiguos (ej. `ip valheim`).
+- **Filtros avanzados**: Soporta filtrado por `author_name`, `channel_name` y exclusión de mensajes eliminados (`is_deleted=0`).
+- **Resiliencia / Fallback**: En caso de que la consulta FTS5 falle o arroje un error sintáctico, la búsqueda cae suavemente a una consulta SQL tradicional con `LIKE %term%`.
 
 ## 📜 Doc generation
 
