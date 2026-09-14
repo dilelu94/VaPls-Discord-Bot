@@ -67,6 +67,14 @@ _OP_STREAM_DELETE = 19
 _OP_STREAM_SET_PAUSED = 22
 
 
+async def _send_json_safe(ws, data) -> None:
+    if ws is None:
+        return
+    res = ws.send_as_json(data)
+    if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
+        await res
+
+
 # ── GoLiveConnection ──────────────────────────────────────────────────────────
 
 
@@ -236,11 +244,6 @@ class GoLiveConnection:
             predicate=lambda d: d.get("stream_key", "") == stream_key and bool(d.get("endpoint")),
         )
 
-        async def _send_json_safe(ws, data):
-            res = ws.send_as_json(data)
-            if asyncio.iscoroutine(res) or hasattr(res, "__await__"):
-                await res
-
         log.info(
             "Sending STREAM_CREATE for guild=%s channel=%s user=%s",
             self.guild_id,
@@ -368,25 +371,29 @@ class GoLiveConnection:
         """Stop the go-live stream and release all resources."""
         if self._stream_key:
             try:
-                await self._bot.ws.send_as_json(
-                    {
-                        "op": _OP_STREAM_SET_PAUSED,
-                        "d": {
-                            "stream_key": self._stream_key,
-                            "paused": True,
+                ws = getattr(self._bot, "ws", None)
+                if ws:
+                    await _send_json_safe(
+                        ws,
+                        {
+                            "op": _OP_STREAM_SET_PAUSED,
+                            "d": {
+                                "stream_key": self._stream_key,
+                                "paused": True,
+                            },
                         },
-                    }
-                )
-                await asyncio.sleep(0.1)
-                await self._bot.ws.send_as_json(
-                    {
-                        "op": _OP_STREAM_DELETE,
-                        "d": {"stream_key": self._stream_key},
-                    }
-                )
-                log.info("Sent STREAM_DELETE for %s", self._stream_key)
-            except Exception:
-                log.debug("GoLive: could not send STREAM_DELETE", exc_info=True)
+                    )
+                    await asyncio.sleep(0.1)
+                    await _send_json_safe(
+                        ws,
+                        {
+                            "op": _OP_STREAM_DELETE,
+                            "d": {"stream_key": self._stream_key},
+                        },
+                    )
+                    log.info("Sent STREAM_DELETE for %s", self._stream_key)
+            except Exception as exc:
+                log.warning("GoLive: could not send STREAM_DELETE: %s", exc)
 
         if self._poll_task and not self._poll_task.done():
             self._poll_task.cancel()
