@@ -63,6 +63,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 - **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea estrictamente necesario por limitaciones técnicas o para su funcionamiento como IA que simula ser una persona real (ej. lógica de personalidad, comportamiento humano o integraciones que no puedan delegarse al bot "vapls").
 - **Reutilización de código existente:** Auditar y reutilizar siempre las funciones, clases o métodos que ya existen antes de crear nuevas si cumplen la función necesaria.
 - **YouTube requiere PoT primero:** Todo lo que use o interactúe con YouTube (descargas, reproducción, yt-dlp, streaming, etc.) debe pasar obligatoriamente por el servicio de PoT (Proof of Work Token, `YT_DLP_POT_BASE_URL`) en primer lugar.
+- **Manejo global de Botones/Views:** Al enviar o responder interacciones que incluyan un `view` con botones (especialmente efímeros), **NUNCA** usar `safe_defer()` / `defer()` seguido de `followup.send(..., view=view)` sin `wait=True`. py-cord registra la vista en `ViewStore` sin `message_id` cuando `wait=False` (default), haciendo que Discord tire `This interaction failed` al presionar cualquier botón. Usar siempre `ctx.respond(..., view=view)` o `interaction.response.send_message(..., view=view)` directamente.
 - **Commit, Push a Master y Deploy a OCI:** Realizar siempre `git commit` y `git push origin master` tras completar cada cambio o tarea. Tras cada push a `master`, GitHub Actions ejecutará automáticamente el pipeline de CI/CD que despliega los cambios en la instancia de producción en OCI (Oracle Cloud Infrastructure).
 
 ## 🌐 Servidor de producción (2026-05-30)
@@ -979,10 +980,11 @@ INDIO_IMAGE_GUILD_ID=0               # guild ID para role gate; 0 = desactivado
    marques una tarea como completa sin tests verdes.
 2. **Reutilizar funciones existentes:** Antes de crear nuevas funciones o métodos, verificar si ya existen funciones o métodos funcionales en el codebase que puedan reutilizarse.
 3. **YouTube por PoT:** Todo componente o llamado que use YouTube debe pasar por PoT primero (`YT_DLP_POT_BASE_URL`).
-4. **Commit, Push a master y Deploy a OCI:** Hacer commit y push a `master` luego de cada cambio completado. GitHub desplegará automáticamente los cambios en el servidor de producción OCI via CI/CD.
-5. **Mantener DAVE patch:** No eliminar el patch en `userbot/bot.py` salvo que
+4. **Manejo de Botones y Views:** Usar siempre `ctx.respond(..., view=view)` directo o `followup.send(..., wait=True)`. Evitar `defer()` + `followup.send()` sin `wait=True` para prevenir errores de `ViewStore` (`This interaction failed`).
+5. **Commit, Push a master y Deploy a OCI:** Hacer commit y push a `master` luego de cada cambio completado. GitHub desplegará automáticamente los cambios en el servidor de producción OCI via CI/CD.
+6. **Mantener DAVE patch:** No eliminar el patch en `userbot/bot.py` salvo que
    haya cambios claros en la API de Discord.
-6. **Config y .env:** Toda nueva variable de entorno debe documentarse en
+7. **Config y .env:** Toda nueva variable de entorno debe documentarse en
    `docs/configuration.md` (y `.env.example` si aplica).
-7. **Docs primero:** Mantener `README.md` y los docs alineados si cambia la
+8. **Docs primero:** Mantener `README.md` y los docs alineados si cambia la
    arquitectura o comandos.
