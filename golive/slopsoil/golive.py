@@ -156,9 +156,7 @@ class GoLiveConnection:
 
     async def reinit_dave_session(self, force: bool = False) -> None:
         if self.dave_protocol_version > 0:
-            if not force and self.dave_session is not None and getattr(self.dave_session, "ready", False):
-                log.info("SlopSoilVoiceConnection: DaveSession already ready, ignoring redundant reinit_dave_session")
-                return
+            log.info("SlopSoilVoiceConnection: re-initializing DaveSession (force=%s)", force)
             # channel_id for go-live DAVE group is server_id - 1
             dave_channel_id = self.server_id - 1  # type: ignore[operator]
             if self.dave_session is not None:
