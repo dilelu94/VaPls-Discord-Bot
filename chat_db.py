@@ -268,7 +268,7 @@ def search_messages(
     channel_name: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
-    """Search messages using FTS5 (or LIKE fallback) with optional filters.
+    """Search messages using hybrid FTS5 and SQL LIKE matching.
 
     Args:
         query: Full-text search term or keywords.
@@ -287,62 +287,76 @@ def search_messages(
     author_filter = (author_name or "").strip()
     chan_filter = (channel_name or "").strip().lstrip("#")
 
-    results = []
+    tokens = [t for t in clean_query.split() if t]
+    if not tokens and not author_filter and not chan_filter:
+        return []
 
-    # Attempt FTS search first if query is provided
-    fts_working = False
-    if clean_query:
-        try:
-            sanitized_fts = " ".join(
-                f'"{token.replace(chr(34), "")}"' for token in clean_query.split()
-            )
-            if sanitized_fts:
-                sql = """
-                    SELECT m.message_id, m.guild_id, m.channel_id, m.channel_name,
-                           m.author_id, m.author_name, m.content, m.has_attachments,
-                           m.created_at, m.is_deleted
-                    FROM messages_fts f
-                    JOIN messages m ON f.message_id = m.message_id
-                    WHERE messages_fts MATCH ?
-                """
-                params: list = [sanitized_fts]
-                if author_filter:
-                    sql += " AND m.author_name LIKE ?"
-                    params.append(f"%{author_filter}%")
-                if chan_filter:
-                    sql += " AND m.channel_name LIKE ?"
-                    params.append(f"%{chan_filter}%")
-                sql += " ORDER BY m.created_at DESC LIMIT ?"
-                params.append(limit)
+    fts_results: list[dict] = []
+    if tokens:
+        # FTS5 search with prefix wildcards and AND combination across tokens
+        fts_tokens = []
+        for t in tokens:
+            cleaned = "".join(c for c in t if c.isalnum())
+            if cleaned:
+                fts_tokens.append(f'"{cleaned}"*')
+        
+        if fts_tokens:
+            fts_expr = " AND ".join(fts_tokens)
+            sql_fts = """
+                SELECT m.message_id, m.guild_id, m.channel_id, m.channel_name,
+                       m.author_id, m.author_name, m.content, m.has_attachments,
+                       m.created_at, m.is_deleted
+                FROM messages_fts f
+                JOIN messages m ON f.message_id = m.message_id
+                WHERE messages_fts MATCH ?
+            """
+            params_fts = [fts_expr]
+            if author_filter:
+                sql_fts += " AND m.author_name LIKE ?"
+                params_fts.append(f"%{author_filter}%")
+            if chan_filter:
+                sql_fts += " AND m.channel_name LIKE ?"
+                params_fts.append(f"%{chan_filter}%")
+            sql_fts += " ORDER BY m.created_at DESC LIMIT ?"
+            params_fts.append(limit)
 
-                cur = _conn.execute(sql, params)
-                results = [dict(row) for row in cur.fetchall()]
-                fts_working = True
-        except Exception as e:
-            logger.debug("FTS match failed, falling back to standard SQL: %s", e)
+            try:
+                cur = _conn.execute(sql_fts, params_fts)
+                fts_results = [dict(row) for row in cur.fetchall()]
+            except Exception as e:
+                logger.debug("FTS match exception: %s", e)
 
-    # Fallback to standard SQL query if FTS was not used or failed
-    if not fts_working:
-        sql = """
-            SELECT message_id, guild_id, channel_id, channel_name,
-                   author_id, author_name, content, has_attachments, created_at, is_deleted
-            FROM messages
-            WHERE 1=1
-        """
-        params = []
-        if clean_query:
-            sql += " AND content LIKE ?"
-            params.append(f"%{clean_query}%")
-        if author_filter:
-            sql += " AND author_name LIKE ?"
-            params.append(f"%{author_filter}%")
-        if chan_filter:
-            sql += " AND channel_name LIKE ?"
-            params.append(f"%{chan_filter}%")
-        sql += " ORDER BY created_at DESC LIMIT ?"
-        params.append(limit)
+    # SQL LIKE search for substring matching (handles compound words like VaPlsValheimServer)
+    sql_like = """
+        SELECT message_id, guild_id, channel_id, channel_name,
+               author_id, author_name, content, has_attachments, created_at, is_deleted
+        FROM messages
+        WHERE 1=1
+    """
+    params_like = []
+    for t in tokens:
+        sql_like += " AND content LIKE ?"
+        params_like.append(f"%{t}%")
+    if author_filter:
+        sql_like += " AND author_name LIKE ?"
+        params_like.append(f"%{author_filter}%")
+    if chan_filter:
+        sql_like += " AND channel_name LIKE ?"
+        params_like.append(f"%{chan_filter}%")
+    sql_like += " ORDER BY created_at DESC LIMIT ?"
+    params_like.append(limit)
 
-        cur = _conn.execute(sql, params)
-        results = [dict(row) for row in cur.fetchall()]
+    cur = _conn.execute(sql_like, params_like)
+    like_results = [dict(row) for row in cur.fetchall()]
 
-    return results
+    # Combine results, prioritizing FTS matches while deduplicating by message_id
+    seen_ids = set()
+    combined = []
+    for r in fts_results + like_results:
+        if r["message_id"] not in seen_ids:
+            seen_ids.add(r["message_id"])
+            combined.append(r)
+
+    combined.sort(key=lambda x: x["created_at"], reverse=True)
+    return combined[:limit]
+

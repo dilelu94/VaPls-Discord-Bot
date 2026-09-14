@@ -136,6 +136,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         ],
         "anecdotas": [
             "le armó la PC que se compró Fide",
+            "le decían butcher vegano en HoTS",
         ],
         "descripcion": [
             "Un pibe flaco, completamente pelado, de mirada colgada o perdida, sonrisa tímida y gestos algo afeminados.",

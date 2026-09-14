@@ -333,8 +333,18 @@ async def start_live_stream(
                 stream = golive_bot._active_streams.pop(guild.id, None)
                 if stream is not None:
                     stream._stopped = True
-            except Exception:
-                pass
+                guild = bot.get_guild(guild.id)
+                if guild:
+                    await golive_bot._restore_nickname(guild)
+            except Exception as e:
+                log.warning("go-live stream nickname restore error: %s", e)
+
+            if vc is not None and vc.is_connected():
+                try:
+                    log.info("go-live stream ended: disconnecting voice client for guild %s", guild.id)
+                    await asyncio.wait_for(vc.disconnect(force=True), timeout=3.0)
+                except Exception as e:
+                    log.warning("go-live stream voice disconnect error: %s", e)
             log.debug("go-live cleanup done for guild %s", guild.id)
 
     live_task = asyncio.create_task(_run_live())

@@ -1512,10 +1512,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     else:
                         ts = now
 
+            display_name = (
+                (m.display_name or "").strip()
+                or (m.name or "").strip()
+                or f"Usuario {m.id}"
+            )
             users.append(
                 {
                     "id": m.id,
-                    "display_name": m.display_name,
+                    "display_name": display_name,
                     "last_seen": ts,
                 }
             )

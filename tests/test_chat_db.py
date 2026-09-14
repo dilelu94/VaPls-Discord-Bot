@@ -70,6 +70,42 @@ def test_save_and_search_messages():
     assert len(res_chan) == 2
 
 
+def test_search_compound_words_and_multi_terms():
+    now = int(time.time())
+    msg = {
+        "message_id": 999,
+        "guild_id": 1,
+        "channel_id": 10,
+        "channel_name": "soreteposting",
+        "author_id": 51,
+        "author_name": "Miles",
+        "content": (
+            "Nombre del Servidor: VaPlsValheimServer\n"
+            "Nombre del Mundo: Fox\n"
+            "Semilla del Mapa (Seed): HHcLC5acQt\n"
+            "Contraseña: equisde\n"
+            "IP del Servidor: 163.176.114.14\n"
+            "Puertos UDP: 2456 y 2457"
+        ),
+        "created_at": now,
+    }
+    chat_db.save_message(msg)
+
+    # Compound word search ("valheim" matching "VaPlsValheimServer")
+    res1 = chat_db.search_messages("valheim")
+    assert len(res1) == 1
+    assert res1[0]["message_id"] == 999
+
+    # Non-contiguous multi-term search ("servidor valheim" or "ip valheim")
+    res2 = chat_db.search_messages("servidor valheim")
+    assert len(res2) == 1
+    assert res2[0]["message_id"] == 999
+
+    res3 = chat_db.search_messages("ip valheim")
+    assert len(res3) == 1
+    assert res3[0]["message_id"] == 999
+
+
 def test_mark_message_deleted():
     msg = {
         "message_id": 201,
