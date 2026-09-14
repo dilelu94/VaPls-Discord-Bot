@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 import discord
 
+from baseView import BaseView
 from media_inspector import MediaTracksInfo, format_language
 
 log = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ class SubtitleTrackSelect(discord.ui.Select):
         await interaction.response.edit_message(view=self.view)
 
 
-class StreamTrackSelectView(discord.ui.View):
+class StreamTrackSelectView(BaseView):
     def __init__(
         self,
         tracks_info: MediaTracksInfo,
@@ -159,8 +160,4 @@ class StreamTrackSelectView(discord.ui.View):
         except Exception as e:
             log.exception("Error in stream track selection start callback")
             await interaction.followup.send(f"❌ Error iniciando transmisión: {e}", ephemeral=True)
-
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
 

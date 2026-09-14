@@ -9,6 +9,7 @@ from baseView import BaseView
 import soundpadCommand
 import playCommand
 import bot
+import stream_track_view
 
 
 @pytest.mark.asyncio
@@ -85,7 +86,7 @@ async def test_soundpad_view_unregisters_and_clears_on_timeout(tmp_path, monkeyp
 
 def test_all_discord_ui_views_inherit_from_base_view():
     """Enforcement promise: Every discord.ui.View subclass in command modules inherits from BaseView."""
-    modules = [bot, playCommand, soundpadCommand]
+    modules = [bot, playCommand, soundpadCommand, stream_track_view]
     view_classes = []
 
     for mod in modules:
@@ -107,3 +108,4 @@ def test_all_discord_ui_views_inherit_from_base_view():
             failing.append(f"{mod_name}.{cls.__name__}")
 
     assert not failing, f"The following View classes do not inherit from BaseView: {failing}"
+

@@ -3711,7 +3711,7 @@ async def transferir(
     )
     link = f"{config.TRANSFER_BASE_URL}/upload/{sess.token}"
     gb = config.TRANSFER_DEFAULT_LIMIT // (1024**3)
-    view = discord.ui.View()
+    view = BaseView()
     view.add_item(
         discord.ui.Button(
             label="⬆️ Subir acá",

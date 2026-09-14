@@ -33,6 +33,7 @@ from playCommand import guildPlayers
 from users import USERS
 import storyManager
 import transferCommand
+from baseView import BaseView
 import tts
 from stremio_sessions import session_manager, StremioSession
 
@@ -1906,7 +1907,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         description=f"**{sess.filename}**\n{sz_str}",
                         color=0x238636,
                     )
-                    view = discord.ui.View()
+                    view = BaseView()
                     view.add_item(discord.ui.Button(label="📋 Copiar link", url=dl))
                     await channel.send(embed=embed, view=view)
                 analytics.capture(
