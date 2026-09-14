@@ -1121,8 +1121,6 @@ class H264VideoPlayer(threading.Thread):
         enc = self._enc
         assert enc is not None, "H264VideoPlayer started with no encoder available"
         pre_input = list(enc.pre_input)
-        if self._start_time > 0:
-            pre_input.extend(["-ss", str(self._start_time)])
 
         probe_args = [
             "-probesize", str(self._probe_size),
@@ -1213,8 +1211,13 @@ class H264VideoPlayer(threading.Thread):
             input_args = []
             for u in self._url:
                 is_u = u.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+                if is_u:
+                    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
                 if is_u and self._live and "googlevideo.com" not in u:
                     input_args += ["-http_persistent", "0"]
+                if self._start_time > 0:
+                    input_args += ["-ss", str(self._start_time)]
                 input_args += ["-i", u]
             audio_map = f"1:a:{a_idx}?"
         else:
@@ -1224,6 +1227,8 @@ class H264VideoPlayer(threading.Thread):
                 input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
             if is_url and self._live and "googlevideo.com" not in primary_url:
                 input_args += ["-http_persistent", "0"]
+            if self._start_time > 0:
+                input_args += ["-ss", str(self._start_time)]
             input_args += ["-i", primary_url]
             audio_map = f"0:a:{a_idx}?"
 

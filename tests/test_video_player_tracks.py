@@ -77,3 +77,30 @@ def test_ffmpeg_cmd_subtitle_burn_in_filter():
         assert "subtitles=f='/tmp/custom_sub.srt'" in vf_str
 
 
+def test_ffmpeg_cmd_start_time_multiple_inputs():
+    vc = MagicMock()
+    vc.ssrc = 100
+
+    video_url = "https://googlevideo.com/videoplayback_video"
+    audio_url = "https://googlevideo.com/videoplayback_audio"
+
+    # Single URL with start_time
+    player_single = H264VideoPlayer(video_url, vc, start_time=1729.0)
+    cmd_single = player_single._ffmpeg_cmd()
+    ss_indices_single = [i for i, arg in enumerate(cmd_single) if arg == "-ss"]
+    assert len(ss_indices_single) == 1
+    assert cmd_single[ss_indices_single[0] + 1] == "1729.0"
+    assert cmd_single[ss_indices_single[0] + 2] == "-i"
+
+    # Tuple of (video_url, audio_url) with start_time
+    player_tuple = H264VideoPlayer((video_url, audio_url), vc, start_time=1729.0)
+    cmd_tuple = player_tuple._ffmpeg_cmd()
+    ss_indices = [i for i, arg in enumerate(cmd_tuple) if arg == "-ss"]
+    assert len(ss_indices) == 2, f"-ss should be specified for both inputs in {cmd_tuple}"
+    # Verify each -ss is followed by timestamp and then -i
+    for idx in ss_indices:
+        assert cmd_tuple[idx + 1] == "1729.0"
+        assert cmd_tuple[idx + 2] == "-i"
+
+
+
