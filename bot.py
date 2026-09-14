@@ -1934,6 +1934,11 @@ async def verstream(ctx):
 def parse_stream_query(canal_input: str) -> tuple[str, float]:
     """Extract optional start minute/time from canal_input.
 
+    Supports:
+        - Embedded URL timestamps (?t=659, &t=10m59s, ?start=659, etc.)
+        - Explicit minute keywords ('min 6', '6 min', '6m')
+        - Bare trailing numbers after URLs ('https://... 10')
+
     Returns:
         (cleaned_canal, start_sec)
     """
@@ -1961,6 +1966,16 @@ def parse_stream_query(canal_input: str) -> tuple[str, float]:
             start_min = float(m3.group(1))
             cleaned = raw[: m3.start()].strip()
             return cleaned, start_min * 60.0
+
+    # 3. Check for embedded URL timestamp parameter (?t=..., &t=..., &start=...)
+    if raw.startswith(("http://", "https://")):
+        try:
+            from playCommand import extract_url_timestamp
+            url_start_sec = extract_url_timestamp(raw)
+            if url_start_sec > 0.0:
+                return raw, url_start_sec
+        except Exception as e:
+            log.warning("parse_stream_query extract_url_timestamp error: %s", e)
 
     return raw, 0.0
 
@@ -3030,18 +3045,12 @@ async def stream(
     ctx,
     canal: discord.Option(
         str,
-        description="Nombre/URL del canal, 'list', 'stremio', 'anime' (ej: soyverycherrii, ESPN, TN)",
+        description="Nombre/URL del canal, 'add <url>', 'remove <url>', 'list', 'stremio', 'anime'",
         required=False,
         default=None,
         autocomplete=stream_autocomplete,
     ) = None,
-    accion: discord.Option(
-        str,
-        description="Acción de monitoreo automático (opcional: add, remove, list)",
-        required=False,
-        default=None,
-        choices=["add", "remove", "list"],
-    ) = None,
+    accion: Optional[str] = None,
 ):
 
     """Slash command: search iptv-org / JKAnime / Stremio / Twitch and manage auto-streams."""

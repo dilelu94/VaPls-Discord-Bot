@@ -98,6 +98,18 @@ def test_parse_stream_query():
         300.0,
     )
     assert bot.parse_stream_query("chainsaw man") == ("chainsaw man", 0.0)
+    assert bot.parse_stream_query("https://youtu.be/Ga2pEwjSNZQ?t=659") == (
+        "https://youtu.be/Ga2pEwjSNZQ?t=659",
+        659.0,
+    )
+    assert bot.parse_stream_query("https://www.youtube.com/watch?v=Ga2pEwjSNZQ&t=10m59s") == (
+        "https://www.youtube.com/watch?v=Ga2pEwjSNZQ&t=10m59s",
+        659.0,
+    )
+    assert bot.parse_stream_query("https://youtu.be/abc?start=120") == (
+        "https://youtu.be/abc?start=120",
+        120.0,
+    )
 
 
 def test_stream_slash_command_option_types():
