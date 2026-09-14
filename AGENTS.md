@@ -25,7 +25,7 @@ Codex, Copilot, u otro) DEBE cumplir esta checklist sin excepciones:
       el trabajo completo.
 - [ ] No marcar una tarea como terminada si hay tests rojos, aunque el cambio
       parezca trivial.
-- [ ] Realizar `git commit` y `git push origin master` inmediatamente después de completar cada cambio o tarea (con la suite en verde).
+- [ ] Realizar `git commit` y `git push origin master` inmediatamente después de completar cada cambio o tarea (con la suite en verde) para que GitHub despliegue los cambios automáticamente en OCI.
 
 **Hook de git (pre-push):** el repositorio incluye `.githooks/pre-push`, que
 bloquea el `git push` automáticamente si la suite está roja. Activalo una sola
@@ -63,7 +63,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 - **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea estrictamente necesario por limitaciones técnicas o para su funcionamiento como IA que simula ser una persona real (ej. lógica de personalidad, comportamiento humano o integraciones que no puedan delegarse al bot "vapls").
 - **Reutilización de código existente:** Auditar y reutilizar siempre las funciones, clases o métodos que ya existen antes de crear nuevas si cumplen la función necesaria.
 - **YouTube requiere PoT primero:** Todo lo que use o interactúe con YouTube (descargas, reproducción, yt-dlp, streaming, etc.) debe pasar obligatoriamente por el servicio de PoT (Proof of Work Token, `YT_DLP_POT_BASE_URL`) en primer lugar.
-- **Commit y Push a Master:** Realizar siempre `git commit` y `git push origin master` tras completar cada cambio o tarea.
+- **Commit, Push a Master y Deploy a OCI:** Realizar siempre `git commit` y `git push origin master` tras completar cada cambio o tarea. Tras cada push a `master`, GitHub Actions ejecutará automáticamente el pipeline de CI/CD que despliega los cambios en la instancia de producción en OCI (Oracle Cloud Infrastructure).
 
 ## 🌐 Servidor de producción (2026-05-30)
 
@@ -957,7 +957,7 @@ INDIO_IMAGE_GUILD_ID=0               # guild ID para role gate; 0 = desactivado
    marques una tarea como completa sin tests verdes.
 2. **Reutilizar funciones existentes:** Antes de crear nuevas funciones o métodos, verificar si ya existen funciones o métodos funcionales en el codebase que puedan reutilizarse.
 3. **YouTube por PoT:** Todo componente o llamado que use YouTube debe pasar por PoT primero (`YT_DLP_POT_BASE_URL`).
-4. **Commit y Push a master:** Hacer commit y push a `master` luego de cada cambio completado.
+4. **Commit, Push a master y Deploy a OCI:** Hacer commit y push a `master` luego de cada cambio completado. GitHub desplegará automáticamente los cambios en el servidor de producción OCI via CI/CD.
 5. **Mantener DAVE patch:** No eliminar el patch en `userbot/bot.py` salvo que
    haya cambios claros en la API de Discord.
 6. **Config y .env:** Toda nueva variable de entorno debe documentarse en
