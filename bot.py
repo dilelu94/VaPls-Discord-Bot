@@ -3050,7 +3050,6 @@ async def stream(
         default=None,
         autocomplete=stream_autocomplete,
     ) = None,
-    accion: Optional[str] = None,
 ):
 
     """Slash command: search iptv-org / JKAnime / Stremio / Twitch and manage auto-streams."""
@@ -3071,10 +3070,10 @@ async def stream(
             if ch is not None and hasattr(ch, "send"):
                 redirect_ch = ch
 
-    _track_command(ctx, "stream", {"query_length": len(canal or ""), "accion": accion or ""})
+    _track_command(ctx, "stream", {"query_length": len(canal or "")})
 
-    action_type = (accion or "").strip().lower()
     raw_canal = (canal or "").strip()
+    action_type = ""
 
     # Handle /stream list or /stream accion: list
     if action_type == "list" or raw_canal.lower() in ("list", "programados", "lista", "auto"):
