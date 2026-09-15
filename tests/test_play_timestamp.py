@@ -36,11 +36,24 @@ def test_parse_timestamp_formats():
 
 def test_extract_url_timestamp():
     """Verify extract_url_timestamp extracts timestamp query parameters from YouTube URLs."""
+    # Standard query-param timestamps
     assert extract_url_timestamp("https://www.youtube.com/watch?v=abc&t=1m30s") == 90.0
     assert extract_url_timestamp("https://youtu.be/abc?t=90") == 90.0
     assert extract_url_timestamp("https://youtu.be/abc?start=120") == 120.0
     assert extract_url_timestamp("https://www.youtube.com/watch?v=abc") == 0.0
     assert extract_url_timestamp("busqueda cualquiera") == 0.0
+
+    # Plain seconds as t=N
+    assert extract_url_timestamp("https://youtu.be/i2T-pXlklb4?t=10") == 10.0
+
+    # Angle-bracket wrapped URLs (as Discord pastes them)
+    assert extract_url_timestamp("<https://youtu.be/i2T-pXlklb4?t=10>") == 10.0
+    assert extract_url_timestamp("<https://www.youtube.com/watch?v=abc&t=30>") == 30.0
+
+    # Fragment-based timestamps (#t=N)
+    assert extract_url_timestamp("https://youtu.be/abc#t=45") == 45.0
+    assert extract_url_timestamp("https://youtu.be/abc#t=1m30s") == 90.0
+    assert extract_url_timestamp("https://youtu.be/abc#45") == 45.0
 
 
 @pytest.mark.asyncio

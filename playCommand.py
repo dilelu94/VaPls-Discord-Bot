@@ -3162,14 +3162,14 @@ def parse_timestamp(val: Optional[str]) -> float:
         - HH:MM:SS or H:MM:SS (e.g. "1:02:30" -> 3750.0)
         - Pure numbers (e.g. "90" -> 90.0, "90.5" -> 90.5)
         - Time unit suffixes (e.g. "1m30s" -> 90.0, "90s" -> 90.0, "1h2m30s" -> 3750.0, "2m" -> 120.0)
-        - Query string prefixes (e.g. "t=90s", "?t=1m30s", "start=90")
+        - Query string / fragment prefixes (e.g. "t=90s", "?t=1m30s", "#t=10", "&t=10s", "start=90")
 
     Returns:
         float representing total seconds, or 0.0 if empty/invalid.
     """
     if not val or not isinstance(val, str):
         return 0.0
-    s = val.strip().lstrip("?").strip()
+    s = val.strip().strip("<>\"'").lstrip("?#&").strip()
     if s.startswith("t="):
         s = s[2:].strip()
     elif s.startswith("start="):
@@ -3193,6 +3193,7 @@ def parse_timestamp(val: Optional[str]) -> float:
             pass
 
     import re
+
     unit_match = re.match(
         r"^(?:(?P<h>\d+(?:\.\d+)?)h)?(?:(?P<m>\d+(?:\.\d+)?)m)?(?:(?P<s>\d+(?:\.\d+)?)s?)?$",
         s,
@@ -3218,14 +3219,29 @@ def parse_timestamp(val: Optional[str]) -> float:
 
 
 def extract_url_timestamp(url_str: str) -> float:
-    """Extract start timestamp from a YouTube URL if present (e.g. ?t=90s or &t=1m30s or &start=90)."""
-    if not url_str or not (url_str.startswith("http://") or url_str.startswith("https://")):
+    """Extract start timestamp from a YouTube URL if present (e.g. ?t=90s, &t=10, #t=1m30s, &start=90)."""
+    if not url_str or not isinstance(url_str, str):
+        return 0.0
+    url_clean = url_str.strip().strip("<>\"'").strip()
+    if not (url_clean.startswith("http://") or url_clean.startswith("https://")):
         return 0.0
     try:
         import urllib.parse
-        parsed = urllib.parse.urlparse(url_str)
+
+        parsed = urllib.parse.urlparse(url_clean)
         qs = urllib.parse.parse_qs(parsed.query)
         t_vals = qs.get("t") or qs.get("start")
+        if not t_vals and parsed.fragment:
+            frag_qs = urllib.parse.parse_qs(parsed.fragment)
+            t_vals = frag_qs.get("t") or frag_qs.get("start")
+            if not t_vals:
+                frag_str = parsed.fragment.strip()
+                if (
+                    frag_str.startswith("t=")
+                    or frag_str.startswith("start=")
+                    or frag_str.isdigit()
+                ):
+                    return parse_timestamp(frag_str)
         if t_vals:
             return parse_timestamp(t_vals[0])
     except Exception:
@@ -3360,7 +3376,7 @@ async def playLogic(
         player.pendingTriggerUserId = ctx.author.id
 
     # Prepare search or URL input
-    inputStr = query.strip()
+    inputStr = query.strip().strip("<>\"'").strip()
     isSearch = not (
         inputStr.startswith("http://")
         or inputStr.startswith("https://")
@@ -3446,9 +3462,8 @@ async def playLogic(
         start_sec = parse_timestamp(inicio)
         if start_sec <= 0.0:
             start_sec = extract_url_timestamp(query)
-        if start_sec > 0.0:
-            for s in songs:
-                s["start_seconds"] = start_sec
+        if start_sec > 0.0 and songs:
+            songs[0]["start_seconds"] = start_sec
     except FileNotFoundError as e:
         diag = _diag(
             "admin",
@@ -3581,7 +3596,7 @@ async def _yt_dlp_search(query: str, *, max_results: int = 1) -> list[dict]:
     ``max_results`` because the first hits are often channels/playlists that get
     filtered out below.
     """
-    inputStr = query.strip()
+    inputStr = query.strip().strip("<>\"'").strip()
     isSearch = not (
         inputStr.startswith("http://")
         or inputStr.startswith("https://")
@@ -3757,9 +3772,8 @@ async def playFromIndio(
     start_sec = parse_timestamp(inicio)
     if start_sec <= 0.0:
         start_sec = extract_url_timestamp(query)
-    if start_sec > 0.0:
-        for s in songs:
-            s["start_seconds"] = start_sec
+    if start_sec > 0.0 and songs:
+        songs[0]["start_seconds"] = start_sec
 
     player = getGuildPlayer(guild_id, bot)
     player.textChannel = text_channel

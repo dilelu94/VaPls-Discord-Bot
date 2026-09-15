@@ -54,11 +54,15 @@ def _reset_throttle():
     greeting._last_user_greeting.clear()
     greeting._pity_state.clear()
     greeting._pity_loaded = True
+    greeting._name_tts_meta.clear()
+    greeting._name_tts_loaded = True
     yield
     greeting._last_greeting.clear()
     greeting._last_user_greeting.clear()
     greeting._pity_state.clear()
     greeting._pity_loaded = False
+    greeting._name_tts_meta.clear()
+    greeting._name_tts_loaded = False
 
 
 @pytest.fixture
@@ -73,6 +77,10 @@ def fake_users(monkeypatch):
 def _audio_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(ubcfg, "CUSTOM_AUDIO_PATH", str(tmp_path))
     monkeypatch.setattr(ubcfg, "GREETING_PITY_PATH", str(tmp_path / "greeting_pity.json"))
+    tts_dir = tmp_path / "greeting_tts"
+    tts_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(ubcfg, "GREETING_TTS_DIR", str(tts_dir))
+    monkeypatch.setattr(ubcfg, "GREETING_TTS_META_PATH", str(tmp_path / "greeting_tts_meta.json"))
     return tmp_path
 
 
@@ -110,10 +118,35 @@ def test_none_user_id_returns_none(fake_users):
     assert greeting.resolve_greeting_path(None) is None
 
 
-async def test_play_skips_user_without_greeting(fake_users):
-    fake_users({1: {"name": "noaudio"}})  # no greeting
+async def test_play_skips_user_without_greeting_or_name(fake_users, monkeypatch):
+    """A user with no 'greeting' key AND no 'name' key produces no audio."""
+    fake_users({1: {}})  # no greeting, no name
     vc = _make_vc()
     played = await greeting.play_user_greeting(vc, user_id=1, channel_id=100)
+    assert played is False
+    vc.play.assert_not_called()
+
+
+async def test_play_uses_tts_for_user_with_name_but_no_greeting(
+    fake_users, monkeypatch, tmp_path
+):
+    """A user with 'name' but no explicit 'greeting' gets a TTS audio greeting."""
+    fake_users({1: {"name": "noaudio"}})
+    vc = _make_vc()
+    # Stub out TTS generation to return a fake file so we don't invoke piper.
+    fake_wav = tmp_path / "1.wav"
+    fake_wav.write_bytes(b"fake")
+    monkeypatch.setattr(greeting, "get_or_generate_name_tts", lambda uid, name: str(fake_wav))
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: object())
+    played = await greeting.play_user_greeting(vc, user_id=1, channel_id=100)
+    assert played is True
+
+
+async def test_play_skips_unknown_user(fake_users):
+    """An unknown user_id (not in USERS at all) produces no audio."""
+    fake_users({})
+    vc = _make_vc()
+    played = await greeting.play_user_greeting(vc, user_id=999, channel_id=100)
     assert played is False
     vc.play.assert_not_called()
 
@@ -411,4 +444,210 @@ async def test_different_users_in_same_channel_both_play(fake_users, _audio_dir,
     assert p2 is True
 
 
+# ---- TTS name fallback tests -----------------------------------------------
 
+async def test_user_without_audio_gets_tts_with_name(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """A user with a name but no configured audio gets a TTS greeting saying their name."""
+    tts_dir = _audio_dir / "greeting_tts"
+    fake_users({200: {"name": "Chalo"}})  # no greeting key
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    # Stub tts.generate_tts_wav to create a real file without running piper.
+    def fake_generate_tts_wav(text, output_path=None):
+        assert text == "Chalo"
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc = _make_vc()
+    played = await greeting.play_user_greeting(vc, user_id=200, channel_id=55)
+    assert played is True
+    vc.play.assert_called_once()
+    # Cached file should exist
+    assert (tts_dir / "200.wav").exists()
+
+
+async def test_tts_name_cached_same_name_no_regeneration(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """When the user's name hasn't changed, TTS is NOT regenerated on the second join."""
+    fake_users({201: {"name": "Magote"}})
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generate_calls = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generate_calls.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc = _make_vc()
+    # First join - generates TTS
+    assert await greeting.play_user_greeting(vc, user_id=201, channel_id=60) is True
+    assert generate_calls == ["Magote"]
+
+    # Fast-forward past throttle window
+    t0 = time.time()
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 20)
+
+    # Second join - same name, TTS file exists -> no new generation
+    vc2 = _make_vc()
+    assert await greeting.play_user_greeting(vc2, user_id=201, channel_id=60) is True
+    assert generate_calls == ["Magote"]  # still only 1 call
+
+
+async def test_tts_regenerated_on_name_change(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """When the user's name changes, the cached TTS file is overwritten."""
+    fake_users({202: {"name": "Pepe"}})
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generated_names = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generated_names.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc = _make_vc()
+    assert await greeting.play_user_greeting(vc, user_id=202, channel_id=70) is True
+    assert generated_names == ["Pepe"]
+
+    # Simulate name change
+    fake_users({202: {"name": "Pepito"}})
+    t0 = time.time()
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 20)
+
+    vc2 = _make_vc()
+    assert await greeting.play_user_greeting(vc2, user_id=202, channel_id=70) is True
+    assert generated_names == ["Pepe", "Pepito"]  # regenerated for new name
+    assert greeting._name_tts_meta[202]["name"] == "Pepito"
+
+
+async def test_tts_fallback_uses_member_display_name(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """When user has no name in USERS, falls back to member.display_name for TTS."""
+    fake_users({203: {}})  # known user_id, but no name or greeting configured
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generated_names = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generated_names.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    member_stub = SimpleNamespace(display_name="ElNombreDelMember", name="member_username")
+    vc = _make_vc()
+    played = await greeting.play_user_greeting(
+        vc, user_id=203, channel_id=80, member=member_stub
+    )
+    assert played is True
+    assert generated_names == ["ElNombreDelMember"]
+
+
+async def test_user_with_base_audio_does_not_use_tts(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """A user with a valid base audio clip never falls back to TTS."""
+    audio = _audio_dir / "audio.mp3"
+    audio.write_bytes(b"fake-audio")
+    fake_users({204: {"name": "Miles", "greeting": "audio.mp3"}})
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generate_calls = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generate_calls.append(text)
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc = _make_vc()
+    played = await greeting.play_user_greeting(vc, user_id=204, channel_id=90)
+    assert played is True
+    vc.play.assert_called_once()
+    assert generate_calls == []  # TTS never invoked
+
+
+async def test_chalo_weighted_none_path_falls_back_to_tts(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """Chalo-style: when the weighted list picks path=None (99% slot), TTS is played.
+    When the 1% rare audio is picked and the file exists, TTS is NOT used."""
+    rare_audio = _audio_dir / "Secretos" / "fuego.mp3"
+    rare_audio.parent.mkdir(parents=True, exist_ok=True)
+    rare_audio.write_bytes(b"rare")
+
+    fake_users({
+        300: {
+            "name": "Chalo",
+            "greeting": [
+                {"path": None, "weight": 99},
+                {"path": "Secretos/fuego.mp3", "weight": 1},
+            ],
+        }
+    })
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generated_names = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generated_names.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    # Case 1: None path chosen (99% slot) -> TTS fallback
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: [None])
+    vc = _make_vc()
+    played = await greeting.play_user_greeting(vc, user_id=300, channel_id=100)
+    assert played is True
+    assert generated_names == ["Chalo"]
+
+    # Case 2: rare audio chosen (1% slot) and file exists -> base audio, no TTS
+    generated_names.clear()
+    greeting._last_greeting.clear()
+    greeting._last_user_greeting.clear()
+    monkeypatch.setattr(greeting.random, "choices",
+                        lambda paths, weights, k=1: ["Secretos/fuego.mp3"])
+    vc2 = _make_vc()
+    played2 = await greeting.play_user_greeting(vc2, user_id=300, channel_id=100)
+    assert played2 is True
+    assert generated_names == []  # no TTS when real audio file was picked
