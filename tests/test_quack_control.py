@@ -124,3 +124,42 @@ async def test_golive_quack_control_raw_and_event():
     golive_bot._paused_streams.discard(guild_id)
     golive_bot._last_quack_time.pop(guild_id, None)
 
+
+def test_golive_quack_control_intercept_parser():
+    import discord
+    from golive import bot as golive_bot
+
+    guild_id = 888123
+    mock_stream = MagicMock()
+    mock_stream._stopped = False
+
+    golive_bot._active_streams[guild_id] = mock_stream
+    golive_bot._paused_streams.discard(guild_id)
+    golive_bot._last_quack_time.pop(guild_id, None)
+
+    # Test parser call with payload where guild is uncached (would cause AttributeError in raw discord.py)
+    fake_state = MagicMock()
+    fake_state._get_guild.return_value = None
+
+    data = {
+        "guild_id": str(guild_id),
+        "channel_id": "111",
+        "user_id": "222",
+        "sound_id": 1,
+        "animation_type": 0,
+        "animation_id": 0,
+    }
+
+    # Call patched parser
+    discord.state.ConnectionState.parse_voice_channel_effect_send(fake_state, data)
+
+    # Verify quack trigger executed pause!
+    mock_stream.pause.assert_called_once()
+    assert guild_id in golive_bot._paused_streams
+
+    # Cleanup
+    golive_bot._active_streams.pop(guild_id, None)
+    golive_bot._paused_streams.discard(guild_id)
+    golive_bot._last_quack_time.pop(guild_id, None)
+
+
