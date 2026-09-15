@@ -2951,7 +2951,7 @@ async def on_voice_state_update(member, before, after):
     except Exception:
         pass
 
-    if member.bot or member.id in config.IGNORE_USER_IDS:
+    if member.id in config.IGNORE_USER_IDS:
         return
 
     guild = (after.channel or before.channel).guild

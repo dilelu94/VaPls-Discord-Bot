@@ -651,3 +651,29 @@ async def test_chalo_weighted_none_path_falls_back_to_tts(
     played2 = await greeting.play_user_greeting(vc2, user_id=300, channel_id=100)
     assert played2 is True
     assert generated_names == []  # no TTS when real audio file was picked
+
+
+async def test_bot_member_gets_tts_greeting(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """Bot members (like GoLive) without base greeting get TTS fallback using display_name."""
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generated_names = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generated_names.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc = _make_vc()
+    member = SimpleNamespace(id=1541984338386620492, display_name="GoLive", bot=True)
+    played = await greeting.play_user_greeting(vc, user_id=member.id, channel_id=100, member=member)
+    assert played is True
+    assert generated_names == ["GoLive"]
