@@ -2279,7 +2279,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
   <h1>Acceso Denegado / Enlace Expirado</h1>
   <p>Este buscador interactivo requiere un token de acceso válido generado desde Discord por motivos de seguridad.</p>
   <div class="cmd">/stream stremio</div>
-  <p>Ejecutá el comando en Discord para obtener un nuevo enlace válido por 24 horas.</p>
+  <p>Ejecutá el comando en Discord para obtener un nuevo enlace válido por 10 minutos.</p>
   <div class="footer">VaPls Discord Bot &bull; Go Live Streaming</div>
 </div>
 </body>

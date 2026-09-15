@@ -2974,7 +2974,7 @@ async def stream(
             description="Buscá anime, películas y series y transmitilas al instante a tu canal de voz.",
             color=0x8B5CF6,
         )
-        embed.set_footer(text="🔒 Este enlace es único y vence en 24 horas.")
+        embed.set_footer(text="🔒 Este enlace es único y vence en 10 minutos.")
         view = StremioWebUIOverlayView(stremio_url)
         await ctx.interaction.edit_original_response(embed=embed, view=view)
         return
