@@ -210,6 +210,8 @@ GREETING_RARE_THRESHOLD = float(os.getenv("GREETING_RARE_THRESHOLD", "0.05"))
 GREETING_TTS_DIR = os.getenv("GREETING_TTS_DIR", "data/greeting_tts")
 # Archivo JSON donde se guarda la metadata (mapeo usuario -> nombre sintetizado) para detectar cambios de nombre.
 GREETING_TTS_META_PATH = os.getenv("GREETING_TTS_META_PATH", "data/greeting_tts_meta.json")
+# Volumen por defecto para la reproducción de greetings (0.8 = 80%).
+GREETING_VOLUME = float(os.getenv("GREETING_VOLUME", "0.8"))
 
 
 # --- Wake sound (confirmation cue on wake-word detection) ------------------

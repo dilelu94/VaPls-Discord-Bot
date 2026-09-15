@@ -26,7 +26,12 @@ import config
 
 logger = logging.getLogger("userbot.greeting")
 
-FFMPEG_NORMALIZE_OPTS = '-af "dynaudnorm=p=0.95:f=200"'
+def get_ffmpeg_greeting_opts() -> str:
+    vol = getattr(config, "GREETING_VOLUME", 0.8)
+    return f'-af "dynaudnorm=p=0.95:f=200,volume={vol}"'
+
+
+FFMPEG_NORMALIZE_OPTS = get_ffmpeg_greeting_opts()
 
 _last_greeting: dict[int, float] = {}
 _last_wake_sound: dict[int, float] = {}
@@ -460,8 +465,9 @@ async def play_user_greeting(
     _greeting_playing = True
 
     try:
+        opts = get_ffmpeg_greeting_opts()
         try:
-            source = discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS)
+            source = discord.FFmpegOpusAudio(path, options=opts)
         except Exception:
             source = discord.FFmpegOpusAudio(path)
         vc.play(source, after=_on_greeting_end)
@@ -545,7 +551,7 @@ async def play_wake_sound(client, *, user_id: int) -> bool:
         return False
     _last_wake_sound[channel_id] = now
     try:
-        source = discord.FFmpegOpusAudio(path, options=FFMPEG_NORMALIZE_OPTS)
+        source = discord.FFmpegOpusAudio(path, options=get_ffmpeg_greeting_opts())
         vc.play(source)
         logger.info("[WAKE-SOUND] playing %s (user=%s, channel=%s)",
                     path, user_id, channel_id)

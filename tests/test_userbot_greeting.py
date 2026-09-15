@@ -677,3 +677,13 @@ async def test_bot_member_gets_tts_greeting(
     played = await greeting.play_user_greeting(vc, user_id=member.id, channel_id=100, member=member)
     assert played is True
     assert generated_names == ["GoLive"]
+
+
+def test_greeting_volume_option(monkeypatch):
+    """get_ffmpeg_greeting_opts returns volume=0.8 by default."""
+    opts = greeting.get_ffmpeg_greeting_opts()
+    assert "volume=0.8" in opts
+    assert "dynaudnorm" in opts
+
+    monkeypatch.setattr(ubcfg, "GREETING_VOLUME", 0.5)
+    assert "volume=0.5" in greeting.get_ffmpeg_greeting_opts()
