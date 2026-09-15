@@ -107,7 +107,9 @@ VAPLS_BOT_ID = int(os.getenv("VAPLS_BOT_ID", "1489830543074918482"))
 
 # Comma-separated user IDs to ignore (e.g. the main bot, other bots).
 _ignore_raw = os.getenv("IGNORE_USER_IDS", "")
-IGNORE_USER_IDS = {int(x) for x in _ignore_raw.split(",") if x.strip()}
+EXPLICIT_IGNORE_USER_IDS = {int(x) for x in _ignore_raw.split(",") if x.strip()}
+
+IGNORE_USER_IDS = set(EXPLICIT_IGNORE_USER_IDS)
 IGNORE_USER_IDS.add(GOLIVE_USER_ID)
 IGNORE_USER_IDS.add(VAPLS_BOT_ID)
 if USERBOT_USER_ID:

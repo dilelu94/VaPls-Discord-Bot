@@ -37,6 +37,12 @@ _log = logging.getLogger("bot.users")
 _USERS_PATH = os.getenv("USERS_PATH", "data/users.json")
 
 _FALLBACK_USERS: dict[int, dict] = {
+    1541984338386620492: {
+        "name": "GoLive",
+        "traits": [
+            "bot de streaming de video / IPTV",
+        ],
+    },
     285116759525031937: {
         "name": "Mila",
         "greeting": [
