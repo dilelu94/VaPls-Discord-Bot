@@ -228,3 +228,58 @@ async def test_stremio_security_validations(mock_bot):
         assert resp_play_chan.status == 400
     finally:
         await client.close()
+
+
+def test_watched_manager_lifecycle(tmp_path):
+    import stremio_sessions
+    storage_file = str(tmp_path / "stremio_watched.json")
+    wm = stremio_sessions.WatchedManager(storage_path=storage_file)
+    assert wm.get_all() == {}
+
+    res = wm.set_watched("tt0944947:s1:e1", True)
+    assert "tt0944947:s1:e1" in res
+
+    wm2 = stremio_sessions.WatchedManager(storage_path=storage_file)
+    assert "tt0944947:s1:e1" in wm2.get_all()
+
+    res_unwatched = wm.set_watched("tt0944947:s1:e1", False)
+    assert "tt0944947:s1:e1" not in res_unwatched
+
+
+@pytest.mark.asyncio
+async def test_stremio_watched_api_endpoints(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="a", channel_id=100, guild_id=200)
+    token = sess.token
+
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        # GET /api/stremio/watched with valid token
+        resp_get = await client.get(f"/api/stremio/watched?token={token}")
+        assert resp_get.status == 200
+        data_get = await resp_get.json()
+        assert "watched" in data_get
+
+        # POST /api/stremio/watched mark episode as watched
+        resp_post = await client.post(
+            "/api/stremio/watched",
+            json={"token": token, "key": "kitsu:11:s1:e2", "watched": True},
+        )
+        assert resp_post.status == 200
+        data_post = await resp_post.json()
+        assert data_post["ok"] is True
+        assert "kitsu:11:s1:e2" in data_post["watched"]
+
+        # POST /api/stremio/watched mark episode as unwatched
+        resp_unwatch = await client.post(
+            "/api/stremio/watched",
+            json={"token": token, "key": "kitsu:11:s1:e2", "watched": False},
+        )
+        assert resp_unwatch.status == 200
+        data_unwatch = await resp_unwatch.json()
+        assert "kitsu:11:s1:e2" not in data_unwatch["watched"]
+    finally:
+        await client.close()
+

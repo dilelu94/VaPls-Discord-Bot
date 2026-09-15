@@ -71,6 +71,9 @@ document.addEventListener('DOMContentLoaded', () => {
   const seasonSelect = document.getElementById('seasonSelect');
   const episodeSelect = document.getElementById('episodeSelect');
   const episodeTitlePreview = document.getElementById('episodeTitle');
+  const toggleWatchedBtn = document.getElementById('toggleWatchedBtn');
+  const watchedIcon = document.getElementById('watchedIcon');
+  const watchedBtnText = document.getElementById('watchedBtnText');
 
   const streamLoader = document.getElementById('streamLoader');
   const streamList = document.getElementById('streamList');
@@ -87,10 +90,134 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedStreamUrl = null;
   let voiceChannels = [];
 
+  // Watched Episodes State & Persistence
+  let watchedMap = {};
+  try {
+    const saved = localStorage.getItem('vapls_watched_episodes');
+    if (saved) watchedMap = JSON.parse(saved);
+  } catch (e) {}
+
   // Init
   fetchVoiceChannels();
+  fetchWatchedHistory();
+
+  async function fetchWatchedHistory() {
+    try {
+      const resp = await apiFetch('/api/stremio/watched');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.watched) {
+          watchedMap = { ...watchedMap, ...data.watched };
+          saveLocalWatched();
+          if (currentMeta) updateEpisodeOptions();
+        }
+      }
+    } catch (e) {}
+  }
+
+  function saveLocalWatched() {
+    try {
+      localStorage.setItem('vapls_watched_episodes', JSON.stringify(watchedMap));
+    } catch (e) {}
+  }
+
+  function getWatchedKey(id, season, episode) {
+    if (!id) return null;
+    if (season !== undefined && episode !== undefined && season !== null && episode !== null) {
+      return `${id}:s${season}:e${episode}`;
+    }
+    return String(id);
+  }
+
+  function isWatched(id, season, episode) {
+    const key = getWatchedKey(id, season, episode);
+    return !!(key && watchedMap[key]);
+  }
+
+  function hasAnyWatched(id) {
+    if (!id) return false;
+    return Object.keys(watchedMap).some(k => k === id || k.startsWith(`${id}:`));
+  }
+
+  async function setWatchedState(id, season, episode, state) {
+    const key = getWatchedKey(id, season, episode);
+    if (!key) return;
+    if (state) {
+      watchedMap[key] = Date.now() / 1000;
+    } else {
+      delete watchedMap[key];
+    }
+    saveLocalWatched();
+    if (currentMeta) updateEpisodeOptions();
+    refreshCardBadges();
+
+    try {
+      await apiFetch('/api/stremio/watched', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: sessionToken, key, watched: state }),
+      });
+    } catch (e) {}
+  }
+
+  function refreshCardBadges() {
+    if (catalogGrid.style.display === 'none') return;
+    const cards = catalogGrid.querySelectorAll('.card');
+    cards.forEach(card => {
+      const cardId = card.dataset.id;
+      let badge = card.querySelector('.watched-badge');
+      if (hasAnyWatched(cardId)) {
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'watched-badge';
+          badge.textContent = '✓ Visto';
+          card.appendChild(badge);
+        }
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+  }
+
+  function updateWatchedButtonState() {
+    if (!toggleWatchedBtn || !currentMeta) return;
+    const season = seasonSelect && seasonSelect.value ? parseInt(seasonSelect.value) : 1;
+    const episode = episodeSelect && episodeSelect.value ? parseInt(episodeSelect.value) : 1;
+    const metaId = currentMeta.id || currentMeta.imdb_id;
+    const watched = currentMeta.episodes && currentMeta.episodes.length > 0
+      ? isWatched(metaId, season, episode)
+      : isWatched(metaId);
+
+    if (watched) {
+      toggleWatchedBtn.classList.add('is-watched');
+      if (watchedIcon) watchedIcon.textContent = '✅';
+      if (watchedBtnText) watchedBtnText.textContent = 'Visto';
+    } else {
+      toggleWatchedBtn.classList.remove('is-watched');
+      if (watchedIcon) watchedIcon.textContent = '👁️';
+      if (watchedBtnText) watchedBtnText.textContent = 'Marcar visto';
+    }
+  }
 
   // Event Listeners
+  if (toggleWatchedBtn) {
+    toggleWatchedBtn.addEventListener('click', () => {
+      if (!currentMeta) return;
+      const season = seasonSelect && seasonSelect.value ? parseInt(seasonSelect.value) : 1;
+      const episode = episodeSelect && episodeSelect.value ? parseInt(episodeSelect.value) : 1;
+      const metaId = currentMeta.id || currentMeta.imdb_id;
+      const watched = currentMeta.episodes && currentMeta.episodes.length > 0
+        ? isWatched(metaId, season, episode)
+        : isWatched(metaId);
+
+      if (currentMeta.episodes && currentMeta.episodes.length > 0) {
+        setWatchedState(metaId, season, episode, !watched);
+      } else {
+        setWatchedState(metaId, null, null, !watched);
+      }
+    });
+  }
+
   searchInput.addEventListener('input', (e) => {
     const val = e.target.value.trim();
     clearSearch.style.display = val ? 'block' : 'none';
@@ -127,6 +254,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   seasonSelect.addEventListener('change', updateEpisodeOptions);
   episodeSelect.addEventListener('change', () => {
+    updateWatchedButtonState();
     if (currentMeta) fetchStreams();
   });
 
@@ -278,18 +406,22 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderCatalogGrid(items) {
-    catalogGrid.innerHTML = items.map(item => `
-      <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
-        <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
-        <div class="card-content">
-          <div class="card-title">${esc(item.title)}</div>
-          <div class="card-meta">
-            <span class="badge ${esc(item.type)}">${esc(item.type.toUpperCase())}</span>
-            <span>${esc(item.year || '')}</span>
+    catalogGrid.innerHTML = items.map(item => {
+      const watched = hasAnyWatched(item.id);
+      return `
+        <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
+          ${watched ? '<div class="watched-badge">✓ Visto</div>' : ''}
+          <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
+          <div class="card-content">
+            <div class="card-title">${esc(item.title)}</div>
+            <div class="card-meta">
+              <span class="badge ${esc(item.type)}">${esc(item.type.toUpperCase())}</span>
+              <span>${esc(item.year || '')}</span>
+            </div>
           </div>
         </div>
-      </div>
-    `).join('');
+      `;
+    }).join('');
 
     catalogGrid.querySelectorAll('.card').forEach(card => {
       card.addEventListener('click', () => {
@@ -361,15 +493,22 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!currentMeta || !currentMeta.episodes) return;
     const selectedSeason = parseInt(seasonSelect.value) || 1;
     const filteredEps = currentMeta.episodes.filter(e => (e.season || 1) === selectedSeason);
+    const metaId = currentMeta.id || currentMeta.imdb_id;
 
-    episodeSelect.innerHTML = filteredEps.map(e => `
-      <option value="${esc(e.episode || 1)}">Episodio ${esc(e.episode || 1)} - ${esc(e.title)}</option>
-    `).join('');
+    episodeSelect.innerHTML = filteredEps.map(e => {
+      const epNum = e.episode || 1;
+      const watched = isWatched(metaId, selectedSeason, epNum);
+      const prefix = watched ? '✓ ' : '';
+      return `
+        <option value="${esc(epNum)}" ${watched ? 'data-watched="true"' : ''}>${esc(prefix)}Episodio ${esc(epNum)} - ${esc(e.title)}</option>
+      `;
+    }).join('');
 
     if (filteredEps.length > 0) {
       episodeTitlePreview.textContent = filteredEps[0].overview || filteredEps[0].title;
     }
 
+    updateWatchedButtonState();
     fetchStreams();
   }
 
@@ -554,6 +693,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       if (resp.ok && (res.started || res.status === 'ok' || res.success)) {
         showToast('🚀 ¡Transmisión Go Live iniciada en Discord!');
+        const metaId = currentMeta ? (currentMeta.id || currentMeta.imdb_id) : null;
+        if (metaId) {
+          if (currentMeta.episodes && currentMeta.episodes.length > 0) {
+            setWatchedState(metaId, seasonVal, episodeVal, true);
+          } else {
+            setWatchedState(metaId, null, null, true);
+          }
+        }
         hideModal();
       } else {
         showToast(`❌ Error: ${esc(res.error || 'No se pudo iniciar el stream')}`);

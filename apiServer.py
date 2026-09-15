@@ -2561,10 +2561,60 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         raw_t = await resp.text()
                         data = {"error": f"Error en relay ({resp.status}): {raw_t[:120]}"}
                     logger.info("[STREMIO TRANSMIT] GoLive relay response (%s): %s", resp.status, data)
+                    if resp.status == 200:
+                        try:
+                            from stremio_sessions import watched_manager
+                            w_key = body.get("watched_key")
+                            if not w_key and imdb_id:
+                                if item_type in ("series", "anime") and season and episode:
+                                    w_key = f"{imdb_id}:s{season}:e{episode}"
+                                else:
+                                    w_key = str(imdb_id)
+                            if w_key:
+                                watched_manager.set_watched(w_key, True)
+                        except Exception as w_err:
+                            logger.warning("[STREMIO TRANSMIT] Failed to auto-mark watched: %s", w_err)
                     return web.json_response(data, status=resp.status)
         except Exception as e:
             logger.error("[STREMIO TRANSMIT] Failed to relay stremio stream request: %s", e)
             return web.json_response({"error": str(e)}, status=500)
+
+    async def apiStremioWatchedGet(request: web.Request) -> web.Response:
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        if not _validate_stremio_session(request):
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
+
+        from stremio_sessions import watched_manager
+        return web.json_response({"watched": watched_manager.get_all()})
+
+    async def apiStremioWatchedPost(request: web.Request) -> web.Response:
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        if not _validate_stremio_session(request, body):
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
+
+        key = str(body.get("key", "")).strip()
+        watched = bool(body.get("watched", True))
+        if not key or len(key) > 128:
+            return web.json_response({"error": "missing or invalid key"}, status=400)
+
+        from stremio_sessions import watched_manager
+        updated = watched_manager.set_watched(key, watched)
+        return web.json_response({"ok": True, "watched": updated})
 
     app.router.add_get("/stremio", stremioIndex)
     app.router.add_get("/stremio/", stremioIndex)
@@ -2576,7 +2626,10 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/api/stremio/meta", apiStremioMeta)
     app.router.add_get("/api/stremio/streams", apiStremioStreams)
     app.router.add_get("/api/stremio/voice-channels", apiStremioVoiceChannels)
+    app.router.add_get("/api/stremio/watched", apiStremioWatchedGet)
+    app.router.add_post("/api/stremio/watched", apiStremioWatchedPost)
     app.router.add_post("/api/stremio/play", apiStremioPlay)
+
 
     return app
 

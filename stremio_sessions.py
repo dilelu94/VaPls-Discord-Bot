@@ -112,3 +112,52 @@ class StremioSessionManager:
 
 
 session_manager = StremioSessionManager()
+
+
+_WATCHED_STORAGE_PATH = os.path.join(os.path.dirname(__file__), "data", "stremio_watched.json")
+
+
+class WatchedManager:
+    """Manages persistent watch history for Stremio episodes and movies."""
+
+    def __init__(self, storage_path: str = _WATCHED_STORAGE_PATH):
+        self.storage_path = storage_path
+        self.watched: dict[str, float] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not os.path.exists(self.storage_path):
+            return
+        try:
+            with open(self.storage_path, "r", encoding="utf-8") as f:
+                self.watched = json.load(f)
+        except Exception as e:
+            logger.warning("Failed to load watched history from %s: %s", self.storage_path, e)
+
+    def _save(self) -> None:
+        try:
+            os.makedirs(os.path.dirname(self.storage_path), exist_ok=True)
+            with open(self.storage_path, "w", encoding="utf-8") as f:
+                json.dump(self.watched, f, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save watched history to %s: %s", self.storage_path, e)
+
+    def get_all(self) -> dict[str, float]:
+        return dict(self.watched)
+
+    def set_watched(self, key: str, state: bool = True) -> dict[str, float]:
+        if not key:
+            return self.get_all()
+        clean_key = str(key).strip()
+        if not clean_key:
+            return self.get_all()
+        if state:
+            self.watched[clean_key] = time.time()
+        else:
+            self.watched.pop(clean_key, None)
+        self._save()
+        return self.get_all()
+
+
+watched_manager = WatchedManager()
+
