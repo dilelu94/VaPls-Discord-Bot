@@ -2166,12 +2166,12 @@ async def _send_stream_control(guild_id: int, action: str, timestamp: float = 0.
 
 async def _stream_health_checker():
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(15)
         for guild_id in list(_active_sources.keys()):
             alive = await _send_stream_control(guild_id, "status")
             if not alive:
-                _active_sources.pop(guild_id, None)
-                _paused_streams.discard(guild_id)
+                log.info("[HEALTH_CHECKER] Stream for guild=%s ended. Executing stopstream cleanup.", guild_id)
+                await stop_stream_for_guild(guild_id)
 
 
 def _is_quack_effect(event) -> bool:
