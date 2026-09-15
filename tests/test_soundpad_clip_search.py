@@ -37,9 +37,9 @@ def _touch(path: str) -> None:
 def soundpad_dir(tmp_path, monkeypatch):
     """Realistic soundpad layout with a few categories and nested clips."""
     root = tmp_path / "audio_output"
-    _touch(str(root / "Juji" / "la-concha-de-tu-madre-bob-esponja_to_Juji.mp3"))
-    _touch(str(root / "Juji" / "victor_le_dice_a_joel_to_Juji.mp3"))
-    _touch(str(root / "Mila" / "hola_che.opus"))
+    _touch(str(root / "Memes" / "la-concha-de-tu-madre-bob-esponja_to_Juji.mp3"))
+    _touch(str(root / "Memes" / "victor_le_dice_a_joel_to_Juji.mp3"))
+    _touch(str(root / "Efectos" / "hola_che.opus"))
     _touch(str(root / "Audios" / "Quandale Dingle" / "quandale.mp3"))
     monkeypatch.setattr(config, "CUSTOM_AUDIO_PATH", str(root), raising=False)
     return str(root)
@@ -127,6 +127,20 @@ def test_iter_clips_walks_categories_and_subfolders(soundpad_dir):
     assert "la-concha-de-tu-madre-bob-esponja_to_Juji.mp3" in found
     assert "quandale.mp3" in found
     assert "hola_che.opus" in found
+
+
+def test_iter_clips_ignores_user_greeting_folders(tmp_path):
+    root = tmp_path / "audio_output"
+    _touch(str(root / "Mila" / "greeting_mila.mp3"))
+    _touch(str(root / "Secretos" / "fuego.mp3"))
+    _touch(str(root / "Seba" / "money.mp3"))
+    _touch(str(root / "Memes" / "risas.mp3"))
+
+    found = {os.path.basename(path) for path, _ in iter_clips(str(root))}
+    assert "risas.mp3" in found
+    assert "greeting_mila.mp3" not in found
+    assert "fuego.mp3" not in found
+    assert "money.mp3" not in found
 
 
 def test_find_best_match_picks_clip_with_similar_name(soundpad_dir):
@@ -672,13 +686,13 @@ async def test_autocomplete_truncates_choices_over_100_chars(tmp_path, monkeypat
     long_stem = (
         "Iguana lagarto desayuna con wevo jugo de china del Bueno "
         "con pulpa sin pulpa Que! Que! toma mango"
-    ) + "_to_Juji"
+    ) + "_to_Meme"
     assert len(long_stem) > 100  # guard: the fixture must actually be too long
-    _touch(str(root / "Juji" / f"{long_stem}.mp3"))
-    _touch(str(root / "Juji" / "short_juji.mp3"))
+    _touch(str(root / "Memes" / f"{long_stem}.mp3"))
+    _touch(str(root / "Memes" / "short_meme.mp3"))
     monkeypatch.setattr(config, "CUSTOM_AUDIO_PATH", str(root), raising=False)
 
-    results = await soundpad_query_autocomplete(_ac_ctx("juji"))
+    results = await soundpad_query_autocomplete(_ac_ctx("iguana"))
     assert results, "long filenames should not eliminate suggestions"
     for r in results:
         assert len(r) <= 100, f"choice still over Discord's cap: {len(r)} chars"
@@ -690,10 +704,10 @@ async def test_autocomplete_picks_up_new_clip_after_filesystem_change(soundpad_d
     assert before == []
 
     # lsyncd drops a new file into an existing category.
-    new_clip = os.path.join(soundpad_dir, "Juji", "recienllegado_to_juji.mp3")
+    new_clip = os.path.join(soundpad_dir, "Memes", "recienllegado_to_meme.mp3")
     _touch(new_clip)
     # Bump category mtime in case the filesystem's resolution masked the create.
-    os.utime(os.path.join(soundpad_dir, "Juji"), None)
+    os.utime(os.path.join(soundpad_dir, "Memes"), None)
 
     after = await soundpad_query_autocomplete(_ac_ctx("recienllegado"))
     # Cache must invalidate so the new clip becomes visible without restart.

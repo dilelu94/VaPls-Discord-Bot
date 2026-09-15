@@ -73,6 +73,36 @@ def _normalize_clip_name(text: str) -> str:
     return text.replace("_", " ").replace("-", " ").lower().strip()
 
 
+_DEFAULT_IGNORED_CATEGORIES = {"secretos", "secret", "greetings", "sorpresas"}
+
+
+def _get_ignored_categories() -> set[str]:
+    """Return lowercased folder names that are hidden from /soundpad."""
+    ignored = set(_DEFAULT_IGNORED_CATEGORIES)
+    try:
+        from users import USERS
+
+        for uinfo in USERS.values():
+            name = uinfo.get("name")
+            if name and isinstance(name, str):
+                ignored.add(name.lower())
+            g = uinfo.get("greeting")
+            if not g:
+                continue
+            items = g if isinstance(g, list) else [g]
+            for item in items:
+                rel_path = item.get("path") if isinstance(item, dict) else item
+                if isinstance(rel_path, str) and rel_path:
+                    parts = rel_path.replace("\\", "/").split("/")
+                    if len(parts) > 1 and parts[0].strip():
+                        top_dir = parts[0].strip().lower()
+                        if top_dir not in {"audios"}:
+                            ignored.add(top_dir)
+    except Exception:
+        pass
+    return ignored
+
+
 def iter_clips(output_dir: str):
     """Yield ``(absolute_path, display_name)`` for every audio clip under ``output_dir``.
 
@@ -82,6 +112,7 @@ def iter_clips(output_dir: str):
     """
     if not os.path.isdir(output_dir):
         return
+    ignored_cats = _get_ignored_categories()
     for category in sorted(os.listdir(output_dir)):
         cat_dir = os.path.join(output_dir, category)
         cat_lower = category.lower()
@@ -89,7 +120,7 @@ def iter_clips(output_dir: str):
             not os.path.isdir(cat_dir)
             or category.startswith(".")
             or category.startswith("_")
-            or cat_lower in {"secretos", "secret", "greetings", "sorpresas"}
+            or cat_lower in ignored_cats
         ):
             continue
         for root, dirs, files in os.walk(cat_dir):
@@ -98,7 +129,7 @@ def iter_clips(output_dir: str):
                 for d in dirs
                 if not d.startswith(".")
                 and not d.startswith("_")
-                and d.lower() not in {"secretos", "secret", "greetings", "sorpresas"}
+                and d.lower() not in ignored_cats
             ]
             for f in sorted(files):
                 _, ext = os.path.splitext(f)
@@ -375,6 +406,7 @@ class SoundpadView(BaseView):
         if not os.path.exists(output_dir):
             raise ValueError(f"La ruta de audios no existe: {output_dir}")
 
+        ignored_cats = _get_ignored_categories()
         self.categories = sorted(
             [
                 d
@@ -382,7 +414,7 @@ class SoundpadView(BaseView):
                 if os.path.isdir(os.path.join(output_dir, d))
                 and not d.startswith(".")
                 and not d.startswith("_")
-                and d.lower() not in {"secretos", "secret", "greetings", "sorpresas"}
+                and d.lower() not in ignored_cats
             ]
         )
 
