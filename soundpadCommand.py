@@ -77,7 +77,7 @@ _DEFAULT_IGNORED_CATEGORIES = {"secretos", "secret", "greetings", "sorpresas"}
 
 
 def _get_ignored_greeting_files() -> set[str]:
-    """Return normalized relative paths and basenames of audio files configured as user greetings."""
+    """Return normalized relative paths of audio files configured as user greetings."""
     ignored = set()
     try:
         from users import USERS
@@ -93,9 +93,6 @@ def _get_ignored_greeting_files() -> set[str]:
                     clean_rel = rel_path.strip().replace("\\", "/")
                     norm_rel = os.path.normpath(clean_rel).lower()
                     ignored.add(norm_rel)
-                    base = os.path.basename(clean_rel).lower()
-                    if base:
-                        ignored.add(base)
     except Exception:
         pass
     return ignored
@@ -135,7 +132,7 @@ def iter_clips(output_dir: str):
                     continue
                 abs_path = os.path.join(root, f)
                 rel_to_root = os.path.relpath(abs_path, output_dir).replace("\\", "/").lower()
-                if rel_to_root in ignored_greetings or f.lower() in ignored_greetings:
+                if rel_to_root in ignored_greetings:
                     continue
                 stem = os.path.splitext(f)[0]
                 yield abs_path, _normalize_clip_name(stem)
@@ -484,7 +481,7 @@ class SoundpadView(BaseView):
                 _, ext = os.path.splitext(f)
                 if ext.lower() in _AUDIO_EXTS:
                     rel_to_root = os.path.relpath(full_path, self.output_dir).replace("\\", "/").lower()
-                    if rel_to_root in ignored_greetings or f.lower() in ignored_greetings:
+                    if rel_to_root in ignored_greetings:
                         continue
                     if subfolder == "/":
                         files.append(f)
