@@ -86,3 +86,41 @@ async def test_on_voice_channel_effect_send_toggle_and_cooldown():
     _active_sources.pop(guild_id, None)
     _paused_streams.discard(guild_id)
     _last_quack_time.pop(guild_id, None)
+
+
+@pytest.mark.asyncio
+async def test_golive_quack_control_raw_and_event():
+    from golive import bot as golive_bot
+
+    guild_id = 777123
+    mock_stream = MagicMock()
+    mock_stream._stopped = False
+
+    golive_bot._active_streams[guild_id] = mock_stream
+    golive_bot._paused_streams.discard(guild_id)
+    golive_bot._last_quack_time.pop(guild_id, None)
+
+    # 1. Simulate raw socket message with sound_id="1" (default Quack) -> Pauses
+    raw_msg = f'{{"t": "VOICE_CHANNEL_EFFECT_SEND", "d": {{"guild_id": "{guild_id}", "sound_id": "1"}}}}'
+    await golive_bot.on_socket_raw_receive(raw_msg)
+
+    mock_stream.pause.assert_called_once()
+    assert guild_id in golive_bot._paused_streams
+
+    # 2. Spammed quack message -> Ignored due to cooldown
+    mock_stream.pause.reset_mock()
+    await golive_bot.on_socket_raw_receive(raw_msg)
+    mock_stream.pause.assert_not_called()
+
+    # 3. Quack after cooldown -> Resumes
+    golive_bot._last_quack_time[guild_id] = time.time() - (golive_bot._QUACK_COOLDOWN + 0.1)
+    await golive_bot.on_socket_raw_receive(raw_msg)
+
+    mock_stream.resume.assert_called_once()
+    assert guild_id not in golive_bot._paused_streams
+
+    # Cleanup
+    golive_bot._active_streams.pop(guild_id, None)
+    golive_bot._paused_streams.discard(guild_id)
+    golive_bot._last_quack_time.pop(guild_id, None)
+

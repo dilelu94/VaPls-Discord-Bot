@@ -567,11 +567,80 @@ class GoLiveStream:
 
 
 _active_streams: dict[int, GoLiveStream] = {}
+_paused_streams: set[int] = set()
+_last_quack_time: dict[int, float] = {}
+_QUACK_COOLDOWN = 2.0
+
+
+def _handle_quack_trigger(guild_id: int):
+    stream = _active_streams.get(guild_id)
+    vp = getattr(client, "video_players", {}).get(guild_id)
+    if not stream and not vp:
+        return
+    if stream and getattr(stream, "_stopped", False):
+        return
+
+    now = time.time()
+    last = _last_quack_time.get(guild_id, 0.0)
+    if now - last < _QUACK_COOLDOWN:
+        log.info("[QUACK] Ignored spammed quack sound (cooldown %.1fs) in guild=%s", _QUACK_COOLDOWN, guild_id)
+        return
+    _last_quack_time[guild_id] = now
+
+    if guild_id in _paused_streams:
+        if stream and hasattr(stream, "resume"):
+            stream.resume()
+        elif vp and hasattr(vp, "resume"):
+            vp.resume()
+        _paused_streams.discard(guild_id)
+        log.info("[QUACK] Resumed stream in guild=%s", guild_id)
+    else:
+        if stream and hasattr(stream, "pause"):
+            stream.pause()
+        elif vp and hasattr(vp, "pause"):
+            vp.pause()
+        _paused_streams.add(guild_id)
+        log.info("[QUACK] Paused stream in guild=%s", guild_id)
+
+
+def _is_quack_effect(event) -> bool:
+    """Safely check if a voice channel effect event represents a quack soundboard sound."""
+    sound = getattr(event, "sound", None)
+    if sound:
+        name = getattr(sound, "name", None)
+        if name and str(name).lower() == "quack":
+            return True
+        sound_id = getattr(sound, "id", None)
+        if sound_id in (1, "1"):
+            return True
+
+    data = getattr(event, "data", {}) or {}
+    sound_name = str(data.get("sound_name", "")).lower()
+    if sound_name == "quack":
+        return True
+
+    sound_id = str(data.get("sound_id", ""))
+    if sound_id == "1":
+        return True
+
+    emoji = getattr(event, "emoji", None)
+    if emoji:
+        emoji_name = str(getattr(emoji, "name", "")).lower()
+        if emoji_name in ("🦆", "quack"):
+            return True
+
+    raw_emoji = data.get("emoji") or {}
+    if isinstance(raw_emoji, dict) and str(raw_emoji.get("name", "")).lower() in ("🦆", "quack"):
+        return True
+
+    return False
+
 
 _nick_restore_tasks: dict[int, asyncio.Task] = {}
 _original_nicknames: dict[int, Optional[str]] = {}
 
 DEFAULT_NICKNAME: Optional[str] = None
+
 
 
 def _save_original_nickname(guild: discord.Guild) -> None:
@@ -892,12 +961,14 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
             stream.pause()
         elif vp and hasattr(vp, "pause"):
             vp.pause()
+        _paused_streams.add(guild_id)
         return web.json_response({"status": "paused", "guild_id": guild_id})
     elif action == "resume":
         if stream and hasattr(stream, "resume"):
             stream.resume()
         elif vp and hasattr(vp, "resume"):
             vp.resume()
+        _paused_streams.discard(guild_id)
         return web.json_response({"status": "resumed", "guild_id": guild_id})
     elif action == "resume_pos":
         curr_pos = 0.0
@@ -909,6 +980,7 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
             stream.seek(resume_sec)
         elif vp and hasattr(vp, "seek"):
             vp.seek(resume_sec)
+        _paused_streams.discard(guild_id)
         return web.json_response(
             {"status": "resumed_from_pos", "pos": resume_sec, "guild_id": guild_id}
         )
@@ -1059,6 +1131,38 @@ async def on_voice_state_update(member, before, after):
                 guild = before.channel.guild
                 _stop_idle_watchdog(guild.id)
                 await _restore_nickname(guild)
+
+
+@client.event
+async def on_voice_channel_effect_send(event):
+    if not _is_quack_effect(event):
+        return
+    guild = getattr(event, "guild", None)
+    if guild:
+        _handle_quack_trigger(guild.id)
+
+
+@client.event
+async def on_socket_raw_receive(msg):
+    if not isinstance(msg, str) or "VOICE_CHANNEL_EFFECT_SEND" not in msg:
+        return
+    try:
+        data = json.loads(msg)
+        if data.get("t") == "VOICE_CHANNEL_EFFECT_SEND":
+            d = data.get("d", {})
+            guild_id_raw = d.get("guild_id")
+            if not guild_id_raw:
+                return
+            guild_id = int(guild_id_raw)
+            sound_id = str(d.get("sound_id", ""))
+            sound_name = str(d.get("sound_name", "")).lower()
+            emoji = d.get("emoji") or {}
+            emoji_name = str(emoji.get("name", "")).lower() if isinstance(emoji, dict) else ""
+            if sound_id == "1" or sound_name == "quack" or emoji_name in ("🦆", "quack"):
+                _handle_quack_trigger(guild_id)
+    except Exception as e:
+        log.debug("[QUACK] error parsing raw socket msg: %s", e)
+
 
 
 # ---------- Main ------------------------------------------------------------
