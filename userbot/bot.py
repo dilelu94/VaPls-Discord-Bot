@@ -2980,6 +2980,7 @@ async def on_voice_state_update(member, before, after):
                             vc,
                             user_id=member.id,
                             channel_id=after.channel.id,
+                            member=member,
                         )
                     )
             except Exception as e:

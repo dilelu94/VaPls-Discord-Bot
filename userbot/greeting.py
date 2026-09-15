@@ -49,9 +49,21 @@ def _on_greeting_end(err=None) -> None:
 _pity_state: dict[int, dict[str, int]] = {}
 _pity_loaded = False
 
+# In-memory name TTS metadata cache: {user_id: {"name": name, "path": path}}
+_name_tts_meta: dict[int, dict[str, str]] = {}
+_name_tts_loaded = False
+
 
 def _get_pity_file_path() -> str:
     return getattr(config, "GREETING_PITY_PATH", "data/greeting_pity.json")
+
+
+def _get_name_tts_meta_path() -> str:
+    return getattr(config, "GREETING_TTS_META_PATH", "data/greeting_tts_meta.json")
+
+
+def _get_name_tts_dir() -> str:
+    return getattr(config, "GREETING_TTS_DIR", "data/greeting_tts")
 
 
 def load_pity_state(path: Optional[str] = None) -> dict[int, dict[str, int]]:
@@ -95,6 +107,126 @@ def _ensure_pity_loaded() -> None:
     global _pity_loaded
     if not _pity_loaded:
         load_pity_state()
+
+
+def load_name_tts_meta(path: Optional[str] = None) -> dict[int, dict[str, str]]:
+    """Load name TTS metadata from JSON file into in-memory ``_name_tts_meta``."""
+    global _name_tts_meta, _name_tts_loaded
+    file_path = path or _get_name_tts_meta_path()
+    try:
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            _name_tts_meta = {
+                int(uid): {"name": str(data.get("name", "")), "path": str(data.get("path", ""))}
+                for uid, data in raw.items()
+                if isinstance(data, dict)
+            }
+        else:
+            _name_tts_meta = {}
+    except Exception:
+        logger.exception("[GREETING] failed to load name TTS metadata from %s", file_path)
+        _name_tts_meta = {}
+    _name_tts_loaded = True
+    return _name_tts_meta
+
+
+def save_name_tts_meta(path: Optional[str] = None) -> None:
+    """Safely persist in-memory ``_name_tts_meta`` to JSON file using atomic write."""
+    file_path = path or _get_name_tts_meta_path()
+    try:
+        dir_name = os.path.dirname(os.path.abspath(file_path))
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+        tmp_path = file_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump({str(uid): data for uid, data in _name_tts_meta.items()}, f, indent=2)
+        os.replace(tmp_path, file_path)
+    except Exception:
+        logger.exception("[GREETING] failed to save name TTS metadata to %s", file_path)
+
+
+def _ensure_name_tts_loaded() -> None:
+    global _name_tts_loaded
+    if not _name_tts_loaded:
+        load_name_tts_meta()
+
+
+def get_user_greeting_name(
+    user_id: int,
+    *,
+    member: Optional[discord.Member] = None,
+    display_name: Optional[str] = None,
+) -> Optional[str]:
+    """Determine the canonical display name to use for TTS greeting synthesis.
+
+    Priority:
+    1. Static ``name`` key in ``users.USERS`` (e.g. "Chalo", "Mila", "Miles").
+    2. Explicitly passed ``display_name``.
+    3. ``member.display_name`` or ``member.name`` from Discord Member.
+    """
+    if user_id is None:
+        return None
+    users = _users_map()
+    info = (
+        users.get(user_id)
+        or (users.get(int(user_id)) if str(user_id).isdigit() else None)
+        or users.get(str(user_id))
+        or {}
+    )
+    name = info.get("name")
+    if name and isinstance(name, str) and name.strip():
+        return name.strip()
+
+    if display_name and isinstance(display_name, str) and display_name.strip():
+        return display_name.strip()
+
+    if member is not None:
+        dname = getattr(member, "display_name", None) or getattr(member, "name", None)
+        if dname and isinstance(dname, str) and dname.strip():
+            return dname.strip()
+
+    return None
+
+
+def get_or_generate_name_tts(user_id: int, name: str) -> Optional[str]:
+    """Return the path to a cached TTS WAV file saying ``name`` for ``user_id``.
+
+    If an existing audio file exists and the cached name matches ``name``, reuses it.
+    Otherwise, generates a new TTS WAV using ``tts.generate_tts_wav``, saving
+    it to ``data/greeting_tts/{user_id}.wav`` (overwriting if needed) and
+    updating metadata.
+    """
+    if user_id is None or not name or not name.strip():
+        return None
+
+    _ensure_name_tts_loaded()
+    tts_dir = _get_name_tts_dir()
+    os.makedirs(tts_dir, exist_ok=True)
+    expected_path = os.path.join(tts_dir, f"{user_id}.wav")
+
+    cached = _name_tts_meta.get(user_id)
+    if (
+        cached
+        and cached.get("name") == name
+        and os.path.exists(expected_path)
+        and os.path.getsize(expected_path) > 0
+    ):
+        return expected_path
+
+    try:
+        import tts
+        res_path = tts.generate_tts_wav(name, output_path=expected_path)
+        if res_path and os.path.exists(res_path) and os.path.getsize(res_path) > 0:
+            _name_tts_meta[user_id] = {"name": name, "path": res_path}
+            save_name_tts_meta()
+            return res_path
+        else:
+            logger.warning("[GREETING] TTS generation for name %r returned invalid path %s", name, res_path)
+            return None
+    except Exception:
+        logger.exception("[GREETING] failed to generate TTS for user_id=%s name=%r", user_id, name)
+        return None
 
 
 def calculate_effective_weights(
@@ -248,19 +380,30 @@ async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:
 _last_user_greeting: dict[tuple[int, int], float] = {}
 
 
-async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
+async def play_user_greeting(
+    vc,
+    *,
+    user_id: int,
+    channel_id: int,
+    member: Optional[discord.Member] = None,
+    display_name: Optional[str] = None,
+) -> bool:
     """Play the per-user greeting on ``vc`` if eligible.
 
-    Returns ``True`` when audio was scheduled, ``False`` when skipped (no
-    configured greeting for this user, throttled, vc not ready, file missing,
-    or the feature is disabled). Errors are logged and swallowed.
+    For users with a configured base audio file, plays that audio file.
+    For users without a base audio file (or when a weighted list resolves to
+    no audio clip), falls back to a synthesized TTS audio file saying their name.
+    The TTS audio file is cached on disk and reused as long as their name remains
+    unchanged; if their name changes, it is regenerated and overwritten.
+
+    Returns ``True`` when audio was scheduled, ``False`` when skipped (throttled,
+    vc not ready, missing audio, or feature disabled). Errors are logged and swallowed.
     """
     if not getattr(config, "GREETING_ENABLED", True):
         return False
-    users = _users_map()
-    info = users.get(user_id) or (users.get(int(user_id)) if str(user_id).isdigit() else None) or users.get(str(user_id)) or {}
-    if not info.get("greeting"):
+    if user_id is None:
         return False
+
     now = time.time()
     last_chan = _last_greeting.get(channel_id, 0.0)
     last_user = _last_user_greeting.get((channel_id, user_id), 0.0)
@@ -288,10 +431,13 @@ async def play_user_greeting(vc, *, user_id: int, channel_id: int) -> bool:
         member_count = 1
 
     path = resolve_greeting_path(user_id, member_count=member_count)
-    if path is None:
-        return False
-    if not os.path.exists(path):
-        logger.warning("[GREETING] file missing: %s", path)
+    if path is None or not os.path.exists(path):
+        target_name = get_user_greeting_name(user_id, member=member, display_name=display_name)
+        if target_name:
+            path = get_or_generate_name_tts(user_id, target_name)
+
+    if path is None or not os.path.exists(path):
+        logger.info("[GREETING] no audio clip or TTS available for user=%s", user_id)
         return False
 
     # Greeting audio has absolute priority over Indio's voice/audio.
