@@ -43,7 +43,7 @@ discord.gateway.davey = davey_compat
 davey_compat.patch_reinit(discord.voice_state)
 
 logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL, logging.INFO),
+    level=getattr(logging, getattr(config, "LOG_LEVEL", "INFO"), logging.INFO),
     stream=sys.stdout,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
@@ -444,18 +444,9 @@ class GoLiveStream:
                             if self.queue:
                                 asyncio.create_task(self._prefetch_next())
                         else:
-                            log.info("[STREAM] No more videos in queue. Entering idle state for 5 seconds...")
-                            await self._stop_players()
-                            
-                            self.idle_event = asyncio.Event()
-                            try:
-                                await asyncio.wait_for(self.idle_event.wait(), timeout=5.0)
-                                log.info("[STREAM] Woken up from idle state by new queued video!")
-                                continue
-                            except asyncio.TimeoutError:
-                                log.info("[STREAM] Idle timeout reached. Closing stream.")
-                                disconnect_voice = True
-                                break
+                            log.info("[STREAM] No more videos in queue. Closing stream.")
+                            disconnect_voice = True
+                            break
         except asyncio.CancelledError:
             return
 
@@ -468,33 +459,35 @@ class GoLiveStream:
         Returns True on success, False on failure or exhausted retries."""
         if self._stopped:
             return False
-        self.reconnect_attempts += 1
         if self.reconnect_attempts > 5:
             log.error("[STREAM] GoLive reconnect too many times. Auto-stopping.")
             return False
 
+        log.info("[STREAM] Attempting GoLive connection restart...")
         await self._stop_players()
-
         if self.conn:
             try:
                 await self.conn.disconnect()
             except Exception:
                 pass
-
-        await asyncio.sleep(3)
-        if self._stopped:
-            return False
+            self.conn = None
 
         try:
             self.conn = GoLiveConnection(self.bot, self.guild_id, self.channel_id, self.vc)
             await self.conn.connect(timeout=30.0)
             self.video_ssrc = self.conn.ssrc + 1
+            if hasattr(client, "live_connections"):
+                client.live_connections[self.guild_id] = self.conn
             await self._start_players()
-            log.info("[STREAM] GoLive reconnected successfully")
+            log.info("[STREAM] GoLive connection restarted successfully")
             return True
         except Exception as e:
-            log.error("[STREAM] GoLive reconnect failed: %s", e)
+            log.error("[STREAM] Connection restart failed: %s", e)
             return False
+
+    def get_position() -> float:
+        """Stub method for position tracking compat."""
+        return 0.0
 
     def pause(self):
         if self.video_player:
@@ -506,7 +499,7 @@ class GoLiveStream:
 
     @property
     def current_position(self) -> float:
-        if self.video_player and hasattr(self.video_player, "current_position"):
+        if self.video_player:
             return self.video_player.current_position
         return 0.0
 
@@ -519,9 +512,20 @@ class GoLiveStream:
             return
         self._stopped = True
 
+        _active_streams.pop(self.guild_id, None)
+
         if self._inactivity_task:
             self._inactivity_task.cancel()
             self._inactivity_task = None
+
+        if hasattr(client, "live_connections"):
+            client.live_connections.pop(self.guild_id, None)
+        if hasattr(client, "video_players"):
+            client.video_players.pop(self.guild_id, None)
+        if hasattr(client, "stream_tasks"):
+            t = client.stream_tasks.pop(self.guild_id, None)
+            if t and not t.done():
+                t.cancel()
 
         # 1. Stop streaming / screenshare immediately (STREAM_DELETE)
         if self.conn:

@@ -42,3 +42,32 @@ async def test_disconnect_sends_stream_delete_sync_ws():
 
     assert 22 in sent_ops  # _OP_STREAM_SET_PAUSED
     assert 19 in sent_ops  # _OP_STREAM_DELETE
+
+
+@pytest.mark.asyncio
+async def test_golive_stream_stop_cleans_up_trackers(monkeypatch):
+    from golive.bot import GoLiveStream, _active_streams, client
+
+    stream = GoLiveStream(
+        bot=MagicMock(),
+        guild_id=123,
+        channel_id=456,
+        url="http://test.url",
+        vc=None,
+    )
+    _active_streams[123] = stream
+    mock_conn = MagicMock()
+    mock_conn.disconnect = MagicMock(return_value=None)
+    async def fake_disconnect():
+        pass
+    mock_conn.disconnect = fake_disconnect
+    stream.conn = mock_conn
+
+    getattr(client, "live_connections", {})[123] = mock_conn
+
+    await stream.stop(disconnect_voice=False)
+
+    assert stream._stopped is True
+    assert 123 not in _active_streams
+    assert 123 not in getattr(client, "live_connections", {})
+
