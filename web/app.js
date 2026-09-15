@@ -71,9 +71,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const seasonSelect = document.getElementById('seasonSelect');
   const episodeSelect = document.getElementById('episodeSelect');
   const episodeTitlePreview = document.getElementById('episodeTitle');
-  const toggleWatchedBtn = document.getElementById('toggleWatchedBtn');
-  const watchedIcon = document.getElementById('watchedIcon');
-  const watchedBtnText = document.getElementById('watchedBtnText');
 
   const streamLoader = document.getElementById('streamLoader');
   const streamList = document.getElementById('streamList');
@@ -134,11 +131,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return !!(key && watchedMap[key]);
   }
 
-  function hasAnyWatched(id) {
-    if (!id) return false;
-    return Object.keys(watchedMap).some(k => k === id || k.startsWith(`${id}:`));
-  }
-
   async function setWatchedState(id, season, episode, state) {
     const key = getWatchedKey(id, season, episode);
     if (!key) return;
@@ -149,7 +141,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     saveLocalWatched();
     if (currentMeta) updateEpisodeOptions();
-    refreshCardBadges();
 
     try {
       await apiFetch('/api/stremio/watched', {
@@ -160,64 +151,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
   }
 
-  function refreshCardBadges() {
-    if (catalogGrid.style.display === 'none') return;
-    const cards = catalogGrid.querySelectorAll('.card');
-    cards.forEach(card => {
-      const cardId = card.dataset.id;
-      let badge = card.querySelector('.watched-badge');
-      if (hasAnyWatched(cardId)) {
-        if (!badge) {
-          badge = document.createElement('div');
-          badge.className = 'watched-badge';
-          badge.textContent = '✓ Visto';
-          card.appendChild(badge);
-        }
-      } else if (badge) {
-        badge.remove();
-      }
-    });
-  }
-
-  function updateWatchedButtonState() {
-    if (!toggleWatchedBtn || !currentMeta) return;
-    const season = seasonSelect && seasonSelect.value ? parseInt(seasonSelect.value) : 1;
-    const episode = episodeSelect && episodeSelect.value ? parseInt(episodeSelect.value) : 1;
-    const metaId = currentMeta.id || currentMeta.imdb_id;
-    const watched = currentMeta.episodes && currentMeta.episodes.length > 0
-      ? isWatched(metaId, season, episode)
-      : isWatched(metaId);
-
-    if (watched) {
-      toggleWatchedBtn.classList.add('is-watched');
-      if (watchedIcon) watchedIcon.textContent = '✅';
-      if (watchedBtnText) watchedBtnText.textContent = 'Visto';
-    } else {
-      toggleWatchedBtn.classList.remove('is-watched');
-      if (watchedIcon) watchedIcon.textContent = '👁️';
-      if (watchedBtnText) watchedBtnText.textContent = 'Marcar visto';
-    }
-  }
-
   // Event Listeners
-  if (toggleWatchedBtn) {
-    toggleWatchedBtn.addEventListener('click', () => {
-      if (!currentMeta) return;
-      const season = seasonSelect && seasonSelect.value ? parseInt(seasonSelect.value) : 1;
-      const episode = episodeSelect && episodeSelect.value ? parseInt(episodeSelect.value) : 1;
-      const metaId = currentMeta.id || currentMeta.imdb_id;
-      const watched = currentMeta.episodes && currentMeta.episodes.length > 0
-        ? isWatched(metaId, season, episode)
-        : isWatched(metaId);
-
-      if (currentMeta.episodes && currentMeta.episodes.length > 0) {
-        setWatchedState(metaId, season, episode, !watched);
-      } else {
-        setWatchedState(metaId, null, null, !watched);
-      }
-    });
-  }
-
   searchInput.addEventListener('input', (e) => {
     const val = e.target.value.trim();
     clearSearch.style.display = val ? 'block' : 'none';
@@ -406,22 +340,18 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderCatalogGrid(items) {
-    catalogGrid.innerHTML = items.map(item => {
-      const watched = hasAnyWatched(item.id);
-      return `
-        <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
-          ${watched ? '<div class="watched-badge">✓ Visto</div>' : ''}
-          <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
-          <div class="card-content">
-            <div class="card-title">${esc(item.title)}</div>
-            <div class="card-meta">
-              <span class="badge ${esc(item.type)}">${esc(item.type.toUpperCase())}</span>
-              <span>${esc(item.year || '')}</span>
-            </div>
+    catalogGrid.innerHTML = items.map(item => `
+      <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
+        <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
+        <div class="card-content">
+          <div class="card-title">${esc(item.title)}</div>
+          <div class="card-meta">
+            <span class="badge ${esc(item.type)}">${esc(item.type.toUpperCase())}</span>
+            <span>${esc(item.year || '')}</span>
           </div>
         </div>
-      `;
-    }).join('');
+      </div>
+    `).join('');
 
     catalogGrid.querySelectorAll('.card').forEach(card => {
       card.addEventListener('click', () => {

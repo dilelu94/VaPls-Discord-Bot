@@ -274,7 +274,10 @@ class GoLiveStream:
         self.target_url = target_url
         if not self.title or self.title == "Stream":
             self.title = title
-        self.is_live = is_live
+        if self.item_type in ("movie", "series", "anime") or self.imdb_id:
+            self.is_live = False
+        else:
+            self.is_live = is_live
 
         log.info("[STREAM] Establishing GoLive connection...")
         
@@ -958,10 +961,11 @@ async def _relay_stopstream(request: web.Request) -> web.Response:
         guild = client.get_guild(guild_id)
         if guild:
             await _restore_nickname(guild)
-            vc = _vc_for_guild(guild)
-            if vc and vc.is_connected():
+        for vc in list(client.voice_clients):
+            if getattr(getattr(vc, "guild", None), "id", None) == guild_id:
                 try:
                     await vc.disconnect(force=True)
+                    log.info("[STOPSTREAM] VoiceClient disconnected for guild=%s", guild_id)
                 except Exception as e:
                     log.warning("[STOPSTREAM] vc disconnect error: %s", e)
 
