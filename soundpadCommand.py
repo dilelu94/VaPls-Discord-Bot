@@ -76,28 +76,26 @@ def _normalize_clip_name(text: str) -> str:
 _DEFAULT_IGNORED_CATEGORIES = {"secretos", "secret", "greetings", "sorpresas"}
 
 
-def _get_ignored_categories() -> set[str]:
-    """Return lowercased folder names that are hidden from /soundpad."""
-    ignored = set(_DEFAULT_IGNORED_CATEGORIES)
+def _get_ignored_greeting_files() -> set[str]:
+    """Return normalized relative paths and basenames of audio files configured as user greetings."""
+    ignored = set()
     try:
         from users import USERS
 
         for uinfo in USERS.values():
-            name = uinfo.get("name")
-            if name and isinstance(name, str):
-                ignored.add(name.lower())
             g = uinfo.get("greeting")
             if not g:
                 continue
             items = g if isinstance(g, list) else [g]
             for item in items:
                 rel_path = item.get("path") if isinstance(item, dict) else item
-                if isinstance(rel_path, str) and rel_path:
-                    parts = rel_path.replace("\\", "/").split("/")
-                    if len(parts) > 1 and parts[0].strip():
-                        top_dir = parts[0].strip().lower()
-                        if top_dir not in {"audios"}:
-                            ignored.add(top_dir)
+                if isinstance(rel_path, str) and rel_path.strip():
+                    clean_rel = rel_path.strip().replace("\\", "/")
+                    norm_rel = os.path.normpath(clean_rel).lower()
+                    ignored.add(norm_rel)
+                    base = os.path.basename(clean_rel).lower()
+                    if base:
+                        ignored.add(base)
     except Exception:
         pass
     return ignored
@@ -112,7 +110,7 @@ def iter_clips(output_dir: str):
     """
     if not os.path.isdir(output_dir):
         return
-    ignored_cats = _get_ignored_categories()
+    ignored_greetings = _get_ignored_greeting_files()
     for category in sorted(os.listdir(output_dir)):
         cat_dir = os.path.join(output_dir, category)
         cat_lower = category.lower()
@@ -120,7 +118,7 @@ def iter_clips(output_dir: str):
             not os.path.isdir(cat_dir)
             or category.startswith(".")
             or category.startswith("_")
-            or cat_lower in ignored_cats
+            or cat_lower in _DEFAULT_IGNORED_CATEGORIES
         ):
             continue
         for root, dirs, files in os.walk(cat_dir):
@@ -129,13 +127,16 @@ def iter_clips(output_dir: str):
                 for d in dirs
                 if not d.startswith(".")
                 and not d.startswith("_")
-                and d.lower() not in ignored_cats
+                and d.lower() not in _DEFAULT_IGNORED_CATEGORIES
             ]
             for f in sorted(files):
                 _, ext = os.path.splitext(f)
                 if ext.lower() not in _AUDIO_EXTS:
                     continue
                 abs_path = os.path.join(root, f)
+                rel_to_root = os.path.relpath(abs_path, output_dir).replace("\\", "/").lower()
+                if rel_to_root in ignored_greetings or f.lower() in ignored_greetings:
+                    continue
                 stem = os.path.splitext(f)[0]
                 yield abs_path, _normalize_clip_name(stem)
 
@@ -406,7 +407,6 @@ class SoundpadView(BaseView):
         if not os.path.exists(output_dir):
             raise ValueError(f"La ruta de audios no existe: {output_dir}")
 
-        ignored_cats = _get_ignored_categories()
         self.categories = sorted(
             [
                 d
@@ -414,7 +414,7 @@ class SoundpadView(BaseView):
                 if os.path.isdir(os.path.join(output_dir, d))
                 and not d.startswith(".")
                 and not d.startswith("_")
-                and d.lower() not in ignored_cats
+                and d.lower() not in _DEFAULT_IGNORED_CATEGORIES
             ]
         )
 
@@ -476,12 +476,16 @@ class SoundpadView(BaseView):
         if not os.path.exists(target_dir):
             return []
 
+        ignored_greetings = _get_ignored_greeting_files()
         files = []
         for f in os.listdir(target_dir):
             full_path = os.path.join(target_dir, f)
             if os.path.isfile(full_path):
                 _, ext = os.path.splitext(f)
-                if ext.lower() in {".opus", ".mp3", ".wav", ".ogg", ".m4a"}:
+                if ext.lower() in _AUDIO_EXTS:
+                    rel_to_root = os.path.relpath(full_path, self.output_dir).replace("\\", "/").lower()
+                    if rel_to_root in ignored_greetings or f.lower() in ignored_greetings:
+                        continue
                     if subfolder == "/":
                         files.append(f)
                     else:

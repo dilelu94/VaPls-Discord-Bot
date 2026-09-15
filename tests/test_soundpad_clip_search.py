@@ -129,18 +129,22 @@ def test_iter_clips_walks_categories_and_subfolders(soundpad_dir):
     assert "hola_che.opus" in found
 
 
-def test_iter_clips_ignores_user_greeting_folders(tmp_path):
+def test_iter_clips_filters_greeting_files_and_keeps_non_greetings(tmp_path):
     root = tmp_path / "audio_output"
-    _touch(str(root / "Mila" / "greeting_mila.mp3"))
-    _touch(str(root / "Secretos" / "fuego.mp3"))
-    _touch(str(root / "Seba" / "money.mp3"))
-    _touch(str(root / "Memes" / "risas.mp3"))
+    # Greeting files configured in USERS
+    _touch(str(root / "Mila" / "Milapollo.mp3"))
+    _touch(str(root / "Secretos" / "fuego_intoxicados.mp3"))
+    _touch(str(root / "Seba" / "moneymoneymoney.mp3"))
+    # Non-greeting clips in the same folders
+    _touch(str(root / "Mila" / "hola_che.opus"))
+    _touch(str(root / "Seba" / "risas.mp3"))
 
     found = {os.path.basename(path) for path, _ in iter_clips(str(root))}
+    assert "hola_che.opus" in found
     assert "risas.mp3" in found
-    assert "greeting_mila.mp3" not in found
-    assert "fuego.mp3" not in found
-    assert "money.mp3" not in found
+    assert "Milapollo.mp3" not in found
+    assert "fuego_intoxicados.mp3" not in found
+    assert "moneymoneymoney.mp3" not in found
 
 
 def test_find_best_match_picks_clip_with_similar_name(soundpad_dir):
