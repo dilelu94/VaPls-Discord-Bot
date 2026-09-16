@@ -13,6 +13,7 @@ proyecto. Es la **fuente canónica** de instrucciones para asistentes de IA.
 
 - [`behavioral-testing`](.agents/skills/behavioral-testing/SKILL.md): cómo escribir
   tests en este repo. **Usala siempre que escribas o modifiques tests.**
+- [`evidence-over-claims`](.agents/skills/evidence-over-claims/SKILL.md): exige verificación empírica y pruebas para todas las declaraciones técnicas, diagnósticos de bugs y resultados de tests. **Usala siempre para respaldar cualquier cambio o afirmación.**
 
 ## ✅ Definition of Done
 
