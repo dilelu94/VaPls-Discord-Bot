@@ -2164,7 +2164,16 @@ async def _send_stream_control(guild_id: int, action: str, timestamp: float = 0.
     try:
         async with aiohttp.ClientSession() as sess:
             async with sess.post(url, json=payload, headers=headers) as resp:
-                return resp.status < 400
+                if resp.status >= 400:
+                    return False
+                if action == "status":
+                    try:
+                        data = await resp.json()
+                        if data.get("stopped", False):
+                            return False
+                    except Exception:
+                        pass
+                return True
     except Exception:
         return False
 
