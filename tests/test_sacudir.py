@@ -137,3 +137,34 @@ async def test_sacudir_cooldown_blocks_immediate_repeat():
     await bot.sacudir(ctx2, usuario=target, veces=5)
     ctx2.respond.assert_called_once()
     assert "fue sacudido hace poco" in ctx2.respond.call_args[0][0]
+
+
+async def test_sacudir_multiple_users_from_mention_string():
+    ctx = _make_sacudir_ctx(author_id=config.OWNER_ID)
+    target1 = _make_member(user_id=101)
+    target2 = _make_member(user_id=102)
+    members = {101: target1, 102: target2}
+    ctx.guild.get_member = MagicMock(side_effect=lambda uid: members.get(uid))
+
+    await bot.sacudir(ctx, usuario="<@101> <@102>", veces=2)
+
+    assert ctx.followup.send.called
+    msg = ctx.followup.send.call_args_list[0][0][0]
+    assert "<@101>" in msg and "<@102>" in msg
+    assert target1.move_to.call_count == 3  # 2 iterations + 1 back to orig channel
+    assert target2.move_to.call_count == 3
+
+
+async def test_sacudir_multiple_users_from_additional_options():
+    ctx = _make_sacudir_ctx(author_id=config.OWNER_ID)
+    target1 = _make_member(user_id=101)
+    target2 = _make_member(user_id=102)
+    members = {101: target1, 102: target2}
+    ctx.guild.get_member = MagicMock(side_effect=lambda uid: members.get(uid))
+
+    await bot.sacudir(ctx, usuario="<@101>", usuario2=target2, veces=1)
+
+    assert ctx.followup.send.called
+    assert target1.move_to.call_count == 2
+    assert target2.move_to.call_count == 2
+

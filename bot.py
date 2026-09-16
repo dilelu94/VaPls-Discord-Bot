@@ -3828,7 +3828,7 @@ async def help_cmd(ctx):
             "**/sugerencias** `idea` — mandá una sugerencia o feature.\n"
             "**/sugerencias-ver** — mirá las sugerencias más pedidas.\n"
             "**/transferir** — link para subir archivos de 10 GB (solo @Main Characters).\n"
-            "**/sacudir** `@usuario` `[veces]` — mueve a un usuario a un canal vacío.\n"
+            "**/sacudir** `@usuario(s)` `[veces]` — mueve a uno o más usuarios a un canal vacío.\n"
             "**/help** — esto."
         ),
         inline=False,
@@ -4320,23 +4320,93 @@ async def restart(
         )
 
 
+async def _resolve_sacudir_targets(ctx, raw_inputs) -> list[discord.Member]:
+    """Extract and deduplicate target members from mentions, string inputs, or Member instances."""
+    members: list[discord.Member] = []
+
+    for raw in raw_inputs:
+        if not raw:
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            sub = await _resolve_sacudir_targets(ctx, raw)
+            members.extend(sub)
+        elif isinstance(raw, str):
+            id_matches = re.findall(r"<@!?(\d+)>|\b(\d{17,20})\b", raw)
+            found_ids = []
+            for match in id_matches:
+                uid_str = match[0] or match[1]
+                if uid_str:
+                    found_ids.append(int(uid_str))
+
+            if found_ids:
+                for uid in found_ids:
+                    m = ctx.guild.get_member(uid) if ctx.guild else None
+                    if not m and ctx.guild and hasattr(ctx.guild, "fetch_member"):
+                        try:
+                            m = await ctx.guild.fetch_member(uid)
+                        except Exception:
+                            m = None
+                    if m:
+                        members.append(m)
+            else:
+                tokens = [t.strip().lstrip("@") for t in re.split(r"[\s,]+", raw) if t.strip()]
+                if ctx.guild and hasattr(ctx.guild, "members") and ctx.guild.members:
+                    for token in tokens:
+                        token_lower = token.lower()
+                        for m in ctx.guild.members:
+                            name = getattr(m, "name", "") or ""
+                            disp = getattr(m, "display_name", "") or ""
+                            if token_lower in (name.lower(), disp.lower()):
+                                members.append(m)
+                                break
+        elif hasattr(raw, "id") and not isinstance(raw, int):
+            members.append(raw)
+
+    seen = set()
+    unique = []
+    for m in members:
+        mid = getattr(m, "id", None)
+        if mid and mid not in seen:
+            seen.add(mid)
+            unique.append(m)
+    return unique
+
+
 _sacudir_cooldowns: dict[int, float] = {}
 
 @bot.slash_command(
     name="sacudir",
-    description="Mueve a un usuario entre un canal específico y uno vacío varias veces"
+    description="Mueve a uno o más usuarios entre un canal específico y uno vacío varias veces"
 )
 async def sacudir(
     ctx,
-    usuario: discord.Option(discord.Member, description="Usuario a sacudir"),
-    veces: discord.Option(int, description="Cantidad de veces", default=5, min_value=1, max_value=20)
+    usuario: discord.Option(str, description="Usuario(s) a sacudir (ej: @chalo @viny)"),
+    veces: discord.Option(int, description="Cantidad de veces", default=5, min_value=1, max_value=20),
+    usuario2: discord.Option(discord.Member, description="Segundo usuario opcional", required=False) = None,
+    usuario3: discord.Option(discord.Member, description="Tercer usuario opcional", required=False) = None,
 ):
-    """Slash command: shakes a user between channel 451581345022476294 and an empty channel."""
+    """Slash command: shakes one or more users between channel 451581345022476294 and an empty channel."""
+    targets = await _resolve_sacudir_targets(ctx, [usuario, usuario2, usuario3])
+    if not targets:
+        await ctx.respond("❌ No se encontró ningún usuario válido para sacudir.", ephemeral=True)
+        return
+
     now = time.time()
-    last_shaken = _sacudir_cooldowns.get(usuario.id, 0)
-    if now - last_shaken < 300:
-        remaining = int(300 - (now - last_shaken))
-        await ctx.respond(f"⏳ {usuario.mention} fue sacudido hace poco. Esperá {remaining} segundos.", ephemeral=True)
+    on_cooldown = []
+    for target in targets:
+        last_shaken = _sacudir_cooldowns.get(target.id, 0)
+        if now - last_shaken < 300:
+            remaining = int(300 - (now - last_shaken))
+            on_cooldown.append((target, remaining))
+
+    if on_cooldown:
+        if len(on_cooldown) == 1:
+            m, remaining = on_cooldown[0]
+            await ctx.respond(f"⏳ {m.mention} fue sacudido hace poco. Esperá {remaining} segundos.", ephemeral=True)
+        else:
+            mentions = ", ".join(m.mention for m, _ in on_cooldown)
+            max_rem = max(rem for _, rem in on_cooldown)
+            await ctx.respond(f"⏳ {mentions} fueron sacudidos hace poco. Esperá {max_rem} segundos.", ephemeral=True)
         return
 
     if veces > 5:
@@ -4346,39 +4416,45 @@ async def sacudir(
         )
         if not is_owner:
             author_member = ctx.author if hasattr(ctx.author, "top_role") else (ctx.guild.get_member(ctx.author.id) if ctx.guild else ctx.author)
-            target_member = usuario if hasattr(usuario, "top_role") else (ctx.guild.get_member(usuario.id) if ctx.guild else usuario)
-            
             author_top = getattr(author_member, "top_role", None)
-            target_top = getattr(target_member, "top_role", None)
             author_is_admin = bool(getattr(getattr(author_member, "guild_permissions", None), "administrator", False))
-            target_is_admin = bool(getattr(getattr(target_member, "guild_permissions", None), "administrator", False))
 
-            has_higher_rank = False
-            if author_is_admin and not target_is_admin:
-                has_higher_rank = True
-            elif author_top and target_top and author_top > target_top:
-                has_higher_rank = True
-            elif author_top and not target_top:
-                has_higher_rank = True
+            for target in targets:
+                target_member = target if hasattr(target, "top_role") else (ctx.guild.get_member(target.id) if ctx.guild else target)
+                target_top = getattr(target_member, "top_role", None)
+                target_is_admin = bool(getattr(getattr(target_member, "guild_permissions", None), "administrator", False))
 
-            if not has_higher_rank:
-                await ctx.respond(f"❌ Necesitás tener un rango mayor al de {usuario.mention} para sacudirlo más de 5 veces.", ephemeral=True)
-                return
+                has_higher_rank = False
+                if author_is_admin and not target_is_admin:
+                    has_higher_rank = True
+                elif author_top and target_top and author_top > target_top:
+                    has_higher_rank = True
+                elif author_top and not target_top:
+                    has_higher_rank = True
+
+                if not has_higher_rank:
+                    await ctx.respond(f"❌ Necesitás tener un rango mayor al de {target.mention} para sacudirlo más de 5 veces.", ephemeral=True)
+                    return
 
     await safe_defer(ctx)
-    _track_command(ctx, "sacudir", {"veces": veces})
-    
-    _sacudir_cooldowns[usuario.id] = now
+    _track_command(ctx, "sacudir", {"veces": veces, "targets": len(targets)})
 
-    if not usuario.voice or not usuario.voice.channel:
-        await ctx.followup.send("❌ El usuario debe estar conectado a un canal de voz.")
+    for target in targets:
+        _sacudir_cooldowns[target.id] = now
+
+    targets_in_voice = [t for t in targets if t.voice and t.voice.channel]
+
+    if not targets_in_voice:
+        if len(targets) == 1:
+            await ctx.followup.send("❌ El usuario debe estar conectado a un canal de voz.")
+        else:
+            await ctx.followup.send("❌ Ninguno de los usuarios está conectado a un canal de voz.")
         return
 
-    original_channel = usuario.voice.channel
     target_channel_id = 451581345022476294
     target_channel = ctx.guild.get_channel(target_channel_id)
-    
-    if not target_channel or not isinstance(target_channel, discord.VoiceChannel):
+
+    if not target_channel or not (isinstance(target_channel, discord.VoiceChannel) or hasattr(target_channel, "members")):
         await ctx.followup.send("❌ No se encontró el canal de destino (451581345022476294).")
         return
 
@@ -4388,29 +4464,39 @@ async def sacudir(
         if vc.id != target_channel_id and len(vc.members) == 0:
             empty_channel = vc
             break
-            
+
     if not empty_channel:
         await ctx.followup.send("❌ No hay canales de voz vacíos disponibles.")
         return
 
-    await ctx.followup.send(f"🌪️ Sacudiendo a {usuario.mention} {veces} veces...")
+    if len(targets_in_voice) == 1:
+        mentions_str = targets_in_voice[0].mention
+    else:
+        mentions_str = ", ".join(m.mention for m in targets_in_voice)
+
+    await ctx.followup.send(f"🌪️ Sacudiendo a {mentions_str} {veces} veces...")
+
+    original_channels = {m.id: m.voice.channel for m in targets_in_voice}
 
     current_target = target_channel
     other_target = empty_channel
     for _ in range(veces):
-        try:
-            await usuario.move_to(current_target)
-            await asyncio.sleep(0.5)
-            current_target, other_target = other_target, current_target
-        except Exception as e:
-            log.warning("Error sacudiendo: %s", e)
-            break
+        for m in targets_in_voice:
+            try:
+                await m.move_to(current_target)
+            except Exception as e:
+                log.warning("Error sacudiendo usuario %s: %s", getattr(m, "id", m), e)
+        await asyncio.sleep(0.5)
+        current_target, other_target = other_target, current_target
 
     # Return to original channel
-    try:
-        await usuario.move_to(original_channel)
-    except Exception:
-        pass
+    for m in targets_in_voice:
+        try:
+            orig = original_channels.get(m.id)
+            if orig:
+                await m.move_to(orig)
+        except Exception:
+            pass
 
 
 # --- Scheduled Daily Stream ---
