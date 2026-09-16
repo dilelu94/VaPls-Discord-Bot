@@ -188,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   seasonSelect.addEventListener('change', updateEpisodeOptions);
   episodeSelect.addEventListener('change', () => {
-    updateWatchedButtonState();
+    updateEpisodePreview();
     if (currentMeta) fetchStreams();
   });
 
@@ -419,6 +419,16 @@ document.addEventListener('DOMContentLoaded', () => {
     updateEpisodeOptions();
   }
 
+  function updateEpisodePreview() {
+    if (!currentMeta || !currentMeta.episodes) return;
+    const selectedSeason = parseInt(seasonSelect.value) || 1;
+    const selectedEpNum = parseInt(episodeSelect.value) || 1;
+    const ep = currentMeta.episodes.find(e => (e.season || 1) === selectedSeason && (e.episode || 1) === selectedEpNum);
+    if (ep && episodeTitlePreview) {
+      episodeTitlePreview.textContent = ep.overview || ep.title || '';
+    }
+  }
+
   function updateEpisodeOptions() {
     if (!currentMeta || !currentMeta.episodes) return;
     const selectedSeason = parseInt(seasonSelect.value) || 1;
@@ -430,15 +440,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const watched = isWatched(metaId, selectedSeason, epNum);
       const prefix = watched ? '✓ ' : '';
       return `
-        <option value="${esc(epNum)}" ${watched ? 'data-watched="true"' : ''}>${esc(prefix)}Episodio ${esc(epNum)} - ${esc(e.title)}</option>
+        <option value="${esc(epNum)}" ${watched ? 'data-watched="true"' : ''}>${esc(prefix)}Episodio ${esc(epNum)}${e.title ? ' - ' + esc(e.title) : ''}</option>
       `;
     }).join('');
 
-    if (filteredEps.length > 0) {
-      episodeTitlePreview.textContent = filteredEps[0].overview || filteredEps[0].title;
-    }
-
-    updateWatchedButtonState();
+    updateEpisodePreview();
     fetchStreams();
   }
 
