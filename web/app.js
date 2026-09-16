@@ -394,8 +394,18 @@ document.addEventListener('DOMContentLoaded', () => {
       modalGenres.textContent = (currentMeta.genres || []).join(' • ');
       modalDescription.textContent = currentMeta.description || 'Sin descripción disponible.';
 
+      const isSeriesOrAnime = currentMeta.type === 'series' || currentMeta.type === 'anime';
       if (currentMeta.episodes && currentMeta.episodes.length > 0) {
         setupEpisodePicker(currentMeta.episodes);
+        episodeSection.style.display = 'block';
+      } else if (isSeriesOrAnime) {
+        const dummyEps = Array.from({ length: 24 }, (_, i) => ({
+          season: 1,
+          episode: i + 1,
+          title: `Episodio ${i + 1}`
+        }));
+        currentMeta.episodes = dummyEps;
+        setupEpisodePicker(dummyEps);
         episodeSection.style.display = 'block';
       } else {
         episodeSection.style.display = 'none';
@@ -407,23 +417,42 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function getEpSeason(ep) {
+    if (!ep) return 1;
+    if (ep.season !== undefined && ep.season !== null && ep.season !== '') {
+      return parseInt(ep.season);
+    }
+    return 1;
+  }
+
   function setupEpisodePicker(episodes) {
     const seasonsMap = {};
     episodes.forEach(ep => {
-      const s = ep.season || 1;
+      const s = getEpSeason(ep);
       if (!seasonsMap[s]) seasonsMap[s] = [];
       seasonsMap[s].push(ep);
     });
 
-    seasonSelect.innerHTML = Object.keys(seasonsMap).map(s => `<option value="${esc(s)}">Temporada ${esc(s)}</option>`).join('');
+    const sortedSeasons = Object.keys(seasonsMap).map(Number).sort((a, b) => a - b);
+    seasonSelect.innerHTML = sortedSeasons.map(s => {
+      const label = s === 0 ? 'Especiales / OVs (Temporada 0)' : `Temporada ${s}`;
+      return `<option value="${s}">${esc(label)}</option>`;
+    }).join('');
+
+    if (seasonsMap[1]) {
+      seasonSelect.value = '1';
+    } else if (sortedSeasons.length > 0) {
+      seasonSelect.value = String(sortedSeasons[0]);
+    }
+
     updateEpisodeOptions();
   }
 
   function updateEpisodePreview() {
     if (!currentMeta || !currentMeta.episodes) return;
-    const selectedSeason = parseInt(seasonSelect.value) || 1;
+    const selectedSeason = (seasonSelect.value !== '' && seasonSelect.value !== null) ? parseInt(seasonSelect.value) : 1;
     const selectedEpNum = parseInt(episodeSelect.value) || 1;
-    const ep = currentMeta.episodes.find(e => (e.season || 1) === selectedSeason && (e.episode || 1) === selectedEpNum);
+    const ep = currentMeta.episodes.find(e => getEpSeason(e) === selectedSeason && (e.episode || 1) === selectedEpNum);
     if (ep && episodeTitlePreview) {
       episodeTitlePreview.textContent = ep.overview || ep.title || '';
     }
@@ -431,8 +460,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function updateEpisodeOptions() {
     if (!currentMeta || !currentMeta.episodes) return;
-    const selectedSeason = parseInt(seasonSelect.value) || 1;
-    const filteredEps = currentMeta.episodes.filter(e => (e.season || 1) === selectedSeason);
+    const selectedSeason = (seasonSelect.value !== '' && seasonSelect.value !== null) ? parseInt(seasonSelect.value) : 1;
+    const filteredEps = currentMeta.episodes.filter(e => getEpSeason(e) === selectedSeason);
     const metaId = currentMeta.id || currentMeta.imdb_id;
 
     episodeSelect.innerHTML = filteredEps.map(e => {
@@ -455,7 +484,7 @@ document.addEventListener('DOMContentLoaded', () => {
     startStreamBtn.disabled = true;
     selectedStreamUrl = null;
 
-    const season = seasonSelect.value ? parseInt(seasonSelect.value) : 1;
+    const season = (seasonSelect.value !== '' && seasonSelect.value !== null) ? parseInt(seasonSelect.value) : 1;
     const episode = episodeSelect.value ? parseInt(episodeSelect.value) : 1;
 
     let streams = [];
