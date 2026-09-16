@@ -642,7 +642,9 @@ def _is_quack_effect(event) -> bool:
 def _patch_voice_channel_effect_send():
     if hasattr(discord.state.ConnectionState, "_quack_patched"):
         return
-    old_parse = discord.state.ConnectionState.parse_voice_channel_effect_send
+    old_parse = getattr(discord.state.ConnectionState, "parse_voice_channel_effect_send", None)
+    if not old_parse:
+        return
 
     def safe_parse_voice_channel_effect_send(self, data):
         try:
