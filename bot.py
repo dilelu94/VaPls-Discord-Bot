@@ -588,6 +588,7 @@ _STREAM_DAILY_MAX = 5  # max stream starts per day that earn points
 
 # Per-guild stream source tracking for quack→pause on YouTube VODs.
 _active_sources: dict[int, dict] = {}
+_active_stream_views: dict[int, StreamControlView] = {}
 _paused_streams: set[int] = set()
 _last_quack_time: dict[int, float] = {}
 _QUACK_COOLDOWN = 2.0
@@ -2086,6 +2087,8 @@ async def start_stream_with_track_select(
                 _paused_streams.discard(guild_id)
             user_mention = f"<@{user_id}> " if user_id else ""
             control_view = StreamControlView(guild_id) if success else None
+            if control_view:
+                _active_stream_views[guild_id] = control_view
             full_msg = f"{user_mention}{status_msg}"
             if redirect_ch:
                 msg = await redirect_ch.send(content=full_msg, view=control_view)
@@ -2136,6 +2139,8 @@ async def start_stream_with_track_select(
         _paused_streams.discard(guild_id)
     user_mention = f"<@{user_id}> " if user_id else ""
     control_view = StreamControlView(guild_id) if success else None
+    if control_view:
+        _active_stream_views[guild_id] = control_view
     full_msg = f"{user_mention}{status_msg}"
     if redirect_ch:
         msg = await redirect_ch.send(content=full_msg, view=control_view)
@@ -2288,6 +2293,7 @@ class StreamControlView(BaseView):
                         except Exception:
                             pass
                     self.stop()
+                    _active_stream_views.pop(self.guild_id, None)
                     break
         except asyncio.CancelledError:
             pass
@@ -2316,6 +2322,11 @@ class StreamControlView(BaseView):
     @discord.ui.button(label="⏹ Detener", style=discord.ButtonStyle.danger, custom_id="stream_stop_btn")
     async def stop_stream_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
         await interaction.response.send_message("⏹ Deteniendo el stream...", ephemeral=True, delete_after=3)
+        try:
+            if interaction.message:
+                await interaction.message.edit(view=None)
+        except Exception:
+            pass
         ctx = type('Obj', (object,), {
             'guild': interaction.guild,
             'guild_id': self.guild_id,
@@ -2327,13 +2338,9 @@ class StreamControlView(BaseView):
         await stopstream(ctx)
         
         self.stop()
-        if self._checker_task:
+        _active_stream_views.pop(self.guild_id, None)
+        if self._checker_task and not self._checker_task.done():
             self._checker_task.cancel()
-            
-        try:
-            await interaction.edit_original_response(view=None)
-        except Exception:
-            pass
 
 
 class TorrentSearchView(BaseView):
@@ -3101,6 +3108,17 @@ async def stream(
 
 async def stop_stream_for_guild(guild_id: int) -> tuple[bool, str]:
     """Helper to stop active GoLive stream for a guild via HTTP relay."""
+    view = _active_stream_views.pop(guild_id, None)
+    if view:
+        view.stop()
+        if view._checker_task and not view._checker_task.done():
+            view._checker_task.cancel()
+        if view.message:
+            try:
+                await view.message.edit(view=None)
+            except Exception:
+                pass
+
     if not (config.GOLIVE_RELAY_URL and config.GOLIVE_RELAY_SECRET):
         return False, "❌ El relay GoLive no está configurado."
 
