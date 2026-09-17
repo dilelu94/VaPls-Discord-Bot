@@ -1249,7 +1249,14 @@ class H264VideoPlayer(threading.Thread):
 
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
-            vf_str = f"{vf_str},subtitles=f='{esc_sub}':charenc=UTF-8"
+            sub_opts = [
+                f"f='{esc_sub}'",
+                "charenc=UTF-8",
+                "original_size=1280x720",
+                "fontsdir='/usr/share/fonts/truetype/dejavu'",
+                "force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0'",
+            ]
+            vf_str = f"{vf_str},subtitles={':'.join(sub_opts)}"
 
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"
@@ -1272,6 +1279,7 @@ class H264VideoPlayer(threading.Thread):
         else:
             video_out_args = [
                 "-map", "0:v:0",
+                "-filter_threads", "2",
                 "-vf", vf_str,
                 "-c:v", enc.name,
                 *enc.post_codec,

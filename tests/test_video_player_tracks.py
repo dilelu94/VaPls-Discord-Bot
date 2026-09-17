@@ -58,6 +58,9 @@ def test_ffmpeg_cmd_subtitle_burn_in_filter():
     cmd_nosub = p_nosub._ffmpeg_cmd()
     vf_idx = cmd_nosub.index("-vf")
     assert "subtitles=" not in cmd_nosub[vf_idx + 1]
+    assert "-filter_threads" in cmd_nosub
+    ft_idx = cmd_nosub.index("-filter_threads")
+    assert cmd_nosub[ft_idx + 1] == "2"
 
     # Subtitle track 1 selected
     p_sub = H264VideoPlayer("http://example.com/video.mkv", vc, subtitle_track=1)
@@ -66,6 +69,8 @@ def test_ffmpeg_cmd_subtitle_burn_in_filter():
     vf_idx = cmd_sub.index("-vf")
     vf_str = cmd_sub[vf_idx + 1]
     assert "subtitles=f=" in vf_str
+    assert "original_size=1280x720" in vf_str
+    assert "fontsdir=" in vf_str
 
     # Explicit subtitle_file parameter
     with patch("os.path.exists", return_value=True), patch("os.path.getsize", return_value=100):
@@ -75,6 +80,7 @@ def test_ffmpeg_cmd_subtitle_burn_in_filter():
         vf_idx = cmd_subfile.index("-vf")
         vf_str = cmd_subfile[vf_idx + 1]
         assert "subtitles=f='/tmp/custom_sub.srt'" in vf_str
+        assert "original_size=1280x720" in vf_str
 
 
 def test_ffmpeg_cmd_start_time_multiple_inputs():
