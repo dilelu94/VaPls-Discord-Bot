@@ -128,6 +128,7 @@ async def _yt_extract_url(url: str) -> tuple[str, str, bool] | None:
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            "socket_timeout": 15,
             "remote_components": ["ejs:github"],
             "format": "bestvideo[vcodec!*=av01]+bestaudio/best[vcodec!*=av01]",
         }

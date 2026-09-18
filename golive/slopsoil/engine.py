@@ -161,7 +161,8 @@ async def start_stream(
                 before_opts = (
                     "-probesize 5000000 -analyzeduration 5000000"
                     " -fflags +nobuffer"
-                    " -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5"
+                    " -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 10"
+                    " -reconnect_on_network_error 1 -reconnect_at_eof 1 -reconnect_on_http_error 4xx,5xx"
                 )
                 raw = discord.FFmpegPCMAudio(
                     url,

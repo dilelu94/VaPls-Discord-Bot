@@ -490,7 +490,14 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 60.0) -> str
     import tempfile
     import uuid
     reconnect_args = (
-        ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        [
+            "-reconnect", "1",
+            "-reconnect_streamed", "1",
+            "-reconnect_delay_max", "10",
+            "-reconnect_on_network_error", "1",
+            "-reconnect_at_eof", "1",
+            "-reconnect_on_http_error", "4xx,5xx",
+        ]
         if url.startswith(("http://", "https://"))
         else []
     )
@@ -1276,7 +1283,14 @@ class H264VideoPlayer(threading.Thread):
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"
         reconnect_args = (
-            ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+            [
+                "-reconnect", "1",
+                "-reconnect_streamed", "1",
+                "-reconnect_delay_max", "10",
+                "-reconnect_on_network_error", "1",
+                "-reconnect_at_eof", "1",
+                "-reconnect_on_http_error", "4xx,5xx",
+            ]
             if is_url
             else []
         )

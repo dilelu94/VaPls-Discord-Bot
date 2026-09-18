@@ -259,7 +259,10 @@ class GoLiveStream:
 
         log.info("[STREAM] Checking stream URL via yt-dlp for %s", url)
         try:
-            res = await _yt_extract_url(url)
+            res = await asyncio.wait_for(_yt_extract_url(url), timeout=20.0)
+        except asyncio.TimeoutError:
+            log.warning("[STREAM] yt-dlp extraction timed out (20s) for %s", url)
+            return target_url, title, False
         except Exception as e:
             err_str = str(e)
             if any(s in err_str for s in _FALLBACK_SIGNALS):
@@ -654,38 +657,7 @@ def _is_quack_effect(event) -> bool:
     return False
 
 
-def _patch_voice_channel_effect_send():
-    if hasattr(discord.state.ConnectionState, "_quack_patched"):
-        return
-    old_parse = getattr(discord.state.ConnectionState, "parse_voice_channel_effect_send", None)
-    if not old_parse:
-        return
 
-    def safe_parse_voice_channel_effect_send(self, data):
-        try:
-            guild_id_raw = data.get("guild_id")
-            if guild_id_raw:
-                guild_id = int(guild_id_raw)
-                sound_id = str(data.get("sound_id", ""))
-                sound_name = str(data.get("sound_name", "")).lower()
-                emoji = data.get("emoji") or {}
-                emoji_name = str(emoji.get("name", "")).lower() if isinstance(emoji, dict) else ""
-                if sound_id == "1" or sound_name == "quack" or emoji_name in ("🦆", "quack"):
-                    log.info("[QUACK] Intercepted quack payload from gateway for guild=%s", guild_id)
-                    _handle_quack_trigger(guild_id)
-        except Exception as e:
-            log.warning("[QUACK] Error in quack payload inspection: %s", e)
-
-        try:
-            old_parse(self, data)
-        except Exception as e:
-            log.debug("[QUACK] Swallowed VoiceChannelEffectSendEvent init error: %s", e)
-
-    discord.state.ConnectionState.parse_voice_channel_effect_send = safe_parse_voice_channel_effect_send
-    discord.state.ConnectionState._quack_patched = True
-
-
-_patch_voice_channel_effect_send()
 
 
 
