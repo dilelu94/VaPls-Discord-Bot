@@ -1529,6 +1529,58 @@ async def indio(
             log.exception("indio: source-channel ack failed")
     await indioLogic(ctx, charla, False)
 
+
+@bot.slash_command(
+    name="imagen",
+    description="Genera o transforma una imagen con Pollinations.ai (Gratis)",
+)
+async def imagenCommand(
+    ctx,
+    prompt: discord.Option(
+        str, description="Descripción de la imagen o cambio que querés realizar"
+    ),
+    imagen: discord.Option(
+        discord.Attachment,
+        description="Opcional: foto/imagen a editar o transformar (Image-to-Image)",
+        required=False,
+        default=None,
+    ) = None,
+    imagen_url: discord.Option(
+        str,
+        description="Opcional: URL de una imagen base para editar",
+        required=False,
+        default=None,
+    ) = None,
+    modelo: discord.Option(
+        str,
+        description="Modelo de IA a utilizar ('flux' o 'turbo')",
+        choices=["flux", "turbo"],
+        required=False,
+        default="flux",
+    ) = "flux",
+):
+    """Slash command: generate or edit images via Pollinations.ai."""
+    from pollinationsImage import imagenLogic
+
+    _track_command(
+        ctx,
+        "imagen",
+        {
+            "prompt_length": len(prompt or ""),
+            "has_attachment": bool(imagen),
+            "has_url": bool(imagen_url),
+            "model": modelo,
+        },
+    )
+    await imagenLogic(
+        ctx,
+        prompt=prompt,
+        image_attachment=imagen,
+        image_url=imagen_url,
+        modelo=modelo,
+    )
+
+
 # @bot.slash_command(
 #     name="banana",
 #     description="Genera una imagen con Gemini (gratis, sin API key, usando Playwright)",
