@@ -55,7 +55,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 1
             },
             {
-                "path": "Canciones/Mila/04 - He Follado con Cocodrilos.mp3",
+                "path": "Secretos/04 - He Follado con Cocodrilos.mp3",
                 "weight": 1
             }
         ],

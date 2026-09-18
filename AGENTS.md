@@ -152,6 +152,10 @@ El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 `/play` descarga con yt-dlp, reproduce con FFmpeg y mantiene cola/estado por
 guild con pre-descarga en segundo plano.
 
+### 4) Saludos y Audios Secretos (`Secretos/`)
+
+Todos los audios raros o secretos configurados como saludos en `users.json` / `users.py` deben residir en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`). La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), la cual mantiene una copia tanto en `Secretos/` (`audio_output/Secretos/04 - He Follado con Cocodrilos.mp3`) como en `Canciones/Mila/` (`audio_output/Canciones/Mila/04 - He Follado con Cocodrilos.mp3`).
+
 ## 📡 Integración con el bot de Telegram
 
 El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por header `X-API-Secret`) que un bot de Telegram externo usa como puente. Endpoints relevantes:

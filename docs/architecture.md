@@ -39,7 +39,7 @@ VaPls runs as two cooperating processes:
 - **apiServer.py**: HTTP API for status, members, queue, and audio playback.
 - **analytics.py**: PostHog wrapper; no-ops if disabled.
 - **greeting.py**: Greeting trigger + throttling. Uses `users.py` and config.
-- **users.py**: Per-user greeting audio mapping.
+- **users.py**: Per-user greeting audio mapping. Secret greetings map to `Secretos/` (e.g. `Secretos/04 - He Follado con Cocodrilos.mp3`), with Mila's song having a copy in both `Secretos/` and `Canciones/Mila/`.
 - **config.py / userbot/config.py**: Environment-driven configuration.
 - **baseView.py**: `BaseView` base class for interactive Discord UI views (`discord.ui.View`). Automatically strips buttons/components (`view=None`) on timeout.
 - **tests/testSoundpad.py**: Soundpad UI and pagination tests.

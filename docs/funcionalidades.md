@@ -184,10 +184,10 @@ Sistema colaborativo: como el tier gratuito tiene cupo limitado, los usuarios
 
 Cuando el bot entra a un canal de voz reproduce un audio de saludo:
 
-- Audio personalizado por usuario (definido en `users.py`) o uno por defecto
-  (`Fish Carrot.m4a`).
-- Throttle de 15 s por canal, normalización de volumen, y espera a que el cliente
-  UDP esté listo antes de reproducir.
+- Audio personalizado por usuario (definido en `users.py` / `data/users.json`) o respuesta TTS con el nombre del usuario si no hay audio base disponible.
+- Soporta audios ponderados (weighted list) y sistema de lástima (*pity*) para audios raros.
+- **Convención de Audios Secretos / Raros (`Secretos/`)**: Todos los audios secretos o de probabilidad baja configurados como saludo (ej. `Secretos/fuego_intoxicados.mp3`, `Secretos/04 - He Follado con Cocodrilos.mp3`) deben guardarse en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`). La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), de la cual existe una copia tanto en `audio_output/Secretos/` como en `audio_output/Canciones/Mila/`.
+- Throttle de 15 s por canal, normalización de volumen, y espera a que el cliente UDP esté listo antes de reproducir.
 
 ## 7. Watchdog de inactividad (`idleWatchdog.py`)
 
