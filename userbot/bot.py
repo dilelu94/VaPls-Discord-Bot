@@ -4545,7 +4545,7 @@ async def _relay_speak(request: web.Request) -> web.Response:
         except Exception:
             pass
 
-        source = discord.FFmpegOpusAudio(wav_path, options=greeting.FFMPEG_NORMALIZE_OPTS)
+        source = discord.FFmpegOpusAudio(wav_path)
         if vc.is_playing():
             vc.stop()
         vc.play(source, after=_after)

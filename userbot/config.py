@@ -212,6 +212,8 @@ GREETING_TTS_DIR = os.getenv("GREETING_TTS_DIR", "data/greeting_tts")
 GREETING_TTS_META_PATH = os.getenv("GREETING_TTS_META_PATH", "data/greeting_tts_meta.json")
 # Volumen por defecto para la reproducción de greetings (0.8 = 80%).
 GREETING_VOLUME = float(os.getenv("GREETING_VOLUME", "0.8"))
+# Volumen por defecto para la síntesis TTS del Indio (0.7 = 70%).
+TTS_VOLUME = float(os.getenv("TTS_VOLUME", "0.7"))
 
 
 # --- Wake sound (confirmation cue on wake-word detection) ------------------

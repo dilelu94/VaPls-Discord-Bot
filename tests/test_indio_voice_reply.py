@@ -276,6 +276,17 @@ async def test_relay_speak_forces_fallback_channel_when_force_is_true(monkeypatc
         assert joined[0].id == 999
 
 
+def test_indio_tts_volume_configuration():
+    """Ensure TTS audio filter uses 0.7 volume after dynamic normalization."""
+    assert "volume=0.7" in tts.FFMPEG_FILTER
+    # Ensure volume=0.7 comes after dynaudnorm so dynamic normalization doesn't override volume
+    dyn_idx = tts.FFMPEG_FILTER.find("dynaudnorm")
+    vol_idx = tts.FFMPEG_FILTER.find("volume=0.7")
+    assert dyn_idx != -1
+    assert vol_idx != -1
+    assert vol_idx > dyn_idx
+
+
 
 
 
