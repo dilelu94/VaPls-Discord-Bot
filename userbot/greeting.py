@@ -296,6 +296,33 @@ def _users_map() -> dict:
     return USERS or {}
 
 
+def _locate_audio_file(rel: Optional[str]) -> Optional[str]:
+    """Find absolute path for a relative audio path if it exists on disk, else None."""
+    if not rel or not isinstance(rel, str) or not rel.strip():
+        return None
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    custom_audio_dir = getattr(config, "CUSTOM_AUDIO_PATH", "/home/ubuntu/vapls-discord-bot/audio_output")
+    candidates = [
+        os.path.join(custom_audio_dir, rel),
+        os.path.join(repo_root, "audio_output", rel),
+        os.path.join(repo_root, rel),
+    ]
+    if rel.startswith("Audios/") or rel.startswith("Audios\\"):
+        candidates.append(os.path.join(custom_audio_dir, rel[7:]))
+        candidates.append(os.path.join(repo_root, "audio_output", rel[7:]))
+
+    basename = os.path.basename(rel)
+    if basename and basename != rel:
+        candidates.append(os.path.join(custom_audio_dir, basename))
+        candidates.append(os.path.join(repo_root, "audio_output", basename))
+        candidates.append(os.path.join(repo_root, "audio_output", "Audios", basename))
+
+    for cand in candidates:
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def resolve_greeting_path(
     user_id: int,
     *,
@@ -325,9 +352,16 @@ def resolve_greeting_path(
     if not rel:
         return None
     if isinstance(rel, list) and rel:
+        valid_items = []
+        for item in rel:
+            p = item.get("path") if isinstance(item, dict) else item
+            if p is None or _locate_audio_file(p) is not None:
+                valid_items.append(item)
+        items_to_use = valid_items if valid_items else rel
+
         _ensure_pity_loaded()
         paths, weights, rare_paths = calculate_effective_weights(
-            rel, user_id, member_count=member_count
+            items_to_use, user_id, member_count=member_count
         )
         if not paths:
             return None
@@ -344,27 +378,12 @@ def resolve_greeting_path(
     if not isinstance(rel, str) or not rel.strip():
         return None
 
+    found = _locate_audio_file(rel)
+    if found:
+        return found
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     custom_audio_dir = getattr(config, "CUSTOM_AUDIO_PATH", "/home/ubuntu/vapls-discord-bot/audio_output")
-    candidates = [
-        os.path.join(custom_audio_dir, rel),
-        os.path.join(repo_root, "audio_output", rel),
-        os.path.join(repo_root, rel),
-    ]
-    if rel.startswith("Audios/") or rel.startswith("Audios\\"):
-        candidates.append(os.path.join(custom_audio_dir, rel[7:]))
-        candidates.append(os.path.join(repo_root, "audio_output", rel[7:]))
-
-    basename = os.path.basename(rel)
-    if basename and basename != rel:
-        candidates.append(os.path.join(custom_audio_dir, basename))
-        candidates.append(os.path.join(repo_root, "audio_output", basename))
-        candidates.append(os.path.join(repo_root, "audio_output", "Audios", basename))
-
-    for cand in candidates:
-        if os.path.exists(cand):
-            return cand
-    return candidates[0]
+    return os.path.join(custom_audio_dir, rel)
 
 
 async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:

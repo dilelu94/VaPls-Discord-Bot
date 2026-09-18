@@ -687,3 +687,27 @@ def test_greeting_volume_option(monkeypatch):
 
     monkeypatch.setattr(ubcfg, "GREETING_VOLUME", 0.5)
     assert "volume=0.5" in greeting.get_ffmpeg_greeting_opts()
+
+
+def test_missing_audio_in_weighted_list_filtered_out(fake_users, _audio_dir):
+    """When a user's greeting list contains a non-existent file alongside an existing file,
+    the missing file is filtered out so it never causes fallback to TTS."""
+    existing_file = _audio_dir / "Mila" / "Milapollo.mp3"
+    existing_file.parent.mkdir(parents=True, exist_ok=True)
+    existing_file.write_bytes(b"fake-mp3")
+
+    fake_users({
+        285116759525031937: {
+            "name": "Mila",
+            "greeting": [
+                {"path": "Mila/Milapollo.mp3", "weight": 1},
+                {"path": "Mila/04 - He Follado con Cocodrilos.mp3", "weight": 99},
+            ],
+        }
+    })
+
+    # Even though non-existent file has 99 weight, resolve_greeting_path filters it out
+    resolved = greeting.resolve_greeting_path(285116759525031937)
+    assert resolved is not None
+    assert resolved.endswith("Mila/Milapollo.mp3")
+
