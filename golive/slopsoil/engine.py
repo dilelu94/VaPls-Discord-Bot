@@ -329,14 +329,16 @@ async def start_live_stream(
                 except Exception:
                     pass
             try:
-                import golive.bot as golive_bot
-                stream = golive_bot._active_streams.pop(guild.id, None)
-                if stream is not None:
-                    await stream.stop(disconnect_voice=True)
-                else:
-                    guild = bot.get_guild(guild.id)
-                    if guild:
-                        await golive_bot._restore_nickname(guild)
+                import sys
+                golive_bot = sys.modules.get("golive.bot") or sys.modules.get("__main__")
+                if golive_bot is not None and hasattr(golive_bot, "_active_streams"):
+                    stream = golive_bot._active_streams.pop(guild.id, None)
+                    if stream is not None:
+                        await stream.stop(disconnect_voice=True)
+                    else:
+                        guild = bot.get_guild(guild.id)
+                        if guild and hasattr(golive_bot, "_restore_nickname"):
+                            await golive_bot._restore_nickname(guild)
             except Exception as e:
                 log.warning("go-live stream nickname restore error: %s", e)
 

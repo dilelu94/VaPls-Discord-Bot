@@ -857,17 +857,23 @@ async def _relay_stream(request: web.Request) -> web.Response:
 
     existing = _active_streams.get(guild_id)
     if existing and not getattr(existing, "_stopped", True):
-        if hasattr(existing, "queue"):
-            existing.queue.append(url)
-            existing.queue_titles.append(stream_title)
-            log.info("[STREAM] Queued video for guild=%s: %s (pos %d)", guild_id, url, len(existing.queue))
-            if len(existing.queue) == 1 and hasattr(existing, "_prefetch_next"):
-                asyncio.create_task(existing._prefetch_next())
-            return web.json_response({
-                "queued": True,
-                "position": len(existing.queue),
-                "guild_id": guild_id
-            })
+        vp = getattr(existing, "video_player", None)
+        if vp and not vp.is_alive() and not existing.queue:
+            log.warning("[STREAM] Found orphaned dead stream for guild=%s, cleaning up before starting new stream", guild_id)
+            _active_streams.pop(guild_id, None)
+            existing = None
+        else:
+            if hasattr(existing, "queue"):
+                existing.queue.append(url)
+                existing.queue_titles.append(stream_title)
+                log.info("[STREAM] Queued video for guild=%s: %s (pos %d)", guild_id, url, len(existing.queue))
+                if len(existing.queue) == 1 and hasattr(existing, "_prefetch_next"):
+                    asyncio.create_task(existing._prefetch_next())
+                return web.json_response({
+                    "queued": True,
+                    "position": len(existing.queue),
+                    "guild_id": guild_id
+                })
 
     guild = client.get_guild(guild_id)
     if guild is None:
