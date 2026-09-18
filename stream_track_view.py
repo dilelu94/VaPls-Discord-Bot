@@ -40,6 +40,8 @@ class AudioTrackSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if self.view.bound_interaction is None:
+            self.view.bound_interaction = interaction
         self.view.selected_audio_track = int(self.values[0])
         # Mark selected default option
         for opt in self.options:
@@ -83,6 +85,8 @@ class SubtitleTrackSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
+        if self.view.bound_interaction is None:
+            self.view.bound_interaction = interaction
         sub_idx = int(self.values[0])
         self.view.selected_subtitle_track = sub_idx
         for opt in self.options:

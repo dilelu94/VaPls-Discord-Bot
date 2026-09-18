@@ -112,9 +112,22 @@ async def safe_respond(ctx, message=None, ephemeral: bool = False, view=None, em
     """Send a response or follow-up safely."""
     try:
         if hasattr(ctx, "response") and ctx.response.is_done():
-            return await ctx.followup.send(content=message, embed=embed, ephemeral=ephemeral, view=view)
+            res = await ctx.followup.send(
+                content=message, embed=embed, ephemeral=ephemeral, view=view, wait=True if view else False
+            )
         else:
-            return await ctx.respond(content=message, embed=embed, ephemeral=ephemeral, view=view)
+            res = await ctx.respond(content=message, embed=embed, ephemeral=ephemeral, view=view)
+
+        if view is not None and isinstance(view, BaseView):
+            if hasattr(res, "edit") and not isinstance(res, discord.Interaction):
+                view.message = res
+            elif isinstance(res, discord.Interaction):
+                view.bound_interaction = res
+            elif hasattr(ctx, "interaction") and ctx.interaction:
+                view.bound_interaction = ctx.interaction
+            elif isinstance(ctx, discord.Interaction):
+                view.bound_interaction = ctx
+        return res
     except Exception:
         pass
 
@@ -2117,6 +2130,10 @@ async def start_stream_with_track_select(
             color=0x3498DB,
         )
         view = StreamTrackSelectView(tracks_info, _on_start_selected)
+        if hasattr(ctx_or_interaction, "interaction") and ctx_or_interaction.interaction:
+            view.bound_interaction = ctx_or_interaction.interaction
+        elif isinstance(ctx_or_interaction, discord.Interaction):
+            view.bound_interaction = ctx_or_interaction
         try:
             if hasattr(ctx_or_interaction, "interaction") and ctx_or_interaction.interaction:
                 await ctx_or_interaction.interaction.edit_original_response(content=None, embed=embed, view=view)

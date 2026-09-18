@@ -84,6 +84,45 @@ async def test_soundpad_view_unregisters_and_clears_on_timeout(tmp_path, monkeyp
     mock_msg.edit.assert_called_once_with(view=None)
 
 
+@pytest.mark.asyncio
+async def test_base_view_on_timeout_handles_interaction_assigned_to_message():
+    """Pin promise: BaseView.on_timeout safely falls back to editing interaction when message is set to an Interaction object."""
+    view = BaseView(timeout=10)
+    btn = discord.ui.Button(label="Test Button", custom_id="btn_test")
+    view.add_item(btn)
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response.is_done.return_value = True
+    mock_interaction.edit_original_response = AsyncMock()
+
+    # Assign Interaction directly to view.message (simulating py-cord ctx.respond return type)
+    view.message = mock_interaction
+
+    await view.on_timeout()
+
+    assert len(view.children) == 0
+    mock_interaction.edit_original_response.assert_called_once_with(view=None)
+
+
+@pytest.mark.asyncio
+async def test_safe_respond_binds_base_view_reference():
+    """Pin promise: safe_respond automatically captures view.message or view.bound_interaction."""
+    view = BaseView(timeout=10)
+    mock_ctx = MagicMock()
+    mock_ctx.response.is_done.return_value = True
+
+    mock_msg = AsyncMock(spec=discord.Message)
+    mock_ctx.followup.send = AsyncMock(return_value=mock_msg)
+
+    res = await bot.safe_respond(mock_ctx, message="test", view=view)
+
+    assert res == mock_msg
+    assert view.message == mock_msg
+    mock_ctx.followup.send.assert_called_once_with(
+        content="test", embed=None, ephemeral=False, view=view, wait=True
+    )
+
+
 def test_all_discord_ui_views_inherit_from_base_view():
     """Enforcement promise: Every discord.ui.View subclass in command modules inherits from BaseView."""
     modules = [bot, playCommand, soundpadCommand, stream_track_view]
@@ -108,4 +147,5 @@ def test_all_discord_ui_views_inherit_from_base_view():
             failing.append(f"{mod_name}.{cls.__name__}")
 
     assert not failing, f"The following View classes do not inherit from BaseView: {failing}"
+
 

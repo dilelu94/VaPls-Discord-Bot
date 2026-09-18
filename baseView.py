@@ -48,19 +48,35 @@ class BaseView(discord.ui.View):
 
         self.clear_items()
 
-        if self.message is not None:
+        target_msg = self.message
+        target_interaction = self.bound_interaction
+
+        if isinstance(target_msg, discord.Interaction):
+            if target_interaction is None:
+                target_interaction = target_msg
+            target_msg = None
+
+        edited = False
+        if target_msg is not None and hasattr(target_msg, "edit"):
             try:
-                await self.message.edit(view=None)
-            except Exception:
-                pass
-        elif self.bound_interaction is not None:
+                await target_msg.edit(view=None)
+                edited = True
+            except Exception as e:
+                logger.warning("Failed to edit message on_timeout in %s: %s", self.__class__.__name__, e)
+
+        if not edited and target_interaction is not None:
             try:
-                if self.bound_interaction.response.is_done():
-                    await self.bound_interaction.edit_original_response(view=None)
+                if target_interaction.response.is_done():
+                    await target_interaction.edit_original_response(view=None)
+                    edited = True
                 else:
-                    await self.bound_interaction.response.edit_message(view=None)
-            except Exception:
-                pass
+                    await target_interaction.response.edit_message(view=None)
+                    edited = True
+            except Exception as e:
+                logger.warning("Failed to edit interaction on_timeout in %s: %s", self.__class__.__name__, e)
+
+        if not edited:
+            logger.debug("on_timeout in %s ran without a bound message or interaction reference", self.__class__.__name__)
 
         self.stop()
 
