@@ -151,3 +151,44 @@ async def test_imagen_logic_failure_response(ctx_factory, monkeypatch):
     assert ctx.followup.send.called or ctx.sent_messages
     call_str = str(ctx.followup.send.call_args) if ctx.followup.send.called else "\n".join(ctx.sent_messages)
     assert "No pude generar" in call_str or "Probá de nuevo" in call_str
+
+
+def test_extract_image_url_from_message_attachments():
+    att = types.SimpleNamespace(url="https://cdn.discordapp.com/test.png", content_type="image/png", filename="test.png")
+    msg = types.SimpleNamespace(attachments=[att], embeds=[])
+    url = pollinationsImage.extract_image_url_from_message(msg)
+    assert url == "https://cdn.discordapp.com/test.png"
+
+
+def test_extract_image_url_from_message_embeds():
+    emb = types.SimpleNamespace(image=types.SimpleNamespace(url="https://example.com/embed.jpg"), thumbnail=None)
+    msg = types.SimpleNamespace(attachments=[], embeds=[emb])
+    url = pollinationsImage.extract_image_url_from_message(msg)
+    assert url == "https://example.com/embed.jpg"
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_image_url_reply_reference(ctx_factory):
+    ctx = ctx_factory()
+    ref_att = types.SimpleNamespace(url="https://cdn.discordapp.com/reply_photo.jpg", content_type="image/jpeg", filename="reply_photo.jpg")
+    ref_msg = types.SimpleNamespace(attachments=[ref_att], embeds=[])
+    ctx.message = types.SimpleNamespace(referenced_message=ref_msg)
+
+    url = await pollinationsImage.resolve_target_image_url(ctx)
+    assert url == "https://cdn.discordapp.com/reply_photo.jpg"
+
+
+@pytest.mark.asyncio
+async def test_resolve_target_image_url_channel_history_fallback(ctx_factory):
+    ctx = ctx_factory()
+    hist_att = types.SimpleNamespace(url="https://cdn.discordapp.com/hist_photo.jpg", content_type="image/jpeg", filename="hist_photo.jpg")
+    hist_msg = types.SimpleNamespace(attachments=[hist_att], embeds=[])
+
+    async def _async_gen():
+        yield hist_msg
+
+    ctx.channel.history = MagicMock(return_value=_async_gen())
+
+    url = await pollinationsImage.resolve_target_image_url(ctx)
+    assert url == "https://cdn.discordapp.com/hist_photo.jpg"
+

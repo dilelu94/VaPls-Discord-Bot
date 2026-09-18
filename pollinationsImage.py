@@ -79,6 +79,92 @@ async def generate_or_edit_image(
         return None
 
 
+def extract_image_url_from_message(msg) -> Optional[str]:
+    """Extract an image URL from a discord.Message's attachments or embeds."""
+    if not msg:
+        return None
+
+    attachments = getattr(msg, "attachments", []) or []
+    for att in attachments:
+        url = getattr(att, "url", "")
+        content_type = (getattr(att, "content_type", "") or "").lower()
+        filename = (getattr(att, "filename", "") or "").lower()
+        if "image" in content_type or filename.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif")):
+            return url
+
+    embeds = getattr(msg, "embeds", []) or []
+    for emb in embeds:
+        img = getattr(emb, "image", None)
+        if img and getattr(img, "url", None):
+            return img.url
+        thumb = getattr(emb, "thumbnail", None)
+        if thumb and getattr(thumb, "url", None):
+            return thumb.url
+
+    return None
+
+
+async def resolve_target_image_url(
+    ctx,
+    image_attachment=None,
+    image_url: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve the target image URL for Image-to-Image editing.
+
+    Priority:
+    1. Direct discord.Attachment parameter (image_attachment)
+    2. Direct URL string parameter (image_url)
+    3. Replied-to message (referenced_message)
+    4. Recent message in channel with an image (fallback)
+    """
+    if image_attachment is not None:
+        url = getattr(image_attachment, "url", None)
+        if url:
+            return url
+
+    if image_url and image_url.strip():
+        return image_url.strip()
+
+    candidates = []
+    msg = getattr(ctx, "message", None)
+    if msg:
+        candidates.append(msg)
+
+    interaction = getattr(ctx, "interaction", None)
+    if interaction:
+        inter_msg = getattr(interaction, "message", None)
+        if inter_msg:
+            candidates.append(inter_msg)
+
+    for m in candidates:
+        ref_msg = getattr(m, "referenced_message", None)
+        if ref_msg:
+            url = extract_image_url_from_message(ref_msg)
+            if url:
+                return url
+        ref = getattr(m, "reference", None)
+        if ref and getattr(ref, "message_id", None) and getattr(ctx, "channel", None):
+            try:
+                fetched = await ctx.channel.fetch_message(ref.message_id)
+                url = extract_image_url_from_message(fetched)
+                if url:
+                    return url
+            except Exception:
+                pass
+
+    channel = getattr(ctx, "channel", None)
+    if channel and hasattr(channel, "history"):
+        try:
+            async for hist_msg in channel.history(limit=5):
+                url = extract_image_url_from_message(hist_msg)
+                if url:
+                    return url
+        except Exception:
+            pass
+
+    return None
+
+
 async def imagenLogic(
     ctx,
     prompt: str,
@@ -104,12 +190,12 @@ async def imagenLogic(
 
     await safe_defer(ctx)
 
-    # Resolve input image URL (attachment takes priority over string URL)
-    target_image_url: Optional[str] = None
-    if image_attachment is not None:
-        target_image_url = getattr(image_attachment, "url", None)
-    elif image_url and image_url.strip():
-        target_image_url = image_url.strip()
+    # Resolve input image URL (attachment -> explicit url -> reply -> recent msg)
+    target_image_url = await resolve_target_image_url(
+        ctx,
+        image_attachment=image_attachment,
+        image_url=image_url,
+    )
 
     valid_models = ("flux", "turbo")
     selected_model = modelo.lower().strip() if modelo else "flux"
