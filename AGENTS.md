@@ -399,7 +399,7 @@ source = "/home/dilelu/repos/RVC_WebUI/Output/"
 host = "ubuntu@141.148.84.55"
 targetdir = "/home/ubuntu/vapls-discord-bot/audio_output/"
 identityFile = "/var/home/dilelu/.ssh/vapls"
-delete = true   -- borra del server lo que se borró en local
+delete = false   -- unidireccional (PC local -> server); nunca borra archivos locales ni del server
 ```
 
 **Instalación en una PC fresh:** symlinkear el unit a `~/.config/systemd/user/` y habilitarlo. Linger se activa para que arranque al boot sin login.
