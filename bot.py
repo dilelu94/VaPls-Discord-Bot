@@ -588,7 +588,7 @@ _STREAM_DAILY_MAX = 5  # max stream starts per day that earn points
 
 # Per-guild stream source tracking for quack→pause on YouTube VODs.
 _active_sources: dict[int, dict] = {}
-_active_stream_views: dict[int, StreamControlView] = {}
+_active_stream_views: dict[int, "StreamControlView"] = {}
 _paused_streams: set[int] = set()
 _last_quack_time: dict[int, float] = {}
 _QUACK_COOLDOWN = 2.0
