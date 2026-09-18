@@ -110,6 +110,22 @@ class StremioSessionManager:
     def validate_token(self, token: str) -> bool:
         return self.get_session(token) is not None
 
+    def extend_session(self, token: str, duration_seconds: float) -> Optional[StremioSession]:
+        sess = self.get_session(token)
+        if not sess:
+            return None
+        now = time.time()
+        ttl = max(600.0, float(duration_seconds) + 600.0)
+        sess.expires_at = now + ttl
+        self._save_sessions()
+        logger.info(
+            "Extended Stremio session token=%s author=%s expires_in=%.1fh",
+            token,
+            sess.author_name,
+            ttl / 3600.0,
+        )
+        return sess
+
 
 session_manager = StremioSessionManager()
 

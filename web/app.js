@@ -77,8 +77,19 @@ document.addEventListener('DOMContentLoaded', () => {
   const refreshStreamsBtn = document.getElementById('refreshStreamsBtn');
   const startStreamBtn = document.getElementById('startStreamBtn');
 
-  const toast = document.getElementById('toast');
-  const toastMessage = document.getElementById('toastMessage');
+  // Active Player View Elements
+  const playerView = document.getElementById('playerView');
+  const playerBackBtn = document.getElementById('playerBackBtn');
+  const playerMediaTitle = document.getElementById('playerMediaTitle');
+  const playerChannelInfo = document.getElementById('playerChannelInfo');
+  const playerCurrentTime = document.getElementById('playerCurrentTime');
+  const playerSeekBar = document.getElementById('playerSeekBar');
+  const playerTotalTime = document.getElementById('playerTotalTime');
+  const playerRewindBtn = document.getElementById('playerRewindBtn');
+  const playerPlayPauseBtn = document.getElementById('playerPlayPauseBtn');
+  const playerPlayIcon = document.getElementById('playerPlayIcon');
+  const playerForwardBtn = document.getElementById('playerForwardBtn');
+  const playerStopBtn = document.getElementById('playerStopBtn');
 
   // Application State
   let currentFilter = 'all';
@@ -87,7 +98,21 @@ document.addEventListener('DOMContentLoaded', () => {
   let selectedStreamUrl = null;
   let voiceChannels = [];
 
-  // Watched Episodes State & Persistence
+  let isStreamingActive = false;
+  let playerPollTimer = null;
+  let activeDurationSecs = 0;
+  let activePosSecs = 0;
+  let isUserSeeking = false;
+  let isPausedState = false;
+
+  function formatTime(seconds) {
+    if (isNaN(seconds) || seconds < 0) return '00:00';
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    const pad = (n) => String(n).padStart(2, '0');
+    return h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  }
   let watchedMap = {};
   try {
     const saved = localStorage.getItem('vapls_watched_episodes');
@@ -614,6 +639,144 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Active Player View Management & Event Handlers
+  function showPlayerView(title, channelName, durationSecs) {
+    isStreamingActive = true;
+    hideModal();
+    if (catalogGrid) catalogGrid.style.display = 'none';
+    if (emptyState) emptyState.style.display = 'none';
+    if (loader) loader.style.display = 'none';
+    if (playerView) playerView.style.display = 'block';
+
+    if (title && playerMediaTitle) playerMediaTitle.textContent = title;
+    if (playerChannelInfo) {
+      playerChannelInfo.textContent = channelName ? `Transmitiendo en ${channelName}` : 'Discord Go Live';
+    }
+
+    activeDurationSecs = durationSecs || 0;
+    if (playerTotalTime) playerTotalTime.textContent = formatTime(activeDurationSecs);
+    if (playerSeekBar) {
+      playerSeekBar.max = activeDurationSecs > 0 ? String(activeDurationSecs) : '7200';
+    }
+
+    startPlayerPoll();
+  }
+
+  function hidePlayerView() {
+    isStreamingActive = false;
+    stopPlayerPoll();
+    if (playerView) playerView.style.display = 'none';
+    if (searchInput && searchInput.value.trim()) {
+      showCatalog();
+    } else {
+      showEmptyState();
+    }
+  }
+
+  function startPlayerPoll() {
+    stopPlayerPoll();
+    pollPlayerStatus();
+    playerPollTimer = setInterval(pollPlayerStatus, 1500);
+  }
+
+  function stopPlayerPoll() {
+    if (playerPollTimer) {
+      clearInterval(playerPollTimer);
+      playerPollTimer = null;
+    }
+  }
+
+  async function pollPlayerStatus() {
+    try {
+      const resp = await apiFetch('/api/stremio/control?action=status');
+      if (!resp.ok) return;
+      const data = await resp.json();
+
+      if (!data.exists || data.stopped) {
+        if (isStreamingActive) {
+          showToast('🛑 La transmisión en Discord ha finalizado.');
+          hidePlayerView();
+        }
+        return;
+      }
+
+      if (data.title && playerMediaTitle && data.title !== playerMediaTitle.textContent) {
+        playerMediaTitle.textContent = data.title;
+      }
+
+      isPausedState = !!data.is_paused;
+      if (playerPlayIcon) playerPlayIcon.textContent = isPausedState ? '▶️' : '⏸️';
+
+      if (!isUserSeeking && data.position !== undefined && playerSeekBar) {
+        activePosSecs = parseFloat(data.position) || 0;
+        playerSeekBar.value = String(activePosSecs);
+        if (playerCurrentTime) playerCurrentTime.textContent = formatTime(activePosSecs);
+      }
+    } catch (e) {}
+  }
+
+  async function sendPlayerControl(action, payload = {}) {
+    try {
+      const body = { token: sessionToken, action, ...payload };
+      const resp = await apiFetch('/api/stremio/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const res = await resp.json();
+      if (resp.ok) {
+        pollPlayerStatus();
+      } else if (res.error) {
+        showToast(`⚠️ ${esc(res.error)}`);
+      }
+    } catch (e) {
+      showToast('❌ Error al enviar comando al reproductor');
+    }
+  }
+
+  if (playerBackBtn) playerBackBtn.addEventListener('click', hidePlayerView);
+
+  if (playerPlayPauseBtn) {
+    playerPlayPauseBtn.addEventListener('click', () => {
+      sendPlayerControl(isPausedState ? 'resume' : 'pause');
+    });
+  }
+
+  if (playerRewindBtn) {
+    playerRewindBtn.addEventListener('click', () => {
+      const target = Math.max(0, activePosSecs - 10);
+      sendPlayerControl('seek', { timestamp: target });
+    });
+  }
+
+  if (playerForwardBtn) {
+    playerForwardBtn.addEventListener('click', () => {
+      const target = activePosSecs + 10;
+      sendPlayerControl('seek', { timestamp: target });
+    });
+  }
+
+  if (playerStopBtn) {
+    playerStopBtn.addEventListener('click', async () => {
+      await sendPlayerControl('stop');
+      showToast('🛑 Transmisión detenida');
+      hidePlayerView();
+    });
+  }
+
+  if (playerSeekBar) {
+    playerSeekBar.addEventListener('input', () => {
+      isUserSeeking = true;
+      if (playerCurrentTime) playerCurrentTime.textContent = formatTime(parseFloat(playerSeekBar.value));
+    });
+
+    playerSeekBar.addEventListener('change', () => {
+      isUserSeeking = false;
+      const target = parseFloat(playerSeekBar.value);
+      sendPlayerControl('seek', { timestamp: target });
+    });
+  }
+
   async function triggerDiscordStream() {
     if (!selectedStreamUrl) return;
 
@@ -631,6 +794,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const seasonVal = seasonSelect && seasonSelect.value ? parseInt(seasonSelect.value) : 1;
     const episodeVal = episodeSelect && episodeSelect.value ? parseInt(episodeSelect.value) : 1;
+    const runtimeMins = currentMeta ? (currentMeta.runtime || 0) : 0;
+    const durationSecs = runtimeMins * 60.0;
 
     const payload = {
       token: sessionToken,
@@ -642,6 +807,8 @@ document.addEventListener('DOMContentLoaded', () => {
       type: currentMeta ? currentMeta.type : 'movie',
       season: seasonVal,
       episode: episodeVal,
+      duration: durationSecs,
+      runtime: runtimeMins,
     };
 
     console.log('[Stremio Transmit Request]', payload);
@@ -666,7 +833,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setWatchedState(metaId, null, null, true);
           }
         }
-        hideModal();
+        showPlayerView(payload.title, channelOpt ? channelOpt.text : '', durationSecs);
       } else {
         showToast(`❌ Error: ${esc(res.error || 'No se pudo iniciar el stream')}`);
       }
@@ -690,4 +857,18 @@ document.addEventListener('DOMContentLoaded', () => {
       toast.style.display = 'none';
     }, 4500);
   }
+
+  async function checkInitialActiveStream() {
+    try {
+      const resp = await apiFetch('/api/stremio/control?action=status');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.exists && !data.stopped) {
+          showPlayerView(data.title || 'Stream Activo', '', 0);
+        }
+      }
+    } catch (e) {}
+  }
+
+  checkInitialActiveStream();
 });

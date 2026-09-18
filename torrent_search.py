@@ -470,6 +470,13 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
             "released": v.get("released") or "",
         })
 
+    runtime_raw = str(meta_data.get("runtime") or "")
+    runtime_mins = 0
+    if runtime_raw:
+        m_rt = re.search(r"(\d+)", runtime_raw)
+        if m_rt:
+            runtime_mins = int(m_rt.group(1))
+
     return {
         "id": item_id,
         "imdb_id": meta_data.get("imdb_id") or (item_id if item_id.startswith("tt") else None),
@@ -481,6 +488,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         "year": str(meta_data.get("year", "")),
         "genres": meta_data.get("genres", []),
         "episodes": episodes,
+        "runtime": runtime_mins,
     }
 
 

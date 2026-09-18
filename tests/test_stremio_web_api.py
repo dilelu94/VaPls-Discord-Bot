@@ -286,3 +286,118 @@ async def test_stremio_watched_api_endpoints(mock_bot):
     finally:
         await client.close()
 
+
+def test_stremio_session_extension():
+    sess = session_manager.create_session(
+        author_id=100,
+        author_name="Extender",
+        channel_id=200,
+        guild_id=300,
+        ttl_hours=10 / 60.0,
+    )
+    initial_expiry = sess.expires_at
+
+    # Extend session for a 2-hour movie (7200 seconds)
+    extended = session_manager.extend_session(sess.token, 7200.0)
+    assert extended is not None
+    assert extended.expires_at > initial_expiry
+    # TTL should be ~7800 seconds (7200s + 600s buffer)
+    assert extended.expires_at - time.time() >= 7700.0
+
+
+@pytest.mark.asyncio
+async def test_stremio_control_api_endpoints(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="a", channel_id=100, guild_id=200)
+    token = sess.token
+
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        # 1. Reject without token -> 403
+        resp_no_token = await client.get("/api/stremio/control?action=status")
+        assert resp_no_token.status == 403
+
+        # 2. GET /api/stremio/control?action=status with token
+        mock_control_resp = MagicMock()
+        mock_control_resp.status = 200
+        mock_control_resp.json = AsyncMock(return_value={"exists": True, "position": 12.5, "is_paused": False, "title": "Test Movie"})
+        mock_control_resp.__aenter__.return_value = mock_control_resp
+
+        with patch("aiohttp.ClientSession.post", return_value=mock_control_resp):
+            resp_status = await client.get(f"/api/stremio/control?action=status&token={token}")
+            assert resp_status.status == 200
+            data_status = await resp_status.json()
+            assert data_status["position"] == 12.5
+            assert data_status["title"] == "Test Movie"
+
+        # 3. POST /api/stremio/control action=pause
+        mock_pause_resp = MagicMock()
+        mock_pause_resp.status = 200
+        mock_pause_resp.json = AsyncMock(return_value={"status": "paused", "guild_id": 200})
+        mock_pause_resp.__aenter__.return_value = mock_pause_resp
+
+        with patch("aiohttp.ClientSession.post", return_value=mock_pause_resp):
+            resp_pause = await client.post(
+                "/api/stremio/control",
+                json={"token": token, "action": "pause", "guild_id": "200"},
+            )
+            assert resp_pause.status == 200
+            data_pause = await resp_pause.json()
+            assert data_pause["status"] == "paused"
+
+        # 4. POST /api/stremio/control action=stop
+        with patch("bot.stop_stream_for_guild", new=AsyncMock(return_value=(True, "🛑 Stream detenido."))) as mock_stop:
+            resp_stop = await client.post(
+                "/api/stremio/control",
+                json={"token": token, "action": "stop", "guild_id": "200"},
+            )
+            assert resp_stop.status == 200
+            data_stop = await resp_stop.json()
+            assert data_stop["stopped"] is True
+            mock_stop.assert_called_once_with(200)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stremio_play_extends_session(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="a", channel_id=100, guild_id=200, ttl_hours=10/60.0)
+    token = sess.token
+    initial_expires_at = sess.expires_at
+
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        mock_relay_resp = MagicMock()
+        mock_relay_resp.status = 200
+        mock_relay_resp.json = AsyncMock(return_value={"started": True, "guild_id": 200})
+        mock_relay_resp.__aenter__.return_value = mock_relay_resp
+
+        with patch("aiohttp.ClientSession.post", return_value=mock_relay_resp), \
+             patch("torrent_search.resolve_redirect_url", return_value="https://nexus-001.tb-cdn.io/stream.mkv"):
+            resp_play = await client.post(
+                "/api/stremio/play",
+                json={
+                    "token": token,
+                    "channel_id": "123456789012345678",
+                    "guild_id": "200",
+                    "url": "https://torrentio.strem.fun/resolve/torbox/1/2",
+                    "title": "Movie 2 Hours",
+                    "duration": 7200.0, # 2 hours in seconds
+                },
+            )
+            assert resp_play.status == 200
+            play_json = await resp_play.json()
+            assert play_json["started"] is True
+            assert "expires_at" in play_json
+            assert play_json["expires_at"] > initial_expires_at
+            # Updated session object in manager has new expiry
+            updated_sess = session_manager.get_session(token)
+            assert updated_sess.expires_at > initial_expires_at
+    finally:
+        await client.close()
+

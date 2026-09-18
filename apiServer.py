@@ -2583,9 +2583,94 @@ def makeApp(bot: discord.Bot) -> web.Application:
                                 watched_manager.set_watched(w_key, True)
                         except Exception as w_err:
                             logger.warning("[STREMIO TRANSMIT] Failed to auto-mark watched: %s", w_err)
+
+                        try:
+                            raw_dur = body.get("duration") or body.get("runtime")
+                            duration_secs = 0.0
+                            if raw_dur:
+                                try:
+                                    v = float(raw_dur)
+                                    duration_secs = v * 60.0 if v < 500 else v
+                                except (ValueError, TypeError):
+                                    pass
+
+                            if not duration_secs and imdb_id and item_type:
+                                try:
+                                    from torrent_search import get_stremio_meta
+                                    m_info = await get_stremio_meta(item_type, imdb_id)
+                                    if m_info and m_info.get("runtime"):
+                                        duration_secs = float(m_info["runtime"]) * 60.0
+                                except Exception:
+                                    pass
+
+                            if not duration_secs:
+                                duration_secs = 10800.0
+
+                            extended = session_manager.extend_session(sess.token, duration_secs)
+                            if extended and isinstance(data, dict):
+                                data["expires_at"] = extended.expires_at
+                                data["ttl_mins"] = round((extended.expires_at - time.time()) / 60.0, 1)
+                        except Exception as ext_err:
+                            logger.warning("[STREMIO TRANSMIT] Failed to extend session token: %s", ext_err)
+
                     return web.json_response(data, status=resp.status)
         except Exception as e:
             logger.error("[STREMIO TRANSMIT] Failed to relay stremio stream request: %s", e)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def apiStremioControl(request: web.Request) -> web.Response:
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        body = {}
+        if request.method == "POST":
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
+
+        sess = _validate_stremio_session(request, body)
+        if not sess:
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
+
+        action = (body.get("action") or request.query.get("action") or "status").strip().lower()
+        guild_id = str(body.get("guild_id") or request.query.get("guild_id") or sess.guild_id or "").strip()
+        timestamp = body.get("timestamp") or request.query.get("timestamp") or 0.0
+
+        if not guild_id:
+            return web.json_response({"error": "missing guild_id"}, status=400)
+
+        try:
+            gid_int = int(guild_id)
+        except ValueError:
+            return web.json_response({"error": "invalid guild_id"}, status=400)
+
+        if action == "stop":
+            from bot import stop_stream_for_guild
+            success, msg = await stop_stream_for_guild(gid_int)
+            return web.json_response({"stopped": success, "message": msg, "guild_id": gid_int})
+
+        relay_url = getattr(config, "GOLIVE_RELAY_URL", "http://127.0.0.1:8082")
+        relay_secret = getattr(config, "GOLIVE_RELAY_SECRET", "")
+        headers = {"Content-Type": "application/json"}
+        if relay_secret:
+            headers["X-API-Secret"] = relay_secret
+
+        payload = {"guild_id": gid_int, "action": action, "timestamp": timestamp}
+        try:
+            async with aiohttp.ClientSession() as http_sess:
+                async with http_sess.post(f"{relay_url}/stream/control", json=payload, headers=headers, timeout=10) as resp:
+                    try:
+                        data = await resp.json()
+                    except Exception:
+                        raw_t = await resp.text()
+                        data = {"error": f"Error en relay ({resp.status}): {raw_t[:120]}"}
+                    return web.json_response(data, status=resp.status)
+        except Exception as e:
+            logger.error("[STREMIO CONTROL] Failed to relay control request: %s", e)
             return web.json_response({"error": str(e)}, status=500)
 
     async def apiStremioWatchedGet(request: web.Request) -> web.Response:
@@ -2638,6 +2723,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/api/stremio/watched", apiStremioWatchedGet)
     app.router.add_post("/api/stremio/watched", apiStremioWatchedPost)
     app.router.add_post("/api/stremio/play", apiStremioPlay)
+    app.router.add_get("/api/stremio/control", apiStremioControl)
+    app.router.add_post("/api/stremio/control", apiStremioControl)
 
 
     return app

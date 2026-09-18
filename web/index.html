@@ -62,6 +62,47 @@
 
       <!-- Catalog Grid -->
       <div id="catalogGrid" class="catalog-grid" style="display: none;"></div>
+
+      <!-- Active Stream Media Player View -->
+      <div id="playerView" class="player-container" style="display: none;">
+        <div class="player-header">
+          <div class="player-live-badge">
+            <span class="live-dot"></span>
+            <span id="playerLiveText">Transmitiendo en Go Live</span>
+          </div>
+          <button id="playerBackBtn" class="mini-btn">🔍 Volver al buscador</button>
+        </div>
+
+        <div class="player-card">
+          <div class="player-screen-mock">
+            <div class="player-glow"></div>
+            <div class="player-screen-content">
+              <div class="player-media-icon">📺</div>
+              <h2 id="playerMediaTitle" class="player-title">Título del Stream</h2>
+              <p id="playerChannelInfo" class="player-subtitle">Canal de Voz Discord</p>
+            </div>
+          </div>
+
+          <div class="player-controls-wrap">
+            <!-- Scrubber / Media Bar -->
+            <div class="scrubber-box">
+              <span id="playerCurrentTime" class="time-label">00:00</span>
+              <input type="range" id="playerSeekBar" class="seek-slider" min="0" max="100" value="0" step="1">
+              <span id="playerTotalTime" class="time-label">00:00</span>
+            </div>
+
+            <!-- Playback Buttons -->
+            <div class="player-buttons">
+              <button id="playerRewindBtn" class="control-btn" title="Retroceder 10 segundos">⏮️ -10s</button>
+              <button id="playerPlayPauseBtn" class="control-btn main-play-btn" title="Pausar / Reanudar">
+                <span id="playerPlayIcon">⏸️</span>
+              </button>
+              <button id="playerForwardBtn" class="control-btn" title="Adelantar 10 segundos">+10s ⏭️</button>
+              <button id="playerStopBtn" class="control-btn stop-btn" title="Detener transmisión">🛑 Detener Stream</button>
+            </div>
+          </div>
+        </div>
+      </div>
     </main>
 
     <!-- Detail & Stream Modal -->
