@@ -363,7 +363,7 @@ async def test_stremio_control_api_endpoints(mock_bot):
 
 @pytest.mark.asyncio
 async def test_stremio_play_extends_session(mock_bot):
-    sess = session_manager.create_session(author_id=1, author_name="a", channel_id=100, guild_id=200, ttl_hours=10/60.0)
+    sess = session_manager.create_session(author_id=1, author_name="a", channel_id=123456789012345678, guild_id=200, ttl_hours=10/60.0)
     token = sess.token
     initial_expires_at = sess.expires_at
 
