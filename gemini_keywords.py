@@ -170,6 +170,13 @@ SYSTEM_TRIGGERS: dict[str, list[str]] = {
         "grabá un clip de 5m",
         "guardá los últimos 1m",
     ],
+    "generate_image": [
+        "generame una imagen",
+        "hacé una imagen de",
+        "editame esta imagen",
+        "modificá esta foto",
+        "creá una foto de",
+    ],
 }
 
 # ── Resume-context phrases ──────────────────────────────────────────────

@@ -160,3 +160,20 @@ def test_logging_handler_captures_exceptions(monkeypatch):
 
     # In async loop context, task is scheduled
     assert True  # Ensure handler runs clean without throwing
+
+
+@pytest.mark.asyncio
+async def test_report_error_handles_github_issues_token_attribute(monkeypatch):
+    monkeypatch.delattr(config, "GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr(config, "GITHUB_ISSUES_TOKEN", "issues-token", raising=False)
+    monkeypatch.setattr(config, "GITHUB_REPO", "owner/repo")
+
+    try:
+        raise ValueError("test issues token fallback")
+    except ValueError as err:
+        target_err = err
+
+    with patch("githubIssues.find_issue_by_fingerprint", new=AsyncMock(return_value=None)), \
+         patch("githubIssues.create_issue", new=AsyncMock(return_value=500)):
+        num = await autoErrorTracker.report_error(target_err, process_name="test-proc")
+        assert num == 500

@@ -198,7 +198,9 @@ async def report_error(
     if not getattr(config, "GITHUB_AUTO_ERROR_ENABLED", True):
         return None
 
-    if not config.GITHUB_TOKEN or not config.GITHUB_REPO:
+    gh_token = getattr(config, "GITHUB_ISSUES_TOKEN", getattr(config, "GITHUB_TOKEN", ""))
+    gh_repo = getattr(config, "GITHUB_REPO", "")
+    if not gh_token or not gh_repo:
         logger.debug("GitHub Token/Repo not configured, skipping issue reporting")
         return None
 

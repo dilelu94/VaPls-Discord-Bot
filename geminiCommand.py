@@ -14,6 +14,7 @@ Depends on geminiClient and analytics.
 
 import asyncio
 
+import io
 import json
 import logging
 import os
@@ -265,6 +266,7 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("disconnect_indio")} → `disconnect_indio` \
 - {_fmt_trigger("troll_move_user")} → `troll_move_user` \
 - {_fmt_trigger("comment_stream")} → `comment_stream` \
+- {_fmt_trigger("generate_image")} → `generate_image` \
 - {_fmt_trigger("make_clip")} con orden EXPLÍCITA de crear un clip de audio (palabras como 'clip', 'clipeá', 'clipea', 'grabá el audio') → `make_clip`. NUNCA llames a `make_clip` por inferencia o charla general sobre denuncias, chistes o quejas que no pidan explícitamente un clip. \
 
 
@@ -638,6 +640,30 @@ _INDIO_TOOLS = [
                 },
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "generate_image",
+        "description": (
+            "Generar o editar/transformar una imagen con IA. \n"
+            "Usala cuando el usuario te pida crear, generar o editar una imagen "
+            "(ej: 'generame una imagen de...', 'editame esta imagen...', 'hacé una foto de...', 'transformá la imagen...'). \n"
+            "Si el usuario respondió a un mensaje con imagen o adjuntó una foto, "
+            "pasá esa URL en `image_url` para transformarla (Image-to-Image). Si no, dejá `image_url` vacío."
+        ),
+        "parameters": {
+            "type": "OBJECT",
+            "properties": {
+                "prompt": {
+                    "type": "STRING",
+                    "description": "Descripción en español o inglés de la imagen a generar o del cambio a realizar.",
+                },
+                "image_url": {
+                    "type": "STRING",
+                    "description": "URL opcional de la imagen base a editar/transformar (si el usuario adjuntó o respondió a una foto).",
+                },
+            },
+            "required": ["prompt"],
         },
     },
     # search_chat_history: misma definición que en _VAPLS_TOOLS (una sola fuente de verdad)
@@ -2930,6 +2956,7 @@ _FUNCTION_CALL_TO_ACTION: dict[str, tuple[str, Optional[str]]] = {
     "make_clip": ("MAKE_CLIP", "duration"),
     "save_memory": ("SAVE_MEMORY", None),
     "search_chat_history": ("SEARCH_CHAT_HISTORY", None),
+    "generate_image": ("GENERATE_IMAGE", None),
 }
 _ACTION_FALLBACK_TEXT = {
     "PLAY_MUSIC": "🎵 Ahí va",
@@ -2948,6 +2975,7 @@ _ACTION_FALLBACK_TEXT = {
     "MAKE_CLIP": "🎬 Clip de audio",
     "SAVE_MEMORY": "De una, anotado",
     "SEARCH_CHAT_HISTORY": "",
+    "GENERATE_IMAGE": "🎨 Generando imagen...",
 }
 
 SPACEWAR_GUIDE_TEXT = """\
@@ -3754,6 +3782,116 @@ async def _dispatch_indio_actions(
                         msg = f"error: {e}"
                     statuses.append(f"use_image: {'ok' if ok else 'fail'} — {msg}")
                     logger.info("indio USE_IMAGE %s → ok=%s msg=%s", image_id, ok, msg)
+                elif action == "GENERATE_IMAGE":
+                    import json as _json
+
+                    prompt = ""
+                    image_url = None
+                    if arg:
+                        if arg.startswith("{"):
+                            try:
+                                parsed = _json.loads(arg)
+                                if isinstance(parsed, dict):
+                                    prompt = str(parsed.get("prompt") or "").strip()
+                                    image_url = (parsed.get("image_url") or "").strip() or None
+                                else:
+                                    prompt = str(arg).strip()
+                            except Exception:
+                                prompt = str(arg).strip()
+                        else:
+                            prompt = str(arg).strip()
+
+                    # Fallback de image_url si no vino explícita en la tool call pero hay adjuntos de imagen en la conversación/reply
+                    if not image_url and attachment_urls:
+                        imgs = [
+                            u
+                            for u in attachment_urls
+                            if u.get("mime_type", "").startswith("image/")
+                        ]
+                        if imgs:
+                            image_url = imgs[0].get("url")
+
+                    target_cid = (
+                        getattr(reply_handle, "channel_id", None)
+                        or config.INDIO_PLAY_CHANNEL_ID
+                        or config.INDIO_REPLY_CHANNEL_ID
+                    )
+                    if not target_cid and bot and getattr(bot, "guilds", None):
+                        for g in bot.guilds:
+                            if g.id == int(guild_id) and getattr(g, "system_channel", None):
+                                target_cid = g.system_channel.id
+                                break
+
+                    ok = False
+                    msg = ""
+                    if prompt:
+                        relay_query = _json.dumps(
+                            {"prompt": prompt, "image_url": image_url},
+                            ensure_ascii=False,
+                        )
+                        ok, msg = await _invoke_slash_via_userbot(
+                            "invoke_imagen",
+                            channel_id=target_cid or 0,
+                            query=relay_query,
+                        )
+                        if ok:
+                            relayed_success.add("GENERATE_IMAGE")
+                        else:
+                            logger.warning(
+                                "indio GENERATE_IMAGE relay failed (%s); falling back to direct generate_or_edit_image",
+                                msg,
+                            )
+                            try:
+                                import pollinationsImage
+
+                                img_bytes = await pollinationsImage.generate_or_edit_image(
+                                    prompt=prompt,
+                                    image_url=image_url,
+                                )
+                                if img_bytes:
+                                    filename = (
+                                        "imagen_editada.jpg"
+                                        if image_url
+                                        else "imagen_generada.jpg"
+                                    )
+                                    file_obj = discord.File(
+                                        io.BytesIO(img_bytes), filename=filename
+                                    )
+                                    header_text = (
+                                        f"🎨 **Imagen transformada** (`flux`)\n> **Prompt:** {prompt}"
+                                        if image_url
+                                        else f"🖼️ **Imagen generada** (`flux`)\n> **Prompt:** {prompt}"
+                                    )
+                                    target_ch = bot.get_channel(target_cid) if target_cid else None
+                                    if target_ch is None and target_cid and hasattr(bot, "fetch_channel"):
+                                        try:
+                                            target_ch = await bot.fetch_channel(target_cid)
+                                        except Exception:
+                                            pass
+                                    if target_ch and hasattr(target_ch, "send"):
+                                        await target_ch.send(
+                                            content=header_text, file=file_obj
+                                        )
+                                        ok = True
+                                        msg = "ok (direct fallback)"
+                                    else:
+                                        msg = "target channel not found"
+                                else:
+                                    msg = "generate returned empty bytes"
+                            except Exception as e:
+                                logger.exception("indio GENERATE_IMAGE fallback failed")
+                                msg = f"fallback error: {e}"
+                    else:
+                        msg = "empty prompt"
+
+                    statuses.append(f"imagen: {'ok' if ok else 'fail'} — {msg}")
+                    logger.info(
+                        "indio GENERATE_IMAGE prompt='%s' image_url='%s' → ok=%s msg=%s",
+                        prompt,
+                        image_url,
+                        ok,
+                        msg,
+                    )
                 elif action == "DJ_MODE":
                     # Activate Auto-DJ + post the panel — same handler as /dj.
                     # Use the channel where the Indio just replied so the panel

@@ -1017,6 +1017,7 @@ class H264VideoPlayer(threading.Thread):
         self._end = threading.Event()
         self._paused_event = threading.Event()
         self._paused_event.set()  # set = running, clear = paused
+        self._seeking_event = threading.Event()
         self._proc: subprocess.Popen | None = None
 
         self._live = live
@@ -1049,6 +1050,20 @@ class H264VideoPlayer(threading.Thread):
     @property
     def audio_fifo(self) -> str:
         return self._audio_fifo
+
+    @property
+    def current_position(self) -> float:
+        fps = self._fps if self._fps > 0 else 25.0
+        return max(0.0, self._start_time + (self._frames_emitted / fps))
+
+    def seek(self, target_sec: float) -> None:
+        self._start_time = max(0.0, float(target_sec))
+        self._frames_emitted = 0
+        self._seeking_event.set()
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            self._kill_proc(proc)
+        log.info("[VIDEO_PLAYER] Seek requested to target_sec=%.2f", self._start_time)
 
     def pause(self) -> None:
         """Pause video frame emission."""
@@ -1096,24 +1111,31 @@ class H264VideoPlayer(threading.Thread):
 
     def run(self) -> None:
         try:
-            self._stream()
-            # If a hardware encoder produced no frames at all (e.g. VA-API
-            # "Access unit too large" on large MPEG-2 keyframes), retry once on
-            # the software encoder so the stream still plays.
-            if (
-                not self._end.is_set()
-                and self._frames_emitted == 0
-                and _SW_ENCODER is not None
-                and self._enc is not _SW_ENCODER
-            ):
-                log.warning(
-                    "video encoder %s produced no output — retrying with software "
-                    "encoder %s",
-                    self._enc.name if self._enc else "?", _SW_ENCODER.name,
-                )
-                self._enc = _SW_ENCODER
-                self._proc = None
+            while not self._end.is_set():
+                self._seeking_event.clear()
                 self._stream()
+                if self._seeking_event.is_set() and not self._end.is_set():
+                    log.info("H264VideoPlayer restarting stream at position %.2f s", self._start_time)
+                    self._proc = None
+                    continue
+                # If a hardware encoder produced no frames at all (e.g. VA-API
+                # "Access unit too large" on large MPEG-2 keyframes), retry once on
+                # the software encoder so the stream still plays.
+                if (
+                    not self._end.is_set()
+                    and self._frames_emitted == 0
+                    and _SW_ENCODER is not None
+                    and self._enc is not _SW_ENCODER
+                ):
+                    log.warning(
+                        "video encoder %s produced no output — retrying with software "
+                        "encoder %s",
+                        self._enc.name if self._enc else "?", _SW_ENCODER.name,
+                    )
+                    self._enc = _SW_ENCODER
+                    self._proc = None
+                    self._stream()
+                break
         except Exception:
             log.exception("H264VideoPlayer error")
         finally:

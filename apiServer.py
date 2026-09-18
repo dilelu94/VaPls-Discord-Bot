@@ -2638,7 +2638,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         action = (body.get("action") or request.query.get("action") or "status").strip().lower()
         guild_id = str(body.get("guild_id") or request.query.get("guild_id") or sess.guild_id or "").strip()
-        timestamp = body.get("timestamp") or request.query.get("timestamp") or 0.0
+        ts_raw = body.get("timestamp") if (isinstance(body, dict) and "timestamp" in body) else request.query.get("timestamp")
+        try:
+            timestamp = float(ts_raw) if ts_raw is not None else 0.0
+        except (ValueError, TypeError):
+            timestamp = 0.0
 
         if not guild_id:
             return web.json_response({"error": "missing guild_id"}, status=400)
