@@ -60,9 +60,16 @@ logging.basicConfig(
 )
 log = logging.getLogger("golive")
 
-import autoErrorTracker
+# Add parent directory to sys.path to allow importing autoErrorTracker from repo root
+_parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
 
-autoErrorTracker.init_auto_error_tracker(process_name="golive")
+try:
+    import autoErrorTracker
+    autoErrorTracker.init_auto_error_tracker(process_name="golive")
+except Exception as _err:
+    log.warning("Could not initialize autoErrorTracker in golive: %s", _err)
 
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
