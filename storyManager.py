@@ -1,7 +1,7 @@
 """Indio story system: auto-generates chistes from pool images with community review.
 
 Triggered by voice occupancy (>2 humans) or chat idle (>4h), generates a story
-via Gemini (Indio persona + image), posts to the review channel for ✅/❌/reply
+via Gemini (Indio persona + image), posts to the review channel for 👍/👎/reply
 feedback, and saves approved stories to the image catalog.
 """
 
@@ -178,7 +178,7 @@ async def _recover_pending_reviews(bot, channel_id: int) -> None:
         except Exception:
             continue
         has_reactions = any(
-            r.me for r in vote_msg.reactions if str(r.emoji) in ("✅", "❌")
+            r.me for r in vote_msg.reactions if str(r.emoji) in ("👍", "👎", "✅", "❌")
         )
         if not has_reactions:
             continue
@@ -554,7 +554,7 @@ async def _post_review(
     }
 
     vote_text = (
-        "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
+        "👍 la aprueban  ·  👎 la rechazan  ·  respondé con otra idea para regenerar"
     )
     vote_msg_id = await _relay_payload(channel_id, vote_text)
     if vote_msg_id is not None:
@@ -566,8 +566,8 @@ async def _post_review(
         _pr_flush()
         try:
             vote_msg = await ch.fetch_message(vote_msg_id)
-            await vote_msg.add_reaction("✅")
-            await vote_msg.add_reaction("❌")
+            await vote_msg.add_reaction("👍")
+            await vote_msg.add_reaction("👎")
         except Exception as e:
             logger.warning("[STORY] could not add reactions to vote msg: %s", e)
         logger.info(
@@ -600,7 +600,7 @@ async def _post_review(
 
 _VOTE_RETRY_BACKOFF = [30, 60, 120]
 _VOTE_TEXT = (
-    "✅ la aprueban  ·  ❌ la rechazan  ·  respondé con otra idea para regenerar"
+    "👍 la aprueban  ·  👎 la rechazan  ·  respondé con otra idea para regenerar"
 )
 
 
@@ -627,8 +627,8 @@ async def _retry_vote(bot, channel_id: int, status_msg_id: int, state: dict) -> 
             _pr_flush()
             try:
                 vote_msg = await channel.fetch_message(vote_msg_id)
-                await vote_msg.add_reaction("✅")
-                await vote_msg.add_reaction("❌")
+                await vote_msg.add_reaction("👍")
+                await vote_msg.add_reaction("👎")
             except Exception:
                 pass
             if status_msg_id:
@@ -654,7 +654,7 @@ async def _retry_vote(bot, channel_id: int, status_msg_id: int, state: dict) -> 
         try:
             m = await channel.fetch_message(status_msg_id)
             await m.edit(
-                content="❌ **No se pudo recuperar el voto. La imagen vuelve al pool.**"
+                content="👎 **No se pudo recuperar el voto. La imagen vuelve al pool.**"
             )
         except Exception:
             pass
@@ -892,7 +892,7 @@ async def handle_story_reaction(payload, bot) -> None:
         _pr_flush()
         return
 
-    if emoji == "✅":
+    if emoji in ("👍", "✅"):
         full = Path(imagePool.POOL_DIR, review["rel_path"]).resolve()
         if not full.exists():
             logger.warning(
@@ -916,7 +916,7 @@ async def handle_story_reaction(payload, bot) -> None:
 
         dm_mid = await _relay_dm_file(
             config.OWNER_ID,
-            f"✅ Quieren aprobar este chiste. ¿Lo guardo?\n\n{review['story_text']}\n\nRespondé **sí** para guardar o **no** para descartar.",
+            f"👍 Quieren aprobar este chiste. ¿Lo guardo?\n\n{review['story_text']}\n\nRespondé **sí** para guardar o **no** para descartar.",
             str(full),
         )
         if dm_mid is None:
@@ -947,12 +947,12 @@ async def handle_story_reaction(payload, bot) -> None:
         except Exception:
             pass
         logger.info(
-            "[STORY] ✅ relayed to owner for approval user=%s guild=%s",
+            "[STORY] 👍 relayed to owner for approval user=%s guild=%s",
             payload.user_id,
             guild_id,
         )
 
-    elif emoji == "❌":
+    elif emoji in ("👎", "❌"):
         logger.info(
             "[STORY] rejected by %s, cleaning up review messages", payload.user_id
         )
@@ -1178,18 +1178,18 @@ async def handle_story_dm_reply(user_id: int, text: str) -> Optional[str]:
     )
 
     text_lower = text.strip().lower()
-    if text_lower in ("sí", "si", "s", "✅", "yes", "y"):
+    if text_lower in ("sí", "si", "s", "👍", "✅", "yes", "y"):
         img_id = await _save_approved_story(ctx["rel_path"], ctx["story_text"])
         logger.info(
             "[STORY] DM reply saved as image_id=%s rel_path=%s",
             img_id,
             ctx["rel_path"],
         )
-        return f"✅ **Guardada.** El chiste queda como `{img_id}`."
+        return f"👍 **Guardada.** El chiste queda como `{img_id}`."
 
-    if text_lower in ("no", "n", "❌", "nop"):
+    if text_lower in ("no", "n", "👎", "❌", "nop"):
         logger.info("[STORY] DM reply rejected rel_path=%s", ctx["rel_path"])
-        return "❌ Descartado, vuelve al pool."
+        return "👎 Descartado, vuelve al pool."
 
     img_part = _read_image_as_part(ctx["rel_path"])
     user_msg = (
@@ -1216,14 +1216,14 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
         return None
 
     text_lower = text.strip().lower()
-    if text_lower in ("sí", "si", "s", "✅", "yes", "y"):
+    if text_lower in ("sí", "si", "s", "👍", "✅", "yes", "y"):
         _pending_owner_approvals.pop(owner_id, None)
         _pr_flush()
         img_id = await _save_approved_story(ctx["rel_path"], ctx["story_text"])
         logger.info("[STORY] owner approved %s -> image_id=%s", ctx["rel_path"], img_id)
-        return f"✅ **Aprobada definitivamente.** Guardada como `{img_id}`."
+        return f"👍 **Aprobada definitivamente.** Guardada como `{img_id}`."
 
-    if text_lower in ("no", "n", "❌", "nop"):
+    if text_lower in ("no", "n", "👎", "❌", "nop"):
         _pending_owner_approvals.pop(owner_id, None)
         _pr_flush()
         ch = bot.get_channel(ctx["channel_id"])
@@ -1234,7 +1234,7 @@ async def handle_owner_story_approval(owner_id: int, text: str, bot) -> Optional
             except Exception:
                 pass
         logger.info("[STORY] owner rejected %s", ctx["rel_path"])
-        return "❌ **Descartada.** La imagen vuelve al pool."
+        return "👎 **Descartada.** La imagen vuelve al pool."
 
     return "Decí **sí** para guardar la imagen o **no** para descartarla."
 

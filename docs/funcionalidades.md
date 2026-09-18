@@ -299,8 +299,8 @@ imágenes del grupo, con revisión comunitaria.
 4. Postea **el chiste** en el canal de revisión (`INDIO_STORY_CHANNEL_ID`)
    **desde el userbot** (cuenta real del Indio, con la imagen adjunta).
 5. En un **mensaje separado**, el bot postea las instrucciones de voto:
-   "✅ la aprueban · ❌ la rechazan · respondé con otra idea para regenerar",
-   con reacciones ✅/❌.
+   "👍 la aprueban · 👎 la rechazan · respondé con otra idea para regenerar",
+   con reacciones 👍/👎.
 6. **Descripción de imagen** → llamada separada a Gemini (`_describe_image`)
    para generar descripción + tags (reconoce famosos).
 
@@ -317,12 +317,11 @@ No hace falta clickear "Reply". Apenas el Indio postea la historia + votación, 
 
 ### Votación (reacciones)
 
-- **✅** → guarda la imagen en el catálogo (`imageManager.add_image()`) con
-  la descripción y tags reales de Gemini, la elimina del pool. Sin mensaje de
-  confirmación. El mensaje de votación se elimina.
-- **❌** → la imagen vuelve al pool (no se guarda), avisa "❌ **Chiste
-  rechazado.** La imagen vuelve al pool." El mensaje de votación se elimina.
-- Las reacciones ✅/❌ **cancelan** la espera del primer mensaje (si alguien
+- **👍** → guarda la imagen en el catálogo (`imageManager.add_image()`) con
+  la descripción corta generada por Gemini + tags automáticos.
+- **👎** → borra el mensaje del review. La imagen **vuelve al pool** (no se borra
+  de la carpeta de origen ni del pool), así que puede volver a salir más adelante.
+- Las reacciones 👍/👎 **cancelan** la espera del primer mensaje (si alguien
   reacciona antes de que llegue el primer mensaje, la reacción tiene prioridad).
 
 ### Testing

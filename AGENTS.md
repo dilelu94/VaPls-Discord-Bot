@@ -781,7 +781,7 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 34. **Prompt sin lista de nombres**: `_STORY_PROMPT` ya no dice "uno de los pibes (Viny, Fox...)". Gemini describe lo que realmente ve en la imagen. Si reconoce un famoso lo identifica; si no, hace un chiste sobre la situación sin inventar identidades.
 35. **Memoria del Indio en chistes**: `_generate_story()` ahora inyecta la misma memoria larga que usa `/indio` (`_format_long_term()` de `geminiCommand`). El Indio sabe quiénes son sus amigos, anécdotas y chistes internos al generar el chiste.
-36. **Aprobación vía DM del owner**: cuando alguien reacciona ✅, el Indio ya no guarda inmediatamente. Te manda **DM** con la imagen + chiste y espera tu respuesta. Respondés **"sí"** → se guarda con descripción + tags. **"no"** → se descarta. Sin timeout.
+36. **Aprobación vía DM del owner**: cuando alguien reacciona 👍, el Indio ya no guarda inmediatamente. Te manda **DM** con la imagen + chiste y espera tu respuesta. Respondés **"sí"** → se guarda con descripción + tags. **"no"** → se descarta. Sin timeout.
 
 ### 2026-06-13 — Refactor: validación de descripciones del usuario contra Gemini
 
@@ -857,7 +857,7 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 El Indio genera **chistes automáticos** sobre imágenes del pool cuando el chat está
 idle (>4h) o hay más de 2 humanos en voz. Las historias se postean en el canal de
-review para que el grupo las vote con ✅/❌ o feedback por reply.
+review para que el grupo las vote con 👍/👎 o feedback por reply.
 
 ### Pool de imágenes (`imagePool.py`)
 
@@ -888,19 +888,19 @@ del Indio (amigos, anécdotas, chistes internos del grupo).
 ### Flujo de review y aprobación
 
 1. **Post**: `_post_review()` relayea el chiste + imagen y el texto de voto
-   (`✅ · ❌ · respondé con otra idea`) vía userbot (el Indio real). Si el canal
+   (`👍 · 👎 · respondé con otra idea`) vía userbot (el Indio real). Si el canal
    configurado (`INDIO_STORY_CHANNEL_ID`) no se encuentra en el servidor (ej. tras mudanza),
    cae en fallback automático a otros canales de texto disponibles.
 2. **Recitado en voz alta 🎙️**: Al postear (o regenerar) una historia, `_post_review()`
    invoca `_speak_indio_reply` (vía Piper TTS del userbot) para que el Indio recite el
    chiste en el canal de voz activo.
-3. **✅ alguien reacciona** → el Indio **te manda DM** con la imagen + chiste.
+3. **👍 alguien reacciona** → el Indio **te manda DM** con la imagen + chiste.
    Respondés **"sí"** para guardar definitivamente o **"no"** para descartar.
    Sin timeout, sin condiciones.
    - Al decir "sí", `_save_approved_story()` describe la imagen con Gemini
      (detecta famosos, genera tags) y la guarda en `indio_images/manifest.json`.
    - Se borran los mensajes del review.
-4. **❌ reacción** → el chiste se rechaza, la imagen vuelve al pool.
+4. **👎 reacción** → el chiste se rechaza, la imagen vuelve al pool.
 5. **Reply con feedback** → `handle_first_msg_after_story()` evalúa si el
    comentario se relaciona con el chiste (`_evaluate_reply_context()` con Gemini).
    - **Relacionado**: regenera el chiste con el feedback como contexto.

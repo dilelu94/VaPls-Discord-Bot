@@ -1099,7 +1099,7 @@ async def on_raw_reaction_add(payload):
             added=True,
         )
 
-        # Story system: ✅/❌ on review channel messages
+        # Story system: 👍/👎 on review channel messages
         await storyManager.handle_story_reaction(payload, bot)
 
         # MMR: log reactions as activity, skipping decifrar voting reactions

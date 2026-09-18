@@ -1,4 +1,4 @@
-"""Story approval flow: ✅ starts owner DM, vote_msg deleted but story_msg
+"""Story approval flow: 👍 starts owner DM, vote_msg deleted but story_msg
 stays in the channel. Owner sí/no processes the pending approval."""
 
 import types
@@ -88,7 +88,7 @@ def _seed_review(story_msg_id=1001, vote_msg_id=1002, guild_id=456):
 
 
 async def test_approve_deletes_vote_msg_only(cfg, bot, tmp_image):
-    """✅ on the vote msg deletes only the vote message, story stays visible
+    """👍 on the vote msg deletes only the vote message, story stays visible
     in the channel, and the owner approval state is set."""
     b, ch = bot
     state = _seed_review()
@@ -99,7 +99,7 @@ async def test_approve_deletes_vote_msg_only(cfg, bot, tmp_image):
 
     with patch.object(storyManager, "_relay_dm_file", AsyncMock(return_value=5001)):
         payload = _fake_reaction_payload(
-            user_id=888, message_id=state["vote_msg_id"], emoji="✅"
+            user_id=888, message_id=state["vote_msg_id"], emoji="👍"
         )
         await storyManager.handle_story_reaction(payload, b)
 
@@ -171,7 +171,7 @@ async def test_owner_no_deletes_story_msg(cfg, bot):
 
 
 async def test_reject_deletes_both_messages(cfg, bot, tmp_image):
-    """❌ in the review channel — both story_msg and vote_msg are deleted
+    """👎 in the review channel — both story_msg and vote_msg are deleted
     and daily limit tracking is preserved so rejection does not trigger retries."""
     b, ch = bot
     state = _seed_review(guild_id=456)
@@ -189,7 +189,7 @@ async def test_reject_deletes_both_messages(cfg, bot, tmp_image):
     ch.fetch_message.side_effect = _fetch
 
     payload = _fake_reaction_payload(
-        user_id=888, message_id=state["vote_msg_id"], emoji="❌"
+        user_id=888, message_id=state["vote_msg_id"], emoji="👎"
     )
     await storyManager.handle_story_reaction(payload, b)
 
