@@ -184,3 +184,89 @@ async def list_closed_issues(*, labels: Optional[list[str]] = None) -> list[int]
     except Exception:
         logger.exception("GitHub list closed issues network error")
         return []
+
+
+async def find_issue_by_fingerprint(
+    fingerprint: str,
+    *,
+    label: Optional[str] = None,
+) -> Optional[dict]:
+    """Find an existing GitHub issue (open or closed) containing the given error fingerprint.
+
+    Searches title and body for ``<!-- error-fingerprint: <fingerprint> -->``
+    or ``fp:<fingerprint>``. Returns dict with ``number``, ``state``, ``title`` if
+    found, or ``None`` if not found or on error.
+    """
+    if not _enabled() or not fingerprint:
+        return None
+
+    params: list[tuple[str, str]] = [("state", "all"), ("per_page", "100")]
+    if label:
+        params.append(("labels", label))
+    qs = "&".join(f"{k}={v}" for k, v in params)
+    url = f"{_API_BASE}/repos/{config.GITHUB_REPO}/issues?{qs}"
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SEC)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.get(url, headers=_headers()) as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error(
+                        "GitHub find issue failed (HTTP %d): %s",
+                        resp.status,
+                        text[:500],
+                    )
+                    return None
+                data = await resp.json()
+                if not isinstance(data, list):
+                    return None
+
+                target_tag = f"<!-- error-fingerprint: {fingerprint} -->"
+                target_short = f"fp:{fingerprint}"
+
+                for item in data:
+                    if not isinstance(item, dict) or "pull_request" in item:
+                        continue
+                    body = item.get("body") or ""
+                    title = item.get("title") or ""
+                    if target_tag in body or target_short in title or target_short in body or fingerprint in body:
+                        return {
+                            "number": item.get("number"),
+                            "state": item.get("state"),
+                            "title": title,
+                        }
+                return None
+    except Exception:
+        logger.exception("GitHub find issue network error")
+        return None
+
+
+async def reopen_issue(issue_number: int) -> bool:
+    """Reopen a closed GitHub issue.
+
+    Returns ``True`` on success, ``False`` on failure.
+    """
+    if not _enabled():
+        return False
+
+    url = f"{_API_BASE}/repos/{config.GITHUB_REPO}/issues/{issue_number}"
+    payload = {"state": "open"}
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SEC)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.patch(url, json=payload, headers=_headers()) as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error(
+                        "GitHub reopen issue failed (HTTP %d): %s",
+                        resp.status,
+                        text[:500],
+                    )
+                    return False
+                return True
+    except Exception:
+        logger.exception("GitHub reopen issue network error")
+        return False
+

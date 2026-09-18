@@ -199,6 +199,13 @@ SUGGESTIONS_MODEL = os.getenv("SUGGESTIONS_MODEL", "gemini-2.5-flash-lite")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 GITHUB_REPO = os.getenv("GITHUB_REPO", "dilelu94/VaPls-Discord-Bot").strip()
 GITHUB_ISSUE_LABEL = os.getenv("GITHUB_ISSUE_LABEL", "sugerencia").strip()
+GITHUB_AUTO_ERROR_ENABLED = (
+    os.getenv("GITHUB_AUTO_ERROR_ENABLED", "true").lower() == "true"
+)
+GITHUB_ERROR_LABEL = os.getenv("GITHUB_ERROR_LABEL", "bot-error").strip()
+GITHUB_ERROR_COOLDOWN_SECONDS = int(
+    os.getenv("GITHUB_ERROR_COOLDOWN_SECONDS", "300")
+)
 
 # --- File transfer (/transferir) --------------------------------------------
 # Directory where uploaded files and metadata are stored.
