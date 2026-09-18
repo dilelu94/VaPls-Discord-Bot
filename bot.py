@@ -45,7 +45,6 @@ import decifrarVoting
 import adivinadorCommand
 from adivinadorCommand import start_headbanz_game
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
-import huggingfaceImage
 import transferCommand
 from transferCommand import manager as transferManager
 import storyManager
@@ -1529,34 +1528,6 @@ async def indio(
         except Exception:
             log.exception("indio: source-channel ack failed")
     await indioLogic(ctx, charla, False)
-
-
-@bot.slash_command(
-    name="generarimagen",
-    description="Genera una imagen con Hugging Face (gratis, requiere token)",
-)
-async def generarimagen(
-    ctx,
-    prompt: discord.Option(
-        str, description="Descripción de la imagen que querés generar"
-    ),
-):
-    """Slash command: generate an image via Hugging Face Inference API.
-
-    Args:
-        ctx: Discord application context.
-        prompt: Image description.
-
-    Side Effects:
-        Calls Hugging Face Inference API, sends the image to Discord,
-        and deletes the temp file.
-
-    Async:
-        This function is a coroutine and must be awaited.
-    """
-    _track_command(ctx, "generarimagen", {"prompt_length": len(prompt or "")})
-    await huggingfaceImage.generarimagenLogic(ctx, prompt)
-
 
 # @bot.slash_command(
 #     name="banana",
@@ -3842,8 +3813,7 @@ async def help_cmd(ctx):
         value=(
             "**/vapls** `pregunta` — respuesta puntual, sin memoria.\n"
             "**/indio** `charla` — persona con memoria corta y larga destilada. "
-            "También responde por voz al decir 'indio'.\n"
-            "**/generarimagen** `prompt` — genera una imagen con Hugging Face."
+            "También responde por voz al decir 'indio'."
         ),
         inline=False,
     )

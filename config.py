@@ -152,12 +152,6 @@ INDIO_STORY_VOICE_MIN_MEMBERS = int(os.getenv("INDIO_STORY_VOICE_MIN_MEMBERS", "
 # Minutos de inactividad para forzar la 1ra historia del día (min 1/día).
 INDIO_STORY_DAILY_MIN_IDLE = int(os.getenv("INDIO_STORY_DAILY_MIN_IDLE", "60"))
 
-# Hugging Face Inference API for /generarimagen (free tier, no API key needed
-# for inference, just a Hugging Face token). Sign up at huggingface.co and
-# create a read token at https://huggingface.co/settings/tokens.
-# Leave HUGGINGFACE_API_TOKEN empty to disable image generation.
-HUGGINGFACE_API_TOKEN = os.getenv("HUGGINGFACE_API_TOKEN", "").strip()
-
 # Cloudflare Workers AI for free image-to-image / image-editing.
 # Sign up for a free account at cloudflare.com (no credit card required for the free tier).
 # Create an API token with "Workers AI" permissions and find your Account ID in the dashboard.
