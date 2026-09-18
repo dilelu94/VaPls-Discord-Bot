@@ -3979,7 +3979,6 @@ async def _dispatch_indio_actions(
                                 async with sess.post(url, json=payload, headers=headers) as resp:
                                     if resp.status == 200:
                                         ogg_bytes = await resp.read()
-                                        import io
                                         file_obj = discord.File(
                                             io.BytesIO(ogg_bytes), filename=f"clip_{guild_id}_{int(time.time())}.ogg"
                                         )

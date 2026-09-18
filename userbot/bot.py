@@ -4290,6 +4290,117 @@ async def _relay_invoke_soundpad(request: web.Request) -> web.Response:
         return web.json_response({"error": f"invocation failed: {e}"}, status=500)
 
 
+async def _relay_invoke_imagen(request: web.Request) -> web.Response:
+    """Ask the userbot to invoke VaPls's /imagen slash command with a prompt
+    (and optional image_url) argument so the image is generated/edited under
+    the real user account. Mirrors :func:`_relay_invoke_play`."""
+    if not config.RELAY_SECRET:
+        return web.json_response({"error": "relay disabled"}, status=503)
+    if request.headers.get("X-API-Secret") != config.RELAY_SECRET:
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        data = await request.json()
+        channel_id = int(data["channel_id"])
+        raw_query = data.get("query")
+        prompt = ""
+        image_url = None
+        if isinstance(raw_query, str):
+            try:
+                q_json = json.loads(raw_query)
+                if isinstance(q_json, dict):
+                    prompt = str(q_json.get("prompt", "") or "").strip()
+                    image_url = q_json.get("image_url")
+                else:
+                    prompt = raw_query.strip()
+            except Exception:
+                prompt = raw_query.strip()
+        elif isinstance(raw_query, dict):
+            prompt = str(raw_query.get("prompt", "") or "").strip()
+            image_url = raw_query.get("image_url")
+
+        if not prompt and "prompt" in data:
+            prompt = str(data.get("prompt", "") or "").strip()
+        if not image_url and "image_url" in data:
+            image_url = data.get("image_url")
+    except Exception as e:
+        log.warning("[RELAY-IMAGEN] rejected invalid body: %s", e)
+        return web.json_response({"error": "invalid body"}, status=400)
+
+    if not prompt:
+        return web.json_response({"error": "empty prompt"}, status=400)
+    if not client.is_ready():
+        return web.json_response({"error": "userbot not ready"}, status=503)
+
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except Exception as e:
+            return web.json_response({"error": f"channel not found: {e}"}, status=404)
+    if not (
+        hasattr(channel, "application_commands") or hasattr(channel, "slash_commands")
+    ):
+        return web.json_response(
+            {"error": "channel has no slash command API"}, status=400
+        )
+
+    try:
+        cmds = await _resolve_slash_commands(
+            channel,
+            "imagen",
+            timeout=config.INDIO_RELAY_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "[RELAY-IMAGEN] slash_commands() timed out for channel %s", channel_id
+        )
+        return web.json_response({"error": "slash_commands() timed out"}, status=504)
+    except Exception as e:
+        log.exception("[RELAY-IMAGEN] slash_commands() failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_imagen_slash_commands_failed"}
+        )
+        return web.json_response({"error": f"slash_commands() failed: {e}"}, status=500)
+
+    imagen_cmd = _pick_vapls_command(cmds, "imagen")
+    if imagen_cmd is None:
+        log.warning(
+            "[RELAY-IMAGEN] VaPls /imagen not found in channel %s (saw %d candidates)",
+            channel_id,
+            len(cmds),
+        )
+        return web.json_response(
+            {"error": "imagen command not found in channel"}, status=404
+        )
+
+    try:
+        kwargs = {"prompt": prompt}
+        if image_url:
+            kwargs["imagen_url"] = image_url
+        await imagen_cmd(**kwargs)
+        log.info(
+            f"[RELAY-IMAGEN] invoked /imagen prompt={prompt!r} image_url={image_url!r} in channel={channel_id}"
+        )
+        return web.json_response({"invoked": True, "prompt": prompt, "image_url": image_url})
+    except discord.HTTPException as e:
+        if getattr(e, "status", None) == 429:
+            log.warning(
+                "[RELAY-IMAGEN] Discord rate-limited /imagen invocation: %s", e
+            )
+            return web.json_response({"error": f"rate-limited: {e}"}, status=429)
+        log.exception("[RELAY-IMAGEN] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_imagen_invocation_failed"}
+        )
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+    except Exception as e:
+        log.exception("[RELAY-IMAGEN] invocation failed")
+        analytics.capture_exception(
+            e, properties={"action": "relay_imagen_invocation_failed"}
+        )
+        return web.json_response({"error": f"invocation failed: {e}"}, status=500)
+
+
 
 
 
@@ -5444,6 +5555,7 @@ async def _start_relay() -> Optional[web.AppRunner]:
     app.router.add_get("/members", _relay_members)
     app.router.add_post("/invoke_play", _relay_invoke_play)
     app.router.add_post("/invoke_soundpad", _relay_invoke_soundpad)
+    app.router.add_post("/invoke_imagen", _relay_invoke_imagen)
     # app.router.add_post("/invoke_banana", _relay_invoke_banana)
     app.router.add_post("/join", _relay_join)
     app.router.add_post("/leave", _relay_leave)
