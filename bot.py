@@ -70,6 +70,10 @@ import posthog_client
 
 posthog_client.init_observability(service_name="vapls-main-bot")
 
+import autoErrorTracker
+
+autoErrorTracker.init_auto_error_tracker(process_name="main-bot")
+
 if not discord.opus.is_loaded():
     for lib in ["libopus.so.0", "libopus.so", "opus"]:
         try:

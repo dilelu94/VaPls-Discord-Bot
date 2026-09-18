@@ -110,6 +110,17 @@ This maps directly to PostHog's **LLM Observability** dashboard, allowing you to
 
 ---
 
+## 🐛 Automatic GitHub Issue Error Tracking (`autoErrorTracker.py`)
+
+Background errors, uncaught exceptions, and `log.exception` calls are automatically tracked and reported to GitHub Issues via `autoErrorTracker.py`:
+
+- **Fingerprinting & Deduplication:** Generates a 12-character SHA256 fingerprint hash based on exception class and top frame location (`<!-- error-fingerprint: <hash> -->`). If an issue already exists (open or closed), **no duplicate issue is created**.
+- **Reincidence Commenting:** If a tracked error re-occurs, a detailed comment is posted on the original issue with the new timestamp, process name, and updated context. Closed issues are automatically re-opened.
+- **Anti-Spam Cooldown:** Enforces an in-memory rate-limiting cooldown per fingerprint (`GITHUB_ERROR_COOLDOWN_SECONDS`, default 300s) to protect GitHub API limits during looping error states.
+- **Rich Diagnostic Telemetry:** Includes exception type, message, full formatted traceback code block, timestamp (UTC), process name (`main-bot`, `userbot`, `golive`), command/event/endpoint context, Discord user/guild/channel metadata, and Python/OS platform details.
+
+---
+
 ## 🔑 Key & Project Reference
 
 | Field                | Value                                               |

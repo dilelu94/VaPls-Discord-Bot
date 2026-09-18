@@ -60,6 +60,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("golive")
 
+import autoErrorTracker
+
+autoErrorTracker.init_auto_error_tracker(process_name="golive")
+
 logging.getLogger("discord.gateway").setLevel(logging.WARNING)
 logging.getLogger("discord.client").setLevel(logging.WARNING)
 

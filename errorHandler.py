@@ -46,6 +46,14 @@ async def handle(ctx, error):
         pass
 
     try:
+        import autoErrorTracker
+        asyncio.create_task(
+            autoErrorTracker.report_error(original, ctx=ctx, logger_name="bot.errors")
+        )
+    except Exception:
+        pass
+
+    try:
         already_responded = False
         response = getattr(ctx, "response", None)
         if response is not None:
