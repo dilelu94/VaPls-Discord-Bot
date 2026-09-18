@@ -25,11 +25,19 @@ import discord
 import discord.gateway
 
 import config
-import video_compat as vc
-import davey_compat
+try:
+    from golive import video_compat as vc
+except (ImportError, ModuleNotFoundError):
+    import video_compat as vc
+
+try:
+    from golive import davey_compat
+except (ImportError, ModuleNotFoundError):
+    import davey_compat
+
 try:
     from golive.slopsoil.golive import GoLiveConnection
-except ModuleNotFoundError:
+except (ImportError, ModuleNotFoundError):
     from slopsoil.golive import GoLiveConnection
 
 
@@ -37,10 +45,13 @@ except ModuleNotFoundError:
 # Must patch before any voice connections (before client.start())
 vc.patch_video(discord.gateway)
 
-import discord.voice_state
-discord.voice_state.davey = davey_compat
-discord.gateway.davey = davey_compat
-davey_compat.patch_reinit(discord.voice_state)
+try:
+    import discord.voice_state
+    discord.voice_state.davey = davey_compat
+    discord.gateway.davey = davey_compat
+    davey_compat.patch_reinit(discord.voice_state)
+except ModuleNotFoundError:
+    pass
 
 logging.basicConfig(
     level=getattr(logging, getattr(config, "LOG_LEVEL", "INFO"), logging.INFO),
@@ -493,12 +504,16 @@ class GoLiveStream:
         return 0.0
 
     def pause(self):
-        if self.video_player:
+        if self.video_player and hasattr(self.video_player, "pause"):
             self.video_player.pause()
+        if hasattr(self, "audio_sender") and self.audio_sender and hasattr(self.audio_sender, "pause"):
+            self.audio_sender.pause()
 
     def resume(self):
-        if self.video_player:
+        if self.video_player and hasattr(self.video_player, "resume"):
             self.video_player.resume()
+        if hasattr(self, "audio_sender") and self.audio_sender and hasattr(self.audio_sender, "resume"):
+            self.audio_sender.resume()
 
     @property
     def current_position(self) -> float:

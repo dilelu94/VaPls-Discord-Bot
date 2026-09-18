@@ -35,9 +35,15 @@ try:
     from discord.gateway import DiscordVoiceWebSocket
 except ImportError:
     DiscordVoiceWebSocket = getattr(discord.gateway, "DiscordVoiceWebSocket", None)
-from discord.voice_state import SocketReader
+try:
+    from discord.voice_state import SocketReader
+except (ImportError, ModuleNotFoundError):
+    SocketReader = getattr(discord.gateway, "SocketReader", None)
 
-import davey_compat
+try:
+    from golive import davey_compat
+except (ImportError, ModuleNotFoundError):
+    import davey_compat
 
 if TYPE_CHECKING:
     from bot import SlopSoil
@@ -479,6 +485,8 @@ class GoLiveAudioSender(threading.Thread):
         self._f = file_obj
         self._conn = conn
         self._end = threading.Event()
+        self._paused_event = threading.Event()
+        self._paused_event.set()  # set = running, clear = paused
         # Returns True while the video player may still produce output, incl. the
         # FIFO gap during a software-encoder fallback restart.  When set, a short
         # read is treated as that gap (wait for the new writer) rather than EOF.
@@ -487,6 +495,19 @@ class GoLiveAudioSender(threading.Thread):
         self._seq: int = initial_seq & 0xFFFF
         self._ts: int = initial_ts & 0xFFFF_FFFF
         self._nonce: int = 0  # running nonce counter for lite/rtpsize modes
+
+    def pause(self) -> None:
+        """Pause audio frame emission."""
+        self._paused_event.clear()
+        log.info("GoLiveAudioSender: paused")
+
+    def resume(self) -> None:
+        """Resume audio frame emission."""
+        self._paused_event.set()
+        log.info("GoLiveAudioSender: resumed")
+
+    def is_paused(self) -> bool:
+        return not self._paused_event.is_set()
 
     def stop(self) -> None:
         self._end.set()
@@ -517,6 +538,13 @@ class GoLiveAudioSender(threading.Thread):
         loops = 0
 
         while not self._end.is_set():
+            if not self._paused_event.is_set():
+                while not self._paused_event.is_set() and not self._end.is_set():
+                    if self._end.wait(timeout=0.1):
+                        break
+                t0 = time.perf_counter()
+                loops = 0
+
             pcm = self._f.read(self._FRAME_SIZE)
             if len(pcm) < self._FRAME_SIZE:
                 # Short read = current FFmpeg closed the FIFO write end.  If the

@@ -2563,6 +2563,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     logger.info("[STREMIO TRANSMIT] GoLive relay response (%s): %s", resp.status, data)
                     if resp.status == 200:
                         try:
+                            from bot import _active_sources, _paused_streams
+                            gid_int = int(guild_id)
+                            _active_sources[gid_int] = {"type": "stremio", "url": stream_url}
+                            _paused_streams.discard(gid_int)
+                            logger.info("[STREMIO TRANSMIT] Registered active source for guild %d", gid_int)
+                        except Exception as act_err:
+                            logger.warning("[STREMIO TRANSMIT] Failed to register active source in bot: %s", act_err)
+
+                        try:
                             from stremio_sessions import watched_manager
                             w_key = body.get("watched_key")
                             if not w_key and imdb_id:

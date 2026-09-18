@@ -163,3 +163,28 @@ def test_golive_quack_control_intercept_parser():
     golive_bot._last_quack_time.pop(guild_id, None)
 
 
+def test_h264_video_player_and_audio_sender_pause_resume():
+    from golive.slopsoil.video_player import H264VideoPlayer
+    from golive.slopsoil.golive import GoLiveAudioSender
+
+    vc = MagicMock()
+    vc.ssrc = 100
+
+    player = H264VideoPlayer("http://example.com/stream.mp4", vc)
+    audio_sender = GoLiveAudioSender(MagicMock(), vc)
+
+    assert player.is_paused() is False
+    assert audio_sender.is_paused() is False
+
+    player.pause()
+    audio_sender.pause()
+    assert player.is_paused() is True
+    assert audio_sender.is_paused() is True
+
+    player.resume()
+    audio_sender.resume()
+    assert player.is_paused() is False
+    assert audio_sender.is_paused() is False
+
+
+

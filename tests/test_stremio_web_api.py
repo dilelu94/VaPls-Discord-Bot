@@ -170,6 +170,9 @@ async def test_stremio_valid_token_access(mock_bot):
             assert resp_play.status == 200
             play_json = await resp_play.json()
             assert play_json["status"] == "ok"
+            from bot import _active_sources
+            assert _active_sources.get(789) is not None
+            assert _active_sources[789]["type"] == "stremio"
     finally:
         await client.close()
 

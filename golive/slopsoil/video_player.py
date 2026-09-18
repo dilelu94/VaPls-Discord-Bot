@@ -1008,6 +1008,8 @@ class H264VideoPlayer(threading.Thread):
         self._season = season
         self._episode = episode
         self._end = threading.Event()
+        self._paused_event = threading.Event()
+        self._paused_event.set()  # set = running, clear = paused
         self._proc: subprocess.Popen | None = None
 
         self._live = live
@@ -1040,6 +1042,19 @@ class H264VideoPlayer(threading.Thread):
     @property
     def audio_fifo(self) -> str:
         return self._audio_fifo
+
+    def pause(self) -> None:
+        """Pause video frame emission."""
+        self._paused_event.clear()
+        log.info("[VIDEO_PLAYER] Stream paused")
+
+    def resume(self) -> None:
+        """Resume video frame emission."""
+        self._paused_event.set()
+        log.info("[VIDEO_PLAYER] Stream resumed")
+
+    def is_paused(self) -> bool:
+        return not self._paused_event.is_set()
 
     def stop(self) -> None:
         self._end.set()
@@ -1554,6 +1569,15 @@ class H264VideoPlayer(threading.Thread):
             nonlocal _stats_late_total, _stats_late_max
             if not f:
                 return False
+
+            if not self._paused_event.is_set():
+                log.info("[VIDEO_PLAYER] Paused — waiting for resume...")
+                while not self._paused_event.is_set() and not self._end.is_set():
+                    if self._end.wait(timeout=0.1):
+                        return True
+                if _t0 is not None:
+                    _t0 = time.monotonic() - _n / self._fps
+
             if _t0 is None:
                 _t0 = time.monotonic()
             self._send_frame(f)
