@@ -333,6 +333,10 @@ golive: encoder probe OK → libx264
      - **Proxy de raíz unificado**: `golive_connection.py` en la raíz se convirtió en un re-export canónico hacia `golive.slopsoil.golive`, eliminando la clase duplicada e incompleta.
      - **Fluidez de 30 FPS / baja carga de CPU**: Gracias al encoder de CPU `libx264` configurado con `-preset ultrafast -tune zerolatency -profile:v high -x264-params aud=1` (del fix 5 del 2026-08-27), delimitar los Access Units con AUDs permite que `streamer.py` agrupe los NALs exactos por cuadro. Con la conexión WebSocket funcionando plenamente, FFmpeg entrega los cuadros a 30 FPS estables con un uso de CPU mínimo en la instancia ARM (4 vCPUs).
 
+7. **(2026-09-18) Botones fantasmas en UI por falta de referencia `message`/`interaction` y error `AttributeError` en `BaseView.on_timeout()`**:
+   - _Causas_: (a) Al responder comandos con `ctx.respond(..., view=view)` o `safe_respond()`, no se guardaba la referencia `view.message` o `view.bound_interaction`. Al expirar el timeout (60s–300s), `BaseView.on_timeout()` no podía editar el mensaje de Discord para remover los botones (`view=None`). (b) En comandos como `/mascota`, `ctx.respond()` devolvía un objeto `discord.Interaction` que era asignado a `view.message`. Al expirar el timeout, `on_timeout()` ejecutaba `await self.message.edit(view=None)`, lanzando `AttributeError: 'Interaction' object has no attribute 'edit'`, fallando silenciosamente la remoción de botones.
+   - **Fixes**: (a) Se actualizó `BaseView.on_timeout()` en `baseView.py` con duck-typing para tratar a `self.message` si es una `discord.Interaction` como `bound_interaction`. (b) Se actualizó `safe_respond()` en `bot.py` para usar `wait=True` cuando se envía una `view` por `followup.send()` y auto-vincular `view.message` o `view.bound_interaction` en todas las respuestas de comandos.
+
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
 El detector de wake-word del userbot corre VOSK con una **gramática restringida**
@@ -439,7 +443,7 @@ Si encontrás el error a futuro: re-correr los 3 comandos en el venv del userbot
 
 ### 2) Modelo `faster-whisper` se descarga en el primer arranque
 
-La primera vez que `indio-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado).
+La primera vez que `indio-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado). Se dispone del token `HUGGINGFACE_API_TOKEN` en `.env` / `config.py` para autenticar descargas o APIs de Hugging Face si fuera requerido.
 
 ### 3) DAVE patch en el userbot
 
