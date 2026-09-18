@@ -226,3 +226,61 @@ async def imagenLogic(
     except Exception as e:
         logger.exception("failed to send image followup: %s", e)
         await safe_respond(ctx, f"⚠️ Error al enviar la imagen: {e}")
+
+
+async def handle_text_message_imagen(message, prompt: str) -> None:
+    """Handle text message invocations of /imagen or !imagen (e.g. replies to photos).
+
+    Args:
+        message: discord.Message object.
+        prompt: Extracted prompt string from the text message.
+    """
+    import discord
+
+    clean_prompt = prompt.strip() if prompt else ""
+    if not clean_prompt:
+        try:
+            await message.reply("❌ Tenés que especificar una descripción o prompt (ej: `/imagen agregale maquillaje de payaso`).")
+        except Exception:
+            pass
+        return
+
+    try:
+        if hasattr(message.channel, "trigger_typing"):
+            await message.channel.trigger_typing()
+    except Exception:
+        pass
+
+    target_image_url = await resolve_target_image_url(message)
+
+    img_bytes = await generate_or_edit_image(
+        prompt=clean_prompt,
+        image_url=target_image_url,
+        model="flux",
+    )
+
+    if not img_bytes:
+        try:
+            await message.reply("❌ No pude generar/editar la imagen. Probá de nuevo más tarde.")
+        except Exception:
+            pass
+        return
+
+    filename = "imagen_editada.jpg" if target_image_url else "imagen_generada.jpg"
+    file_obj = discord.File(io.BytesIO(img_bytes), filename=filename)
+
+    header_text = (
+        f"🎨 **Imagen transformada** (`flux`)\n> **Prompt:** {clean_prompt}"
+        if target_image_url
+        else f"🖼️ **Imagen generada** (`flux`)\n> **Prompt:** {clean_prompt}"
+    )
+
+    try:
+        await message.reply(content=header_text, file=file_obj)
+    except Exception as e:
+        logger.exception("failed to reply with image to text message: %s", e)
+        try:
+            await message.channel.send(content=header_text, file=file_obj)
+        except Exception:
+            pass
+

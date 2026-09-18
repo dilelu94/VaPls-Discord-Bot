@@ -192,3 +192,40 @@ async def test_resolve_target_image_url_channel_history_fallback(ctx_factory):
     url = await pollinationsImage.resolve_target_image_url(ctx)
     assert url == "https://cdn.discordapp.com/hist_photo.jpg"
 
+
+@pytest.mark.asyncio
+async def test_handle_text_message_imagen_success(monkeypatch):
+    monkeypatch.setattr(
+        pollinationsImage,
+        "generate_or_edit_image",
+        AsyncMock(return_value=b"fake-edited-bytes"),
+    )
+
+    ref_att = types.SimpleNamespace(url="https://cdn.discordapp.com/miles_photo.jpg", content_type="image/jpeg", filename="photo.jpg")
+    ref_msg = types.SimpleNamespace(attachments=[ref_att], embeds=[])
+
+    msg = MagicMock()
+    msg.referenced_message = ref_msg
+    msg.reply = AsyncMock()
+
+    await pollinationsImage.handle_text_message_imagen(msg, "agregale maquillaje de payaso")
+
+    assert msg.reply.called
+    kwargs = msg.reply.call_args.kwargs
+    assert "agregale maquillaje de payaso" in kwargs.get("content", "")
+    assert "file" in kwargs
+
+
+@pytest.mark.asyncio
+async def test_handle_text_message_imagen_empty_prompt():
+    msg = MagicMock()
+    msg.reply = AsyncMock()
+
+    await pollinationsImage.handle_text_message_imagen(msg, "   ")
+
+    assert msg.reply.called
+    kwargs = msg.reply.call_args
+    args_str = str(kwargs)
+    assert "Tenés que especificar" in args_str or "prompt" in args_str
+
+

@@ -950,6 +950,11 @@ async def on_message(message):
         user_id = message.author.id
         channel_type = str(getattr(message.channel, "type", "") or "")
 
+        if content.startswith(("/imagen", "!imagen")):
+            prompt = re.sub(r"^[/!]imagen\s*", "", content, flags=re.I)
+            import pollinationsImage
+            asyncio.create_task(pollinationsImage.handle_text_message_imagen(message, prompt))
+
         # Story system: track chat activity for idle detection
         storyManager.record_chat_activity(guild_id)
         # Catch first message after a story for context/feedback
