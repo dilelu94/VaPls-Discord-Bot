@@ -1805,6 +1805,16 @@ class GuildPlayer:
         playLogger.info(
             f"[DOWNLOAD CANCEL] User cancelled download for '{videoTitle}' (ID: {videoId})"
         )
+        if not self.isDownloading and videoId not in self.downloadingIds:
+            try:
+                if getattr(interaction, "message", None):
+                    await interaction.message.edit(content=f"ℹ️ La descarga de **{videoTitle}** ya finalizó.", view=None)
+                else:
+                    await interaction.response.send_message(f"ℹ️ La descarga de **{videoTitle}** ya finalizó.", ephemeral=True)
+            except Exception:
+                pass
+            return
+
         if self.activeDownloadProc:
             try:
                 self.activeDownloadProc.kill()
@@ -1822,14 +1832,17 @@ class GuildPlayer:
         self.pendingVoiceChannel = None
         self.pendingTriggerUserId = None
         # Soltar el handle del mensaje progresivo del indio si quedó pendiente
-        # (sin esto, una próxima canción cuyo video_id matcheara accidentalmente
-        # editaría un mensaje ya stale).
         self.indioProgressMessage = None
         self.indioProgressMeta = {}
         try:
-            await interaction.edit_original_response(
-                content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None
-            )
+            if getattr(interaction, "message", None):
+                await interaction.message.edit(
+                    content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None
+                )
+            else:
+                await interaction.edit_original_response(
+                    content=f"❌ Descarga cancelada: **{videoTitle}**.", view=None
+                )
         except Exception:
             pass
         if self.vc:
@@ -2563,7 +2576,13 @@ class GuildPlayer:
         if self.history:
             embed.set_footer(text=f"Canciones en historial: {len(self.history)}")
 
-        view = PlayerControlView(self)
+        is_connected = bool(self.vc and getattr(self.vc, "is_connected", lambda: False)())
+        is_active = is_connected and (self.currentSong is not None or getattr(self, "isDownloading", False))
+        if not is_active:
+            lastSong = self.currentSong or (self.history[-1] if self.history else None)
+            view = DisconnectedControlView(self.bot, self.guildId, lastSong)
+        else:
+            view = PlayerControlView(self)
 
         try:
             if self.controlMessage:

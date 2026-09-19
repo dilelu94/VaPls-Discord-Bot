@@ -2779,6 +2779,12 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient, force_restart: bool =
         f"[VOICE] Starting listener in {vc.channel.name} (sink={type(sink).__name__})"
     )
     try:
+        if getattr(vc, "is_listening", lambda: False)():
+            log.info(f"[VOICE] Stopping existing listener in {vc.channel.name}")
+            try:
+                vc.stop_listening()
+            except Exception:
+                pass
         vc.listen(sink)
         endpoint_ip = getattr(vc, "endpoint_ip", None) or getattr(getattr(vc, "_connection", None), "endpoint_ip", None)
         voice_port = getattr(vc, "voice_port", None) or getattr(getattr(vc, "_connection", None), "voice_port", None)
@@ -2792,6 +2798,8 @@ async def _start_listening(vc: voice_recv.VoiceRecvClient, force_restart: bool =
             struct.pack_into(">I", nat_ping, 4, ssrc)
             sock.sendto(bytes(nat_ping), (endpoint_ip, voice_port))
             log.info(f"[VOICE] Sent IP discovery UDP NAT ping to {endpoint_ip}:{voice_port} (ssrc={ssrc})")
+    except discord.ClientException as e:
+        log.warning(f"[VOICE] listen() skipped (already listening): {e}")
     except Exception as e:
         log.exception(f"[VOICE] listen() failed: {e}")
         analytics.capture_exception(e, properties={"action": "voice_listen_failed"})

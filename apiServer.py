@@ -177,27 +177,33 @@ async def authMiddleware(request: web.Request, handler):
     Async:
         This function is a coroutine and must be awaited by aiohttp.
     """
-    # Admin routes use Basic Auth instead of X-API-Secret.
-    if request.path.startswith("/admin"):
+    try:
+        # Admin routes use Basic Auth instead of X-API-Secret.
+        if request.path.startswith("/admin"):
+            return await handler(request)
+        # Transfer routes use the token as auth.
+        if (
+            request.path.startswith("/upload")
+            or request.path.startswith("/dl")
+            or request.path.startswith("/static")
+            or request.path.startswith("/stremio")
+            or request.path.startswith("/api/stremio")
+            or request.path.startswith("/webhook")
+            or request.path.startswith("/privacy")
+            or request.path.startswith("/delete-data")
+            or request.path.startswith("/audio")
+            or request.path.startswith("/debug-idle")
+        ):
+            return await handler(request)
+        err = _checkAuth(request)
+        if err is not None:
+            return err
         return await handler(request)
-    # Transfer routes use the token as auth.
-    if (
-        request.path.startswith("/upload")
-        or request.path.startswith("/dl")
-        or request.path.startswith("/static")
-        or request.path.startswith("/stremio")
-        or request.path.startswith("/api/stremio")
-        or request.path.startswith("/webhook")
-        or request.path.startswith("/privacy")
-        or request.path.startswith("/delete-data")
-        or request.path.startswith("/audio")
-        or request.path.startswith("/debug-idle")
-    ):
-        return await handler(request)
-    err = _checkAuth(request)
-    if err is not None:
-        return err
-    return await handler(request)
+    except aiohttp.http_exceptions.BadHttpMessage as ex:
+        logger.warning("HTTP request error from %s: %s", getattr(request, "remote", "unknown"), ex)
+        return web.json_response({"error": "bad request"}, status=400)
+    except web.HTTPException as ex:
+        return ex
 
 
 def _serializeMemberVoice(member: discord.Member) -> dict:
