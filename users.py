@@ -291,7 +291,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     495255209715433472: {
         "name": "Franko",
-        "greeting": "Audios/Sale un contercito.m4a",
+        "greeting": [
+            {
+                "path": "Audios/Sale un contercito.m4a",
+                "weight": 99
+            },
+            {
+                "path": "Secretos/discord-kitten.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Franco",
