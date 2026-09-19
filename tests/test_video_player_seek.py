@@ -4,7 +4,20 @@ import threading
 from unittest.mock import MagicMock, patch
 import pytest
 
-from golive.slopsoil.video_player import H264VideoPlayer
+from golive.slopsoil.video_player import H264VideoPlayer, _EncoderConfig
+import golive.slopsoil.video_player as vp
+
+
+@pytest.fixture(autouse=True)
+def mock_encoder():
+    dummy = _EncoderConfig(
+        name="libx264",
+        pre_input=[],
+        post_codec=["-preset", "ultrafast"],
+        vf="scale=1280x720,format=yuv420p",
+    )
+    with patch.object(vp, "_ENCODER", dummy):
+        yield
 
 
 def test_h264_video_player_current_position_initial():

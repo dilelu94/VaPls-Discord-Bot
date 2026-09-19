@@ -178,6 +178,7 @@ async def test_relay_invoke_imagen_handler(monkeypatch):
     client.get_channel.return_value = channel
 
     import asyncio, logging, discord
+    from typing import Optional
     from aiohttp import web
     from types import SimpleNamespace
 
@@ -196,6 +197,7 @@ async def test_relay_invoke_imagen_handler(monkeypatch):
         "asyncio": asyncio,
         "json": json,
         "analytics": MagicMock(),
+        "Optional": Optional,
     }
 
     exec(owner_block, ns)
