@@ -121,6 +121,7 @@ class GoLiveStream:
         item_type: Optional[str] = None,
         season: Optional[int] = None,
         episode: Optional[int] = None,
+        is_live: Optional[bool] = None,
     ):
         self.bot = bot
         self.guild_id = guild_id
@@ -140,7 +141,7 @@ class GoLiveStream:
         self.video_player = None
         self.audio_sender = None
         self.video_ssrc = None
-        self.is_live = True
+        self.is_live = is_live if is_live is not None else True
         self.target_url = None
         self.title = None
         self.reconnect_attempts = 0
@@ -171,7 +172,7 @@ class GoLiveStream:
         """
         target_url = url
         title = "Stream"
-        is_live = True
+        is_live = False
 
         if not url.startswith(("http://", "https://")):
             if url.startswith("magnet:") or "urn:btih:" in url.lower():
@@ -813,6 +814,8 @@ async def _relay_stream(request: web.Request) -> web.Response:
         item_type = str(data.get("type", "") or data.get("item_type", "")).strip() or None
         season = int(data["season"]) if data.get("season") is not None else None
         episode = int(data["episode"]) if data.get("episode") is not None else None
+        is_live_arg = data.get("is_live")
+        is_live = bool(is_live_arg) if is_live_arg is not None else None
     except Exception as e:
         log.warning("[STREAM] invalid body: %s", e)
         return web.json_response({"error": "invalid body"}, status=400)
@@ -894,7 +897,7 @@ async def _relay_stream(request: web.Request) -> web.Response:
     stream = GoLiveStream(
         client, guild_id, channel_id, vc, url,
         start_sec=start_sec, audio_track=audio_track, subtitle_track=subtitle_track, subtitle_file=subtitle_file,
-        title=stream_title, imdb_id=imdb_id, item_type=item_type, season=season, episode=episode,
+        title=stream_title, imdb_id=imdb_id, item_type=item_type, season=season, episode=episode, is_live=is_live,
     )
     try:
         await stream.start()

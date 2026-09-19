@@ -2559,6 +2559,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "type": item_type,
                     "season": season,
                     "episode": episode,
+                    "is_live": False,
                 }
                 async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=90) as resp:
                     try:

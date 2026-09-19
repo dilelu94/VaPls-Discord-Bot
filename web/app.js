@@ -745,6 +745,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (playerRewindBtn) {
     playerRewindBtn.addEventListener('click', () => {
       const target = Math.max(0, activePosSecs - 10);
+      activePosSecs = target;
+      if (playerSeekBar) playerSeekBar.value = String(target);
+      if (playerCurrentTime) playerCurrentTime.textContent = formatTime(target);
       sendPlayerControl('seek', { timestamp: target });
     });
   }
@@ -752,6 +755,9 @@ document.addEventListener('DOMContentLoaded', () => {
   if (playerForwardBtn) {
     playerForwardBtn.addEventListener('click', () => {
       const target = activePosSecs + 10;
+      activePosSecs = target;
+      if (playerSeekBar) playerSeekBar.value = String(target);
+      if (playerCurrentTime) playerCurrentTime.textContent = formatTime(target);
       sendPlayerControl('seek', { timestamp: target });
     });
   }
