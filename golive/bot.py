@@ -558,7 +558,8 @@ class GoLiveStream:
         if hasattr(client, "stream_tasks"):
             t = client.stream_tasks.pop(self.guild_id, None)
             if t and not t.done():
-                t.cancel()
+                if t is not asyncio.current_task():
+                    t.cancel()
 
         # 1. Stop streaming / screenshare immediately (STREAM_DELETE)
         if self.conn:
