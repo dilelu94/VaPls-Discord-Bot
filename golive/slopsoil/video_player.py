@@ -1300,7 +1300,10 @@ class H264VideoPlayer(threading.Thread):
                 "fontsdir='/usr/share/fonts/truetype/dejavu'",
                 "force_style='FontName=DejaVu Sans,FontSize=20,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.5,Shadow=0'",
             ]
-            vf_str = f"{vf_str},subtitles={':'.join(sub_opts)}"
+            if self._start_time > 0:
+                vf_str = f"{vf_str},setpts=PTS+{self._start_time:.3f}/TB,subtitles={':'.join(sub_opts)},setpts=PTS-STARTPTS"
+            else:
+                vf_str = f"{vf_str},subtitles={':'.join(sub_opts)}"
 
         rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
         fflags = "+discardcorrupt"

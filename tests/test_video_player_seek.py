@@ -43,3 +43,25 @@ def test_h264_video_player_seek_updates_position_and_triggers_event():
         assert player.current_position == 300.0
         assert player._seeking_event.is_set()
         mock_kill.assert_called_once_with(mock_proc)
+
+
+def test_h264_video_player_ffmpeg_cmd_setpts_subtitles(tmp_path):
+    sub_file = str(tmp_path / "test.srt")
+    with open(sub_file, "w") as f:
+        f.write("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+
+    vc = MagicMock()
+    vc.ssrc = 1000
+    player = H264VideoPlayer(
+        url="http://example.com/video.mp4",
+        voice_client=vc,
+        fps=25.0,
+        start_time=128.8,
+        subtitle_file=sub_file,
+    )
+    cmd = player._ffmpeg_cmd()
+    cmd_str = " ".join(cmd)
+    assert "setpts=PTS+128.800/TB" in cmd_str
+    assert "subtitles=" in cmd_str
+    assert "setpts=PTS-STARTPTS" in cmd_str
+
