@@ -51,7 +51,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 99
             },
             {
-                "path": "Mila/dorime_WdWNsGk.mp3",
+                "path": "Secretos/dorime_WdWNsGk.mp3",
                 "weight": 1
             },
             {
@@ -117,11 +117,11 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 98
             },
             {
-                "path": "Audios/el-monte-everest-no-tiene-nada-en-contra-de-mi_cut_025338.mp3",
+                "path": "Secretos/el-monte-everest-no-tiene-nada-en-contra-de-mi_cut_025338.mp3",
                 "weight": 1
             },
             {
-                "path": "Audios/viny-amor-descabellado.mp3",
+                "path": "Secretos/viny-amor-descabellado.mp3",
                 "weight": 1
             }
         ],
@@ -185,11 +185,11 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 98
             },
             {
-                "path": "Audios/Albin y las Ardillas/albin backshoots 2.m4a",
+                "path": "Secretos/albin backshoots 2.m4a",
                 "weight": 1
             },
             {
-                "path": "Audios/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
+                "path": "Secretos/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
                 "weight": 1
             }
         ],
@@ -231,7 +231,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 33
             },
             {
-                "path": "Seba/mr-krabs-money_z55UHab.mp3",
+                "path": "Secretos/mr-krabs-money_z55UHab.mp3",
                 "weight": 1
             }
         ],
@@ -262,7 +262,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 99
             },
             {
-                "path": "Audios/debi tirar mas fotos 0.mp3",
+                "path": "Secretos/debi tirar mas fotos 0.mp3",
                 "weight": 1
             }
         ],
@@ -327,11 +327,11 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 98
             },
             {
-                "path": "Audios/enrique_invertido.mp3",
+                "path": "Secretos/enrique_invertido.mp3",
                 "weight": 1
             },
             {
-                "path": "Audios/enrique_tiktok_invertido.mp3",
+                "path": "Secretos/enrique_tiktok_invertido.mp3",
                 "weight": 1
             }
         ],
@@ -352,7 +352,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 99
             },
             {
-                "path": "Audios/oniiiiiiiiiiiii.mp3",
+                "path": "Secretos/oniiiiiiiiiiiii.mp3",
                 "weight": 1
             }
         ],
