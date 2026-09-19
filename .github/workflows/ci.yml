@@ -22,9 +22,9 @@ jobs:
         python-version: ["3.10"]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: "pip"
@@ -86,7 +86,7 @@ jobs:
       # updated (handles the very first deploy or a broken server state).
       - name: Check out repository (for deploy.sh)
         if: steps.guard.outputs.ready == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deploy to server
         if: steps.guard.outputs.ready == 'true'
