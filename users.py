@@ -367,10 +367,14 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/Fart_with_reverb_sound_effect.wav",
-                "weight": 99
+                "weight": 98
             },
             {
                 "path": "Secretos/oniiiiiiiiiiiii.mp3",
+                "weight": 1
+            },
+            {
+                "path": "Secretos/le-fart-de-simon.mp3",
                 "weight": 1
             }
         ],
