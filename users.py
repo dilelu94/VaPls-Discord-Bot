@@ -342,15 +342,19 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/enrique.mp3",
-                "weight": 34
+                "weight": 25
             },
             {
                 "path": "Audios/enrique-slowed.mp3",
-                "weight": 32
+                "weight": 25
             },
             {
                 "path": "Audios/enrique-sped-up.mp3",
-                "weight": 32
+                "weight": 24
+            },
+            {
+                "path": "Audios/enrique-high-pitched-velzoh-edition.mp3",
+                "weight": 24
             },
             {
                 "path": "Secretos/enrique_invertido.mp3",
