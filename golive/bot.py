@@ -407,7 +407,7 @@ class GoLiveStream:
                 if self._stopped:
                     break
 
-                if self.conn and not self.conn.healthy:
+                if self.conn and not getattr(self.conn, "healthy", True):
                     log.warning("[STREAM] GoLive connection lost. Reconnecting...")
                     ok = await self._restart_connection()
                     if self._stopped:
@@ -574,6 +574,7 @@ class GoLiveStream:
             try:
                 if self.vc.is_connected():
                     log.info("[STREAM] Disconnecting voice client...")
+                    await asyncio.sleep(0.2)
                     await asyncio.wait_for(self.vc.disconnect(force=True), timeout=3.0)
                     log.info("[STREAM] VoiceClient disconnected gracefully")
             except Exception as e:

@@ -326,7 +326,7 @@ async def start_live_stream(
             live_conn = bot.live_connections.pop(guild.id, None)
             if live_conn is not None:
                 try:
-                    await live_conn.disconnect()
+                    await asyncio.wait_for(live_conn.disconnect(), timeout=3.0)
                 except Exception:
                     pass
             try:
