@@ -4971,6 +4971,7 @@ async def _speak_indio_reply(
     text: str,
     max_chars: int = 500,
     force: bool = False,
+    efecto: str = "ninguno",
 ) -> None:
     """Send text to the Userbot (Indio) HTTP relay so the Userbot account speaks the response in voice."""
     if not text or not guild_id:
@@ -4998,6 +4999,7 @@ async def _speak_indio_reply(
         "channel_id": channel_id,
         "user_id": user_id,
         "force": force,
+        "efecto": efecto,
     }
 
     headers = {}
@@ -5400,7 +5402,7 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str, router=None
 
 
 async def indioLogic(
-    ctx: discord.ApplicationContext, pregunta: str, nuevo: bool, router=None
+    ctx: discord.ApplicationContext, pregunta: str, nuevo: bool, router=None, efecto: str = "ninguno"
 ):
     """Handle the /indio command with short-term conversation memory.
 
@@ -5890,7 +5892,7 @@ async def indioLogic(
             if history_size_after >= _HISTORY_COMPRESS_THRESHOLD:
                 _spawn(_maybe_compress(hist_key, lt_key))
 
-    _spawn(_speak_indio_reply(ctx.bot, getattr(ctx.guild, "id", None), ctx.author, clean_reply))
+    _spawn(_speak_indio_reply(ctx.bot, getattr(ctx.guild, "id", None), ctx.author, clean_reply, efecto=efecto))
 
     analytics.capture(
         "indio invoked",

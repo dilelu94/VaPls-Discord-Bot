@@ -93,7 +93,7 @@ async def test_relay_speak_stops_existing_audio(monkeypatch, tmp_path):
     
     dummy_wav = tmp_path / "test.wav"
     dummy_wav.write_bytes(b"RIFF....WAVE")
-    monkeypatch.setattr(tts, "generate_tts_wav", lambda text: str(dummy_wav))
+    monkeypatch.setattr(tts, "generate_tts_wav", lambda text, output=None, efecto="ninguno": str(dummy_wav))
 
     class DummyReq:
         headers = {"X-API-Secret": "secret123"}
@@ -147,7 +147,7 @@ async def test_relay_speak_rejoins_channel_if_mismatched(monkeypatch, tmp_path):
 
     dummy_wav = tmp_path / "test.wav"
     dummy_wav.write_bytes(b"RIFF....WAVE")
-    monkeypatch.setattr(tts, "generate_tts_wav", lambda text: str(dummy_wav))
+    monkeypatch.setattr(tts, "generate_tts_wav", lambda text, output=None, efecto="ninguno": str(dummy_wav))
 
     class DummyReq:
         headers = {"X-API-Secret": "secret123"}
@@ -257,7 +257,7 @@ async def test_relay_speak_forces_fallback_channel_when_force_is_true(monkeypatc
 
     dummy_wav = tmp_path / "test.wav"
     dummy_wav.write_bytes(b"RIFF....WAVE")
-    monkeypatch.setattr(tts, "generate_tts_wav", lambda text: str(dummy_wav))
+    monkeypatch.setattr(tts, "generate_tts_wav", lambda text, output=None, efecto="ninguno": str(dummy_wav))
 
     class DummyReq:
         headers = {"X-API-Secret": "secret123"}
@@ -278,10 +278,11 @@ async def test_relay_speak_forces_fallback_channel_when_force_is_true(monkeypatc
 
 def test_indio_tts_volume_configuration():
     """Ensure TTS audio filter uses 0.7 volume after dynamic normalization."""
-    assert "volume=0.7" in tts.FFMPEG_FILTER
+    base_filter = tts.get_ffmpeg_filter()
+    assert "volume=0.7" in base_filter
     # Ensure volume=0.7 comes after dynaudnorm so dynamic normalization doesn't override volume
-    dyn_idx = tts.FFMPEG_FILTER.find("dynaudnorm")
-    vol_idx = tts.FFMPEG_FILTER.find("volume=0.7")
+    dyn_idx = base_filter.find("dynaudnorm")
+    vol_idx = base_filter.find("volume=0.7")
     assert dyn_idx != -1
     assert vol_idx != -1
     assert vol_idx > dyn_idx

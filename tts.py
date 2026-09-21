@@ -62,8 +62,26 @@ MODEL_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/
 CONFIG_URL = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_ES/davefx/medium/{MODEL_NAME}.onnx.json"
 
 TTS_VOLUME = float(os.getenv("TTS_VOLUME", "0.7"))
-# Audio filter to add a subtle old man vocal texture (slightly lower pitch, warm bass, soft treble, subtle tremor) and normalized volume (0.7)
-FFMPEG_FILTER = f"asetrate=22050*0.90,aresample=22050,atempo=1.111,equalizer=f=160:g=3.5:width_type=h:width=120,equalizer=f=3000:g=-3.5:width_type=h:width=400,tremolo=f=4.5:d=0.10,dynaudnorm=p=0.95:f=150,volume={TTS_VOLUME}"
+
+def get_ffmpeg_filter(efecto: str = "ninguno") -> str:
+    """Return the FFmpeg audio filter string for a given effect."""
+    vol = TTS_VOLUME
+    # Default: old man vocal texture (slightly lower pitch, warm bass, soft treble, subtle tremor)
+    base_filter = f"asetrate=22050*0.90,aresample=22050,atempo=1.111,equalizer=f=160:g=3.5:width_type=h:width=120,equalizer=f=3000:g=-3.5:width_type=h:width=400,tremolo=f=4.5:d=0.10,dynaudnorm=p=0.95:f=150,volume={vol}"
+    
+    efecto = efecto.lower().strip()
+    if efecto == "eco":
+        return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+    elif efecto == "robot":
+        return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+    elif efecto == "radio":
+        return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,highpass=f=200,lowpass=f=3000,dynaudnorm=p=0.95:f=150,volume={vol}"
+    elif efecto == "ardilla":
+        return f"asetrate=22050*1.5,aresample=22050,atempo=0.666,dynaudnorm=p=0.95:f=150,volume={vol}"
+    elif efecto == "demonio":
+        return f"asetrate=22050*0.6,aresample=22050,atempo=1.666,aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+    else:
+        return base_filter
 
 
 def ensure_model_exists() -> bool:
@@ -125,12 +143,13 @@ def _get_piper_cmd() -> list[str]:
     return [sys.executable, "-m", "piper"]
 
 
-def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
+def generate_tts_wav(text: str, output_path: str | None = None, efecto: str = "ninguno") -> str | None:
     """Synthesize text using Piper TTS and process audio with FFmpeg voice filter.
 
     Args:
         text: Text to synthesize into speech.
         output_path: Optional explicit output WAV path. If None, a temporary path is generated.
+        efecto: The special voice effect to apply (e.g. 'eco', 'robot', 'ardilla', etc.)
 
     Returns:
         Absolute path to the resulting WAV file, or None if generation failed.
@@ -162,8 +181,9 @@ def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
         "-ac", "1",
         "-i", "pipe:0",
     ]
-    if FFMPEG_FILTER:
-        ffmpeg_cmd.extend(["-af", FFMPEG_FILTER])
+    ffmpeg_filter_str = get_ffmpeg_filter(efecto)
+    if ffmpeg_filter_str:
+        ffmpeg_cmd.extend(["-af", ffmpeg_filter_str])
     ffmpeg_cmd.append(output_path)
 
     try:
@@ -206,12 +226,13 @@ def generate_tts_wav(text: str, output_path: str | None = None) -> str | None:
         return None
 
 
-def generate_indio_tts(text: str, output_dir: str = "/tmp/tts_audios") -> str | None:
+def generate_indio_tts(text: str, output_dir: str = "/tmp/tts_audios", efecto: str = "ninguno") -> str | None:
     """Synthesize Indio text into an OGG/Opus audio file for Telegram voice notes.
 
     Args:
         text: Text to synthesize.
         output_dir: Directory where the output audio file will be saved.
+        efecto: The special voice effect to apply.
 
     Returns:
         The generated audio filename (e.g. 'indio_resp_abc123.ogg'), or None on failure.
@@ -244,8 +265,9 @@ def generate_indio_tts(text: str, output_dir: str = "/tmp/tts_audios") -> str | 
         "-ac", "1",
         "-i", "pipe:0",
     ]
-    if FFMPEG_FILTER:
-        ffmpeg_cmd.extend(["-af", FFMPEG_FILTER])
+    ffmpeg_filter_str = get_ffmpeg_filter(efecto)
+    if ffmpeg_filter_str:
+        ffmpeg_cmd.extend(["-af", ffmpeg_filter_str])
     ffmpeg_cmd.extend(["-c:a", "libopus", "-b:a", "32k", output_path])
 
     try:
@@ -281,8 +303,8 @@ def generate_indio_tts(text: str, output_dir: str = "/tmp/tts_audios") -> str | 
                 "-ac", "1",
                 "-i", "pipe:0",
             ]
-            if FFMPEG_FILTER:
-                fallback_cmd.extend(["-af", FFMPEG_FILTER])
+            if ffmpeg_filter_str:
+                fallback_cmd.extend(["-af", ffmpeg_filter_str])
             fallback_cmd.append(output_path)
 
             piper_proc2 = subprocess.Popen(piper_cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

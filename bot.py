@@ -1504,6 +1504,13 @@ async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
 async def indio(
     ctx,
     charla: discord.Option(str, description="Qué le decís al indio"),
+    efecto: discord.Option(
+        str,
+        description="Efecto especial para la voz del Indio",
+        choices=["ninguno", "eco", "radio", "robot", "ardilla", "demonio"],
+        required=False,
+        default="ninguno"
+    ) = "ninguno",
 ):
     """Slash command: chat with the Indio persona (with history).
 
@@ -1536,7 +1543,7 @@ async def indio(
             )
         except Exception:
             log.exception("indio: source-channel ack failed")
-    await indioLogic(ctx, charla, False)
+    await indioLogic(ctx, charla, False, efecto=efecto)
 
 
 @bot.slash_command(

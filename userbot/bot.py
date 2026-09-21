@@ -4597,6 +4597,7 @@ async def _relay_speak(request: web.Request) -> web.Response:
         channel_id = data.get("channel_id")
         user_id = data.get("user_id")
         force = bool(data.get("force", False))
+        efecto = str(data.get("efecto", "ninguno"))
     except Exception:
         return web.json_response({"error": "invalid body"}, status=400)
 
@@ -4645,7 +4646,7 @@ async def _relay_speak(request: web.Request) -> web.Response:
 
     import tts
     try:
-        wav_path = await asyncio.to_thread(tts.generate_tts_wav, text)
+        wav_path = await asyncio.to_thread(tts.generate_tts_wav, text, None, efecto)
         if not wav_path or not os.path.exists(wav_path):
             return web.json_response({"error": "tts generation failed"}, status=500)
     except Exception as e:
