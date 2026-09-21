@@ -702,6 +702,7 @@ _LT_JOKES = 100
 
 _indio_history: dict[str, list[dict]] = {}
 _indio_last_seen: dict[str, float] = {}
+_indio_voice_effects: dict[str, str] = {}
 
 # How old a turn has to be (in seconds) before we tag it with a "(hace X)"
 # prefix when feeding it back to Gemini. Without this, the model has no temporal
@@ -1804,6 +1805,9 @@ def _load_indio_state() -> None:
         compress_queue = val.get("compress_queue") or []
         if isinstance(compress_queue, list) and compress_queue:
             _indio_compress_queue[key] = [_sanitize_turn_on_load(t) for t in compress_queue]
+        voice_effect = val.get("voice_effect")
+        if voice_effect:
+            _indio_voice_effects[key] = voice_effect
     if loaded or _indio_long_term or _indio_current_members:
         logger.info(
             "indio memory: loaded %d entries (long_term=%d, roster=%d) from %s",
@@ -1839,6 +1843,7 @@ async def _persist_indio_state() -> None:
             | set(_indio_long_term)
             | set(_indio_current_members)
             | set(_indio_compress_queue)
+            | set(_indio_voice_effects)
         )
         payload = {
             "entries": {
@@ -1851,6 +1856,7 @@ async def _persist_indio_state() -> None:
                         k, 0.0
                     ),
                     "compress_queue": _indio_compress_queue.get(k, []),
+                    "voice_effect": _indio_voice_effects.get(k, "ninguno"),
                 }
                 for k in keys
             }
@@ -5402,7 +5408,7 @@ async def vaplsLogic(ctx: discord.ApplicationContext, pregunta: str, router=None
 
 
 async def indioLogic(
-    ctx: discord.ApplicationContext, pregunta: str, nuevo: bool, router=None, efecto: str = "ninguno"
+    ctx: discord.ApplicationContext, pregunta: str, nuevo: bool, router=None, efecto: str | None = None
 ):
     """Handle the /indio command with short-term conversation memory.
 
@@ -5427,6 +5433,12 @@ async def indioLogic(
     """
     _evict_stale_indio()
     hist_key, lt_key = _indio_memory_key(ctx)
+    
+    if efecto is not None:
+        _indio_voice_effects[hist_key] = efecto
+    else:
+        efecto = _indio_voice_effects.get(hist_key, "ninguno")
+        
     lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     speaker = getattr(ctx.author, "display_name", None) or getattr(
         ctx.author, "name", "alguien"

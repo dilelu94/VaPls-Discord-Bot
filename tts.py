@@ -69,11 +69,12 @@ def get_ffmpeg_filter(efecto: str = "ninguno") -> str:
     # Default: old man vocal texture (slightly lower pitch, warm bass, soft treble, subtle tremor)
     base_filter = f"asetrate=22050*0.90,aresample=22050,atempo=1.111,equalizer=f=160:g=3.5:width_type=h:width=120,equalizer=f=3000:g=-3.5:width_type=h:width=400,tremolo=f=4.5:d=0.10,dynaudnorm=p=0.95:f=150,volume={vol}"
     
-    efecto = efecto.lower().strip()
+    efecto = (efecto or "ninguno").lower().strip()
+    
     if efecto == "eco":
         return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "robot":
-        return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,chorus=0.5:0.9:50|60|40:0.4|0.32|0.3:0.25|0.4|0.3:2|2.3|1.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+        return f"vibrato=f=12.0:d=1.0,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "radio":
         return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,highpass=f=200,lowpass=f=3000,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "ardilla":
@@ -81,8 +82,8 @@ def get_ffmpeg_filter(efecto: str = "ninguno") -> str:
     elif efecto == "demonio":
         return f"asetrate=22050*0.6,aresample=22050,atempo=1.666,aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
     else:
-        return base_filter
-
+        # Default (ninguno): Soft radio mode (more human)
+        return f"highpass=f=150,lowpass=f=4000,dynaudnorm=p=0.95:f=150,volume={vol}"
 
 def ensure_model_exists() -> bool:
     """Ensure the Piper voice model and config files exist locally.

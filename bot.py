@@ -1509,8 +1509,8 @@ async def indio(
         description="Efecto especial para la voz del Indio",
         choices=["ninguno", "eco", "radio", "robot", "ardilla", "demonio"],
         required=False,
-        default="ninguno"
-    ) = "ninguno",
+        default=None
+    ) = None,
 ):
     """Slash command: chat with the Indio persona (with history).
 
