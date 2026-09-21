@@ -95,7 +95,7 @@ async def test_indio_ask_returns_text_and_audio_url_with_tts(monkeypatch):
     async def _fake_generate_indio(guild_id, prompt, speaker, bot=None):
         return "Qué hacés Leonel, todo piola?"
 
-    def _fake_generate_tts(text, output_dir="/tmp/tts_audios"):
+    def _fake_generate_tts(text, output_dir="/tmp/tts_audios", efecto="ninguno"):
         return "indio_resp_123.ogg"
 
     monkeypatch.setattr(

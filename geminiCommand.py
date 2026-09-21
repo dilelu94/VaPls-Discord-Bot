@@ -6450,7 +6450,8 @@ async def indioFromVoice(
             or "[TG" in speaker_name
         )
     )
-    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply, force=is_tg))
+    efecto = _indio_voice_effects.get(hist_key, "ninguno")
+    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply, force=is_tg, efecto=efecto))
 
     analytics.capture(
         "indio voice invoked",

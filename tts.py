@@ -76,10 +76,10 @@ def get_ffmpeg_filter(efecto: str = "ninguno") -> str:
     elif efecto == "alien":
         return f"{base_voice},vibrato=f=12.0:d=1.0,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "robot":
-        return f"{base_voice},aecho=0.8:0.9:4:0.5,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
+        return f"{base_voice},tremolo=f=30.0:d=0.8,aecho=0.8:0.9:4:0.5,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "radio":
-        # A stronger radio effect
-        return f"highpass=f=300,lowpass=f=2500,dynaudnorm=p=0.95:f=150,volume={vol}"
+        # A stronger radio effect with a tighter bandpass and slight distortion
+        return f"highpass=f=400,lowpass=f=2000,acrusher=level_in=1:level_out=1:bits=12:mode=log,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "ardilla":
         return f"asetrate=22050*1.5,aresample=22050,atempo=0.666,{base_voice},dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "demonio":

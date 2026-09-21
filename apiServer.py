@@ -1726,7 +1726,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         audio_url = None
         if generate_tts:
-            audio_filename = await asyncio.to_thread(tts.generate_indio_tts, indio_response_text)
+            efecto = geminiCommand._indio_voice_effects.get(f"guild-{guild_id}", "ninguno")
+            audio_filename = await asyncio.to_thread(tts.generate_indio_tts, indio_response_text, "/tmp/tts_audios", efecto)
             if audio_filename:
                 audio_url = f"/audio/{audio_filename}"
 
