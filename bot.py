@@ -1507,7 +1507,7 @@ async def indio(
     efecto: discord.Option(
         str,
         description="Efecto especial para la voz del Indio",
-        choices=["ninguno", "eco", "radio", "robot", "ardilla", "demonio"],
+        choices=["ninguno", "eco", "radio", "robot", "alien", "ardilla", "demonio"],
         required=False,
         default=None
     ) = None,

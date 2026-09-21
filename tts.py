@@ -66,24 +66,27 @@ TTS_VOLUME = float(os.getenv("TTS_VOLUME", "0.7"))
 def get_ffmpeg_filter(efecto: str = "ninguno") -> str:
     """Return the FFmpeg audio filter string for a given effect."""
     vol = TTS_VOLUME
-    # Default: old man vocal texture (slightly lower pitch, warm bass, soft treble, subtle tremor)
-    base_filter = f"asetrate=22050*0.90,aresample=22050,atempo=1.111,equalizer=f=160:g=3.5:width_type=h:width=120,equalizer=f=3000:g=-3.5:width_type=h:width=400,tremolo=f=4.5:d=0.10,dynaudnorm=p=0.95:f=150,volume={vol}"
+    # Default: Soft radio mode (more human)
+    base_voice = "highpass=f=150,lowpass=f=4000"
     
     efecto = (efecto or "ninguno").lower().strip()
     
     if efecto == "eco":
-        return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+        return f"{base_voice},aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+    elif efecto == "alien":
+        return f"{base_voice},vibrato=f=12.0:d=1.0,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "robot":
-        return f"vibrato=f=12.0:d=1.0,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
+        return f"{base_voice},aecho=0.8:0.9:4:0.5,aecho=0.8:0.9:5:0.5,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "radio":
-        return f"asetrate=22050*0.90,aresample=22050,atempo=1.111,highpass=f=200,lowpass=f=3000,dynaudnorm=p=0.95:f=150,volume={vol}"
+        # A stronger radio effect
+        return f"highpass=f=300,lowpass=f=2500,dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "ardilla":
-        return f"asetrate=22050*1.5,aresample=22050,atempo=0.666,dynaudnorm=p=0.95:f=150,volume={vol}"
+        return f"asetrate=22050*1.5,aresample=22050,atempo=0.666,{base_voice},dynaudnorm=p=0.95:f=150,volume={vol}"
     elif efecto == "demonio":
-        return f"asetrate=22050*0.6,aresample=22050,atempo=1.666,aecho=0.8:0.9:1000:0.3,dynaudnorm=p=0.95:f=150,volume={vol}"
+        return f"asetrate=22050*0.6,aresample=22050,atempo=1.666,aecho=0.8:0.9:1000:0.3,{base_voice},dynaudnorm=p=0.95:f=150,volume={vol}"
     else:
-        # Default (ninguno): Soft radio mode (more human)
-        return f"highpass=f=150,lowpass=f=4000,dynaudnorm=p=0.95:f=150,volume={vol}"
+        # Default (ninguno)
+        return f"{base_voice},dynaudnorm=p=0.95:f=150,volume={vol}"
 
 def ensure_model_exists() -> bool:
     """Ensure the Piper voice model and config files exist locally.
