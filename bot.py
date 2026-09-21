@@ -1503,7 +1503,7 @@ async def vapls(ctx, pregunta: discord.Option(str, description="Tu pregunta")):
 )
 async def indio(
     ctx,
-    charla: discord.Option(str, description="Qué le decís al indio"),
+    charla: discord.Option(str, description="Qué le decís al indio", required=False, default=None),
     efecto: discord.Option(
         str,
         description="Efecto especial para la voz del Indio",

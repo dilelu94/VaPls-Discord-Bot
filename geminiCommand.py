@@ -5439,6 +5439,13 @@ async def indioLogic(
     else:
         efecto = _indio_voice_effects.get(hist_key, "ninguno")
         
+    if not pregunta:
+        try:
+            await ctx.followup.send(f"✅ Efecto de voz configurado en: **{efecto}**", ephemeral=True)
+        except Exception:
+            pass
+        return
+        
     lock = _indio_locks.setdefault(hist_key, asyncio.Lock())
     speaker = getattr(ctx.author, "display_name", None) or getattr(
         ctx.author, "name", "alguien"
