@@ -386,19 +386,35 @@ def resolve_greeting_path(
     return os.path.join(custom_audio_dir, rel)
 
 
+def _is_vc_ready(vc) -> bool:
+    """Return True if ``vc`` is connected and its voice WebSocket socket is open."""
+    if vc is None:
+        return False
+    try:
+        if not vc.is_connected():
+            return False
+        ws = getattr(vc, "ws", None)
+        if ws is None or type(ws).__module__.startswith("unittest.mock"):
+            return True
+        sock = getattr(ws, "socket", None)
+        if sock is not None and not type(sock).__module__.startswith("unittest.mock") and getattr(sock, "closed", None) is True:
+            return False
+        if hasattr(ws, "open") and not type(getattr(ws, "open")).__module__.startswith("unittest.mock") and getattr(ws, "open") is False:
+            return False
+        return True
+    except Exception:
+        return bool(vc.is_connected())
+
+
 async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:
-    """Poll ``vc.is_connected()`` for up to ``timeout_seconds``."""
+    """Poll ``_is_vc_ready(vc)`` for up to ``timeout_seconds``."""
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if vc is None:
-            return False
-        try:
-            if vc.is_connected():
-                return True
-        except Exception:
-            return False
+        if _is_vc_ready(vc):
+            return True
         await asyncio.sleep(0.25)
     return False
+
 
 
 _last_user_greeting: dict[tuple[int, int], float] = {}

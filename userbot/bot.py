@@ -2834,10 +2834,12 @@ async def _join_channel(channel: discord.VoiceChannel):
     if not _guild_allowed(channel.guild.id):
         return
     existing = _vc_for_guild(channel.guild)
+    force_restart = True
     try:
         if existing:
             if existing.channel.id == channel.id and existing.is_connected():
                 vc = existing
+                force_restart = False
             else:
                 log.info(
                     f"[VOICE] Reconnecting: {existing.channel.name} → {channel.name}"
@@ -2864,7 +2866,7 @@ async def _join_channel(channel: discord.VoiceChannel):
         log.exception(f"[VOICE] Failed to join {channel.name}: {e}")
         analytics.capture_exception(e, properties={"action": "voice_join_failed"})
         return
-    await _start_listening(vc, force_restart=True)
+    await _start_listening(vc, force_restart=force_restart)
 
 
 async def _leave_if_empty(guild: discord.Guild):
