@@ -172,6 +172,16 @@ def get_user_greeting_name(
     """
     if user_id is None:
         return None
+
+    golive_id = getattr(config, "GOLIVE_USER_ID", 1541984338386620492)
+    if user_id == golive_id or str(user_id) == str(golive_id):
+        if display_name and isinstance(display_name, str) and display_name.strip():
+            return display_name.strip()
+        if member is not None:
+            dname = getattr(member, "display_name", None) or getattr(member, "name", None)
+            if dname and isinstance(dname, str) and dname.strip():
+                return dname.strip()
+
     users = _users_map()
     info = (
         users.get(user_id)

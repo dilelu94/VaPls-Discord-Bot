@@ -1,5 +1,6 @@
 import sys
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 
@@ -139,3 +140,60 @@ async def test_on_ready_cleans_stale_stream_nicknames():
     with patch("golive.bot.client", mock_client):
         await on_ready()
         mock_me.edit.assert_awaited_with(nick=None)
+
+
+@pytest.mark.asyncio
+async def test_relay_stream_sets_nickname_before_joining_channel():
+    """_relay_stream sets nickname before joining voice channel so voice_state_update has the new nickname."""
+    call_order = []
+
+    async def fake_set_nickname(guild, name):
+        call_order.append(("set_nickname", name))
+
+    async def fake_join_channel(channel):
+        call_order.append(("join_channel", channel.name))
+
+    mock_channel = MagicMock(spec=discord.VoiceChannel)
+    mock_channel.id = 100
+    mock_channel.name = "General Voice"
+
+    mock_guild = MagicMock()
+    mock_guild.id = 500
+    mock_guild.get_channel.return_value = mock_channel
+
+    mock_client = MagicMock()
+    mock_client.is_ready.return_value = True
+    mock_client.get_guild.return_value = mock_guild
+
+    mock_request = MagicMock()
+    mock_request.remote = "127.0.0.1"
+    mock_request.headers = {"X-API-Secret": "secret"}
+    mock_request.json = AsyncMock(return_value={
+        "channel_id": "100",
+        "guild_id": "500",
+        "url": "http://example.com/stream.m3u8",
+        "title": "Al Jazeera English",
+    })
+
+    mock_stream = MagicMock()
+    mock_stream.start = AsyncMock()
+    mock_stream.video_ssrc = 100
+    mock_stream.is_live = True
+
+    with patch.object(golive_bot, "client", mock_client), \
+         patch.object(golive_bot, "config", SimpleNamespace(RELAY_SECRET="secret", GUILD_ALLOWLIST=None)), \
+         patch.object(golive_bot, "_save_original_nickname"), \
+         patch.object(golive_bot, "_set_nickname", side_effect=fake_set_nickname), \
+         patch.object(golive_bot, "_join_channel", side_effect=fake_join_channel), \
+         patch.object(golive_bot, "_vc_for_guild", return_value=MagicMock()), \
+         patch.object(golive_bot, "GoLiveStream", return_value=mock_stream):
+
+        resp = await golive_bot._relay_stream(mock_request)
+        assert resp.status == 200
+
+        # Verify set_nickname happened BEFORE join_channel
+        assert call_order == [
+            ("set_nickname", "GoLive - Al Jazeera English"),
+            ("join_channel", "General Voice"),
+        ]
+

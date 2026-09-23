@@ -885,16 +885,15 @@ async def _relay_stream(request: web.Request) -> web.Response:
     if not hasattr(client, "live_connections"):
         client.live_connections = {}
 
-    await _join_channel(channel)
-    vc = _vc_for_guild(guild)
-
-
     if stream_title:
         _save_original_nickname(guild)
         task = _nick_restore_tasks.pop(guild_id, None)
         if task and not task.done():
             task.cancel()
         await _set_nickname(guild, f"GoLive - {stream_title}")
+
+    await _join_channel(channel)
+    vc = _vc_for_guild(guild)
 
     stream = GoLiveStream(
         client, guild_id, channel_id, vc, url,

@@ -679,6 +679,81 @@ async def test_bot_member_gets_tts_greeting(
     assert generated_names == ["GoLive"]
 
 
+async def test_golive_uses_dynamic_nickname_for_tts_greeting(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """GoLive bot uses its dynamic display_name (e.g. 'GoLive - Stream Title') for TTS greeting."""
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generated_names = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generated_names.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc = _make_vc()
+    member = SimpleNamespace(
+        id=1541984338386620492,
+        display_name="GoLive - Al Jazeera English",
+        bot=True,
+    )
+    played = await greeting.play_user_greeting(
+        vc, user_id=member.id, channel_id=100, member=member
+    )
+    assert played is True
+    assert generated_names == ["GoLive - Al Jazeera English"]
+
+
+async def test_golive_tts_regenerates_when_stream_title_changes(
+    fake_users, _audio_dir, monkeypatch,
+):
+    """When GoLive's stream title changes, TTS is regenerated for the new stream title."""
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio",
+                        lambda *a, **k: SimpleNamespace())
+
+    generated_names = []
+
+    def fake_generate_tts_wav(text, output_path=None):
+        generated_names.append(text)
+        Path(output_path).write_bytes(b"fake-wav")
+        return output_path
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate_tts_wav)
+    import sys
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    vc1 = _make_vc()
+    member1 = SimpleNamespace(
+        id=1541984338386620492,
+        display_name="GoLive - Channel 1",
+        bot=True,
+    )
+    assert await greeting.play_user_greeting(vc1, user_id=member1.id, channel_id=100, member=member1) is True
+    assert generated_names == ["GoLive - Channel 1"]
+
+    # Fast forward past throttle window
+    t0 = time.time()
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 20)
+
+    vc2 = _make_vc()
+    member2 = SimpleNamespace(
+        id=1541984338386620492,
+        display_name="GoLive - Channel 2",
+        bot=True,
+    )
+    assert await greeting.play_user_greeting(vc2, user_id=member2.id, channel_id=100, member=member2) is True
+    assert generated_names == ["GoLive - Channel 1", "GoLive - Channel 2"]
+
+
+
 def test_greeting_volume_option(monkeypatch):
     """get_ffmpeg_greeting_opts returns volume=0.8 by default."""
     opts = greeting.get_ffmpeg_greeting_opts()
