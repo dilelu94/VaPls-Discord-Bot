@@ -62,7 +62,7 @@ Returns a single guild member’s status and voice state.
 
 ### POST `/message`
 
-Posts a message to a text channel.
+Posts an announcement or notification text message to a text channel via the VaPls main bot.
 
 **Body (JSON)**
 
@@ -71,9 +71,18 @@ Posts a message to a text channel.
   "guild_id": 123,
   "channel_id": 456,
   "content": "hola",
-  "sender_label": "TG"
+  "sender_label": "Valheim",
+  "speak_tts": false
 }
 ```
+
+| Field          | Required | Description                                                                        |
+| -------------- | -------- | ---------------------------------------------------------------------------------- |
+| `guild_id`     | yes      | Discord guild ID where the channel lives.                                          |
+| `channel_id`   | yes      | Discord text channel ID where the message is posted.                               |
+| `content`      | yes      | Text content of the message.                                                       |
+| `sender_label` | no       | Sender label prefix formatted as `**[TG/{sender_label}]**`. Defaults to `"TG"`.    |
+| `speak_tts`    | no       | Set `true` to also recite the message via Piper TTS in the voice channel if active.|
 
 **Response**
 
