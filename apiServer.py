@@ -2120,6 +2120,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
         except Exception:
             return web.json_response({"error": "invalid JSON body"}, status=400)
 
+        if isinstance(body, dict) and "channel_id" in body and "guild_id" not in body:
+            try:
+                cid = int(body["channel_id"])
+                ch = bot.get_channel(cid)
+                if ch and getattr(ch, "guild", None):
+                    body["guild_id"] = ch.guild.id
+            except Exception:
+                pass
+
         # Build the /say URL from the relay base (e.g. http://127.0.0.1:8081)
         parsed = urlparse(config.INDIO_RELAY_URL)
         say_url = f"{parsed.scheme}://{parsed.netloc}/say"

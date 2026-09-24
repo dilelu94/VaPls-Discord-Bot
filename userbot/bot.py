@@ -3714,6 +3714,32 @@ async def _relay_say(request: web.Request) -> web.Response:
         analytics.capture_exception(e, properties={"action": "relay_send_failed"})
         return web.json_response({"error": str(e)}, status=500)
 
+    # Extract guild or guild_id robustly
+    guild = getattr(channel, "guild", None)
+    guild_id = data.get("guild_id")
+    if not guild_id and guild:
+        guild_id = getattr(guild, "id", None)
+    if not guild_id and hasattr(channel, "guild_id"):
+        guild_id = getattr(channel, "guild_id", None)
+
+    if guild_id and content:
+        try:
+            gid = int(guild_id)
+            task = asyncio.create_task(_speak_text_internal(gid, content, force=True))
+
+            def _on_done(t: asyncio.Task):
+                try:
+                    res = t.result()
+                    log.info("[RELAY-SAY-TTS] result for guild %s: %s", gid, res)
+                except Exception as e:
+                    log.exception("[RELAY-SAY-TTS] task exception: %s", e)
+
+            task.add_done_callback(_on_done)
+        except (ValueError, TypeError) as e:
+            log.warning("[RELAY-SAY-TTS] invalid guild_id %s: %s", guild_id, e)
+    else:
+        log.warning("[RELAY-SAY-TTS] missing guild_id (channel=%s, guild=%s) — TTS skipped", channel_id, guild)
+
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
 
 
@@ -4582,6 +4608,111 @@ async def _relay_leave(request: web.Request) -> web.Response:
         return web.json_response({"error": f"leave failed: {e}"}, status=500)
 
 
+async def _speak_text_internal(
+    guild_id: int,
+    text: str,
+    channel_id: Optional[int] = None,
+    user_id: Optional[int] = None,
+    force: bool = False,
+    efecto: str = "ninguno",
+) -> tuple[bool, Optional[int], str]:
+    """Helper coroutine that synthesizes and plays Piper TTS audio in voice for a guild."""
+    if not client.is_ready():
+        log.warning("[RELAY-SPEAK] skipped: userbot client not ready")
+        return False, None, "userbot not ready"
+
+    guild = client.get_guild(guild_id)
+    if guild is None:
+        try:
+            guild = await client.fetch_guild(guild_id)
+        except Exception:
+            guild = None
+    if guild is None:
+        log.warning("[RELAY-SPEAK] skipped: guild %s not found in cache or API", guild_id)
+        return False, None, "guild not found"
+
+    vc = _vc_for_guild(guild)
+    target_channel = None
+    if channel_id:
+        ch = guild.get_channel(int(channel_id))
+        if isinstance(ch, discord.VoiceChannel):
+            target_channel = ch
+    if target_channel is None and user_id:
+        m = guild.get_member(int(user_id))
+        if m and getattr(m, "voice", None):
+            target_channel = getattr(m.voice, "channel", None)
+    if target_channel is None:
+        for ch in getattr(guild, "voice_channels", []):
+            if any(not getattr(mem, "bot", False) for mem in ch.members):
+                target_channel = ch
+                break
+
+    if target_channel is None and force:
+        if vc and vc.is_connected() and getattr(vc, "channel", None):
+            target_channel = vc.channel
+        elif getattr(guild, "voice_channels", []):
+            target_channel = guild.voice_channels[0]
+        else:
+            vcs = [c for c in getattr(guild, "channels", []) if isinstance(c, discord.VoiceChannel)]
+            if vcs:
+                target_channel = vcs[0]
+
+    if target_channel is not None:
+        if vc is None or not vc.is_connected() or (getattr(vc, "channel", None) and vc.channel.id != target_channel.id):
+            try:
+                await _join_channel(target_channel)
+                vc = _vc_for_guild(guild)
+            except Exception as e:
+                log.exception("[RELAY-SPEAK] failed to join voice channel: %s", e)
+                return False, None, f"voice join failed: {e}"
+    elif vc is None or not vc.is_connected():
+        log.warning("[RELAY-SPEAK] skipped: no active or fallback voice channel found in guild %s (force=%s)", guild_id, force)
+        return False, None, "no active voice channel found"
+
+    if vc is None or not vc.is_connected():
+        log.warning("[RELAY-SPEAK] skipped: userbot not connected to voice in guild %s", guild_id)
+        return False, None, "userbot not connected to voice"
+
+    import tts
+    try:
+        wav_path = await asyncio.to_thread(tts.generate_tts_wav, text, None, efecto)
+        if not wav_path or not os.path.exists(wav_path):
+            log.warning("[RELAY-SPEAK] skipped: generate_tts_wav failed for text '%s...'", text[:30])
+            return False, None, "tts generation failed"
+    except Exception as e:
+        log.exception("[RELAY-SPEAK] tts generation exception: %s", e)
+        return False, None, f"tts generation error: {e}"
+
+    def _after(_err):
+        try:
+            if os.path.exists(wav_path):
+                os.remove(wav_path)
+        except Exception:
+            pass
+
+    try:
+        try:
+            deadline = time.monotonic() + 10.0
+            while greeting.is_greeting_playing() and time.monotonic() < deadline:
+                await asyncio.sleep(0.25)
+        except Exception:
+            pass
+
+        source = discord.FFmpegOpusAudio(wav_path)
+        if vc.is_playing():
+            vc.stop()
+        vc.play(source, after=_after)
+        log.info(
+            "[RELAY-SPEAK] userbot speaking TTS text (length=%d) in %s",
+            len(text),
+            getattr(vc.channel, "name", "?"),
+        )
+        return True, getattr(vc.channel, "id", None), "ok"
+    except Exception as e:
+        log.exception("[RELAY-SPEAK] vc.play failed: %s", e)
+        _after(None)
+        return False, None, f"playback failed: {e}"
+
 
 async def _relay_speak(request: web.Request) -> web.Response:
     """Synthesize TTS audio and play it in voice as the Indio userbot account.
@@ -4603,88 +4734,18 @@ async def _relay_speak(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "invalid body"}, status=400)
 
-    if not client.is_ready():
-        return web.json_response({"error": "userbot not ready"}, status=503)
-
-    guild = client.get_guild(guild_id)
-    if guild is None:
-        return web.json_response({"error": "guild not found"}, status=404)
-
-    vc = _vc_for_guild(guild)
-    target_channel = None
-    if channel_id:
-        ch = guild.get_channel(int(channel_id))
-        if isinstance(ch, discord.VoiceChannel):
-            target_channel = ch
-    if target_channel is None and user_id:
-        m = guild.get_member(int(user_id))
-        if m and getattr(m, "voice", None):
-            target_channel = getattr(m.voice, "channel", None)
-    if target_channel is None:
-        for ch in guild.voice_channels:
-            if any(not getattr(mem, "bot", False) for mem in ch.members):
-                target_channel = ch
-                break
-
-    if target_channel is None and force:
-        if vc and vc.is_connected() and getattr(vc, "channel", None):
-            target_channel = vc.channel
-        elif guild.voice_channels:
-            target_channel = guild.voice_channels[0]
-
-    if target_channel is not None:
-        if vc is None or not vc.is_connected() or (getattr(vc, "channel", None) and vc.channel.id != target_channel.id):
-            try:
-                await _join_channel(target_channel)
-                vc = _vc_for_guild(guild)
-            except Exception as e:
-                log.exception("[RELAY-SPEAK] failed to join voice channel: %s", e)
-                return web.json_response({"error": f"voice join failed: {e}"}, status=500)
-    elif vc is None or not vc.is_connected():
-        return web.json_response({"error": "no active voice channel found"}, status=400)
-
-    if vc is None or not vc.is_connected():
-        return web.json_response({"error": "userbot not connected to voice"}, status=400)
-
-    import tts
-    try:
-        wav_path = await asyncio.to_thread(tts.generate_tts_wav, text, None, efecto)
-        if not wav_path or not os.path.exists(wav_path):
-            return web.json_response({"error": "tts generation failed"}, status=500)
-    except Exception as e:
-        log.exception("[RELAY-SPEAK] tts generation exception: %s", e)
-        return web.json_response({"error": f"tts generation error: {e}"}, status=500)
-
-    def _after(_err):
-        try:
-            if os.path.exists(wav_path):
-                os.remove(wav_path)
-        except Exception:
-            pass
-
-    try:
-        # Wait if a user greeting is currently playing so TTS never interrupts greetings
-        try:
-            deadline = time.monotonic() + 10.0
-            while greeting.is_greeting_playing() and time.monotonic() < deadline:
-                await asyncio.sleep(0.25)
-        except Exception:
-            pass
-
-        source = discord.FFmpegOpusAudio(wav_path)
-        if vc.is_playing():
-            vc.stop()
-        vc.play(source, after=_after)
-        log.info(
-            "[RELAY-SPEAK] userbot speaking TTS text (length=%d) in %s",
-            len(text),
-            getattr(vc.channel, "name", "?"),
-        )
-        return web.json_response({"spoken": True, "channel_id": getattr(vc.channel, "id", None)})
-    except Exception as e:
-        log.exception("[RELAY-SPEAK] vc.play failed: %s", e)
-        _after(None)
-        return web.json_response({"error": f"play failed: {e}"}, status=500)
+    ok, vcid, err = await _speak_text_internal(
+        guild_id=guild_id,
+        text=text,
+        channel_id=channel_id,
+        user_id=user_id,
+        force=force,
+        efecto=efecto,
+    )
+    if not ok:
+        status_code = 400 if "no active voice channel" in err else 500
+        return web.json_response({"error": err}, status=status_code)
+    return web.json_response({"spoken": True, "channel_id": vcid})
 
 
 async def _relay_edit(request: web.Request) -> web.Response:
