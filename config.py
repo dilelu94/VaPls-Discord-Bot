@@ -272,6 +272,7 @@ ISRAEL_ALERTS_CHANNEL_ID = int(os.getenv("ISRAEL_ALERTS_CHANNEL_ID", "0"))
 # --- Scheduled Daily Stream ------------------------------------------------
 SCHEDULED_STREAM_ENABLED = os.getenv("SCHEDULED_STREAM_ENABLED", "true").lower() == "true"
 SCHEDULED_STREAM_URL = os.getenv("SCHEDULED_STREAM_URL", "https://www.youtube.com/watch?v=0Bjsv6Ft9nk")
+SCHEDULED_STREAM_TITLE = os.getenv("SCHEDULED_STREAM_TITLE", "Himno Nacional")
 SCHEDULED_STREAM_FALLBACK_CHANNEL_ID = int(os.getenv("SCHEDULED_STREAM_FALLBACK_CHANNEL_ID", "809945936822403092"))
 
 # --- Instagram Webhooks (Meta for Developers) --------------------------------

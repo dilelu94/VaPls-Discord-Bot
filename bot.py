@@ -4639,7 +4639,7 @@ async def scheduled_daily_stream():
 
     # Execute stream silently (no text channel announcement as per user request)
     success, status_msg, is_live = await start_iptv_stream_logic(
-        target_guild.id, best_vc, config.SCHEDULED_STREAM_URL, "Stream Programado"
+        target_guild.id, best_vc, config.SCHEDULED_STREAM_URL, config.SCHEDULED_STREAM_TITLE
     )
 
     if success:
