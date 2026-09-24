@@ -288,6 +288,40 @@ def test_indio_tts_volume_configuration():
     assert vol_idx > dyn_idx
 
 
+@pytest.mark.asyncio
+async def test_ask_indio_external_speaker_forces_tts_reply(monkeypatch):
+    """Ensure external prompts (such as Zomboid server alerts or TG tags) trigger TTS voice reply with force=True."""
+    speak_calls = []
+
+    async def mock_speak(bot, guild_id, member, text, max_chars=500, force=False, efecto="ninguno"):
+        speak_calls.append({"guild_id": guild_id, "text": text, "force": force})
+
+    monkeypatch.setattr(geminiCommand, "_speak_indio_reply", mock_speak)
+    monkeypatch.setattr(geminiCommand.geminiClient, "generate", AsyncMock(return_value=SimpleNamespace(text="Masa, queso y horno.", function_calls=None)))
+
+    guild = MagicMock(id=12345)
+    channel = MagicMock()
+    channel.guild = guild
+    channel.send = AsyncMock(return_value=MagicMock(id=111))
+    guild.get_channel.return_value = channel
+    bot = MagicMock()
+    bot.get_guild.return_value = guild
+    bot.get_channel.return_value = channel
+    await geminiCommand.askIndio(
+        bot=bot,
+        text="como hago una pizza?",
+        speaker_name="[Miles en Zomboid]",
+        guild_id=12345,
+        channel_id=67890,
+    )
+    await asyncio.sleep(0.01)
+
+    assert len(speak_calls) == 1
+    assert speak_calls[0]["force"] is True
+    assert speak_calls[0]["guild_id"] == 12345
+
+
+
 
 
 

@@ -758,6 +758,13 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 },
             )
             return web.json_response({"error": str(e)}, status=500)
+
+        speakTts = bool(data.get("speak_tts") or data.get("tts"))
+        if speakTts:
+            asyncio.create_task(
+                geminiCommand._speak_indio_reply(bot, guildId, None, content, force=True)
+            )
+
         analytics.capture(
             "api message sent",
             properties={

@@ -6442,16 +6442,18 @@ async def indioFromVoice(
             dm_text = f"te respondi en <#{channel_id}>"
         _spawn(_relay_dm_user(int(user_id), dm_text))
 
-    is_tg = bool(
+    is_external = bool(
         speaker_name
         and (
-            speaker_name.startswith("[TG")
+            speaker_name.startswith("[")
             or speaker_name.startswith("TG/")
             or "[TG" in speaker_name
+            or "Zomboid" in speaker_name
+            or "zomboid" in speaker_name
         )
     )
     efecto = _indio_voice_effects.get(hist_key, "ninguno")
-    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply, force=is_tg, efecto=efecto))
+    _spawn(_speak_indio_reply(bot, guild_id, member, clean_reply, force=is_external, efecto=efecto))
 
     analytics.capture(
         "indio voice invoked",
