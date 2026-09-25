@@ -44,9 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const homeQrWidget = document.getElementById('homeQrWidget');
   const homeQrImg = document.getElementById('homeQrImg');
-  const targetUrl = sessionToken
-    ? `${window.location.origin}/stremio/scanneme.png?token=${encodeURIComponent(sessionToken)}`
-    : `${window.location.origin}/stremio/scanneme.png`;
+  const targetUrl = `${window.location.origin}/stremio/scanneme.png`;
 
   if (homeQrWidget) {
     homeQrWidget.href = sanitizeUrl(targetUrl);
