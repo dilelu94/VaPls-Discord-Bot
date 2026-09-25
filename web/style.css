@@ -515,6 +515,7 @@ body {
 .modal-poster-wrap {
   width: 180px;
   flex-shrink: 0;
+  position: relative;
 }
 
 .modal-poster-wrap img {
