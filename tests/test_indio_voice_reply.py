@@ -321,6 +321,52 @@ async def test_ask_indio_external_speaker_forces_tts_reply(monkeypatch):
     assert speak_calls[0]["guild_id"] == 12345
 
 
+@pytest.mark.asyncio
+async def test_relay_say_triggers_tts_voice_playback(monkeypatch):
+    """Ensure POST /say (userbot relay text posting) triggers TTS voice playback for the Indio account."""
+    import sys
+    if "discord.ext.voice_recv" not in sys.modules:
+        class MockVoiceRecv(MagicMock):
+            class AudioSink: pass
+        sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
+    if "discord.voice_state" not in sys.modules:
+        sys.modules["discord.voice_state"] = MagicMock()
+    try:
+        from userbot import bot as userbot_module
+    except Exception:
+        pytest.skip("userbot module not present")
+
+    speak_internal_calls = []
+
+    async def mock_speak_internal(guild_id, text, **kwargs):
+        speak_internal_calls.append({"guild_id": guild_id, "text": text, **kwargs})
+        return True, 100, "ok"
+
+    monkeypatch.setattr(userbot_module, "_speak_text_internal", mock_speak_internal)
+    monkeypatch.setattr(userbot_module.config, "RELAY_SECRET", "secret123")
+
+    channel = MagicMock()
+    channel.guild = MagicMock(id=888)
+    channel.send = AsyncMock(return_value=MagicMock(id=999))
+
+    monkeypatch.setattr(userbot_module, "client", MagicMock(is_ready=lambda: True, get_channel=lambda cid: channel))
+
+    class DummySayReq:
+        headers = {"X-API-Secret": "secret123"}
+        async def json(self):
+            return {"channel_id": 456, "content": "Hola mundo desde el relay"}
+
+    resp = await userbot_module._relay_say(DummySayReq())
+    assert resp.status == 200
+    await asyncio.sleep(0.01)
+
+    assert len(speak_internal_calls) == 1
+    assert speak_internal_calls[0]["guild_id"] == 888
+    assert speak_internal_calls[0]["text"] == "Hola mundo desde el relay"
+    assert speak_internal_calls[0]["force"] is True
+
+
+
 
 
 

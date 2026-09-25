@@ -94,20 +94,41 @@ class StremioSessionManager:
         )
         return sess
 
+    def revoke_sessions_for_guild(self, guild_id: int) -> int:
+        """Revokes/expires all session tokens associated with a given guild ID."""
+        to_remove = [t for t, s in self.sessions.items() if s.guild_id == guild_id]
+        for t in to_remove:
+            self.sessions.pop(t, None)
+        if to_remove:
+            self._save_sessions()
+            logger.info("Revoked %d Stremio sessions for guild=%s", len(to_remove), guild_id)
+        return len(to_remove)
+
     def get_session(self, token: str) -> Optional[StremioSession]:
         if not token:
             return None
         sess = self.sessions.get(token)
         if not sess:
             return None
-        if time.time() > sess.expires_at:
+        now = time.time()
+        # If stream is active in guild or active session, keep token valid up to 6 hours from now
+        try:
+            import sys
+            bot_mod = sys.modules.get("bot")
+            if bot_mod and hasattr(bot_mod, "_active_sources"):
+                if sess.guild_id in bot_mod._active_sources:
+                    sess.expires_at = max(sess.expires_at, now + 21600.0)
+        except Exception:
+            pass
+
+        if now > sess.expires_at:
             logger.info("Stremio session expired: token=%s", token)
             self.sessions.pop(token, None)
             self._save_sessions()
             return None
         return sess
 
-    def touch_session(self, token: str, min_ttl_seconds: float = 7200.0) -> Optional[StremioSession]:
+    def touch_session(self, token: str, min_ttl_seconds: float = 21600.0) -> Optional[StremioSession]:
         sess = self.get_session(token)
         if not sess:
             return None
@@ -126,7 +147,7 @@ class StremioSessionManager:
         if not sess:
             return None
         now = time.time()
-        ttl = max(7200.0, float(duration_seconds) + 1800.0)
+        ttl = max(21600.0, float(duration_seconds) + 7200.0)
         sess.expires_at = max(sess.expires_at, now + ttl)
         self._save_sessions()
         logger.info(

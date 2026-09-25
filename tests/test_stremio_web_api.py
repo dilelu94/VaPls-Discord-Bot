@@ -432,3 +432,42 @@ async def test_stremio_session_touch_on_validation(mock_bot):
         await client.close()
 
 
+@pytest.mark.asyncio
+async def test_revoke_sessions_for_guild():
+    sess1 = session_manager.create_session(author_id=1, author_name="user1", channel_id=100, guild_id=999)
+    sess2 = session_manager.create_session(author_id=2, author_name="user2", channel_id=100, guild_id=999)
+    sess3 = session_manager.create_session(author_id=3, author_name="user3", channel_id=100, guild_id=888)
+
+    assert session_manager.validate_token(sess1.token) is True
+    assert session_manager.validate_token(sess2.token) is True
+    assert session_manager.validate_token(sess3.token) is True
+
+    revoked_count = session_manager.revoke_sessions_for_guild(999)
+    assert revoked_count == 2
+    assert session_manager.validate_token(sess1.token) is False
+    assert session_manager.validate_token(sess2.token) is False
+    assert session_manager.validate_token(sess3.token) is True
+
+
+@pytest.mark.asyncio
+async def test_stop_stream_for_guild_revokes_sessions():
+    from bot import stop_stream_for_guild
+
+    sess = session_manager.create_session(author_id=1, author_name="user1", channel_id=100, guild_id=777)
+    assert session_manager.validate_token(sess.token) is True
+
+    with patch("config.GOLIVE_RELAY_URL", "http://127.0.0.1:8082"), \
+         patch("config.GOLIVE_RELAY_SECRET", "secret"):
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.text = AsyncMock(return_value="OK")
+        mock_resp.__aenter__.return_value = mock_resp
+
+        with patch("aiohttp.ClientSession.post", return_value=mock_resp):
+            success, msg = await stop_stream_for_guild(777)
+            assert success is True
+
+    assert session_manager.validate_token(sess.token) is False
+
+
+

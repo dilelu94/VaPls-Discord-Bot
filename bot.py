@@ -805,6 +805,12 @@ async def on_voice_state_update(member, before, after):
             except Exception:
                 log.exception("failed to stop idle watchdog")
             try:
+                from stremio_sessions import session_manager
+
+                session_manager.revoke_sessions_for_guild(before.channel.guild.id)
+            except Exception:
+                log.exception("failed to revoke stremio sessions on voice disconnect")
+            try:
                 from playCommand import guildPlayers
 
                 _player = guildPlayers.get(before.channel.guild.id)
@@ -3046,7 +3052,7 @@ async def stream(
             description="Buscá anime, películas y series y transmitilas al instante a tu canal de voz.",
             color=0x8B5CF6,
         )
-        embed.set_footer(text="🔒 Este enlace es único y permanece activo durante tu sesión.")
+        embed.set_footer(text="🔒 Válido por 6hs máximo (se revoca al cortar o desconectar).")
         view = StremioWebUIOverlayView(stremio_url)
         await ctx.interaction.edit_original_response(embed=embed, view=view)
         return
@@ -3173,6 +3179,13 @@ async def stream(
 
 async def stop_stream_for_guild(guild_id: int) -> tuple[bool, str]:
     """Helper to stop active GoLive stream for a guild via HTTP relay."""
+    try:
+        from stremio_sessions import session_manager
+
+        session_manager.revoke_sessions_for_guild(guild_id)
+    except Exception as e:
+        log.warning("Failed to revoke stremio sessions for guild %s: %s", guild_id, e)
+
     view = _active_stream_views.pop(guild_id, None)
     if view:
         view.stop()

@@ -25,6 +25,12 @@ async def pararLogic(ctx):
     from playCommand import guildPlayers, clearGuildPlayer
     from idleWatchdog import stop_idle_watchdog
     from soundpadCommand import disable_panels
+    from stremio_sessions import session_manager
+
+    try:
+        session_manager.revoke_sessions_for_guild(ctx.guild.id)
+    except Exception as e:
+        _log.warning("Failed to revoke stremio sessions: %s", e)
 
     try:
         stop_idle_watchdog(ctx.guild.id)
