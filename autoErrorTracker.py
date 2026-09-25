@@ -328,8 +328,12 @@ class GitHubErrorLoggingHandler(logging.Handler):
         self.process_name = process_name
 
     def emit(self, record: logging.LogRecord) -> None:
-        # Avoid recursive logging loops
-        if record.name.startswith("bot.github_issues") or record.name.startswith("bot.error_tracker"):
+        # Avoid recursive logging loops and external web scanner noise from aiohttp.server
+        if (
+            record.name.startswith("bot.github_issues")
+            or record.name.startswith("bot.error_tracker")
+            or record.name == "aiohttp.server"
+        ):
             return
 
         if record.exc_info and record.exc_info[1] is not None:
