@@ -475,4 +475,126 @@ async def test_stop_stream_for_guild_revokes_sessions():
     assert session_manager.validate_token(sess.token) is False
 
 
+@pytest.mark.asyncio
+async def test_stremio_security_headers_present(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="Tester", channel_id=100, guild_id=200)
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        resp = await client.get(f"/stremio?token={sess.token}")
+        assert resp.status == 200
+        headers = resp.headers
+        assert "Content-Security-Policy" in headers
+        assert "default-src 'self'" in headers["Content-Security-Policy"]
+        assert headers.get("X-Frame-Options") == "DENY"
+        assert headers.get("X-Content-Type-Options") == "nosniff"
+        assert headers.get("Referrer-Policy") == "no-referrer"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stremio_ssrf_prevention(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="Tester", channel_id=100, guild_id=200)
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        forbidden_urls = [
+            "http://127.0.0.1:8080/admin",
+            "http://localhost:8082/stream",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/secret",
+            "http://192.168.1.10/router",
+            "http://0.0.0.0/",
+            "http://[::1]/",
+            "http://myhost.local/",
+            "http://internal.service.internal/",
+        ]
+        for url in forbidden_urls:
+            resp = await client.post(
+                "/api/stremio/play",
+                json={"token": sess.token, "channel_id": "123456789012345678", "url": url, "title": "SSRF Test"},
+            )
+            assert resp.status == 400, f"Expected 400 for forbidden URL: {url}"
+            data = await resp.json()
+            assert "invalid or unsafe stream url" in data["error"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stremio_invalid_token_format_rejected(mock_bot):
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        malicious_tokens = [
+            "../../../etc/passwd",
+            "<script>alert(1)</script>",
+            "' OR 1=1--",
+            "not_hex_token_32chars_long_xxxx",
+            "12345",
+        ]
+        for tok in malicious_tokens:
+            resp = await client.get(f"/stremio?token={tok}")
+            assert resp.status == 403
+            resp_api = await client.get(f"/api/stremio/search?q=test&token={tok}")
+            assert resp_api.status == 403
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stremio_control_invalid_actions_rejected(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="Tester", channel_id=100, guild_id=200)
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        invalid_actions = ["exec", "eval", "system", "delete", "format_c"]
+        for act in invalid_actions:
+            resp = await client.post(
+                "/api/stremio/control",
+                json={"token": sess.token, "action": act, "guild_id": "200"},
+            )
+            assert resp.status == 400
+            data = await resp.json()
+            assert data["error"] == "invalid action"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stremio_watched_invalid_key_rejected(mock_bot):
+    sess = session_manager.create_session(author_id=1, author_name="Tester", channel_id=100, guild_id=200)
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        invalid_keys = [
+            "../../etc/passwd",
+            "<script>alert(1)</script>",
+            "key with spaces and ' quotes",
+            "key;drop table users;",
+        ]
+        for key in invalid_keys:
+            resp = await client.post(
+                "/api/stremio/watched",
+                json={"token": sess.token, "key": key, "watched": True},
+            )
+            assert resp.status == 400
+            data = await resp.json()
+            assert "invalid key" in data["error"]
+    finally:
+        await client.close()
+
+
+
 

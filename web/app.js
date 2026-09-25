@@ -3,12 +3,29 @@
  */
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Security Helper: HTML Escaping to prevent XSS attacks
+  // Security Helper: Robust HTML & Attribute Escaping to prevent XSS attacks
   function esc(str) {
     if (str === null || str === undefined) return '';
-    const d = document.createElement('div');
-    d.textContent = String(str);
-    return d.innerHTML;
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // Security Helper: Validate and sanitize URLs to prevent javascript: / data: / XSS scheme injection
+  function sanitizeUrl(url) {
+    if (!url || typeof url !== 'string') return '';
+    const clean = url.trim();
+    const low = clean.toLowerCase();
+    if (low.startsWith('javascript:') || low.startsWith('data:text/html') || low.startsWith('vbscript:')) {
+      return '#';
+    }
+    if (low.startsWith('http://') || low.startsWith('https://') || low.startsWith('/') || low.startsWith('magnet:?')) {
+      return clean;
+    }
+    return '#';
   }
 
   // Session Token Security
@@ -19,6 +36,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (pathMatch) sessionToken = pathMatch[1];
   }
 
+  // Clean sensitive token parameter from address bar to prevent browser history / Referer leakage
+  if (urlParams.has('token') && window.history && window.history.replaceState) {
+    const cleanUrl = window.location.pathname + (window.location.hash || '');
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+
   const homeQrWidget = document.getElementById('homeQrWidget');
   const homeQrImg = document.getElementById('homeQrImg');
   const targetUrl = sessionToken
@@ -26,10 +49,10 @@ document.addEventListener('DOMContentLoaded', () => {
     : `${window.location.origin}/stremio/scanneme.png`;
 
   if (homeQrWidget) {
-    homeQrWidget.href = targetUrl;
+    homeQrWidget.href = sanitizeUrl(targetUrl);
   }
   if (homeQrImg) {
-    homeQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(targetUrl)}`;
+    homeQrImg.src = sanitizeUrl(`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(targetUrl)}`);
   }
 
   async function apiFetch(url, options = {}) {
@@ -420,7 +443,7 @@ document.addEventListener('DOMContentLoaded', () => {
       currentMeta = await resp.json();
 
       modalTitle.textContent = currentMeta.title || '';
-      modalPoster.src = currentMeta.poster || 'https://via.placeholder.com/300x450?text=No+Poster';
+      modalPoster.src = sanitizeUrl(currentMeta.poster) || 'https://via.placeholder.com/300x450?text=No+Poster';
       
       const modalPosterWrap = document.querySelector('.modal-poster-wrap');
       if (modalPosterWrap) {
@@ -436,8 +459,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      if (currentMeta.banner) {
-        modalBanner.style.backgroundImage = `url('${esc(currentMeta.banner)}')`;
+      const cleanBanner = sanitizeUrl(currentMeta.banner);
+      if (cleanBanner && cleanBanner !== '#') {
+        modalBanner.style.backgroundImage = `url("${cleanBanner.replace(/"/g, '%22')}")`;
       } else {
         modalBanner.style.backgroundImage = 'none';
       }

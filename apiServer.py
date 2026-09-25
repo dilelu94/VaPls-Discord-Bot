@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import ipaddress
 import os
 import re
 import time
@@ -2209,8 +2210,29 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/privacy", privacyPage)
     app.router.add_get("/delete-data", deleteDataPage)
 
-    # ---- Stremio & Anime Web UI Endpoints (Security Enhanced with Token Gating) ----
+    # ---- Stremio & Anime Web UI Endpoints (Security Enhanced with Token Gating & CSP) ----
     _stremio_rate_limit: dict[str, list[float]] = {}
+
+    def _add_stremio_security_headers(response: web.Response) -> web.Response:
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+            "font-src 'self' https://fonts.gstatic.com; "
+            "img-src 'self' data: https:; "
+            "connect-src 'self' https://torrentio.strem.fun https://api.qrserver.com; "
+            "frame-ancestors 'none'; "
+            "object-src 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self';"
+        )
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        return response
 
     def _check_stremio_rate_limit(request: web.Request) -> bool:
         ip = request.remote or "unknown"
@@ -2221,6 +2243,14 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return False
         _stremio_rate_limit[ip].append(now)
         return True
+
+    def _clean_stremio_token(token: Optional[str]) -> Optional[str]:
+        if not token:
+            return None
+        raw = str(token).strip().lower()
+        if re.match(r"^[a-f0-9]{32}$", raw):
+            return raw
+        return None
 
     def _clean_stremio_id(item_id: str) -> Optional[str]:
         raw = (item_id or "").strip()
@@ -2241,6 +2271,33 @@ def makeApp(bot: discord.Bot) -> web.Application:
         low = raw.lower()
         if not (low.startswith("http://") or low.startswith("https://") or low.startswith("magnet:?") or low.startswith("torrent:")):
             return None
+        if low.startswith(("http://", "https://")):
+            try:
+                parsed = urlparse(raw)
+                hostname = (parsed.hostname or "").lower()
+                if not hostname:
+                    return None
+                if (
+                    hostname in {"localhost", "localhost.localdomain", "broadcasthost"}
+                    or hostname.endswith(".local")
+                    or hostname.endswith(".internal")
+                ):
+                    return None
+                try:
+                    ip = ipaddress.ip_address(hostname)
+                    if (
+                        ip.is_loopback
+                        or ip.is_private
+                        or ip.is_link_local
+                        or ip.is_multicast
+                        or ip.is_unspecified
+                        or ip.is_reserved
+                    ):
+                        return None
+                except ValueError:
+                    pass
+            except Exception:
+                return None
         return raw
 
     def _validate_stremio_session(
@@ -2251,9 +2308,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
             token = request.headers.get("X-Stremio-Token")
         if not token and body_json and isinstance(body_json, dict):
             token = body_json.get("token")
-        if not token:
+        tok_str = _clean_stremio_token(token)
+        if not tok_str:
             return None
-        tok_str = str(token).strip()
         sess = session_manager.get_session(tok_str)
         if sess:
             session_manager.touch_session(tok_str)
@@ -2323,20 +2380,24 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if not token and "token" in request.match_info:
             token = request.match_info["token"].strip()
 
-        sess = session_manager.get_session(token)
+        tok_clean = _clean_stremio_token(token)
+        sess = session_manager.get_session(tok_clean) if tok_clean else None
         if not sess:
-            return web.Response(
+            resp = web.Response(
                 status=403,
                 content_type="text/html",
                 text=_build_stremio_access_denied_html(),
             )
+            return _add_stremio_security_headers(resp)
 
         web_dir = os.path.join(os.path.dirname(__file__), "web")
         index_path = os.path.join(web_dir, "index.html")
         if os.path.exists(index_path):
             with open(index_path, "r", encoding="utf-8") as f:
-                return web.Response(text=f.read(), content_type="text/html")
-        return web.Response(status=404, text="Web UI not found")
+                resp = web.Response(text=f.read(), content_type="text/html")
+                return _add_stremio_security_headers(resp)
+        resp = web.Response(status=404, text="Web UI not found")
+        return _add_stremio_security_headers(resp)
 
     async def stremioStatic(request: web.Request) -> web.Response:
         filename = request.match_info.get("filename", "")
@@ -2347,8 +2408,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
         web_dir = os.path.join(os.path.dirname(__file__), "web")
         file_path = os.path.join(web_dir, safe_name)
         if os.path.isfile(file_path):
-            return web.FileResponse(file_path)
-        return web.Response(status=404, text="File not found")
+            if safe_name == "scanneme.png" and not _validate_stremio_session(request):
+                resp = web.Response(
+                    status=403,
+                    content_type="text/html",
+                    text=_build_stremio_access_denied_html(),
+                )
+                return _add_stremio_security_headers(resp)
+            resp = web.FileResponse(file_path)
+            return _add_stremio_security_headers(resp)
+        resp = web.Response(status=404, text="File not found")
+        return _add_stremio_security_headers(resp)
 
     async def apiStremioSearch(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
@@ -2402,7 +2472,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         try:
             season = max(1, min(int(request.query.get("season", 1)), 1000))
             episode = max(1, min(int(request.query.get("episode", 1)), 2000))
-        except ValueError:
+        except (ValueError, TypeError):
             season, episode = 1, 1
 
         raw_imdb = request.query.get("imdb_id", None)
@@ -2491,12 +2561,19 @@ def makeApp(bot: discord.Bot) -> web.Application:
         raw_channel_id = str(body.get("channel_id", "")).strip()
         channel_id = raw_channel_id if raw_channel_id else str(sess.channel_id)
         raw_url = str(body.get("url", "")).strip()
-        raw_title = str(body.get("title", "Stream Stremio")).strip()[:120]
+        raw_title = str(body.get("title", "Stream Stremio")).strip()
+        raw_title = re.sub(r"[\x00-\x1f\x7f]", "", raw_title)[:120]
         raw_guild_id = body.get("guild_id")
 
-        if not re.match(r"^\d{17,20}$", channel_id):
+        if not re.match(r"^\d{1,20}$", channel_id):
             logger.warning("[STREMIO TRANSMIT] Invalid channel_id: '%s'", channel_id)
             return web.json_response({"error": "invalid channel_id"}, status=400)
+
+        if raw_guild_id:
+            clean_gid = str(raw_guild_id).strip()
+            if not re.match(r"^\d{1,20}$", clean_gid):
+                logger.warning("[STREMIO TRANSMIT] Invalid guild_id: '%s'", clean_gid)
+                return web.json_response({"error": "invalid guild_id"}, status=400)
 
         stream_url = _clean_stream_url(raw_url)
         if not stream_url:
@@ -2508,9 +2585,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
             try:
                 res_url, res_title = await asyncio.to_thread(resolve_stremio_or_magnet_url, stream_url)
                 if res_url and res_url.startswith(("http://", "https://")):
-                    stream_url = res_url
+                    checked_res = _clean_stream_url(res_url)
+                    if checked_res:
+                        stream_url = checked_res
                     if res_title and res_title != "Stream Directo":
-                        raw_title = res_title
+                        raw_title = re.sub(r"[\x00-\x1f\x7f]", "", str(res_title)).strip()[:120]
             except Exception as e:
                 logger.warning("[STREMIO TRANSMIT] Magnet stream resolution error: %s", e)
         elif stream_url.startswith(("http://", "https://")):
@@ -2529,7 +2608,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
                             status=400,
                         )
                     if resolved:
-                        stream_url = resolved
+                        checked_res = _clean_stream_url(resolved)
+                        if checked_res:
+                            stream_url = checked_res
                 except Exception as e:
                     logger.warning("[STREMIO TRANSMIT] Redirect resolution error: %s", e)
 
@@ -2553,10 +2634,16 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.warning("[STREMIO TRANSMIT] Could not resolve guild_id for channel_id %s", channel_id)
             return web.json_response({"error": "could not resolve guild_id for channel"}, status=400)
 
-        imdb_id = body.get("imdb_id")
-        item_type = body.get("type")
-        season = body.get("season")
-        episode = body.get("episode")
+        imdb_id = _clean_stremio_id(body.get("imdb_id")) if body.get("imdb_id") else None
+        item_type = _clean_stremio_type(body.get("type"))
+        try:
+            season = max(1, min(int(body.get("season", 1)), 1000))
+        except (ValueError, TypeError):
+            season = 1
+        try:
+            episode = max(1, min(int(body.get("episode", 1)), 2000))
+        except (ValueError, TypeError):
+            episode = 1
 
         logger.info(
             "[STREMIO TRANSMIT] Transmit requested: title='%s' | imdb_id=%s | type=%s | channel_id=%s | guild_id=%s | url='%s'",
@@ -2608,12 +2695,15 @@ def makeApp(bot: discord.Bot) -> web.Application:
                         try:
                             from stremio_sessions import watched_manager
                             w_key = body.get("watched_key")
-                            if not w_key and imdb_id:
+                            if w_key:
+                                w_key_clean = str(w_key).strip()
+                                if re.match(r"^[a-zA-Z0-9_:\.\-]{1,128}$", w_key_clean):
+                                    watched_manager.set_watched(w_key_clean, True)
+                            elif imdb_id:
                                 if item_type in ("series", "anime") and season and episode:
                                     w_key = f"{imdb_id}:s{season}:e{episode}"
                                 else:
                                     w_key = str(imdb_id)
-                            if w_key:
                                 watched_manager.set_watched(w_key, True)
                         except Exception as w_err:
                             logger.warning("[STREMIO TRANSMIT] Failed to auto-mark watched: %s", w_err)
@@ -2671,20 +2761,23 @@ def makeApp(bot: discord.Bot) -> web.Application:
             )
 
         action = (body.get("action") or request.query.get("action") or "status").strip().lower()
-        guild_id = str(body.get("guild_id") or request.query.get("guild_id") or sess.guild_id or "").strip()
-        ts_raw = body.get("timestamp") if (isinstance(body, dict) and "timestamp" in body) else request.query.get("timestamp")
-        try:
-            timestamp = float(ts_raw) if ts_raw is not None else 0.0
-        except (ValueError, TypeError):
-            timestamp = 0.0
+        if action not in {"status", "pause", "resume", "stop", "seek", "resume_pos"}:
+            return web.json_response({"error": "invalid action"}, status=400)
 
-        if not guild_id:
-            return web.json_response({"error": "missing guild_id"}, status=400)
+        guild_id_str = str(body.get("guild_id") or request.query.get("guild_id") or sess.guild_id or "").strip()
+        if not guild_id_str or not re.match(r"^\d{1,20}$", guild_id_str):
+            return web.json_response({"error": "invalid guild_id"}, status=400)
 
         try:
-            gid_int = int(guild_id)
+            gid_int = int(guild_id_str)
         except ValueError:
             return web.json_response({"error": "invalid guild_id"}, status=400)
+
+        ts_raw = body.get("timestamp") if (isinstance(body, dict) and "timestamp" in body) else request.query.get("timestamp")
+        try:
+            timestamp = max(0.0, min(float(ts_raw), 86400.0)) if ts_raw is not None else 0.0
+        except (ValueError, TypeError):
+            timestamp = 0.0
 
         if action == "stop":
             from bot import stop_stream_for_guild
@@ -2741,7 +2834,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
 
         key = str(body.get("key", "")).strip()
         watched = bool(body.get("watched", True))
-        if not key or len(key) > 128:
+        if not key or len(key) > 128 or not re.match(r"^[a-zA-Z0-9_:\.\-]+$", key):
             return web.json_response({"error": "missing or invalid key"}, status=400)
 
         from stremio_sessions import watched_manager
