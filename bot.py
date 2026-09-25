@@ -4612,6 +4612,13 @@ async def scheduled_daily_stream():
         log.warning("[SCHEDULED STREAM] No guilds found to stream in.")
         return
 
+    if target_guild.id in _active_sources:
+        log.info(
+            "[SCHEDULED STREAM] Skipping scheduled daily stream because guild %s already has an active stream.",
+            target_guild.id,
+        )
+        return
+
     best_vc = None
     max_members = -1
 

@@ -48,3 +48,31 @@ async def test_scheduled_daily_stream_uses_himno_nacional_title(monkeypatch):
     args, _ = start_mock.call_args
     assert args[2] == config.SCHEDULED_STREAM_URL
     assert args[3] == "Himno Nacional"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_daily_stream_skips_when_active_stream_exists(monkeypatch):
+    """Test that scheduled_daily_stream skips execution if a stream is already active in the guild."""
+    monkeypatch.setattr(config, "SCHEDULED_STREAM_ENABLED", True)
+    monkeypatch.setattr(bot.scheduled_daily_stream, "_current_loop", 1)
+
+    start_mock = AsyncMock(return_value=(True, "Stream iniciado", True))
+    monkeypatch.setattr(bot, "start_iptv_stream_logic", start_mock)
+
+    class DummyGuild:
+        id = 9999
+        afk_channel = None
+        voice_channels = []
+
+    dummy_guild = DummyGuild()
+    dummy_guild.get_channel = lambda cid: None
+    monkeypatch.setattr(type(bot.bot), "guilds", PropertyMock(return_value=[dummy_guild]))
+
+    monkeypatch.setitem(bot._active_sources, 9999, {"type": "stremio", "url": "http://example.com/stream"})
+
+    try:
+        await bot.scheduled_daily_stream()
+        assert not start_mock.called
+    finally:
+        bot._active_sources.pop(9999, None)
+

@@ -340,6 +340,60 @@ class GoLiveStream:
 
         self._inactivity_task = asyncio.create_task(self._inactivity_loop())
 
+    async def _start_players(self):
+        """Starts H264VideoPlayer and GoLiveAudioSender on existing GoLiveConnection."""
+        try:
+            from slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
+            from slopsoil.video_player import H264VideoPlayer, _stream_fps
+        except ModuleNotFoundError:
+            from golive.slopsoil.golive import _GoLiveVCProxy, GoLiveAudioSender
+            from golive.slopsoil.video_player import H264VideoPlayer, _stream_fps
+
+        if not self.conn:
+            log.error("[STREAM] Cannot start players: no GoLiveConnection")
+            return
+
+        proxy_vc = _GoLiveVCProxy(self.conn)
+        self.video_player = H264VideoPlayer(
+            url=self.target_url,
+            voice_client=proxy_vc,
+            fps=_stream_fps(),
+            live=self.is_live,
+            audio=True,
+            start_time=self.start_sec,
+            audio_track=self.audio_track,
+            subtitle_track=self.subtitle_track,
+            subtitle_file=self.subtitle_file,
+            title=self.title,
+            imdb_id=self.imdb_id,
+            item_type=self.item_type,
+            season=self.season,
+            episode=self.episode,
+        )
+        if hasattr(client, "video_players"):
+            client.video_players[self.guild_id] = self.video_player
+        self.video_player.start()
+        log.info("[STREAM] Video player started for '%s'", self.title)
+
+        try:
+            f = await asyncio.wait_for(
+                asyncio.to_thread(open, self.video_player.audio_fifo, "rb"),
+                timeout=90.0,
+            )
+        except (TimeoutError, asyncio.TimeoutError):
+            log.error("[STREAM] Timed out waiting for audio FIFO")
+            raise RuntimeError("Timed out waiting for audio FIFO")
+
+        self.audio_sender = GoLiveAudioSender(
+            file_obj=f,
+            conn=self.conn,
+            is_source_active=self.video_player.is_source_active,
+            initial_seq=self._audio_seq,
+            initial_ts=self._audio_ts,
+        )
+        self.audio_sender.start()
+        log.info("[STREAM] Audio sender started for '%s'", self.title)
+
     async def _stop_players(self):
         if self.video_player:
             self.video_player.stop()
@@ -469,9 +523,14 @@ class GoLiveStream:
                                 _save_original_nickname(guild)
                                 await _set_nickname(guild, f"GoLive - {next_title}")
                             
-                            await self._start_players()
-                            if self.queue:
-                                asyncio.create_task(self._prefetch_next())
+                            try:
+                                await self._start_players()
+                                if self.queue:
+                                    asyncio.create_task(self._prefetch_next())
+                            except Exception as e:
+                                log.error("[STREAM] Failed to start next queued video: %s", e)
+                                disconnect_voice = True
+                                break
                         else:
                             log.info("[STREAM] No more videos in queue. Closing stream.")
                             disconnect_voice = True
