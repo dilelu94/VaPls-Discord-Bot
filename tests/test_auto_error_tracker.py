@@ -177,3 +177,21 @@ async def test_report_error_handles_github_issues_token_attribute(monkeypatch):
          patch("githubIssues.create_issue", new=AsyncMock(return_value=500)):
         num = await autoErrorTracker.report_error(target_err, process_name="test-proc")
         assert num == 500
+
+
+def test_logging_handler_ignores_aiohttp_server_noise():
+    handler = autoErrorTracker.GitHubErrorLoggingHandler(process_name="test-proc")
+    record = logging.LogRecord(
+        name="aiohttp.server",
+        level=logging.ERROR,
+        pathname="test.py",
+        lineno=1,
+        msg="Error handling request",
+        args=(),
+        exc_info=(ValueError, ValueError("BadHttpMessage"), None),
+    )
+
+    with patch.object(autoErrorTracker, "_submit_error_task") as mock_submit:
+        handler.emit(record)
+        mock_submit.assert_not_called()
+
