@@ -80,11 +80,12 @@ body {
   width: 44px;
   height: 44px;
   border-radius: var(--radius-md);
-  background-color: #fde8d7;
+  background-color: #fff4ea;
+  border: 1px solid rgba(255, 244, 234, 0.4);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-glow);
+  box-shadow: 0 0 12px rgba(255, 244, 234, 0.3);
   overflow: hidden;
 }
 
@@ -93,7 +94,7 @@ body {
   height: 100%;
   object-fit: contain;
   border-radius: var(--radius-md);
-  background-color: #fde8d7;
+  background-color: #fff4ea;
 }
 
 .brand-text h1 {
@@ -104,9 +105,11 @@ body {
 }
 
 .brand-text h1 span {
-  background: var(--primary-gradient);
+  background: linear-gradient(135deg, #a78bfa 0%, #38bdf8 100%);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  color: #a78bfa;
 }
 
 .brand-text p {

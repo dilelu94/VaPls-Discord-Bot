@@ -2344,13 +2344,6 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return await stremioIndex(request)
 
         safe_name = os.path.basename(filename)
-        if safe_name == "scanneme.png" and not _validate_stremio_session(request):
-            return web.Response(
-                status=403,
-                content_type="text/html",
-                text=_build_stremio_access_denied_html(),
-            )
-
         web_dir = os.path.join(os.path.dirname(__file__), "web")
         file_path = os.path.join(web_dir, safe_name)
         if os.path.isfile(file_path):
