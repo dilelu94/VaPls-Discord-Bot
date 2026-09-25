@@ -29,7 +29,7 @@ class StremioSession:
 
 
 class StremioSessionManager:
-    def __init__(self, default_ttl_hours: float = 10 / 60.0, storage_path: str = _STORAGE_PATH):
+    def __init__(self, default_ttl_hours: float = 6.0, storage_path: str = _STORAGE_PATH):
         self.sessions: dict[str, StremioSession] = {}
         self.default_ttl_hours = default_ttl_hours
         self.storage_path = storage_path
@@ -107,6 +107,17 @@ class StremioSessionManager:
             return None
         return sess
 
+    def touch_session(self, token: str, min_ttl_seconds: float = 7200.0) -> Optional[StremioSession]:
+        sess = self.get_session(token)
+        if not sess:
+            return None
+        now = time.time()
+        if sess.expires_at - now < min_ttl_seconds:
+            sess.expires_at = now + min_ttl_seconds
+            self._save_sessions()
+            logger.info("Touched/refreshed Stremio session token=%s author=%s", token, sess.author_name)
+        return sess
+
     def validate_token(self, token: str) -> bool:
         return self.get_session(token) is not None
 
@@ -115,8 +126,8 @@ class StremioSessionManager:
         if not sess:
             return None
         now = time.time()
-        ttl = max(600.0, float(duration_seconds) + 600.0)
-        sess.expires_at = now + ttl
+        ttl = max(7200.0, float(duration_seconds) + 1800.0)
+        sess.expires_at = max(sess.expires_at, now + ttl)
         self._save_sessions()
         logger.info(
             "Extended Stremio session token=%s author=%s expires_in=%.1fh",

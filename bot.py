@@ -3038,7 +3038,7 @@ async def stream(
             author_name=getattr(ctx.author, "display_name", ctx.author.name),
             channel_id=voice_channel.id,
             guild_id=ctx.guild.id if ctx.guild else 0,
-            ttl_hours=10 / 60.0,
+            ttl_hours=6.0,
         )
         stremio_url = f"{stremio_base}?token={sess.token}"
         embed = discord.Embed(
@@ -3046,7 +3046,7 @@ async def stream(
             description="Buscá anime, películas y series y transmitilas al instante a tu canal de voz.",
             color=0x8B5CF6,
         )
-        embed.set_footer(text="🔒 Este enlace es único y vence en 10 minutos.")
+        embed.set_footer(text="🔒 Este enlace es único y permanece activo durante tu sesión.")
         view = StremioWebUIOverlayView(stremio_url)
         await ctx.interaction.edit_original_response(embed=embed, view=view)
         return

@@ -401,3 +401,34 @@ async def test_stremio_play_extends_session(mock_bot):
     finally:
         await client.close()
 
+
+@pytest.mark.asyncio
+async def test_stremio_session_touch_on_validation(mock_bot):
+    """Test that calling API endpoints automatically touches/refreshes the session token so it never expires during active use."""
+    sess = session_manager.create_session(author_id=1, author_name="a", channel_id=100, guild_id=200, ttl_hours=0.5)
+    token = sess.token
+    # Set expiration to 60 seconds from now
+    sess.expires_at = time.time() + 60.0
+
+    app = apiServer.makeApp(mock_bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        mock_control_resp = MagicMock()
+        mock_control_resp.status = 200
+        mock_control_resp.json = AsyncMock(return_value={"exists": True, "position": 5.0})
+        mock_control_resp.__aenter__.return_value = mock_control_resp
+
+        with patch("aiohttp.ClientSession.post", return_value=mock_control_resp):
+            resp = await client.get(f"/api/stremio/control?action=status&token={token}")
+            assert resp.status == 200
+
+        # After status call, session should be touched and extended to at least 2 hours (7200s) from now
+        updated_sess = session_manager.get_session(token)
+        assert updated_sess is not None
+        assert updated_sess.expires_at - time.time() >= 7100.0
+    finally:
+        await client.close()
+
+

@@ -2247,7 +2247,11 @@ def makeApp(bot: discord.Bot) -> web.Application:
             token = body_json.get("token")
         if not token:
             return None
-        return session_manager.get_session(str(token).strip())
+        tok_str = str(token).strip()
+        sess = session_manager.get_session(tok_str)
+        if sess:
+            session_manager.touch_session(tok_str)
+        return sess
 
     def _build_stremio_access_denied_html() -> str:
         return """<!DOCTYPE html>
