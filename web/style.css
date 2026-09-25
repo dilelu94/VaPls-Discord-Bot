@@ -80,7 +80,7 @@ body {
   width: 44px;
   height: 44px;
   border-radius: var(--radius-md);
-  background-color: #ffe9dc;
+  background-color: #fde8d7;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -93,7 +93,7 @@ body {
   height: 100%;
   object-fit: contain;
   border-radius: var(--radius-md);
-  background-color: #ffe9dc;
+  background-color: #fde8d7;
 }
 
 .brand-text h1 {

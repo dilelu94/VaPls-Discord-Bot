@@ -376,6 +376,73 @@ async def search_stremio_torrents(query: str, limit: int = 10) -> list[TorrentSt
     return results
 
 
+_ISRAELI_DIRECTOR_CACHE: dict[str, bool] = {}
+
+
+def is_israeli_or_jewish_person(name: str) -> bool:
+    """Checks via Wikidata whether a director/person has Israeli citizenship or Jewish religion/ethnicity."""
+    if not name or not isinstance(name, str):
+        return False
+    clean_name = name.strip()
+    if not clean_name:
+        return False
+    if clean_name in _ISRAELI_DIRECTOR_CACHE:
+        return _ISRAELI_DIRECTOR_CACHE[clean_name]
+
+    try:
+        url = f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(clean_name)}&language=en&format=json"
+        req = urllib.request.Request(url, headers={"User-Agent": BROWSER_HEADERS["User-Agent"]})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode())
+            results = data.get("search", [])
+            if not results:
+                _ISRAELI_DIRECTOR_CACHE[clean_name] = False
+                return False
+            entity_id = results[0]["id"]
+
+        entity_url = f"https://www.wikidata.org/wiki/Special:EntityData/{entity_id}.json"
+        req2 = urllib.request.Request(entity_url, headers={"User-Agent": BROWSER_HEADERS["User-Agent"]})
+        with urllib.request.urlopen(req2, timeout=3.0) as resp2:
+            edata = json.loads(resp2.read().decode())
+            claims = edata.get("entities", {}).get(entity_id, {}).get("claims", {})
+
+            # P27: Country of citizenship (Q801 = Israel)
+            for c in claims.get("P27", []):
+                qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                if qid == "Q801":
+                    _ISRAELI_DIRECTOR_CACHE[clean_name] = True
+                    return True
+
+            # P140: Religion (Q9268 = Judaism)
+            for c in claims.get("P140", []):
+                qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                if qid == "Q9268":
+                    _ISRAELI_DIRECTOR_CACHE[clean_name] = True
+                    return True
+
+            # P172: Ethnic group (Q7325 = Jews, Q614725 = Israeli Jews)
+            for c in claims.get("P172", []):
+                qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                if qid in ("Q7325", "Q614725"):
+                    _ISRAELI_DIRECTOR_CACHE[clean_name] = True
+                    return True
+    except Exception as e:
+        log.warning("Wikidata lookup error for '%s': %s", clean_name, e)
+
+    _ISRAELI_DIRECTOR_CACHE[clean_name] = False
+    return False
+
+
+def check_israeli_flag(directors: list[str], country_raw: str = "") -> bool:
+    """Returns True if production country is Israel or any director is Israeli / Jewish."""
+    if country_raw and "israel" in str(country_raw).lower():
+        return True
+    for d in directors:
+        if is_israeli_or_jewish_person(d):
+            return True
+    return False
+
+
 def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[dict]:
     """Search Cinemeta and Kitsu catalogs synchronously."""
     clean_query = query.strip()
@@ -415,6 +482,11 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
                     if item_id.startswith("kitsu:"):
                         item_type = "anime"
 
+                    raw_dir = item.get("director")
+                    dirs = raw_dir if isinstance(raw_dir, list) else ([raw_dir] if raw_dir else [])
+                    country = str(item.get("country") or "")
+                    is_israeli = check_israeli_flag(dirs, country)
+
                     results.append({
                         "id": item_id,
                         "type": item_type,
@@ -423,6 +495,8 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
                         "banner": banner,
                         "year": year,
                         "description": description,
+                        "director": dirs,
+                        "is_israeli": is_israeli,
                         "imdb_id": item.get("imdb_id") or (item_id if item_id.startswith("tt") else None),
                     })
         except Exception as e:
@@ -487,6 +561,8 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
     writer = raw_writer if isinstance(raw_writer, list) else ([raw_writer] if raw_writer else [])
 
     imdb_rating = str(meta_data.get("imdbRating") or "")
+    country_raw = str(meta_data.get("country") or "")
+    is_israeli = check_israeli_flag(director, country_raw)
 
     return {
         "id": item_id,
@@ -502,6 +578,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         "cast": cast,
         "writer": writer,
         "imdb_rating": imdb_rating,
+        "is_israeli": is_israeli,
         "episodes": episodes,
         "runtime": runtime_mins,
     }

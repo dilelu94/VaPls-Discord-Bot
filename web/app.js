@@ -21,9 +21,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const homeQrWidget = document.getElementById('homeQrWidget');
   const homeQrImg = document.getElementById('homeQrImg');
-  if (sessionToken && homeQrWidget && homeQrImg) {
-    const targetUrl = `${window.location.origin}/stremio/scanneme.png?token=${encodeURIComponent(sessionToken)}`;
+  const targetUrl = sessionToken
+    ? `${window.location.origin}/stremio/scanneme.png?token=${encodeURIComponent(sessionToken)}`
+    : `${window.location.origin}/stremio/scanneme.png`;
+
+  if (homeQrWidget) {
     homeQrWidget.href = targetUrl;
+  }
+  if (homeQrImg) {
     homeQrImg.src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(targetUrl)}`;
   }
 
