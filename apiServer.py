@@ -1507,7 +1507,13 @@ def makeApp(bot: discord.Bot) -> web.Application:
         from bot import _macro_voice_sessions
         guild_macro = _macro_voice_sessions.get(guild_id, {})
 
-        async for m in guild.fetch_members(limit=None):
+        try:
+            members = [m async for m in guild.fetch_members(limit=None)]
+        except Exception as e:
+            logger.warning("lastVoice: fetch_members failed (%s), using cached members", e)
+            members = list(guild.members)
+
+        for m in members:
             if m.bot or not discord.utils.get(m.roles, id=role_id):
                 continue
             uid_str = str(m.id)
