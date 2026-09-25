@@ -535,6 +535,21 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
         except Exception as e:
             log.warning("Catalog search error for %s (%s): %s", url, cat_type, e)
 
+    # For catalog items where director is missing (Cinemeta catalog search summary omits director), fetch meta in parallel for top items
+    missing_items = [item for item in results[:10] if not item.get("director") and item.get("id")]
+    if missing_items:
+        import concurrent.futures
+        def _enrich_item(item):
+            try:
+                m = get_stremio_meta_sync(item["type"], item["id"])
+                if m:
+                    item["director"] = m.get("director", [])
+                    item["is_israeli"] = m.get("is_israeli", False)
+            except Exception:
+                pass
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            list(executor.map(_enrich_item, missing_items))
+
     return results
 
 
