@@ -832,8 +832,8 @@ class _ImageDMSession:
                 {
                     "original_filename": p.original_filename,
                     "attachment": {
-                        "url": p.attachment.url,
-                        "filename": p.attachment.filename,
+                        "url": getattr(p.attachment, "url", ""),
+                        "filename": getattr(p.attachment, "filename", "image.png"),
                         "content_type": getattr(
                             p.attachment, "content_type", "image/png"
                         ),

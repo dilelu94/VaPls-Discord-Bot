@@ -96,7 +96,7 @@ class StremioSessionManager:
 
     def revoke_sessions_for_guild(self, guild_id: int) -> int:
         """Revokes/expires all session tokens associated with a given guild ID."""
-        to_remove = [t for t, s in self.sessions.items() if s.guild_id == guild_id]
+        to_remove = [t for t, s in self.sessions.items() if s.guild_id == guild_id or guild_id == 0]
         for t in to_remove:
             self.sessions.pop(t, None)
         if to_remove:
@@ -111,16 +111,6 @@ class StremioSessionManager:
         if not sess:
             return None
         now = time.time()
-        # If stream is active in guild or active session, keep token valid up to 6 hours from now
-        try:
-            import sys
-            bot_mod = sys.modules.get("bot")
-            if bot_mod and hasattr(bot_mod, "_active_sources"):
-                if sess.guild_id in bot_mod._active_sources:
-                    sess.expires_at = max(sess.expires_at, now + 21600.0)
-        except Exception:
-            pass
-
         if now > sess.expires_at:
             logger.info("Stremio session expired: token=%s", token)
             self.sessions.pop(token, None)
@@ -128,15 +118,23 @@ class StremioSessionManager:
             return None
         return sess
 
-    def touch_session(self, token: str, min_ttl_seconds: float = 21600.0) -> Optional[StremioSession]:
+    def touch_session(self, token: str, min_ttl_seconds: float = 300.0) -> Optional[StremioSession]:
         sess = self.get_session(token)
         if not sess:
             return None
         now = time.time()
-        if sess.expires_at - now < min_ttl_seconds:
-            sess.expires_at = now + min_ttl_seconds
-            self._save_sessions()
-            logger.info("Touched/refreshed Stremio session token=%s author=%s", token, sess.author_name)
+        # Only extend touch TTL if a stream is actively playing for this guild
+        try:
+            import sys
+            bot_mod = sys.modules.get("bot")
+            if bot_mod and hasattr(bot_mod, "_active_sources"):
+                if sess.guild_id in bot_mod._active_sources:
+                    if sess.expires_at - now < min_ttl_seconds:
+                        sess.expires_at = now + min_ttl_seconds
+                        self._save_sessions()
+                        logger.info("Touched/refreshed Stremio session token=%s author=%s", token, sess.author_name)
+        except Exception:
+            pass
         return sess
 
     def validate_token(self, token: str) -> bool:

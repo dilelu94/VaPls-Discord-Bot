@@ -10,14 +10,15 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
 
-  <link rel="stylesheet" href="/stremio/style.css?v=20260918_player">
+  <link rel="icon" type="image/webp" href="/stremio/ahegao.webp">
+  <link rel="stylesheet" href="/stremio/style.css?v=20260925_sync">
 </head>
 <body>
   <div class="app-container">
     <!-- Header / Navbar -->
     <header class="navbar">
       <div class="brand">
-        <div class="logo-badge">⚡</div>
+        <div class="logo-badge"><img src="/stremio/ahegao.webp" alt="Logo" class="logo-img"></div>
         <div class="brand-text">
           <h1>VaPls <span>Stremio</span></h1>
           <p>Anime & Streaming en Discord Go Live</p>
@@ -99,6 +100,7 @@
               </button>
               <button id="playerForwardBtn" class="control-btn" title="Adelantar 10 segundos">+10s ⏭️</button>
               <button id="playerStopBtn" class="control-btn stop-btn" title="Detener transmisión">🛑 Detener Stream</button>
+              <button id="playerSyncBtn" class="control-btn sync-btn" title="Reiniciar stream desde la posición actual">🔄 Reiniciar Stream</button>
             </div>
           </div>
         </div>
@@ -128,6 +130,7 @@
 
             <h2 id="modalTitle">Título del Contenido</h2>
             <p id="modalGenres" class="genres-list"></p>
+            <p id="modalDirector" class="director-text" style="display:none; margin: 4px 0 8px 0; font-size: 0.9em; color: var(--text-muted);"></p>
             <p id="modalDescription" class="description-text"></p>
 
             <!-- Series / Anime Episode Picker -->

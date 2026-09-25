@@ -2413,6 +2413,13 @@ class StreamControlView(BaseView):
         if self._checker_task and not self._checker_task.done():
             self._checker_task.cancel()
 
+    @discord.ui.button(label="🔄 Sync", style=discord.ButtonStyle.success, custom_id="stream_sync_btn")
+    async def sync_stream_btn(self, button: discord.ui.Button, interaction: discord.Interaction):
+        await interaction.response.send_message("🔄 Resincronizando stream desde la posición actual...", ephemeral=True, delete_after=3)
+        success = await _send_stream_control(self.guild_id, "resume_pos")
+        if not success:
+            await interaction.followup.send("❌ Error de comunicación con el stream.", ephemeral=True)
+
 
 class TorrentSearchView(BaseView):
     """Interactive SelectMenu UI for choosing a torrent stream option."""

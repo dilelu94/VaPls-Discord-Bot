@@ -90,6 +90,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const playerPlayIcon = document.getElementById('playerPlayIcon');
   const playerForwardBtn = document.getElementById('playerForwardBtn');
   const playerStopBtn = document.getElementById('playerStopBtn');
+  const playerSyncBtn = document.getElementById('playerSyncBtn');
 
   // Application State
   let currentFilter = 'all';
@@ -417,6 +418,27 @@ document.addEventListener('DOMContentLoaded', () => {
       modalTypeBadge.className = `badge ${esc(currentMeta.type)}`;
       modalYear.textContent = currentMeta.year || '';
       modalGenres.textContent = (currentMeta.genres || []).join(' • ');
+
+      const modalDirector = document.getElementById('modalDirector');
+      if (modalDirector) {
+        if (currentMeta.director && currentMeta.director.length > 0) {
+          modalDirector.textContent = '🎬 Director: ' + currentMeta.director.join(', ');
+          modalDirector.style.display = 'block';
+        } else {
+          modalDirector.style.display = 'none';
+        }
+      }
+
+      if (modalImdb) {
+        if (currentMeta.imdb_rating) {
+          modalImdb.textContent = '⭐ ' + currentMeta.imdb_rating;
+          modalImdb.style.display = 'inline-block';
+        } else {
+          modalImdb.style.display = 'inline-block';
+          modalImdb.textContent = '⭐ IMDb';
+        }
+      }
+
       modalDescription.textContent = currentMeta.description || 'Sin descripción disponible.';
 
       const isSeriesOrAnime = currentMeta.type === 'series' || currentMeta.type === 'anime';
@@ -767,6 +789,13 @@ document.addEventListener('DOMContentLoaded', () => {
       await sendPlayerControl('stop');
       showToast('🛑 Transmisión detenida');
       hidePlayerView();
+    });
+  }
+
+  if (playerSyncBtn) {
+    playerSyncBtn.addEventListener('click', async () => {
+      showToast('🔄 Resincronizando stream desde el punto actual...');
+      await sendPlayerControl('resume_pos');
     });
   }
 

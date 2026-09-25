@@ -1011,6 +1011,26 @@ async def _relay_dm_file(user_id: int, content: str, file_path: str) -> Optional
                 pass
 
 
+class _StoryBuffer:
+    def __init__(self):
+        self.messages = []
+
+    async def send(self, content=None):
+        if content:
+            self.messages.append(content)
+
+
+class _FileAtt:
+    def __init__(self, data, filename: str, content_type: str, url: str = ""):
+        self._data = data
+        self.filename = filename
+        self.content_type = content_type
+        self.url = url
+
+    async def read(self):
+        return self._data
+
+
 async def handle_first_msg_after_story(message, bot) -> None:
     guild_id = message.guild.id
     review = _awaiting_first_msg.pop(guild_id, None)
@@ -1114,23 +1134,6 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 "gif": "image/gif",
                 "webp": "image/webp",
             }.get(ext, "image/png")
-
-            class _StoryBuffer:
-                def __init__(self):
-                    self.messages = []
-
-                async def send(self, content=None):
-                    if content:
-                        self.messages.append(content)
-
-            class _FileAtt:
-                def __init__(self, data, filename, content_type):
-                    self._data = data
-                    self.filename = filename
-                    self.content_type = content_type
-
-                async def read(self):
-                    return self._data
 
             fake_att = _FileAtt(data, full.name, mime)
             buf = _StoryBuffer()

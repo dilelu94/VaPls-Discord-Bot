@@ -477,6 +477,17 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         if m_rt:
             runtime_mins = int(m_rt.group(1))
 
+    raw_director = meta_data.get("director")
+    director = raw_director if isinstance(raw_director, list) else ([raw_director] if raw_director else [])
+
+    raw_cast = meta_data.get("cast")
+    cast = raw_cast if isinstance(raw_cast, list) else ([raw_cast] if raw_cast else [])
+
+    raw_writer = meta_data.get("writer")
+    writer = raw_writer if isinstance(raw_writer, list) else ([raw_writer] if raw_writer else [])
+
+    imdb_rating = str(meta_data.get("imdbRating") or "")
+
     return {
         "id": item_id,
         "imdb_id": meta_data.get("imdb_id") or (item_id if item_id.startswith("tt") else None),
@@ -487,6 +498,10 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         "description": meta_data.get("description") or "",
         "year": str(meta_data.get("year", "")),
         "genres": meta_data.get("genres", []),
+        "director": director,
+        "cast": cast,
+        "writer": writer,
+        "imdb_rating": imdb_rating,
         "episodes": episodes,
         "runtime": runtime_mins,
     }

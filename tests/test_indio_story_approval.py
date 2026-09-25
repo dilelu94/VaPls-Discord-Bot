@@ -297,3 +297,19 @@ async def test_watch_loop_triggers_after_startup_grace_period(bot):
         await storyManager._watch_loop(b)
         mock_trigger.assert_called_once()
 
+
+def test_file_att_to_dict_persistence_no_attribute_error():
+    """_FileAtt used in storyManager for fake attachments has a url attribute and to_dict handles it without AttributeError."""
+    import geminiCommand
+
+    fake_att = storyManager._FileAtt(b"data", "test.png", "image/png")
+    assert hasattr(fake_att, "url")
+    assert fake_att.url == ""
+
+    sess = geminiCommand._ImageDMSession(author_id=123, images=[fake_att])
+    d = sess.to_dict()
+    assert isinstance(d, dict)
+    assert d["pending"][0]["attachment"]["url"] == ""
+    assert d["pending"][0]["attachment"]["filename"] == "test.png"
+
+
