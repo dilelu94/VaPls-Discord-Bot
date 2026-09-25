@@ -376,60 +376,93 @@ async def search_stremio_torrents(query: str, limit: int = 10) -> list[TorrentSt
     return results
 
 
+KNOWN_JEWISH_ISRAELI_DIRECTORS = {
+    "taika waititi", "steven spielberg", "stanley kubrick", "woody allen", "roman polanski",
+    "ethan coen", "joel coen", "coen brothers", "ari folman", "gideon raff", "darren aronofsky",
+    "david cronenberg", "sam mendes", "billy wilder", "fritz lang", "mel brooks", "sidney lumet",
+    "william wyler", "otto preminger", "michael curtiz", "ernst lubitsch", "fred zinnemann",
+    "mike nichols", "rob reiner", "carl reiner", "barbra streisand", "spike jonze",
+    "bryan singer", "jon favreau", "j.j. abrams", "todd phillips", "david o. russell", "sam raimi",
+    "judd apatow", "seth rogen", "evan goldberg", "eli roth", "joseph gordon-levitt",
+    "noah baumbach", "james gray", "susanne bier", "errol morris", "chantal akerman", "claude lanzmann",
+    "amos gitai", "eitan fox", "joseph cedar", "samuel maoz", "nadav lapid", "guy nattiv",
+    "hagai levi", "david shore", "david chase", "david simon", "max landis", "john landis",
+    "harold ramis", "ivan reitman", "jason reitman",
+}
+
 _ISRAELI_DIRECTOR_CACHE: dict[str, bool] = {}
 
 
 def is_israeli_or_jewish_person(name: str) -> bool:
-    """Checks via Wikidata whether a director/person has Israeli citizenship or Jewish religion/ethnicity."""
+    """Checks via known list, Wikidata, and Wikipedia whether a director/person has Israeli citizenship or Jewish religion/ethnicity."""
     if not name or not isinstance(name, str):
         return False
     clean_name = name.strip()
     if not clean_name:
         return False
-    if clean_name in _ISRAELI_DIRECTOR_CACHE:
-        return _ISRAELI_DIRECTOR_CACHE[clean_name]
+    low_name = clean_name.lower()
+    
+    if low_name in _ISRAELI_DIRECTOR_CACHE:
+        return _ISRAELI_DIRECTOR_CACHE[low_name]
 
+    # Fast match against known directors set
+    if any(k in low_name for k in KNOWN_JEWISH_ISRAELI_DIRECTORS):
+        _ISRAELI_DIRECTOR_CACHE[low_name] = True
+        return True
+
+    # Check Wikidata API
     try:
         url = f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(clean_name)}&language=en&format=json"
-        req = urllib.request.Request(url, headers={"User-Agent": BROWSER_HEADERS["User-Agent"]})
+        req_headers = {"User-Agent": "VaPlsBot/1.0 (https://github.com/dilelu94)"}
+        req = urllib.request.Request(url, headers=req_headers)
         with urllib.request.urlopen(req, timeout=3.0) as resp:
             data = json.loads(resp.read().decode())
             results = data.get("search", [])
-            if not results:
-                _ISRAELI_DIRECTOR_CACHE[clean_name] = False
-                return False
-            entity_id = results[0]["id"]
+            if results:
+                entity_id = results[0]["id"]
+                entity_url = f"https://www.wikidata.org/wiki/Special:EntityData/{entity_id}.json"
+                req2 = urllib.request.Request(entity_url, headers=req_headers)
+                with urllib.request.urlopen(req2, timeout=3.0) as resp2:
+                    edata = json.loads(resp2.read().decode())
+                    claims = edata.get("entities", {}).get(entity_id, {}).get("claims", {})
 
-        entity_url = f"https://www.wikidata.org/wiki/Special:EntityData/{entity_id}.json"
-        req2 = urllib.request.Request(entity_url, headers={"User-Agent": BROWSER_HEADERS["User-Agent"]})
-        with urllib.request.urlopen(req2, timeout=3.0) as resp2:
-            edata = json.loads(resp2.read().decode())
-            claims = edata.get("entities", {}).get(entity_id, {}).get("claims", {})
+                    # P27: Country of citizenship (Q801 = Israel)
+                    for c in claims.get("P27", []):
+                        qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                        if qid == "Q801":
+                            _ISRAELI_DIRECTOR_CACHE[low_name] = True
+                            return True
 
-            # P27: Country of citizenship (Q801 = Israel)
-            for c in claims.get("P27", []):
-                qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
-                if qid == "Q801":
-                    _ISRAELI_DIRECTOR_CACHE[clean_name] = True
-                    return True
+                    # P140: Religion (Q9268 = Judaism)
+                    for c in claims.get("P140", []):
+                        qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                        if qid == "Q9268":
+                            _ISRAELI_DIRECTOR_CACHE[low_name] = True
+                            return True
 
-            # P140: Religion (Q9268 = Judaism)
-            for c in claims.get("P140", []):
-                qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
-                if qid == "Q9268":
-                    _ISRAELI_DIRECTOR_CACHE[clean_name] = True
-                    return True
-
-            # P172: Ethnic group (Q7325 = Jews, Q614725 = Israeli Jews)
-            for c in claims.get("P172", []):
-                qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
-                if qid in ("Q7325", "Q614725"):
-                    _ISRAELI_DIRECTOR_CACHE[clean_name] = True
-                    return True
+                    # P172: Ethnic group (Q7325 = Jews, Q614725 = Israeli Jews, Q6122670 = Jewish New Zealanders, Q902167 = Jewish Americans, etc)
+                    for c in claims.get("P172", []):
+                        qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                        if qid in ("Q7325", "Q614725", "Q6122670", "Q902167", "Q1029471"):
+                            _ISRAELI_DIRECTOR_CACHE[low_name] = True
+                            return True
     except Exception as e:
-        log.warning("Wikidata lookup error for '%s': %s", clean_name, e)
+        log.debug("Wikidata lookup error for '%s': %s", clean_name, e)
 
-    _ISRAELI_DIRECTOR_CACHE[clean_name] = False
+    # Wikipedia REST API fallback
+    try:
+        wp_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(clean_name.replace(' ', '_'))}"
+        req_wp = urllib.request.Request(wp_url, headers={"User-Agent": "VaPlsBot/1.0 (https://github.com/dilelu94)"})
+        with urllib.request.urlopen(req_wp, timeout=3.0) as rwp:
+            wp_data = json.loads(rwp.read().decode())
+            extract = wp_data.get("extract", "").lower()
+            if "jewish" in extract or "israeli" in extract or "judaism" in extract:
+                _ISRAELI_DIRECTOR_CACHE[low_name] = True
+                return True
+    except Exception:
+        pass
+
+    _ISRAELI_DIRECTOR_CACHE[low_name] = False
     return False
 
 

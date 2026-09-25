@@ -381,7 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderCatalogGrid(items) {
     catalogGrid.innerHTML = items.map(item => `
       <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
-        ${item.is_israeli ? '<div class="israeli-star-badge" title="Director u origen israelí / judío">✡️</div>' : ''}
+        ${item.is_israeli ? '<div class="israeli-star-badge" title="Director u origen israelí / judío"><img src="/stremio/star_of_david.png" class="israeli-star-img" alt="Estrella de David"></div>' : ''}
         <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
         <div class="card-content">
           <div class="card-title">${esc(item.title)}</div>
@@ -430,7 +430,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const badge = document.createElement('div');
           badge.className = 'israeli-star-badge';
           badge.title = 'Director u origen israelí / judío';
-          badge.textContent = '✡️';
+          badge.innerHTML = '<img src="/stremio/star_of_david.png" class="israeli-star-img" alt="Estrella de David">';
           modalPosterWrap.style.position = 'relative';
           modalPosterWrap.appendChild(badge);
         }
@@ -450,7 +450,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const modalDirector = document.getElementById('modalDirector');
       if (modalDirector) {
         if (currentMeta.director && currentMeta.director.length > 0) {
-          modalDirector.textContent = '🎬 Director: ' + currentMeta.director.join(', ') + (currentMeta.is_israeli ? ' ✡️' : '');
+          modalDirector.innerHTML = '🎬 Director: ' + esc(currentMeta.director.join(', ')) + (currentMeta.is_israeli ? ' <img src="/stremio/star_of_david.png" class="israeli-star-inline-img" alt="Estrella de David">' : '');
           modalDirector.style.display = 'block';
         } else {
           modalDirector.style.display = 'none';
