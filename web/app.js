@@ -381,6 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderCatalogGrid(items) {
     catalogGrid.innerHTML = items.map(item => `
       <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
+        ${item.is_israeli ? '<div class="israeli-star-badge" title="Director u origen israelí / judío">✡️</div>' : ''}
         <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
         <div class="card-content">
           <div class="card-title">${esc(item.title)}</div>
@@ -421,6 +422,20 @@ document.addEventListener('DOMContentLoaded', () => {
       modalTitle.textContent = currentMeta.title || '';
       modalPoster.src = currentMeta.poster || 'https://via.placeholder.com/300x450?text=No+Poster';
       
+      const modalPosterWrap = document.querySelector('.modal-poster-wrap');
+      if (modalPosterWrap) {
+        const existingBadge = modalPosterWrap.querySelector('.israeli-star-badge');
+        if (existingBadge) existingBadge.remove();
+        if (currentMeta.is_israeli) {
+          const badge = document.createElement('div');
+          badge.className = 'israeli-star-badge';
+          badge.title = 'Director u origen israelí / judío';
+          badge.textContent = '✡️';
+          modalPosterWrap.style.position = 'relative';
+          modalPosterWrap.appendChild(badge);
+        }
+      }
+
       if (currentMeta.banner) {
         modalBanner.style.backgroundImage = `url('${esc(currentMeta.banner)}')`;
       } else {
@@ -435,7 +450,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const modalDirector = document.getElementById('modalDirector');
       if (modalDirector) {
         if (currentMeta.director && currentMeta.director.length > 0) {
-          modalDirector.textContent = '🎬 Director: ' + currentMeta.director.join(', ');
+          modalDirector.textContent = '🎬 Director: ' + currentMeta.director.join(', ') + (currentMeta.is_israeli ? ' ✡️' : '');
           modalDirector.style.display = 'block';
         } else {
           modalDirector.style.display = 'none';
