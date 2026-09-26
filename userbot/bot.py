@@ -3703,10 +3703,12 @@ async def _relay_say(request: web.Request) -> web.Response:
     if not guild_id and hasattr(channel, "guild_id"):
         guild_id = getattr(channel, "guild_id", None)
 
-    if guild_id and content:
+    speak_tts = bool(data.get("speak_tts") or data.get("tts"))
+    efecto = str(data.get("efecto", "ninguno"))
+    if guild_id and content and speak_tts:
         try:
             gid = int(guild_id)
-            task = asyncio.create_task(_speak_text_internal(gid, content, force=True))
+            task = asyncio.create_task(_speak_text_internal(gid, content, force=True, efecto=efecto))
 
             def _on_done(t: asyncio.Task):
                 try:

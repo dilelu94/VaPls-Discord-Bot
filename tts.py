@@ -7,7 +7,7 @@ import time
 import hashlib
 import logging
 import subprocess
-import urllib.request
+import uuid
 
 log = logging.getLogger("bot.tts")
 
@@ -169,7 +169,8 @@ def generate_tts_wav(text: str, output_path: str | None = None, efecto: str = "n
 
     if not output_path:
         text_hash = hashlib.md5(cleaned_text.encode("utf-8")).hexdigest()[:10]
-        output_path = f"/tmp/tts_indio_{text_hash}.wav"
+        uid_str = uuid.uuid4().hex[:6]
+        output_path = f"/tmp/tts_indio_{text_hash}_{uid_str}.wav"
 
     piper_cmd = _get_piper_cmd() + [
         "--model", MODEL_PATH,

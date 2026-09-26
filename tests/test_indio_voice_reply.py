@@ -354,7 +354,7 @@ async def test_relay_say_triggers_tts_voice_playback(monkeypatch):
     class DummySayReq:
         headers = {"X-API-Secret": "secret123"}
         async def json(self):
-            return {"channel_id": 456, "content": "Hola mundo desde el relay"}
+            return {"channel_id": 456, "content": "Hola mundo desde el relay", "speak_tts": True}
 
     resp = await userbot_module._relay_say(DummySayReq())
     assert resp.status == 200
