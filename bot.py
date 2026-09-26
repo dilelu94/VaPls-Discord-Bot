@@ -2918,20 +2918,24 @@ async def stream_autocomplete(ctx: discord.AutocompleteContext):
 
 @bot.slash_command(
     name="stream",
-    description="Transmití un canal de IPTV/Stremio/Anime o gestioná el auto-stream de Twitch",
+    description="Transmití IPTV, Stremio, torrents o links directos en Go Live",
 )
 async def stream(
     ctx,
-    canal: discord.Option(
+    opcion: discord.Option(
         str,
-        description="Nombre/URL del canal, 'add <url>', 'remove <url>', 'list', 'stremio'",
+        name="opcion",
+        description="Link, torrent, canal IPTV, 'stremio', 'list', etc.",
         required=False,
         default=None,
         autocomplete=stream_autocomplete,
     ) = None,
+    canal: Optional[str] = None,
 ):
-
     """Slash command: search iptv-org / Stremio / Twitch and manage auto-streams."""
+    if opcion is None and canal is not None:
+        opcion = canal
+    canal = opcion
     will_redirect = (
         config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
     )
