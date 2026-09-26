@@ -287,6 +287,18 @@ async def generate(
                             except Exception:
                                 logger.debug("on_retry callback failed", exc_info=True)
                         continue
+                    if status in (500, 502, 503, 504):
+                        _key_cooldowns[picked] = time.monotonic() + 5.0
+                        logger.warning(
+                            "gemini key …%s hit transient HTTP %d (attempt %d/%d): %s",
+                            picked[-6:],
+                            status,
+                            attempt + 1,
+                            attempts,
+                            msg or "transient failure",
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
                     if status == 401:
                         _key_cooldowns[picked] = time.monotonic() + _KEY_DEAD_COOLDOWN_SEC
                         logger.warning(

@@ -798,7 +798,7 @@ class _ImageDMSession:
         self._candidate_desc: str = ""
         self._retries: int = 0
         self._pending_desc: str = ""
-        self._pending_tags: list[str] = field(default_factory=list)
+        self._pending_tags: list[str] = []
         self._pending_data: bytes = b""
         self._pending_mime: str = ""
         self._pending_ext: str = ""
@@ -5036,6 +5036,7 @@ async def _relay_to_userbot(
     content: str,
     reply_to_id: Optional[int],
     file_path: Optional[str] = None,
+    guild_id: Optional[int] = None,
 ) -> Optional[list[int]]:
     """POST the indio reply to the userbot's local /say endpoint so it gets
     posted by the real user account.
@@ -5050,7 +5051,9 @@ async def _relay_to_userbot(
     secret = config.INDIO_RELAY_SECRET
     if not url or not secret:
         return None
-    payload = {"channel_id": int(channel_id), "content": content}
+    payload: dict = {"channel_id": int(channel_id), "content": content}
+    if guild_id is not None:
+        payload["guild_id"] = int(guild_id)
     if reply_to_id is not None:
         payload["reply_to_message_id"] = int(reply_to_id)
     if file_path:
@@ -5800,7 +5803,7 @@ async def indioLogic(
 
             # No reply-to: el question_msg lo posteo el bot mismo, hacer reply
             # ahi queda como auto-reply (Indio respondiendose a si mismo).
-            relay_ids = await _relay_to_userbot(channel_id, clean_reply, None)
+            relay_ids = await _relay_to_userbot(channel_id, clean_reply, None, guild_id=getattr(ctx.guild, "id", None))
             relayed_via_userbot = bool(relay_ids)
             if relayed_via_userbot:
                 relay_msg_id = relay_ids[0] if relay_ids else None
