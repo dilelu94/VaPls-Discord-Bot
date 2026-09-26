@@ -191,7 +191,7 @@ async def test_stremio_slash_commands():
 
     # Test /stream stremio command generates tokenized link
     with patch("bot.safe_defer", new=AsyncMock()):
-        await stream(ctx, canal="stremio")
+        await stream(ctx, opcion="stremio")
         assert ctx.interaction.edit_original_response.called
         kwargs = ctx.interaction.edit_original_response.call_args[1]
         embed = kwargs["embed"]

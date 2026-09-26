@@ -39,25 +39,25 @@ async def test_autostream_add_and_remove(ctx_factory):
     # Reset monitored channels
     bot._autostream_monitored_channels.clear()
 
-    # Add channel via /stream canal: add <url>
-    await bot.stream(ctx, canal="add https://www.twitch.tv/soyverycherrii/schedule")
+    # Add channel via /stream opcion: add <url>
+    await bot.stream(ctx, opcion="add https://www.twitch.tv/soyverycherrii/schedule")
     assert "https://www.twitch.tv/soyverycherrii" in bot._autostream_monitored_channels
     assert "agregado" in get_sent_message(ctx).lower()
 
     # Add duplicate
     ctx_dup = ctx_factory(channel_id=config.INDIO_PLAY_CHANNEL_ID)
-    await bot.stream(ctx_dup, canal="add soyverycherrii")
+    await bot.stream(ctx_dup, opcion="add soyverycherrii")
     assert len(bot._autostream_monitored_channels) == 1
     assert "ya está en la lista" in get_sent_message(ctx_dup).lower()
 
-    # List channels via /stream canal: list
+    # List channels via /stream opcion: list
     ctx_list = ctx_factory(channel_id=config.INDIO_PLAY_CHANNEL_ID)
-    await bot.stream(ctx_list, canal="list")
+    await bot.stream(ctx_list, opcion="list")
     assert get_sent_message(ctx_list) != ""
 
-    # Remove channel via /stream canal: remove <url>
+    # Remove channel via /stream opcion: remove <url>
     ctx_rem = ctx_factory(channel_id=config.INDIO_PLAY_CHANNEL_ID)
-    await bot.stream(ctx_rem, canal="remove soyverycherrii")
+    await bot.stream(ctx_rem, opcion="remove soyverycherrii")
     assert "https://www.twitch.tv/soyverycherrii" not in bot._autostream_monitored_channels
     assert "eliminado" in get_sent_message(ctx_rem).lower()
 

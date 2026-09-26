@@ -2930,11 +2930,8 @@ async def stream(
         default=None,
         autocomplete=stream_autocomplete,
     ) = None,
-    canal: Optional[str] = None,
 ):
     """Slash command: search iptv-org / Stremio / Twitch and manage auto-streams."""
-    if opcion is None and canal is not None:
-        opcion = canal
     canal = opcion
     will_redirect = (
         config.INDIO_PLAY_CHANNEL_ID and ctx.channel_id != config.INDIO_PLAY_CHANNEL_ID
