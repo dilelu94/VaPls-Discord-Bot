@@ -32,7 +32,6 @@ userbot. Los dos se comunican por HTTP en loopback.
 | **`/quit`**                  | Desconecta de voz **sin** tocar la cola.                                                                                                                                               |
 | **`/story-test`**            | [Owner] Fuerza una historia del Indio al instante (testing).                                                                                                                           |
 | **`/restart`**               | Devtool: reinicia el proceso del bot (`os.execv`).                                                                                                                                     |
-| **`/instagram`** (Pendiente) | **[PENDIENTE]** Transmite reels de Instagram en Go Live, scroll infinito. Pendiente de crear cuenta de Instagram para el userbot.                                                      |
 
 **Eventos del bot:**
 

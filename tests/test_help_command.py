@@ -37,6 +37,7 @@ async def test_help_embed_contains_categories_and_copy_paste_commands(ctx_factor
     assert any("Juegos y Mascota" in name for name in field_names)
     assert any("Estadísticas e Historial" in name for name in field_names)
     assert any("Otros" in name for name in field_names)
+    assert not any("Instagram" in name for name in field_names)
 
     all_text = " ".join(f.value for f in embed.fields)
 
