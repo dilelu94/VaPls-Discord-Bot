@@ -11,6 +11,15 @@ import geminiClient
 from geminiClient import GeminiError
 
 
+@pytest.fixture(autouse=True)
+def reset_gemini_client_state():
+    geminiClient._key_cooldowns.clear()
+    geminiClient._sticky_key = None
+    yield
+    geminiClient._key_cooldowns.clear()
+    geminiClient._sticky_key = None
+
+
 async def _gen(**kw):
     kw.setdefault("user_message", "hola")
     kw.setdefault("system_instruction", "sos un bot")
@@ -278,3 +287,21 @@ async def test_rotates_off_a_rate_limited_key(gemini_http, monkeypatch):
     await _gen()
     second = spy.requests[-1]["kwargs"]["params"]["key"]
     assert second != first
+
+
+async def test_rotates_and_retries_on_transient_503_error(gemini_http, monkeypatch):
+    monkeypatch.setattr(config, "GEMINI_API_KEYS", ["keyA", "keyB"], raising=False)
+    geminiClient._key_cooldowns.clear()
+    geminiClient._sticky_key = None
+
+    # First response fails with 503, second succeeds with 200
+    responses = [
+        {"status": 503, "payload": {"error": {"message": "overloaded"}}},
+        {"status": 200, "payload": {"candidates": [{"finishReason": "STOP", "content": {"parts": [{"text": "chiste gracioso"}]}}]}},
+    ]
+
+    spy = gemini_http(responses=responses)
+    reply = await _gen()
+    assert reply.text == "chiste gracioso"
+    assert len(spy.requests) == 2
+

@@ -299,11 +299,18 @@ def gemini_http(monkeypatch):
     spy = _Spy()
     spy.requests = []
 
-    def _configure(*, status=200, payload=None, json_exc=None, enter_exc=None):
-        resp = _FakeResp(status=status, payload=payload,
-                         json_exc=json_exc, enter_exc=enter_exc)
-        monkeypatch.setattr(aiohttp, "ClientSession",
-                            lambda *a, **k: _FakeSession(resp, spy.requests))
+    def _configure(*, status=200, payload=None, json_exc=None, enter_exc=None, responses=None):
+        if responses:
+            resps = [_FakeResp(**r) for r in responses]
+            def _session_factory(*a, **k):
+                r = resps.pop(0) if len(resps) > 1 else resps[0]
+                return _FakeSession(r, spy.requests)
+            monkeypatch.setattr(aiohttp, "ClientSession", _session_factory)
+        else:
+            resp = _FakeResp(status=status, payload=payload,
+                             json_exc=json_exc, enter_exc=enter_exc)
+            monkeypatch.setattr(aiohttp, "ClientSession",
+                                lambda *a, **k: _FakeSession(resp, spy.requests))
         return spy
 
     _configure.requests = spy.requests

@@ -235,6 +235,8 @@ async def generate(
     data: Optional[dict] = None
     status = 0
     last_429_msg: Optional[str] = None
+    last_transient_status: Optional[int] = None
+    last_transient_msg: Optional[str] = None
     # Probamos hasta una vez por key configurada antes de rendirnos.
     attempts = max(1, len(_pool_keys()))
     used_keys: set[str] = set()
@@ -246,7 +248,12 @@ async def generate(
             if picked in used_keys:
                 # Ya probamos todas las keys disponibles; _pick_key esta
                 # devolviendo "la menos peor" que ya esta en cooldown.
-                # Devolvemos el 429 acumulado.
+                if last_transient_status is not None:
+                    raise GeminiError(
+                        f"HTTP {last_transient_status}: {last_transient_msg or 'request failed'}",
+                        kind="http",
+                        status=last_transient_status,
+                    )
                 raise GeminiError(
                     f"HTTP 429: {last_429_msg or 'all keys rate-limited'}",
                     kind="http",
@@ -289,13 +296,13 @@ async def generate(
                         continue
                     if status in (500, 502, 503, 504):
                         _key_cooldowns[picked] = time.monotonic() + 5.0
+                        last_transient_status = status
+                        last_transient_msg = msg or "request failed"
                         logger.warning(
-                            "gemini key …%s hit transient HTTP %d (attempt %d/%d): %s",
-                            picked[-6:],
+                            "gemini http %d (key …%s): %s",
                             status,
-                            attempt + 1,
-                            attempts,
-                            msg or "transient failure",
+                            picked[-6:],
+                            msg or "request failed",
                         )
                         await asyncio.sleep(0.5)
                         continue
@@ -317,7 +324,12 @@ async def generate(
                         status=status,
                     )
         else:
-            # No conseguimos respuesta 2xx con ninguna key: el ultimo error fue 429.
+            if last_transient_status is not None:
+                raise GeminiError(
+                    f"HTTP {last_transient_status}: {last_transient_msg or 'request failed'}",
+                    kind="http",
+                    status=last_transient_status,
+                )
             raise GeminiError(
                 f"HTTP 429: {last_429_msg or 'all keys rate-limited'}",
                 kind="http",
