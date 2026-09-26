@@ -547,8 +547,10 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
                     item["is_israeli"] = m.get("is_israeli", False)
             except Exception:
                 pass
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            list(executor.map(_enrich_item, missing_items))
+    # Log an error for any catalog item that ends up without a director
+    for item in results:
+        if not item.get("director"):
+            log.error("Resultado sin director en catálogo: '%s' (ID: %s, Tipo: %s)", item.get("title"), item.get("id"), item.get("type"))
 
     return results
 
@@ -599,8 +601,15 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         if m_rt:
             runtime_mins = int(m_rt.group(1))
 
-    raw_director = meta_data.get("director")
+    raw_director = meta_data.get("director") or meta_data.get("directors")
+    if not raw_director and "crew" in meta_data and isinstance(meta_data.get("crew"), list):
+        crew_dirs = [c["name"] for c in meta_data["crew"] if isinstance(c, dict) and c.get("job") == "Director" and c.get("name")]
+        if crew_dirs:
+            raw_director = crew_dirs
+
     director = raw_director if isinstance(raw_director, list) else ([raw_director] if raw_director else [])
+    if not director:
+        log.error("Resultado sin director en metadatos: '%s' (ID: %s, Tipo: %s)", meta_data.get("name", "Desconocido"), item_id, item_type)
 
     raw_cast = meta_data.get("cast")
     cast = raw_cast if isinstance(raw_cast, list) else ([raw_cast] if raw_cast else [])
