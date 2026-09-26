@@ -1100,10 +1100,32 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
             return web.json_response({"status": "seeked", "timestamp": target_sec, "guild_id": guild_id})
         except ValueError:
             return web.json_response({"error": "invalid timestamp"}, status=400)
+    elif action in ("set_tracks", "change_track"):
+        a_tr = data.get("audio_track")
+        s_tr = data.get("subtitle_track")
+        sub_file = data.get("subtitle_file")
+        player = getattr(stream, "video_player", None) or vp
+        if player and hasattr(player, "set_tracks"):
+            player.set_tracks(
+                audio_track=int(a_tr) if a_tr is not None else None,
+                subtitle_track=int(s_tr) if s_tr is not None else None,
+                subtitle_file=sub_file,
+            )
+            return web.json_response({
+                "status": "tracks_updated",
+                "audio_track": getattr(player, "_audio_track", -1),
+                "subtitle_track": getattr(player, "_subtitle_track", -1),
+                "guild_id": guild_id,
+            })
+        return web.json_response({"error": "player not available for track update"}, status=400)
     elif action == "status":
         pos = getattr(stream, "current_position", 0.0) if stream else (getattr(vp, "current_position", 0.0) if vp else 0.0)
         is_paused = guild_id in _paused_streams
         st_title = getattr(stream, "title", "") if stream else ""
+        st_url = getattr(stream, "url", "") if stream else ""
+        player = getattr(stream, "video_player", None) or vp
+        audio_tr = getattr(player, "_audio_track", -1) if player else -1
+        sub_tr = getattr(player, "_subtitle_track", -1) if player else -1
         if stream:
             return web.json_response({
                 "exists": True,
@@ -1112,6 +1134,9 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
                 "position": pos,
                 "is_paused": is_paused,
                 "title": st_title,
+                "url": st_url,
+                "audio_track": audio_tr,
+                "subtitle_track": sub_tr,
                 "video_player": str(getattr(stream, "video_player", None)),
                 "video_player_alive": stream.video_player.is_alive() if getattr(stream, "video_player", None) else None,
                 "audio_sender": str(getattr(stream, "audio_sender", None)),
@@ -1126,6 +1151,9 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
                 "position": pos,
                 "is_paused": is_paused,
                 "title": st_title,
+                "url": st_url,
+                "audio_track": audio_tr,
+                "subtitle_track": sub_tr,
                 "video_player": str(vp),
                 "video_player_alive": vp.is_alive() if vp else False,
                 "conn_healthy": conn.healthy if conn and hasattr(conn, "healthy") else True,

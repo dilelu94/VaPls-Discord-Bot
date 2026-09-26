@@ -106,8 +106,32 @@
                 <span id="playerPlayIcon">⏸️</span>
               </button>
               <button id="playerForwardBtn" class="control-btn" title="Adelantar 10 segundos">+10s ⏭️</button>
-              <button id="playerStopBtn" class="control-btn stop-btn" title="Detener transmisión">🛑 Detener Stream</button>
-              <button id="playerSyncBtn" class="control-btn sync-btn" title="Reiniciar stream desde la posición actual">🔄 Reiniciar Stream</button>
+              <button id="playerTracksBtn" class="control-btn tracks-btn" title="Configurar Audio y Subtítulos en Vivo">⚙️ Audio & Subs</button>
+              <button id="playerSyncBtn" class="control-btn sync-btn" title="Reiniciar stream desde la posición actual">🔄 Reiniciar</button>
+              <button id="playerStopBtn" class="control-btn stop-btn" title="Detener transmisión">🛑 Detener</button>
+            </div>
+
+            <!-- Active Player Live Tracks Selector Panel -->
+            <div id="playerTracksPanel" class="tracks-panel player-tracks-panel" style="display: none;">
+              <div class="tracks-panel-header">
+                <span>💬 Cambiar Pistas de Audio y Subtítulos en Vivo</span>
+                <span id="playerTracksSpinner" class="mini-spinner-inline" style="display: none;"></span>
+              </div>
+              <div class="tracks-grid">
+                <div class="select-group">
+                  <label for="playerAudioSelect">🎙️ Audio:</label>
+                  <select id="playerAudioSelect">
+                    <option value="-1">✨ Auto-detectar (Predeterminado)</option>
+                  </select>
+                </div>
+                <div class="select-group">
+                  <label for="playerSubSelect">💬 Subtítulos:</label>
+                  <select id="playerSubSelect">
+                    <option value="-1">✨ Auto-detectar (Español / OpenSubtitles)</option>
+                    <option value="-2">🚫 Sin Subtítulos (Desactivados)</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -160,7 +184,33 @@
             <div class="section-box">
               <div class="section-header">
                 <h3>🎥 Opciones de Stream</h3>
-                <button id="refreshStreamsBtn" class="mini-btn">🔄 Actualizar</button>
+                <div class="section-actions">
+                  <button id="toggleModalTracksBtn" class="mini-btn tracks-toggle-btn" title="Configurar audio y subtítulos">⚙️ Audio & Subs</button>
+                  <button id="refreshStreamsBtn" class="mini-btn">🔄 Actualizar</button>
+                </div>
+              </div>
+
+              <!-- Collapsible Tracks Config Panel in Modal -->
+              <div id="modalTracksPanel" class="tracks-panel" style="display: none;">
+                <div class="tracks-panel-header">
+                  <span>⚙️ Configuración de Audio y Subtítulos</span>
+                  <span id="modalTracksSpinner" class="mini-spinner-inline" style="display: none;"></span>
+                </div>
+                <div class="tracks-grid">
+                  <div class="select-group">
+                    <label for="modalAudioSelect">🎙️ Pista de Audio:</label>
+                    <select id="modalAudioSelect">
+                      <option value="-1">✨ Auto-detectar (Predeterminado)</option>
+                    </select>
+                  </div>
+                  <div class="select-group">
+                    <label for="modalSubSelect">💬 Subtítulos:</label>
+                    <select id="modalSubSelect">
+                      <option value="-1">✨ Auto-detectar (Español / OpenSubtitles)</option>
+                      <option value="-2">🚫 Sin Subtítulos (Desactivados)</option>
+                    </select>
+                  </div>
+                </div>
               </div>
 
               <div id="streamLoader" class="stream-loader" style="display: none;">

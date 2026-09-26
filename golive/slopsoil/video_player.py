@@ -1065,6 +1065,27 @@ class H264VideoPlayer(threading.Thread):
             self._kill_proc(proc)
         log.info("[VIDEO_PLAYER] Seek requested to target_sec=%.2f", self._start_time)
 
+    def set_tracks(
+        self,
+        audio_track: int | None = None,
+        subtitle_track: int | None = None,
+        subtitle_file: str | None = None,
+    ) -> None:
+        """Update audio track and/or subtitle track, then restart stream at current position."""
+        if audio_track is not None:
+            self._audio_track = int(audio_track)
+        if subtitle_track is not None:
+            self._subtitle_track = int(subtitle_track)
+        if subtitle_file is not None:
+            self._subtitle_file = subtitle_file
+        log.info(
+            "[VIDEO_PLAYER] set_tracks called: audio_track=%s, subtitle_track=%s, subtitle_file=%s",
+            self._audio_track,
+            self._subtitle_track,
+            self._subtitle_file,
+        )
+        self.seek(self.current_position)
+
     def pause(self) -> None:
         """Pause video frame emission."""
         self._paused_event.clear()

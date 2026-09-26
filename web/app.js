@@ -132,6 +132,22 @@ document.addEventListener('DOMContentLoaded', () => {
   const playerStopBtn = document.getElementById('playerStopBtn');
   const playerSyncBtn = document.getElementById('playerSyncBtn');
 
+  // Tracks Config Elements
+  const toggleModalTracksBtn = document.getElementById('toggleModalTracksBtn');
+  const modalTracksPanel = document.getElementById('modalTracksPanel');
+  const modalAudioSelect = document.getElementById('modalAudioSelect');
+  const modalSubSelect = document.getElementById('modalSubSelect');
+  const modalTracksSpinner = document.getElementById('modalTracksSpinner');
+
+  const playerTracksBtn = document.getElementById('playerTracksBtn');
+  const playerTracksPanel = document.getElementById('playerTracksPanel');
+  const playerAudioSelect = document.getElementById('playerAudioSelect');
+  const playerSubSelect = document.getElementById('playerSubSelect');
+  const playerTracksSpinner = document.getElementById('playerTracksSpinner');
+
+  let fetchedTracksUrl = null;
+  let isFetchingTracks = false;
+
   // Application State
   let currentFilter = 'all';
   let searchTimeout = null;
@@ -730,11 +746,99 @@ document.addEventListener('DOMContentLoaded', () => {
         item.classList.add('selected');
         selectedStreamUrl = item.dataset.url;
         startStreamBtn.disabled = false;
+        if (modalTracksPanel && modalTracksPanel.style.display !== 'none' && fetchedTracksUrl !== selectedStreamUrl) {
+          fetchStreamTracks(selectedStreamUrl, 'modal');
+        }
       });
 
       if (idx === 0) {
         item.click();
       }
+    });
+  }
+
+  async function fetchStreamTracks(streamUrl, target = 'modal') {
+    if (isFetchingTracks) return;
+    isFetchingTracks = true;
+    const spinner = target === 'modal' ? modalTracksSpinner : playerTracksSpinner;
+    const audioSel = target === 'modal' ? modalAudioSelect : playerAudioSelect;
+    const subSel = target === 'modal' ? modalSubSelect : playerSubSelect;
+
+    if (spinner) spinner.style.display = 'inline-block';
+
+    try {
+      const q = streamUrl ? `?url=${encodeURIComponent(streamUrl)}` : '';
+      const resp = await apiFetch(`/api/stremio/tracks${q}`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (streamUrl) fetchedTracksUrl = streamUrl;
+
+        // Populate Audio Select
+        const defaultAudioOpt = `<option value="-1">✨ Auto-detectar (Predeterminado)</option>`;
+        if (data.audio_tracks && data.audio_tracks.length > 0) {
+          audioSel.innerHTML = defaultAudioOpt + data.audio_tracks.map(tr =>
+            `<option value="${tr.index}">${esc(tr.display_name)}</option>`
+          ).join('');
+        } else {
+          audioSel.innerHTML = defaultAudioOpt;
+        }
+
+        // Populate Subtitles Select
+        const defaultSubOpt = `
+          <option value="-1">✨ Auto-detectar (Español / OpenSubtitles)</option>
+          <option value="-2">🚫 Sin Subtítulos (Desactivados)</option>
+        `;
+        if (data.subtitle_tracks && data.subtitle_tracks.length > 0) {
+          subSel.innerHTML = defaultSubOpt + data.subtitle_tracks.map(tr =>
+            `<option value="${tr.index}">${esc(tr.display_name)}</option>`
+          ).join('');
+        } else {
+          subSel.innerHTML = defaultSubOpt;
+        }
+      }
+    } catch (e) {
+      console.warn('[TRACKS] Failed to fetch tracks:', e);
+    } finally {
+      isFetchingTracks = false;
+      if (spinner) spinner.style.display = 'none';
+    }
+  }
+
+  if (toggleModalTracksBtn) {
+    toggleModalTracksBtn.addEventListener('click', () => {
+      const isVisible = modalTracksPanel.style.display !== 'none';
+      modalTracksPanel.style.display = isVisible ? 'none' : 'block';
+      toggleModalTracksBtn.classList.toggle('active', !isVisible);
+      if (!isVisible && selectedStreamUrl && fetchedTracksUrl !== selectedStreamUrl) {
+        fetchStreamTracks(selectedStreamUrl, 'modal');
+      }
+    });
+  }
+
+  if (playerTracksBtn) {
+    playerTracksBtn.addEventListener('click', () => {
+      const isVisible = playerTracksPanel.style.display !== 'none';
+      playerTracksPanel.style.display = isVisible ? 'none' : 'block';
+      playerTracksBtn.classList.toggle('active', !isVisible);
+      if (!isVisible) {
+        fetchStreamTracks('', 'player');
+      }
+    });
+  }
+
+  if (playerAudioSelect) {
+    playerAudioSelect.addEventListener('change', () => {
+      const val = parseInt(playerAudioSelect.value);
+      sendPlayerControl('set_tracks', { audio_track: val });
+      showToast('🎙️ Actualizando pista de audio en vivo...');
+    });
+  }
+
+  if (playerSubSelect) {
+    playerSubSelect.addEventListener('change', () => {
+      const val = parseInt(playerSubSelect.value);
+      sendPlayerControl('set_tracks', { subtitle_track: val });
+      showToast('💬 Actualizando subtítulos en vivo...');
     });
   }
 
@@ -909,6 +1013,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const runtimeMins = currentMeta ? (currentMeta.runtime || 0) : 0;
     const durationSecs = runtimeMins * 60.0;
 
+    const audioTrackVal = modalAudioSelect && modalAudioSelect.value ? parseInt(modalAudioSelect.value) : -1;
+    const subTrackVal = modalSubSelect && modalSubSelect.value ? parseInt(modalSubSelect.value) : -1;
+
     const payload = {
       token: sessionToken,
       url: selectedStreamUrl,
@@ -919,6 +1026,8 @@ document.addEventListener('DOMContentLoaded', () => {
       type: currentMeta ? currentMeta.type : 'movie',
       season: seasonVal,
       episode: episodeVal,
+      audio_track: audioTrackVal,
+      subtitle_track: subTrackVal,
       duration: durationSecs,
       runtime: runtimeMins,
     };

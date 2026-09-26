@@ -2638,13 +2638,25 @@ def makeApp(bot: discord.Bot) -> web.Application:
         except (ValueError, TypeError):
             episode = 1
 
+        try:
+            audio_track = int(body.get("audio_track", -1))
+        except (ValueError, TypeError):
+            audio_track = -1
+        try:
+            subtitle_track = int(body.get("subtitle_track", -1))
+        except (ValueError, TypeError):
+            subtitle_track = -1
+        subtitle_file = body.get("subtitle_file")
+
         logger.info(
-            "[STREMIO TRANSMIT] Transmit requested: title='%s' | imdb_id=%s | type=%s | channel_id=%s | guild_id=%s | url='%s'",
+            "[STREMIO TRANSMIT] Transmit requested: title='%s' | imdb_id=%s | type=%s | channel_id=%s | guild_id=%s | audio_track=%d | sub_track=%d | url='%s'",
             raw_title,
             imdb_id,
             item_type,
             channel_id,
             guild_id,
+            audio_track,
+            subtitle_track,
             stream_url,
         )
 
@@ -2666,6 +2678,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
                     "type": item_type,
                     "season": season,
                     "episode": episode,
+                    "audio_track": audio_track,
+                    "subtitle_track": subtitle_track,
+                    "subtitle_file": subtitle_file,
                     "is_live": False,
                 }
                 async with http_sess.post(f"{relay_url}/stream", json=payload, headers=headers, timeout=90) as resp:
@@ -2735,6 +2750,106 @@ def makeApp(bot: discord.Bot) -> web.Application:
             logger.error("[STREMIO TRANSMIT] Failed to relay stremio stream request: %s", e)
             return web.json_response({"error": str(e)}, status=500)
 
+    async def apiStremioTracks(request: web.Request) -> web.Response:
+        if not _check_stremio_rate_limit(request):
+            return web.json_response({"error": "too many requests"}, status=429)
+
+        sess = _validate_stremio_session(request)
+        if not sess:
+            return web.json_response(
+                {"error": "sesión inválida o expirada. Ejecutá /stream stremio en Discord."},
+                status=403,
+            )
+
+        raw_url = request.query.get("url", "").strip()
+        stream_url = _clean_stream_url(raw_url) if raw_url else None
+
+        if not stream_url and sess.guild_id:
+            try:
+                relay_url = getattr(config, "GOLIVE_RELAY_URL", "http://127.0.0.1:8082")
+                relay_secret = getattr(config, "GOLIVE_RELAY_SECRET", "")
+                headers = {"Content-Type": "application/json"}
+                if relay_secret:
+                    headers["X-API-Secret"] = relay_secret
+                async with aiohttp.ClientSession() as http_sess:
+                    async with http_sess.post(
+                        f"{relay_url}/stream/control",
+                        json={"guild_id": sess.guild_id, "action": "status"},
+                        headers=headers,
+                        timeout=5,
+                    ) as resp:
+                        if resp.status == 200:
+                            st_data = await resp.json()
+                            if st_data.get("url"):
+                                stream_url = _clean_stream_url(st_data["url"])
+            except Exception as e:
+                logger.warning("[STREMIO TRACKS] Failed to fetch active stream URL: %s", e)
+
+        if not stream_url:
+            return web.json_response({"audio_tracks": [], "subtitle_tracks": [], "has_multiple_audios": False, "has_subtitles": False})
+
+        from torrent_search import resolve_redirect_url, resolve_stremio_or_magnet_url, is_torrent_input
+        if stream_url.startswith("magnet:") or is_torrent_input(stream_url):
+            try:
+                res_url, _ = await asyncio.to_thread(resolve_stremio_or_magnet_url, stream_url)
+                if res_url and res_url.startswith(("http://", "https://")):
+                    checked_res = _clean_stream_url(res_url)
+                    if checked_res:
+                        stream_url = checked_res
+            except Exception:
+                pass
+        elif stream_url.startswith(("http://", "https://")):
+            needs_resolve = (
+                "resolve/" in stream_url.lower()
+                or "torbox" in stream_url.lower()
+                or not ("tb-cdn" in stream_url or stream_url.endswith((".mp4", ".mkv", ".avi", ".m3u8")))
+            )
+            if needs_resolve:
+                try:
+                    resolved = await asyncio.to_thread(resolve_redirect_url, stream_url)
+                    if resolved and not ("/configure" in resolved or ".legal/" in resolved):
+                        checked_res = _clean_stream_url(resolved)
+                        if checked_res:
+                            stream_url = checked_res
+                except Exception:
+                    pass
+
+        from media_inspector import inspect_media_tracks
+        tracks_info = await inspect_media_tracks(stream_url, timeout=6.0)
+
+        audios = [
+            {
+                "index": tr.index,
+                "stream_index": tr.stream_index,
+                "language": tr.language,
+                "title": tr.title,
+                "codec": tr.codec,
+                "display_name": tr.display_name,
+            }
+            for tr in tracks_info.audio_tracks
+        ]
+
+        subs = [
+            {
+                "index": tr.index,
+                "stream_index": tr.stream_index,
+                "language": tr.language,
+                "title": tr.title,
+                "codec": tr.codec,
+                "is_forced": tr.is_forced,
+                "display_name": tr.display_name,
+            }
+            for tr in tracks_info.subtitle_tracks
+        ]
+
+        return web.json_response({
+            "url": stream_url,
+            "audio_tracks": audios,
+            "subtitle_tracks": subs,
+            "has_multiple_audios": tracks_info.has_multiple_audios,
+            "has_subtitles": tracks_info.has_subtitles,
+        })
+
     async def apiStremioControl(request: web.Request) -> web.Response:
         if not _check_stremio_rate_limit(request):
             return web.json_response({"error": "too many requests"}, status=429)
@@ -2754,7 +2869,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
             )
 
         action = (body.get("action") or request.query.get("action") or "status").strip().lower()
-        if action not in {"status", "pause", "resume", "stop", "seek", "resume_pos"}:
+        if action not in {"status", "pause", "resume", "stop", "seek", "resume_pos", "set_tracks", "change_track"}:
             return web.json_response({"error": "invalid action"}, status=400)
 
         guild_id_str = str(body.get("guild_id") or request.query.get("guild_id") or sess.guild_id or "").strip()
@@ -2783,7 +2898,14 @@ def makeApp(bot: discord.Bot) -> web.Application:
         if relay_secret:
             headers["X-API-Secret"] = relay_secret
 
-        payload = {"guild_id": gid_int, "action": action, "timestamp": timestamp}
+        payload = {
+            "guild_id": gid_int,
+            "action": action,
+            "timestamp": timestamp,
+            "audio_track": body.get("audio_track"),
+            "subtitle_track": body.get("subtitle_track"),
+            "subtitle_file": body.get("subtitle_file"),
+        }
         try:
             async with aiohttp.ClientSession() as http_sess:
                 async with http_sess.post(f"{relay_url}/stream/control", json=payload, headers=headers, timeout=10) as resp:
@@ -2843,6 +2965,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/api/stremio/search", apiStremioSearch)
     app.router.add_get("/api/stremio/meta", apiStremioMeta)
     app.router.add_get("/api/stremio/streams", apiStremioStreams)
+    app.router.add_get("/api/stremio/tracks", apiStremioTracks)
     app.router.add_get("/api/stremio/voice-channels", apiStremioVoiceChannels)
     app.router.add_get("/api/stremio/watched", apiStremioWatchedGet)
     app.router.add_post("/api/stremio/watched", apiStremioWatchedPost)
