@@ -4977,11 +4977,15 @@ async def _speak_indio_reply(
     text: str,
     max_chars: int = 500,
     force: bool = False,
-    efecto: str = "ninguno",
+    efecto: Optional[str] = None,
 ) -> None:
     """Send text to the Userbot (Indio) HTTP relay so the Userbot account speaks the response in voice."""
     if not text or not guild_id:
         return
+    if (not efecto or efecto == "ninguno") and guild_id:
+        efecto = _indio_voice_effects.get(f"guild-{guild_id}", "ninguno")
+    if not efecto:
+        efecto = "ninguno"
     spoken = _clean_text_for_speech(text)
     if not spoken:
         return
@@ -5436,6 +5440,7 @@ async def indioLogic(
     
     if efecto is not None:
         _indio_voice_effects[hist_key] = efecto
+        await _persist_indio_state()
     else:
         efecto = _indio_voice_effects.get(hist_key, "ninguno")
         
