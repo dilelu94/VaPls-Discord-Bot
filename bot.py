@@ -28,6 +28,7 @@ import geminiCommand
 from geminiCommand import vaplsLogic, indioLogic, SPACEWAR_GUIDE_TEXT
 from suggestionsCommand import (
     sugerenciasLogic,
+    sugerenciasVerLogic,
     migrate_existing_suggestions,
     sync_closed_issues,
 )
@@ -1658,6 +1659,21 @@ async def sugerencias(
         log.warning("sugerencias defer failed: %s", e)
     _track_command(ctx, "sugerencias", {"idea_length": len(idea or "")})
     await sugerenciasLogic(ctx, idea)
+
+
+@bot.slash_command(
+    name="sugerencias-ver",
+    description="Mirá las sugerencias acumuladas y más pedidas",
+)
+async def sugerencias_ver(ctx):
+    """Slash command: view accumulated user suggestions."""
+    try:
+        if not ctx.response.is_done():
+            await ctx.defer(ephemeral=True)
+    except Exception as e:
+        log.warning("sugerencias-ver defer failed: %s", e)
+    _track_command(ctx, "sugerencias-ver")
+    await sugerenciasVerLogic(ctx)
 
 
 @bot.slash_command(name="quit", description="Sale del canal de voz")
@@ -3878,31 +3894,52 @@ async def help_cmd(ctx):
     embed.add_field(
         name="🎵 Música",
         value=(
-            "**/play** `query` — busca o pega una URL de YouTube.\n"
-            "**/queue** — muestra la cola de reproducción.\n"
-            "**/soundpad** `[query]` — panel de clips locales.\n"
-            "**/parar** — corta la reproducción y limpia la cola.\n"
+            "**/play query: cancion o url** — busca o reproduce una canción/playlist de YouTube.\n"
+            "**/queue** — muestra la cola de reproducción actual.\n"
+            "**/soundpad query: clip** — abre el panel interactivo o reproduce un clip por nombre.\n"
+            "**/parar** — corta la reproducción de audio y limpia la cola.\n"
             "**/quit** — sale del canal de voz sin limpiar la cola."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🎙️ Voz y Go Live",
+        name="🎥 Voz y Go Live",
         value=(
-            "**/entraindio** — hace que el indio (userbot) entre a escuchar.\n"
-            "**/sensibilidad** `0|1|2|3|4` — ajusta la sensibilidad del wake-word.\n"
-            "**/huh** — activa/desactiva el sonido de confirmación del indio.\n"
-            "**/stream** `canal` — transmití IPTV por Go Live.\n"
-            "**/stopstream** — detiene el stream de IPTV.\n"
+            "**/entraindio** — hace que el Indio (userbot) entre a tu canal de voz.\n"
+            "**/clip duracion: 1m** — graba y envía los últimos segundos/minutos de audio de voz.\n"
+            "**/verstream** — captura tu transmisión Go Live para que el Indio la comente.\n"
+            "**/stream opcion: stremio** — transmití IPTV, Stremio (`opcion: stremio`), torrents (`opcion: torrent: query`) o Twitch por Go Live.\n"
+            "**/stopstream** — detiene la transmisión Go Live activa.\n"
+            "**/sensibilidad preset: 1** — ajusta la sensibilidad del wake-word del Indio (0 a 4).\n"
+            "**/huh** — activa o desactiva el sonido de confirmación del wake-word."
         ),
         inline=False,
     )
     embed.add_field(
-        name="🤖 Gemini",
+        name="🤖 IA e Imágenes",
         value=(
-            "**/vapls** `pregunta` — respuesta puntual, sin memoria.\n"
-            "**/indio** `charla` — persona con memoria corta y larga destilada. "
-            "También responde por voz al decir 'indio'."
+            "**/vapls pregunta: qué es la inflación** — consulta puntual a Gemini, sin memoria.\n"
+            "**/indio charla: hola indio** — habla con la personalidad del Indio (memoria corta y larga destilada).\n"
+            "**/imagen prompt: un carpincho tomando mate** — genera o transforma imágenes con IA (Flux/Turbo)."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🎮 Juegos y Mascota",
+        value=(
+            "**/adivinador usuario: @usuario** — inicia una partida de trivia / Headbanz contra un usuario.\n"
+            "**/mascota accion: ver** — gestioná tu mascota virtual evolutiva (`ver` o `mostrar`).\n"
+            "**/spacewar** — guía para tener Spacewar gratis en tu biblioteca de Steam."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 Estadísticas e Historial",
+        value=(
+            "**/estadisticas usuario: @usuario** — resumen de voz, sesión actual y MMR.\n"
+            "**/ranking** — tabla de posiciones del ranking MMR en el servidor.\n"
+            "**/historial usuario: @usuario** — historial reciente de conexiones y desconexiones de voz.\n"
+            "**/actividad** — estadísticas detalladas de MMR (solo owner)."
         ),
         inline=False,
     )
@@ -3917,22 +3954,13 @@ async def help_cmd(ctx):
         inline=False,
     )
     embed.add_field(
-        name="📊 Estadísticas",
-        value=(
-            "**/estadisticas** `[usuario]` — resumen de voz, sesión actual y MMR.\n"
-            "**/ranking** — ranking MMR de actividad en el servidor.\n"
-            "**/actividad** — estadísticas detalladas de MMR (solo owner)."
-        ),
-        inline=False,
-    )
-    embed.add_field(
         name="💡 Otros",
         value=(
-            "**/sugerencias** `idea` — mandá una sugerencia o feature.\n"
-            "**/sugerencias-ver** — mirá las sugerencias más pedidas.\n"
-            "**/transferir** — link para subir archivos de 10 GB (solo @Main Characters).\n"
-            "**/sacudir** `@usuario(s)` `[veces]` — mueve a uno o más usuarios a un canal vacío.\n"
-            "**/help** — esto."
+            "**/sugerencias idea: agregar un comando** — mandá una sugerencia clasificada por IA.\n"
+            "**/sugerencias-ver** — mirá las sugerencias acumuladas y más pedidas.\n"
+            "**/transferir dias: 1** — generá un enlace temporal para subir archivos de hasta 10 GB.\n"
+            "**/sacudir usuario: @usuario veces: 5** — mueve a uno o más usuarios entre canales de voz.\n"
+            "**/help** — muestra esta guía de ayuda."
         ),
         inline=False,
     )

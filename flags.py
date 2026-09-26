@@ -22,6 +22,7 @@ COMMAND_FLAGS: dict[str, str] = {
     "imagen": "text",
     # "banana": "text",
     "sugerencias": "text",
+    "sugerencias-ver": "text",
     "quit": "text",
     "entraindio": "text",
     "sensibilidad": "text",
