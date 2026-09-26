@@ -39,6 +39,11 @@ def _extract_wake_ns():
     assert m, "could not locate _normalize"
     blocks.append(m.group(0))
 
+    # `_WAKE_WORD_TOKENS`
+    m_tokens = re.search(r"^_WAKE_WORD_TOKENS = .*?\)\n", src, re.MULTILINE | re.DOTALL)
+    assert m_tokens, "could not locate _WAKE_WORD_TOKENS"
+    blocks.append(m_tokens.group(0))
+
     # Preset pattern constants, sensitivity globals, and _PRESET_3_FILLER.
     # Captures from _PRESET_1_PATTERNS through the closing bracket of
     # _PRESET_3_FILLER so that _build_vosk_grammar can reference it.
