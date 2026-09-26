@@ -437,6 +437,7 @@ def _normalize(s: str) -> str:
 # transcript when deciding whether anything substantive is left to dispatch.
 _WAKE_WORD_TOKENS = (
     "indio",
+    "india",
     "indyo",
     "endio",
     "endyo",
