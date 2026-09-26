@@ -779,7 +779,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
             form.add_field("temperature", "0.0")
             form.add_field(
                 "prompt",
-                "Español rioplatense con voseo. Vocabulario: Indio, VaPls, Discord, clipeá, chiste.",
+                "Español rioplatense con voseo. Wake word: che indio, Che Indio, indio, Indio. Vocabulario: VaPls, Discord, clipeá, chiste.",
             )
 
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -1984,10 +1984,9 @@ class WakeWordSink(voice_recv.AudioSink):
                 },
             )
             # VOSK matched a _WAKE_PATTERNS pair and STT confirmed "indio".
-            # Only drop when transcript produced nothing substantive beyond filler.
             text = _trim_to_wake_word(text)
-            if not _has_text_beyond_wake_word(text):
-                log.info(f"[WAKE] user={user_id} only wake word / no question; skip")
+            if not text:
+                log.info(f"[WAKE] user={user_id} empty transcript after trim; skip")
                 return
             await on_transcript(
                 user_id, text, via_wake_word=True, vosk_result=vosk_result, pcm_bytes=pcm_16k
@@ -2096,11 +2095,14 @@ def _whisper_confirms_indio(text: str) -> bool:
     # Reject 3rd person references (e.g. "el indio de chile", "del indio", "al indio", "un indio")
     if re.search(r"\b(el|del|al|un)\s+(indio|india)\b", norm):
         return False
-    # Accept "indio" plus the close mis-spellings Whisper-small produces on the
+    # Accept "indio" plus the close mis-spellings Whisper produces on the
     # short wake clip ("india"; "indió" already strips to "indio"). Substring
     # within a token so glued/punctuated forms ("cheindio", "indio,", "indios")
     # count, while unrelated words like "individuo" do not.
-    return any(("indio" in tok or "india" in tok) for tok in norm.split())
+    return any(
+        ("indio" in tok or "india" in tok or "indyo" in tok or "iñdio" in tok)
+        for tok in norm.split()
+    )
 
 
 # s16le mono @16kHz: bytes per second of audio (2 bytes/sample × 16000).

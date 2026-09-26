@@ -71,6 +71,8 @@ def test_whisper_confirms_indio_strict_verification():
     assert userbot_bot._whisper_confirms_indio("indio, que hora es") is True
     assert userbot_bot._whisper_confirms_indio("INDIO DALE") is True
 
+    assert userbot_bot._whisper_confirms_indio("che indyo dale") is True
+
     # Invalid ambient text without wake-word (VOSK false positives)
     assert userbot_bot._whisper_confirms_indio("hola como andan todos") is False
     assert userbot_bot._whisper_confirms_indio("vamos a jugar una partida") is False
@@ -98,6 +100,29 @@ async def test_transcribe_and_dispatch_rejects_false_positive(monkeypatch):
 
         # Must NOT dispatch to on_transcript because Groq transcript lacked 'indio'
         on_transcript_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_transcribe_and_dispatch_accepts_standalone_che_indio(monkeypatch):
+    """Verify _transcribe_and_dispatch dispatches when speaker says standalone 'che indio'."""
+    on_transcript_mock = AsyncMock()
+    monkeypatch.setattr(userbot_bot, "on_transcript", on_transcript_mock)
+
+    with patch.object(userbot_bot, "_transcribe_pcm", AsyncMock(return_value="che indio")):
+        sink = userbot_bot.WakeWordSink(client_ref=MagicMock())
+        pcm_dummy = b"\x00\x00" * 16000
+        vosk_res = {"_matched_text": "che indio", "text": "che indio"}
+
+        await sink._transcribe_and_dispatch(
+            user_id=123,
+            pcm_16k=pcm_dummy,
+            duration=1.0,
+            vosk_result=vosk_res,
+        )
+
+        on_transcript_mock.assert_called_once()
+        assert on_transcript_mock.call_args[0][1] == "che indio"
+
 
 
 
