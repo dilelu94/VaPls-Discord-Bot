@@ -4684,6 +4684,26 @@ async def _speak_text_internal(
         source = discord.FFmpegOpusAudio(wav_path)
         if vc.is_playing():
             vc.stop()
+
+        conn = getattr(vc, "_connection", None)
+        dave_sess = getattr(conn, "dave_session", None)
+        if dave_sess is not None and not getattr(dave_sess, "ready", False):
+            log.warning(
+                "[RELAY-SPEAK] DAVE session exists but ready=False in guild %s. Attempting reinit_dave_session...",
+                guild_id,
+            )
+            if hasattr(conn, "reinit_dave_session"):
+                try:
+                    await conn.reinit_dave_session()
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    log.warning("[RELAY-SPEAK] reinit_dave_session failed: %s", e)
+            dave_sess = getattr(conn, "dave_session", None)
+            if dave_sess is not None and not getattr(dave_sess, "ready", False):
+                log.warning(
+                    "[RELAY-SPEAK] DAVE session still ready=False; outbound TTS Opus frames may be dropped by Discord."
+                )
+
         vc.play(source, after=_after)
         log.info(
             "[RELAY-SPEAK] userbot speaking TTS text (length=%d) in %s",
