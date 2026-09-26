@@ -472,6 +472,24 @@ def is_israeli_or_jewish_person(name: str) -> bool:
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid in ("Q7325", "Q614725", "Q6122670", "Q902167", "Q1029471"):
                             return _set_director_cache(low_name, True)
+
+                    # P1142: Political ideology (Q181600 = Zionism, Q517409 = Labor Zionism, Q21074403 = Revisionist Zionism, Q1408803 = Religious Zionism)
+                    for c in claims.get("P1142", []):
+                        qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                        if qid in ("Q181600", "Q517409", "Q21074403", "Q1408803", "Q3348610"):
+                            return _set_director_cache(low_name, True)
+
+                    # P135: Movement (Q181600 = Zionism)
+                    for c in claims.get("P135", []):
+                        qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                        if qid in ("Q181600", "Q517409", "Q21074403", "Q1408803"):
+                            return _set_director_cache(low_name, True)
+
+                    # P102: Political party (Likud Q185441, Religious Zionist Party Q104712431, Otzma Yehudit Q7110996)
+                    for c in claims.get("P102", []):
+                        qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
+                        if qid in ("Q185441", "Q104712431", "Q7110996"):
+                            return _set_director_cache(low_name, True)
     except Exception as e:
         log.debug("Wikidata lookup error for '%s': %s", clean_name, e)
 
@@ -482,7 +500,7 @@ def is_israeli_or_jewish_person(name: str) -> bool:
         with urllib.request.urlopen(req_wp, timeout=3.0) as rwp:
             wp_data = json.loads(rwp.read().decode())
             extract = wp_data.get("extract", "").lower()
-            if "jewish" in extract or "israeli" in extract or "judaism" in extract:
+            if "zionist" in extract or "zionism" in extract or "pro-israel" in extract or "jewish" in extract or "israeli" in extract or "judaism" in extract:
                 return _set_director_cache(low_name, True)
     except Exception:
         pass
