@@ -52,13 +52,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  const homeQrWidget = document.getElementById('homeQrWidget');
   const homeQrImg = document.getElementById('homeQrImg');
   const targetUrl = `${window.location.origin}/stremio/scanneme.png`;
 
-  if (homeQrWidget) {
-    homeQrWidget.href = sanitizeUrl(targetUrl);
-  }
   if (homeQrImg) {
     homeQrImg.src = sanitizeUrl(`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(targetUrl)}`);
   }

@@ -362,14 +362,9 @@ body {
   border-radius: var(--radius-md);
   text-decoration: none;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.7), var(--shadow-glow);
-  transition: all 0.25s ease;
+  cursor: default;
+  user-select: none;
   z-index: 1000;
-}
-
-.home-qr-widget:hover {
-  transform: scale(1.08) translateY(-2px);
-  border-color: var(--primary-purple);
-  box-shadow: 0 8px 25px rgba(139, 92, 246, 0.5);
 }
 
 .qr-img {
