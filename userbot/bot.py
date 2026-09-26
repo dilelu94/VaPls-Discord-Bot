@@ -2071,7 +2071,7 @@ def _whisper_confirms_indio(text: str) -> bool:
 
     norm = _normalize(text)
     # Reject 3rd person references (e.g. "el indio", "del indio", "al indio", "un indio")
-    if re.search(r"\b(el|del|al|un)\s+[,\s\-:]*(indio|india|indyo|hindio|hindia|chendio)\b", norm):
+    if re.search(r"\b(el|del|al|un)[,\s\-:]+(indio|india|indyo|hindio|hindia|chendio)\b", norm):
         return False
 
     # Clean punctuation to spaces for token matching
