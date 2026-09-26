@@ -35,11 +35,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const pathMatch = window.location.pathname.match(/\/stremio\/([a-f0-9]{32})/i);
     if (pathMatch) sessionToken = pathMatch[1];
   }
+  if (!sessionToken) {
+    try {
+      sessionToken = sessionStorage.getItem('stremio_token') || '';
+    } catch (e) {}
+  }
 
-  // Clean sensitive token parameter from address bar to prevent browser history / Referer leakage
-  if (urlParams.has('token') && window.history && window.history.replaceState) {
-    const cleanUrl = window.location.pathname + (window.location.hash || '');
-    window.history.replaceState({}, document.title, cleanUrl);
+  if (sessionToken) {
+    try {
+      sessionStorage.setItem('stremio_token', sessionToken);
+    } catch (e) {}
+    // Ensure the token stays in the browser address bar so the user sees it and page reloads work
+    if (!urlParams.has('token') && window.history && window.history.replaceState) {
+      const newUrl = `${window.location.pathname}?token=${encodeURIComponent(sessionToken)}${window.location.hash || ''}`;
+      window.history.replaceState({}, document.title, newUrl);
+    }
   }
 
   const homeQrWidget = document.getElementById('homeQrWidget');
