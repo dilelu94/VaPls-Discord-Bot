@@ -7,6 +7,7 @@ resolve URLs, as well as searching for movie/series streams via Stremio-compatib
 from dataclasses import dataclass
 import json
 import logging
+import os
 import re
 from typing import Optional
 import urllib.parse
@@ -390,7 +391,36 @@ KNOWN_JEWISH_ISRAELI_DIRECTORS = {
     "harold ramis", "ivan reitman", "jason reitman",
 }
 
-_ISRAELI_DIRECTOR_CACHE: dict[str, bool] = {}
+DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DIRECTOR_CACHE_FILE = os.path.join(DATA_DIR, "israeli_directors_cache.json")
+META_CACHE_FILE = os.path.join(DATA_DIR, "stremio_meta_cache.json")
+SEARCH_CACHE_FILE = os.path.join(DATA_DIR, "stremio_search_cache.json")
+
+def _load_cache_dict(path: str) -> dict:
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            log.warning("Cache load error for %s: %s", path, e)
+    return {}
+
+def _save_cache_dict(path: str, data: dict):
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        log.warning("Cache save error for %s: %s", path, e)
+
+_ISRAELI_DIRECTOR_CACHE: dict[str, bool] = _load_cache_dict(DIRECTOR_CACHE_FILE)
+_STREMIO_META_CACHE: dict[str, dict] = _load_cache_dict(META_CACHE_FILE)
+_STREMIO_SEARCH_CACHE: dict[str, list[dict]] = _load_cache_dict(SEARCH_CACHE_FILE)
+
+def _set_director_cache(low_name: str, val: bool) -> bool:
+    _ISRAELI_DIRECTOR_CACHE[low_name] = val
+    _save_cache_dict(DIRECTOR_CACHE_FILE, _ISRAELI_DIRECTOR_CACHE)
+    return val
 
 
 def is_israeli_or_jewish_person(name: str) -> bool:
@@ -407,8 +437,7 @@ def is_israeli_or_jewish_person(name: str) -> bool:
 
     # Fast match against known directors set
     if any(k in low_name for k in KNOWN_JEWISH_ISRAELI_DIRECTORS):
-        _ISRAELI_DIRECTOR_CACHE[low_name] = True
-        return True
+        return _set_director_cache(low_name, True)
 
     # Check Wikidata API
     try:
@@ -430,22 +459,19 @@ def is_israeli_or_jewish_person(name: str) -> bool:
                     for c in claims.get("P27", []):
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid == "Q801":
-                            _ISRAELI_DIRECTOR_CACHE[low_name] = True
-                            return True
+                            return _set_director_cache(low_name, True)
 
                     # P140: Religion (Q9268 = Judaism)
                     for c in claims.get("P140", []):
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid == "Q9268":
-                            _ISRAELI_DIRECTOR_CACHE[low_name] = True
-                            return True
+                            return _set_director_cache(low_name, True)
 
                     # P172: Ethnic group (Q7325 = Jews, Q614725 = Israeli Jews, Q6122670 = Jewish New Zealanders, Q902167 = Jewish Americans, etc)
                     for c in claims.get("P172", []):
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid in ("Q7325", "Q614725", "Q6122670", "Q902167", "Q1029471"):
-                            _ISRAELI_DIRECTOR_CACHE[low_name] = True
-                            return True
+                            return _set_director_cache(low_name, True)
     except Exception as e:
         log.debug("Wikidata lookup error for '%s': %s", clean_name, e)
 
@@ -457,13 +483,11 @@ def is_israeli_or_jewish_person(name: str) -> bool:
             wp_data = json.loads(rwp.read().decode())
             extract = wp_data.get("extract", "").lower()
             if "jewish" in extract or "israeli" in extract or "judaism" in extract:
-                _ISRAELI_DIRECTOR_CACHE[low_name] = True
-                return True
+                return _set_director_cache(low_name, True)
     except Exception:
         pass
 
-    _ISRAELI_DIRECTOR_CACHE[low_name] = False
-    return False
+    return _set_director_cache(low_name, False)
 
 
 def check_israeli_flag(directors: list[str], country_raw: str = "") -> bool:
@@ -481,6 +505,12 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
     clean_query = query.strip()
     if not clean_query:
         return []
+
+    search_key = f"{type_filter}:{clean_query.lower()}"
+    if search_key in _STREMIO_SEARCH_CACHE:
+        cached = _STREMIO_SEARCH_CACHE[search_key]
+        if isinstance(cached, list) and len(cached) > 0 and any(item.get("director") for item in cached):
+            return cached
 
     results = []
     seen_ids = set()
@@ -556,6 +586,10 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
         if not item.get("director"):
             log.error("Resultado sin director en catálogo: '%s' (ID: %s, Tipo: %s)", item.get("title"), item.get("id"), item.get("type"))
 
+    if results:
+        _STREMIO_SEARCH_CACHE[search_key] = results
+        _save_cache_dict(SEARCH_CACHE_FILE, _STREMIO_SEARCH_CACHE)
+
     return results
 
 
@@ -567,6 +601,10 @@ async def search_stremio_catalog(query: str, type_filter: str = "all") -> list[d
 
 def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
     """Fetch metadata and episode list for a movie, series, or anime."""
+    meta_cache_key = f"{item_type}:{item_id}"
+    if meta_cache_key in _STREMIO_META_CACHE:
+        return _STREMIO_META_CACHE[meta_cache_key]
+
     url = ""
     if item_id.startswith("kitsu:") or item_type == "anime":
         url = f"https://anime-kitsu.strem.fun/meta/anime/{item_id}.json"
@@ -625,7 +663,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
     country_raw = str(meta_data.get("country") or "")
     is_israeli = check_israeli_flag(director, country_raw)
 
-    return {
+    res = {
         "id": item_id,
         "imdb_id": meta_data.get("imdb_id") or (item_id if item_id.startswith("tt") else None),
         "type": item_type,
@@ -643,6 +681,11 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         "episodes": episodes,
         "runtime": runtime_mins,
     }
+    if meta_data:
+        _STREMIO_META_CACHE[meta_cache_key] = res
+        _save_cache_dict(META_CACHE_FILE, _STREMIO_META_CACHE)
+
+    return res
 
 
 async def get_stremio_meta(item_type: str, item_id: str) -> dict:
