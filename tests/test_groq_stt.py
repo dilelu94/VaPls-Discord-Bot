@@ -67,16 +67,22 @@ def test_whisper_confirms_indio_strict_verification():
     """Verify strict wake-word confirmation accepts indio mentions and rejects ambient text."""
     # Valid wake-word triggers
     assert userbot_bot._whisper_confirms_indio("che indio ponete un tema") is True
+    assert userbot_bot._whisper_confirms_indio("Che, indio, ponete un tema") is True
     assert userbot_bot._whisper_confirms_indio("hola indio que tal") is True
     assert userbot_bot._whisper_confirms_indio("indio, que hora es") is True
     assert userbot_bot._whisper_confirms_indio("INDIO DALE") is True
 
     assert userbot_bot._whisper_confirms_indio("che indyo dale") is True
+    assert userbot_bot._whisper_confirms_indio("che india dale") is True
+    assert userbot_bot._whisper_confirms_indio("chendio dale") is True
+    assert userbot_bot._whisper_confirms_indio("che, hindio dale") is True
 
     # Invalid ambient text without wake-word (VOSK false positives)
     assert userbot_bot._whisper_confirms_indio("hola como andan todos") is False
     assert userbot_bot._whisper_confirms_indio("vamos a jugar una partida") is False
     assert userbot_bot._whisper_confirms_indio("el individuo caminaba por la calle") is False
+    assert userbot_bot._whisper_confirms_indio("el indio de chile") is False
+    assert userbot_bot._whisper_confirms_indio("el, indio de chile") is False
     assert userbot_bot._whisper_confirms_indio("") is False
 
 

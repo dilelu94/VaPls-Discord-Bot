@@ -779,7 +779,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
             form.add_field("temperature", "0.0")
             form.add_field(
                 "prompt",
-                "Español rioplatense con voseo. Wake word: che indio, Che Indio, indio, Indio. Vocabulario: VaPls, Discord, clipeá, chiste.",
+                "Español rioplatense con voseo. Frase de activación / wake word: 'che indio'. Ejemplos: 'che indio, ponete un tema', 'che indio'. Vocabulario: VaPls, Discord, clipeá, chiste, indio.",
             )
 
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -2010,34 +2010,34 @@ def _trim_to_wake_word(text: str) -> str:
     Example:
         >>> _trim_to_wake_word("Si empezaron como la entretención, che indio qué opinás de las codornices")
         'che indio qué opinás de las codornices'
+        >>> _trim_to_wake_word("Che, indio, ponete un tema")
+        'Che, indio, ponete un tema'
     """
     if not text:
         return text
 
-    wake_phrases = [
-        "che indio",
-        "que indio",
-        "eh indio",
-        "ey indio",
-        "hey indio",
-        "indio",
-        "india",
-    ]
+    particles = r"(?:che|que|eh|ey|hey)"
+    indio_vars = r"(?:indio|india|indyo|iñdio|hindio|hindia|hindyo|chendio|cheindio|sendio|sendyo|cendio|ceindio|endio|endyo|yndio|yndyo)"
 
-    best_idx = -1
+    # 1. Compound wake phrase with optional punctuation/space between particle and indio variant
+    compound_pattern = r"\b" + particles + r"[,\s\-:]+" + indio_vars + r"\b"
+    m = re.search(compound_pattern, text, flags=re.IGNORECASE)
+    if m:
+        idx = m.start()
+        if idx > 0:
+            trimmed = text[idx:].strip()
+            return re.sub(r"^[^\wáéíóúñü]+", "", trimmed, flags=re.IGNORECASE)
+        return text
 
-    for phrase in wake_phrases:
-        pattern = r"\b" + re.escape(phrase) + r"\b"
-        m = re.search(pattern, text, flags=re.IGNORECASE)
-        if m:
-            idx = m.start()
-            if best_idx == -1 or idx < best_idx:
-                best_idx = idx
-
-    if best_idx > 0:
-        trimmed = text[best_idx:].strip()
-        trimmed = re.sub(r"^[^\wáéíóúñü]+", "", trimmed, flags=re.IGNORECASE)
-        return trimmed
+    # 2. Standalone or glued indio variant
+    single_pattern = r"\b" + indio_vars + r"\b"
+    m_single = re.search(single_pattern, text, flags=re.IGNORECASE)
+    if m_single:
+        idx = m_single.start()
+        if idx > 0:
+            trimmed = text[idx:].strip()
+            return re.sub(r"^[^\wáéíóúñü]+", "", trimmed, flags=re.IGNORECASE)
+        return text
 
     return text
 
@@ -2061,47 +2061,25 @@ def _has_text_beyond_wake_word(text: str) -> bool:
 
 
 def _whisper_confirms_indio(text: str) -> bool:
-    """True iff the normalized transcript contains the token "indio".
+    """True iff the normalized transcript contains "indio" or one of its phonetic variants.
 
-    Used by preset 4 to verify the prebuffer region actually contains the wake
-    word "indio" before committing to a full command transcription.
-
-    Matching rule: the normalized (accent-stripped, lowercased) text must
-    contain "indio" as a substring of at least one whitespace-delimited token
-    (so "indios," and "indio." also count, but "el_indo" does not).  Empty or
-    None input returns False.
-
-    Examples:
-        >>> _whisper_confirms_indio("che indio ponete un tema")
-        True
-        >>> _whisper_confirms_indio("ponete algo indio")
-        True
-        >>> _whisper_confirms_indio("INDIO")
-        True
-        >>> _whisper_confirms_indio("indio,")
-        True
-        >>> _whisper_confirms_indio("che india")  # Whisper-small mis-spelling
-        True
-        >>> _whisper_confirms_indio("cheindio dale")  # glued
-        True
-        >>> _whisper_confirms_indio("el individuo")  # not the wake word
-        False
-        >>> _whisper_confirms_indio("")
-        False
+    Used by preset 4 and post-STT verification to confirm the wake word.
     """
     if not text:
         return False
+
     norm = _normalize(text)
-    # Reject 3rd person references (e.g. "el indio de chile", "del indio", "al indio", "un indio")
-    if re.search(r"\b(el|del|al|un)\s+(indio|india)\b", norm):
+    # Reject 3rd person references (e.g. "el indio", "del indio", "al indio", "un indio")
+    if re.search(r"\b(el|del|al|un)\s+[,\s\-:]*(indio|india|indyo|hindio|hindia|chendio)\b", norm):
         return False
-    # Accept "indio" plus the close mis-spellings Whisper produces on the
-    # short wake clip ("india"; "indió" already strips to "indio"). Substring
-    # within a token so glued/punctuated forms ("cheindio", "indio,", "indios")
-    # count, while unrelated words like "individuo" do not.
+
+    # Clean punctuation to spaces for token matching
+    cleaned = re.sub(r"[^\w\s]", " ", norm)
+    tokens = cleaned.split()
+
     return any(
-        ("indio" in tok or "india" in tok or "indyo" in tok or "iñdio" in tok)
-        for tok in norm.split()
+        any(w_tok in tok for w_tok in _WAKE_WORD_TOKENS)
+        for tok in tokens
     )
 
 

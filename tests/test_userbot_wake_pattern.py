@@ -464,3 +464,10 @@ def test_trim_to_wake_word():
 
     raw3 = "che indio dale"
     assert trim(raw3) == "che indio dale"
+
+    # Preserves 'Che,' without trimming 'Che' when punctuated
+    assert trim("Che, indio, ponete un tema") == "Che, indio, ponete un tema"
+    assert trim("Che, indio.") == "Che, indio."
+    assert trim("Che, India, dale play") == "Che, India, dale play"
+    assert trim("Che, hindio, dale") == "Che, hindio, dale"
+    assert trim("Si empezaron como la entretención, Che, indio qué opinás de las codornices") == "Che, indio qué opinás de las codornices"
