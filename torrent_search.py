@@ -472,50 +472,86 @@ def is_israeli_or_jewish_person(name: str) -> bool:
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid in ("Q7325", "Q614725", "Q6122670", "Q902167", "Q1029471"):
                             return _set_director_cache(low_name, True)
+    except Exception as e:
+        log.debug("Wikidata lookup error for '%s': %s", clean_name, e)
+
+    return _set_director_cache(low_name, False)
+
+
+def is_zionist_person(name: str) -> bool:
+    """Checks via Wikidata and Wikipedia whether a director/person has explicit Zionist ideology, movement, or party affiliation."""
+    if not name or not isinstance(name, str):
+        return False
+    clean_name = name.strip()
+    if not clean_name:
+        return False
+    low_name = clean_name.lower()
+
+    try:
+        url = f"https://www.wikidata.org/w/api.php?action=wbsearchentities&search={urllib.parse.quote(clean_name)}&language=en&format=json"
+        req_headers = {"User-Agent": "VaPlsBot/1.0 (https://github.com/dilelu94)"}
+        req = urllib.request.Request(url, headers=req_headers)
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode())
+            results = data.get("search", [])
+            if results:
+                entity_id = results[0]["id"]
+                entity_url = f"https://www.wikidata.org/wiki/Special:EntityData/{entity_id}.json"
+                req2 = urllib.request.Request(entity_url, headers=req_headers)
+                with urllib.request.urlopen(req2, timeout=3.0) as resp2:
+                    edata = json.loads(resp2.read().decode())
+                    claims = edata.get("entities", {}).get(entity_id, {}).get("claims", {})
 
                     # P1142: Political ideology (Q181600 = Zionism, Q517409 = Labor Zionism, Q21074403 = Revisionist Zionism, Q1408803 = Religious Zionism)
                     for c in claims.get("P1142", []):
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid in ("Q181600", "Q517409", "Q21074403", "Q1408803", "Q3348610"):
-                            return _set_director_cache(low_name, True)
+                            return True
 
                     # P135: Movement (Q181600 = Zionism)
                     for c in claims.get("P135", []):
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid in ("Q181600", "Q517409", "Q21074403", "Q1408803"):
-                            return _set_director_cache(low_name, True)
+                            return True
 
                     # P102: Political party (Likud Q185441, Religious Zionist Party Q104712431, Otzma Yehudit Q7110996)
                     for c in claims.get("P102", []):
                         qid = c.get("mainsnak", {}).get("datavalue", {}).get("value", {}).get("id")
                         if qid in ("Q185441", "Q104712431", "Q7110996"):
-                            return _set_director_cache(low_name, True)
+                            return True
     except Exception as e:
-        log.debug("Wikidata lookup error for '%s': %s", clean_name, e)
+        log.debug("Wikidata Zionist lookup error for '%s': %s", clean_name, e)
 
-    # Wikipedia REST API fallback
     try:
         wp_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{urllib.parse.quote(clean_name.replace(' ', '_'))}"
         req_wp = urllib.request.Request(wp_url, headers={"User-Agent": "VaPlsBot/1.0 (https://github.com/dilelu94)"})
         with urllib.request.urlopen(req_wp, timeout=3.0) as rwp:
             wp_data = json.loads(rwp.read().decode())
             extract = wp_data.get("extract", "").lower()
-            if "zionist" in extract or "zionism" in extract or "pro-israel" in extract or "jewish" in extract or "israeli" in extract or "judaism" in extract:
-                return _set_director_cache(low_name, True)
+            if "zionist" in extract or "zionism" in extract or "pro-israel" in extract:
+                return True
     except Exception:
         pass
 
-    return _set_director_cache(low_name, False)
+    return False
 
 
-def check_israeli_flag(directors: list[str], country_raw: str = "") -> bool:
-    """Returns True if production country is Israel or any director is Israeli / Jewish."""
+def check_israeli_flag(directors: list[str], country_raw: str = "") -> tuple[bool, bool]:
+    """Returns (is_israeli, is_zionist) tuple."""
+    is_israeli = False
+    is_zionist = False
+
     if country_raw and "israel" in str(country_raw).lower():
-        return True
+        is_israeli = True
+        is_zionist = True
+
     for d in directors:
         if is_israeli_or_jewish_person(d):
-            return True
-    return False
+            is_israeli = True
+        if is_zionist_person(d):
+            is_zionist = True
+
+    return is_israeli, is_zionist
 
 
 def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[dict]:
@@ -566,7 +602,7 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
                     raw_dir = item.get("director")
                     dirs = raw_dir if isinstance(raw_dir, list) else ([raw_dir] if raw_dir else [])
                     country = str(item.get("country") or "")
-                    is_israeli = check_israeli_flag(dirs, country)
+                    is_israeli, is_zionist = check_israeli_flag(dirs, country)
 
                     results.append({
                         "id": item_id,
@@ -578,6 +614,7 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
                         "description": description,
                         "director": dirs,
                         "is_israeli": is_israeli,
+                        "is_zionist": is_zionist,
                         "imdb_id": item.get("imdb_id") or (item_id if item_id.startswith("tt") else None),
                     })
         except Exception as e:
@@ -593,6 +630,7 @@ def search_stremio_catalog_sync(query: str, type_filter: str = "all") -> list[di
                 if m:
                     item["director"] = m.get("director", [])
                     item["is_israeli"] = m.get("is_israeli", False)
+                    item["is_zionist"] = m.get("is_zionist", False)
             except Exception as e:
                 log.warning("Error enriching catalog item %s: %s", item.get("id"), e)
 
@@ -679,7 +717,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
 
     imdb_rating = str(meta_data.get("imdbRating") or "")
     country_raw = str(meta_data.get("country") or "")
-    is_israeli = check_israeli_flag(director, country_raw)
+    is_israeli, is_zionist = check_israeli_flag(director, country_raw)
 
     res = {
         "id": item_id,
@@ -687,7 +725,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         "type": item_type,
         "title": meta_data.get("name", "Desconocido"),
         "poster": meta_data.get("poster") or "",
-        "banner": meta_data.get("background") or "",
+        "banner": banner if 'banner' in locals() else meta_data.get("background") or "",
         "description": meta_data.get("description") or "",
         "year": str(meta_data.get("year", "")),
         "genres": meta_data.get("genres", []),
@@ -696,6 +734,7 @@ def get_stremio_meta_sync(item_type: str, item_id: str) -> dict:
         "writer": writer,
         "imdb_rating": imdb_rating,
         "is_israeli": is_israeli,
+        "is_zionist": is_zionist,
         "episodes": episodes,
         "runtime": runtime_mins,
     }
