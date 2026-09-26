@@ -406,9 +406,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderCatalogGrid(items) {
-    catalogGrid.innerHTML = items.map(item => `
+    catalogGrid.innerHTML = items.map(item => {
+      let badgeHtml = '';
+      if (item.is_israeli) {
+        badgeHtml = '<div class="israeli-star-badge" title="Director u origen israelí / judío"><img src="/stremio/star_of_david.png?v=20260926" class="israeli-star-img" alt="Estrella de David"></div>';
+      } else if (item.is_zionist) {
+        badgeHtml = '<div class="israeli-star-badge" title="Director Sionista"><img src="/stremio/ZionDirector.png?v=20260926" class="israeli-star-img" alt="Director Sionista"></div>';
+      }
+      return `
       <div class="card" data-id="${esc(item.id)}" data-type="${esc(item.type)}">
-        ${item.is_zionist || item.is_israeli ? '<div class="israeli-star-badge" title="Director Sionista / Origen israelí"><img src="/stremio/ZionDirector.png?v=20260926" class="israeli-star-img" alt="Director Sionista"></div>' : ''}
+        ${badgeHtml}
         <img class="card-poster" src="${esc(item.poster || 'https://via.placeholder.com/300x450?text=No+Poster')}" alt="${esc(item.title)}" loading="lazy">
         <div class="card-content">
           <div class="card-title">${esc(item.title)}</div>
@@ -418,7 +425,8 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
 
     catalogGrid.querySelectorAll('.card').forEach(card => {
       card.addEventListener('click', () => {
@@ -453,10 +461,17 @@ document.addEventListener('DOMContentLoaded', () => {
       if (modalPosterWrap) {
         const existingBadge = modalPosterWrap.querySelector('.israeli-star-badge');
         if (existingBadge) existingBadge.remove();
-        if (currentMeta.is_zionist || currentMeta.is_israeli) {
+        if (currentMeta.is_israeli) {
           const badge = document.createElement('div');
           badge.className = 'israeli-star-badge';
-          badge.title = 'Director Sionista / Origen israelí';
+          badge.title = 'Director u origen israelí / judío';
+          badge.innerHTML = '<img src="/stremio/star_of_david.png?v=20260926" class="israeli-star-img" alt="Estrella de David">';
+          modalPosterWrap.style.position = 'relative';
+          modalPosterWrap.appendChild(badge);
+        } else if (currentMeta.is_zionist) {
+          const badge = document.createElement('div');
+          badge.className = 'israeli-star-badge';
+          badge.title = 'Director Sionista';
           badge.innerHTML = '<img src="/stremio/ZionDirector.png?v=20260926" class="israeli-star-img" alt="Director Sionista">';
           modalPosterWrap.style.position = 'relative';
           modalPosterWrap.appendChild(badge);
@@ -478,7 +493,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const modalDirector = document.getElementById('modalDirector');
       if (modalDirector) {
         if (currentMeta.director && currentMeta.director.length > 0) {
-          modalDirector.innerHTML = '🎬 Director: ' + esc(currentMeta.director.join(', ')) + ((currentMeta.is_zionist || currentMeta.is_israeli) ? ' <img src="/stremio/ZionDirector.png?v=20260926" class="israeli-star-inline-img" alt="Director Sionista">' : '');
+          let badgeInline = '';
+          if (currentMeta.is_israeli) {
+            badgeInline = ' <img src="/stremio/star_of_david.png?v=20260926" class="israeli-star-inline-img" alt="Estrella de David">';
+          } else if (currentMeta.is_zionist) {
+            badgeInline = ' <img src="/stremio/ZionDirector.png?v=20260926" class="israeli-star-inline-img" alt="Director Sionista">';
+          }
+          modalDirector.innerHTML = '🎬 Director: ' + esc(currentMeta.director.join(', ')) + badgeInline;
           modalDirector.style.display = 'block';
         } else {
           modalDirector.style.display = 'none';
