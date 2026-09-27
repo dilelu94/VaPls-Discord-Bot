@@ -363,6 +363,14 @@ _FALLBACK_USERS: dict[int, dict] = {
             {
                 "path": "Secretos/enrique_tiktok_invertido.mp3",
                 "weight": 1
+            },
+            {
+                "path": "Secretos/enrique-fart-super-slowed.mp3",
+                "weight": 1
+            },
+            {
+                "path": "Secretos/ennnnriiiiqqqqueeeeeeee.mp3",
+                "weight": 1
             }
         ],
         "traits": [
