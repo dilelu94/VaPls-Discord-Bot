@@ -2239,7 +2239,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
         now = time.time()
         timestamps = _stremio_rate_limit.setdefault(ip, [])
         _stremio_rate_limit[ip] = [t for t in timestamps if now - t < 60.0]
-        if len(_stremio_rate_limit[ip]) >= 40:
+        if len(_stremio_rate_limit[ip]) >= 120:
             return False
         _stremio_rate_limit[ip].append(now)
         return True

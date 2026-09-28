@@ -1301,16 +1301,16 @@ class H264VideoPlayer(threading.Thread):
         use_filter_complex = False
 
         if not sub_file and sub_idx >= 0 and is_url:
-            search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
-            sub_file = _fetch_opensubtitles_file(
-                query=search_q,
-                imdb_id=getattr(self, "_imdb_id", None),
-                item_type=getattr(self, "_item_type", None) or "movie",
-                season=getattr(self, "_season", None) or 1,
-                episode=getattr(self, "_episode", None) or 1,
-            )
+            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=12.0)
             if not sub_file:
-                sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=12.0)
+                search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
+                sub_file = _fetch_opensubtitles_file(
+                    query=search_q,
+                    imdb_id=getattr(self, "_imdb_id", None),
+                    item_type=getattr(self, "_item_type", None) or "movie",
+                    season=getattr(self, "_season", None) or 1,
+                    episode=getattr(self, "_episode", None) or 1,
+                )
 
         if sub_file and os.path.exists(sub_file) and os.path.getsize(sub_file) > 0:
             esc_sub = sub_file.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
