@@ -782,6 +782,10 @@ def get_stremio_streams_sync(
 
     urls_to_try = []
     for b in provider_bases:
+        if item_id.startswith("kitsu:"):
+            urls_to_try.append(f"{b}{prefix}stream/series/{item_id}:{episode}.json")
+            urls_to_try.append(f"{b}stream/series/{item_id}:{episode}.json")
+
         if series_imdb:
             if item_type == "movie":
                 urls_to_try.append(f"{b}{prefix}stream/movie/{series_imdb}.json")
@@ -794,10 +798,6 @@ def get_stremio_streams_sync(
                 urls_to_try.append(f"{b}stream/series/{series_imdb}:{season}:{episode}.json")
                 urls_to_try.append(f"{b}{prefix}stream/movie/{series_imdb}.json")
                 urls_to_try.append(f"{b}stream/movie/{series_imdb}.json")
-
-        if item_id.startswith("kitsu:"):
-            urls_to_try.append(f"{b}{prefix}stream/series/{item_id}:{episode}.json")
-            urls_to_try.append(f"{b}stream/series/{item_id}:{episode}.json")
 
     streams_out = []
     seen_urls = set()
