@@ -621,6 +621,16 @@ def _fetch_opensubtitles_file(
     if resolved_type == "series" and ":" not in sub_key:
         s_num = season or 1
         e_num = episode or 1
+        if query:
+            q_low = query.lower()
+            if "part 6" in q_low or "stone ocean" in q_low:
+                s_num = 6
+            elif "part 5" in q_low or "golden wind" in q_low:
+                s_num = 5
+            elif "part 4" in q_low or "diamond is unbreakable" in q_low:
+                s_num = 4
+            elif "part 3" in q_low or "stardust crusaders" in q_low:
+                s_num = 3
         sub_key = f"{sub_key}:{s_num}:{e_num}"
 
     sub_url = f"https://opensubtitles-v3.strem.io/subtitles/{resolved_type}/{sub_key}.json"
@@ -1301,7 +1311,7 @@ class H264VideoPlayer(threading.Thread):
         use_filter_complex = False
 
         if not sub_file and sub_idx >= 0 and is_url:
-            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=12.0)
+            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=35.0)
             if not sub_file:
                 search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
                 sub_file = _fetch_opensubtitles_file(
