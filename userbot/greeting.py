@@ -453,6 +453,8 @@ async def play_user_greeting(
         return False
     if user_id is None:
         return False
+    if member is not None and getattr(member, "bot", False):
+        return False
 
     now = time.time()
     last_chan = _last_greeting.get(channel_id, 0.0)

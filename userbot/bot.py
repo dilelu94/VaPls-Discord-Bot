@@ -2947,7 +2947,7 @@ async def on_voice_state_update(member, before, after):
         pass
 
     self_id = client.user.id if client.user else None
-    if (self_id is not None and member.id == self_id) or member.id in config.EXPLICIT_IGNORE_USER_IDS:
+    if getattr(member, "bot", False) or (self_id is not None and member.id == self_id) or member.id in config.EXPLICIT_IGNORE_USER_IDS:
         return
 
     guild = (after.channel or before.channel).guild

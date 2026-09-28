@@ -1059,6 +1059,9 @@ async def _relay_stream_control(request: web.Request) -> web.Response:
     vp = getattr(client, "video_players", {}).get(guild_id)
     conn = getattr(client, "live_connections", {}).get(guild_id)
 
+    if action == "status" and stream is None and vp is None and conn is None:
+        return web.json_response({"exists": False, "stopped": True})
+
     if stream is None and vp is None and conn is None:
         return web.json_response({"error": "no active stream"}, status=404)
 
