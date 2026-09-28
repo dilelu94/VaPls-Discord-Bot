@@ -110,6 +110,7 @@ class MediaTracksInfo:
     url: str
     audio_tracks: list[AudioTrack] = field(default_factory=list)
     subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
+    has_video: bool = False
 
     @property
     def has_multiple_audios(self) -> bool:
@@ -129,6 +130,8 @@ def _parse_ffprobe_json(data: dict, url: str) -> MediaTracksInfo:
 
     for stream in streams:
         ctype = stream.get("codec_type")
+        if ctype == "video":
+            info.has_video = True
         abs_idx = stream.get("index", 0)
         tags = stream.get("tags") or {}
         # Normalize tag keys (case-insensitive)

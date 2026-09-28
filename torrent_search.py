@@ -183,6 +183,15 @@ def resolve_redirect_url(url: str) -> str:
         )
         with urllib.request.urlopen(req, timeout=6.0) as resp:
             final_url = resp.geturl()
+            cd = str(resp.headers.get("Content-Disposition", "")).lower()
+            ct = str(resp.headers.get("Content-Type", "")).lower()
+            cl_val = resp.headers.get("Content-Length", "")
+            try:
+                cl_num = int(cl_val) if cl_val else 0
+            except ValueError:
+                cl_num = 0
+            if "filename=" in cd and (cd.endswith('.txt"') or cd.endswith(".nfo\"") or ".txt" in cd or ".nfo" in cd) or (ct == "text/plain" and cl_num < 100000):
+                log.warning("[STREAM RESOLVE] Resolved URL %s is a text/non-video file! (Disposition: %s, Type: %s, Length: %s)", final_url[:80], cd, ct, cl_val)
             if final_url and final_url != url:
                 log.info("[STREAM RESOLVE] Followed redirect: %s -> %s", url, final_url)
                 return final_url
