@@ -1221,8 +1221,9 @@ async def _idle_watcher(guild_id: int):
                 idle_since = time.monotonic()
             else:
                 elapsed = time.monotonic() - idle_since
-                # Use a timeout of 15 seconds when stream ends, 60 seconds when idle
-                timeout = 15.0 if not has_stream else 60.0
+                # If channel is empty (no humans), disconnect in 15s.
+                # If humans are present but stream ended/paused, allow 5 minutes (300s) idle before disconnecting.
+                timeout = 15.0 if humans == 0 else (300.0 if not has_stream else 60.0)
                 if elapsed >= timeout:
                     log.info("[WATCHDOG] Guild=%s idle for %.0fs (humans=%d), disconnecting voice client...", guild_id, elapsed, humans)
                     try:

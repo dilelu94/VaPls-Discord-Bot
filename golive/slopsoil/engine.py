@@ -345,9 +345,9 @@ async def start_live_stream(
                         if stream is not None:
                             await stream.stop(disconnect_voice=True)
                         else:
-                            guild = bot.get_guild(guild.id)
-                            if guild and hasattr(golive_bot, "_restore_nickname"):
-                                await golive_bot._restore_nickname(guild)
+                            g_obj = bot.get_guild(guild.id)
+                            if g_obj and hasattr(golive_bot, "_restore_nickname"):
+                                await golive_bot._restore_nickname(g_obj)
                     for voice_c in list(bot.voice_clients):
                         if getattr(getattr(voice_c, "guild", None), "id", None) == guild.id:
                             try:
