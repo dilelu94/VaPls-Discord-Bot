@@ -47,7 +47,7 @@ DEFAULT_CFG = {
     "initial_deviation": "350",
     "min_deviation": "30",
     "max_deviation": "500",
-    "min_rating": "1000",
+    "min_rating": "0",
     "system_rating": "1500",
     "system_deviation": "350",
     "decay_per_day": "10",
@@ -164,6 +164,7 @@ def _schema() -> None:
     _migrate_v3()
     _migrate_v4()
     _migrate_v5()
+    _migrate_v6()
 
 
 def _migrate_v1() -> None:
@@ -221,6 +222,30 @@ def _migrate_v5() -> None:
                 "INSERT INTO config (key, value) VALUES (?, ?)", (k, "1.5")
             )
     _conn.commit()
+
+
+def _migrate_v6() -> None:
+    _conn.execute(
+        "INSERT OR REPLACE INTO config (key, value) VALUES ('min_rating', '0')"
+    )
+    _conn.commit()
+
+
+def reset_all_mmr(tobi_id: int = 428444575963807745) -> None:
+    """Reset all user ratings to 1500 except Tobi (set to 1000), and set min_rating config to 0."""
+    if _conn is None:
+        return
+    _conn.execute(
+        "UPDATE user_mmr SET rating=1500, deviation=350 WHERE user_id != ?",
+        (tobi_id,),
+    )
+    _conn.execute(
+        "UPDATE user_mmr SET rating=1000, deviation=350 WHERE user_id = ?",
+        (tobi_id,),
+    )
+    set_config("min_rating", "0")
+    _conn.commit()
+
 
 
 # ---- Pet evolution points --------------------------------------------------
@@ -484,7 +509,7 @@ def log_activity(
         days_idle = (now - last_at) / 86400.0
         decay_rd = _get_cfg_float("decay_per_day") or 10.0
         decay_r = _get_cfg_float("decay_rating_per_day") or 5.0
-        min_r = _get_cfg_float("min_rating") or 1000.0
+        min_r = _get_cfg_float("min_rating")
         max_rd = _get_cfg_float("max_deviation") or 500.0
 
         new_rd = min(max_rd, new_rd + decay_rd * days_idle)
@@ -594,7 +619,7 @@ def _apply_decay_on_read(row: dict, now_ts: int | None = None) -> dict:
         days_idle = (now_ts - last_at) / 86400.0
         decay_rd = _get_cfg_float("decay_per_day") or 10.0
         decay_r = _get_cfg_float("decay_rating_per_day") or 5.0
-        min_r = _get_cfg_float("min_rating") or 1000.0
+        min_r = _get_cfg_float("min_rating")
         max_rd = _get_cfg_float("max_deviation") or 500.0
 
         r["rating"] = round(max(min_r, r["rating"] - decay_r * days_idle), 1)

@@ -345,3 +345,35 @@ class TestDecay:
         delta_10 = adb.log_activity(2, 100, "voice_vad", duration_secs=30, user_count=10)
         # user_count=10 gets max occupancy boost (1.4x), yielding higher delta than user_count=2
         assert delta_10 > delta_2
+
+    def test_decay_can_go_below_1000_towards_zero(self, monkeypatch):
+        """Idle decay can reduce MMR below 1000 down towards 0."""
+        start_ts = 1000000
+        monkeypatch.setattr(adb, "_now", lambda: start_ts)
+        adb.log_activity(1, 100, "message", value=1)
+
+        # 120 days of inactivity: 120 * 5 = 600 points decay -> 1500 - 600 = 900
+        monkeypatch.setattr(adb, "_now", lambda: start_ts + 86400 * 120)
+        stats = adb.get_user_stats(1, 100)
+        assert stats is not None
+        assert stats["rating"] < 1000.0
+
+
+class TestResetAllMMR:
+    def test_reset_all_mmr_sets_tobi_1000_others_1500(self):
+        tobi_id = 428444575963807745
+        adb.log_activity(111, 100, "message", value=1)
+        adb.log_activity(222, 100, "message", value=1)
+        adb.log_activity(tobi_id, 100, "message", value=1)
+
+        adb.reset_all_mmr(tobi_id=tobi_id)
+
+        stats_1 = adb.get_user_stats(111, 100)
+        stats_2 = adb.get_user_stats(222, 100)
+        stats_tobi = adb.get_user_stats(tobi_id, 100)
+
+        assert stats_1["rating"] == 1500.0
+        assert stats_2["rating"] == 1500.0
+        assert stats_tobi["rating"] == 1000.0
+        assert adb.get_config("min_rating") == "0"
+
