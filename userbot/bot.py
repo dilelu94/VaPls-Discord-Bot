@@ -780,7 +780,7 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
             form.add_field("temperature", "0.0")
             form.add_field(
                 "prompt",
-                "Español rioplatense con voseo. Frase de activación / wake word: 'che indio'. Ejemplos: 'che indio, ponete un tema', 'che indio'. Vocabulario: VaPls, Discord, clipeá, chiste, indio.",
+                "Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá.",
             )
 
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -846,10 +846,7 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
         language="es",
         beam_size=1,
         vad_filter=True,
-        initial_prompt=(
-            "Conversación en español rioplatense con voseo. "
-            "Se menciona a veces a 'indio' o 'che indio'."
-        ),
+        initial_prompt="Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá.",
         condition_on_previous_text=False,
     )
     return " ".join(s.text.strip() for s in segments if s.text).strip()
