@@ -1,12 +1,12 @@
 """
 davey_compat.py – Compatibility shim for discord.py-self's DAVE/E2EE support.
 
-Wraps the ``davey`` package (Snazzah's Python bindings for the DAVE protocol)
-to expose the same API that discord.py-self 2.1.0 expects.
+Wraps dave.py (DisnakeDev's Python bindings for Discord's official C++ libdave)
+to expose the same API that discord.py-self expects from the "davey" package.
 
-discord.py-self imports davey in voice_state.py and gateway.py. We replace
-those module-level references with this shim so that the davey DaveSession is
-used transparently.
+discord.py-self 2.1.0 imports davey in voice_state.py and gateway.py. By
+replacing those module-level references with this shim, the working libdave
+implementation is used instead of davey's broken Rust binding.
 
 Applied in bot.py before any voice connections are made:
     import discord.voice_state, discord.gateway
@@ -19,179 +19,360 @@ Applied in bot.py before any voice connections are made:
 from __future__ import annotations
 
 import logging
-import davey
+import dave
 
 log = logging.getLogger(__name__)
 
 # ── Protocol version ──────────────────────────────────────────────────────────
-# davey exposes this as a module-level integer constant (not a function).
 
-DAVE_PROTOCOL_VERSION: int = davey.DAVE_PROTOCOL_VERSION
+DAVE_PROTOCOL_VERSION: int = dave.get_max_supported_protocol_version()
 
 
-# ── Re-export enums/types that discord.py-self references directly ────────────
+# ── ProposalsOperationType ────────────────────────────────────────────────────
+# gateway.py passes davey.ProposalsOperationType.append / .revoke as the first
+# argument to dave_session.process_proposals(). Values are 0 / 1.
 
-ProposalsOperationType = davey.ProposalsOperationType
-CommitWelcome = davey.CommitWelcome
-SessionStatus = davey.SessionStatus
-MediaType = davey.MediaType
-Codec = davey.Codec
+
+class ProposalsOperationType:
+    append = 0
+    revoke = 1
+
+
+# ── CommitWelcome ─────────────────────────────────────────────────────────────
+# gateway.py does:
+#   if isinstance(result, davey.CommitWelcome):
+#       await send_binary(result.commit + (result.welcome or b''))
+
+
+class CommitWelcome:
+    __slots__ = ("commit", "welcome")
+
+    def __init__(self, data: bytes) -> None:
+        self.commit = data  # dave.py returns combined commit(+welcome) bytes
+        self.welcome = None  # already concatenated into .commit
+
+
+# ── Fake stats wrapper ────────────────────────────────────────────────────────
+
+
+class _EncryptionStats:
+    __slots__ = ("attempts", "successes", "failures")
+
+    def __init__(self, s) -> None:
+        self.attempts = getattr(s, "encrypt_attempts", 0)
+        self.successes = getattr(s, "encrypt_success_count", 0)
+        self.failures = getattr(s, "encrypt_failure_count", 0)
+
+
+# ── SessionStatus ─────────────────────────────────────────────────────────────
+
+
+class SessionStatus:
+    inactive = 0
+    pending = 1
+    active = 3
 
 
 # ── DaveSession ───────────────────────────────────────────────────────────────
-# discord.py-self calls:
-#   session = davey.DaveSession(protocol_version, user_id, channel_id)
-#   session.reinit(protocol_version, user_id, channel_id)
-#   session.reset()
-#   session.get_serialized_key_package() -> bytes
-#   session.set_external_sender(data: bytes)
-#   session.process_proposals(op_type, proposals: bytes) -> CommitWelcome | None
-#   session.process_commit(commit: bytes)
-#   session.process_welcome(welcome: bytes)
-#   session.set_passthrough_mode(passthrough: bool, transition_expiry=None)
-#   session.encrypt_opus(data: bytes) -> bytes
-#   session.decrypt(user_id: int, media_type, packet: bytes) -> bytes
-#   session.ready  (bool property)
-#   session.status (SessionStatus property)
-#
-# davey.DaveSession provides all of these natively — we just delegate.
 
 
 class DaveSession:
     """
-    Thin wrapper around ``davey.DaveSession`` that adds helpers used by the
-    golive streaming stack (encrypt_h264, register_video_ssrc) and provides
-    the same interface expected by discord.py-self gateway / voice_state.
+    Drop-in replacement for davey.DaveSession, backed by dave.py (libdave).
+
+    Constructed the same way discord.py-self does:
+        DaveSession(protocol_version, user_id, channel_id)
     """
 
-    def __init__(
-        self,
-        protocol_version: int,
-        user_id: int,
-        channel_id: int,
-    ) -> None:
-        self._session = davey.DaveSession(protocol_version, user_id, channel_id)
-        self._voice_state = None  # set by patch_reinit
-        log.debug(
-            "[DAVE] DaveSession created (protocol=%s user=%s channel=%s)",
-            protocol_version, user_id, channel_id,
+    # Fixed SSRC=0 for our single outgoing audio stream.
+    _SSRC: int = 0
+
+    def __init__(self, protocol_version: int, user_id: int, channel_id: int) -> None:
+        self._protocol_version = protocol_version
+        self._user_id = user_id
+        self._channel_id = channel_id
+
+        # Injected by patch_reinit() so we can read channel.members for
+        # recognized_user_ids. None until the patch runs.
+        self._voice_state = None
+
+        self._session = dave.Session(mls_failure_callback=self._on_mls_failure)
+        self._encryptor = dave.Encryptor()
+        self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
+        self._encryptor.set_passthrough_mode(True)  # passthrough until key ready
+
+        self._decryptor = dave.Decryptor()
+        self._decryptor.transition_to_passthrough_mode(True)
+        self._active_decryptor_user_id: str | None = None
+
+        self._ready = False
+        self._epoch: int | None = None
+        self.status = SessionStatus.inactive
+        self.voice_privacy_code: str | None = None
+
+        self._do_init()
+
+    # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _on_mls_failure(self, reason: str, detail: str) -> None:
+        log.error("[DAVE] MLS failure: %s – %s", reason, detail)
+
+    def _do_init(self) -> None:
+        self._session.init(
+            self._protocol_version,
+            self._channel_id,  # group_id == voice channel id
+            str(self._user_id),  # libdave expects user_id as str
         )
+        self.status = SessionStatus.pending
 
-    # ── Delegation to native davey.DaveSession ────────────────────────────────
+    def _get_recognized_users(self) -> set:
+        """
+        Build the set of string user IDs that libdave should trust.
+        Always includes the bot itself; adds current voice-channel members
+        when a back-reference to VoiceConnectionState is available.
+        """
+        users = {str(self._user_id)}
+        if self._voice_state is not None:
+            try:
+                vc = getattr(self._voice_state, "voice_client", None)
+                channel = getattr(vc, "channel", None) if vc else None
+                if channel is not None:
+                    for member in getattr(channel, "members", []):
+                        users.add(str(member.id))
+                    voice_states = getattr(channel, "voice_states", None)
+                    if isinstance(voice_states, dict):
+                        users.update(str(uid) for uid in voice_states.keys())
+                    guild = getattr(channel, "guild", None)
+                    if guild is not None:
+                        g_states = getattr(guild, "voice_states", None)
+                        if isinstance(g_states, dict):
+                            users.update(str(uid) for uid in g_states.keys())
+                        for member in getattr(guild, "members", []):
+                            users.add(str(member.id))
+            except Exception as exc:
+                log.warning("[DAVE] Could not read channel members: %s", exc)
+        return users
 
-    def reinit(
-        self,
-        protocol_version: int,
-        user_id: int,
-        channel_id: int,
-    ) -> None:
-        self._session.reinit(protocol_version, user_id, channel_id)
-        log.debug("[DAVE] reinit (protocol=%s)", protocol_version)
+    def _refresh_key(self) -> None:
+        """Pull key ratchets from the MLS session → give them to Encryptor and Decryptor."""
+        ratchet_enc = self._session.get_key_ratchet(str(self._user_id))
+        if ratchet_enc is not None:
+            self._encryptor.set_key_ratchet(ratchet_enc)
+            self._encryptor.set_passthrough_mode(False)
+
+        ratchet_dec = self._session.get_key_ratchet(str(self._user_id))
+        if ratchet_dec is not None:
+            try:
+                self._decryptor.transition_to_key_ratchet(ratchet_dec)
+                self._decryptor.transition_to_passthrough_mode(False)
+            except Exception as exc:
+                log.warning("[DAVE] decryptor ratchet transition warning: %s", exc)
+
+        if ratchet_enc is not None or ratchet_dec is not None:
+            if not self._ready:
+                log.info("[DAVE] Key ratchet established — session READY")
+            self._ready = True
+            self.status = SessionStatus.active
+        else:
+            log.warning("[DAVE] WARNING: get_key_ratchet returned None (user_id=%s, ready=%s)", self._user_id, self._ready)
+
+    # ── Public API (mirrors davey.DaveSession) ────────────────────────────────
+
+    @property
+    def ready(self) -> bool:
+        """Return True if the DAVE key ratchet is established."""
+        return self._ready
+
+    def reinit(self, protocol_version: int, user_id: int, channel_id: int) -> None:
+        self._protocol_version = protocol_version
+        self._user_id = user_id
+        self._channel_id = channel_id
+        self._session.reset()
+        self._ready = False
+        self._epoch = None
+        self.status = SessionStatus.inactive
+        self._encryptor.set_key_ratchet(None)
+        self._encryptor.set_passthrough_mode(True)
+        self._decryptor.transition_to_passthrough_mode(True)
+        self._do_init()
 
     def reset(self) -> None:
         self._session.reset()
+        self._ready = False
+        self._epoch = None
+        self.status = SessionStatus.inactive
+        self._encryptor.set_key_ratchet(None)
+        self._encryptor.set_passthrough_mode(True)
+        self._decryptor.transition_to_passthrough_mode(True)
 
     def get_serialized_key_package(self) -> bytes:
-        return self._session.get_serialized_key_package()
+        """Returns the MLS key package to send to Discord (opcode MLS_KEY_PACKAGE)."""
+        return self._session.get_marshalled_key_package()
 
     def set_external_sender(self, data: bytes) -> None:
         self._session.set_external_sender(data)
 
-    def process_proposals(
-        self,
-        operation_type,
-        proposals: bytes,
-        expected_user_ids=None,
-    ):
+    def set_passthrough_mode(self, passthrough: bool, transition_expiry=None) -> None:
+        self._encryptor.set_passthrough_mode(passthrough)
+        self._decryptor.transition_to_passthrough_mode(passthrough)
+
+    def process_proposals(self, optype, proposals: bytes):
         """
-        Called by gateway.py with (ProposalsOperationType, proposals_bytes).
-        davey's native API accepts the enum directly.
+        Called by gateway.py with (ProposalsOperationType, msg[4:]).
+
+        discord.py-self extracts the proposals_op_type byte from msg[3] and
+        passes msg[4:] here. libdave's process_proposals expects msg[3:] — the
+        op-type byte must be RE-PREPENDED before handing to libdave.
         """
+        optype_byte = bytes([0 if optype == ProposalsOperationType.append else 1])
+        full_data = optype_byte + proposals
+        recognized = self._get_recognized_users()
         try:
-            result = self._session.process_proposals(operation_type, proposals, expected_user_ids)
+            result = self._session.process_proposals(full_data, recognized)
         except Exception as exc:
             log.error("[DAVE] process_proposals FAILED: %s", exc)
             return None
-        return result  # CommitWelcome | None
+        if result is not None:
+            return CommitWelcome(result)
+        return None
 
     def process_commit(self, commit: bytes) -> None:
-        """Called by gateway.py. Falls back to passthrough on failure."""
+        """Called by gateway.py. Raises on rejection so gateway can recover."""
         log.info("[DAVE] Processing MLS commit (size=%d)", len(commit))
         try:
-            self._session.process_commit(commit)
+            result = self._session.process_commit(commit)
+            if isinstance(result, dave.RejectType):
+                log.warning("[DAVE] Commit REJECTED: %s — switching to passthrough mode", result.name)
+                self.set_passthrough_mode(True)
+                return
+            if isinstance(result, dict) and result:
+                self._epoch = max(result.keys())
+                log.info("[DAVE] Commit processed OK, epoch=%s", self._epoch)
+            self._refresh_key()
         except Exception as exc:
             log.warning("[DAVE] process_commit note: %s — switching to passthrough mode", exc)
             self.set_passthrough_mode(True)
 
     def process_welcome(self, welcome: bytes) -> None:
-        """Called by gateway.py. Falls back to passthrough on failure."""
+        """Process incoming DAVE Welcome message. Falls back to passthrough mode on rejection."""
         log.info("[DAVE] Processing MLS welcome (size=%d)", len(welcome))
+        recognized = self._get_recognized_users()
         try:
-            self._session.process_welcome(welcome)
+            result = self._session.process_welcome(welcome, recognized)
+            if result is None:
+                log.warning("[DAVE] Welcome REJECTED by libdave — switching to passthrough mode")
+                self.set_passthrough_mode(True)
+                return
+            if isinstance(result, dict) and result:
+                self._epoch = max(result.keys())
+                log.info("[DAVE] Welcome processed OK, epoch=%s", self._epoch)
+            self._refresh_key()
         except Exception as exc:
             log.warning("[DAVE] process_welcome note: %s — switching to passthrough mode", exc)
             self.set_passthrough_mode(True)
 
-    def set_passthrough_mode(
-        self, passthrough: bool, transition_expiry=None
-    ) -> None:
-        self._session.set_passthrough_mode(passthrough, transition_expiry)
-
     def encrypt_opus(self, data: bytes) -> bytes:
-        """DAVE-encrypt an Opus frame."""
-        try:
-            return self._session.encrypt_opus(data)
-        except Exception:
-            return data  # passthrough on error
-
-    def decrypt(self, user_id: int, media_type, packet: bytes) -> bytes:
-        """Decrypt a DAVE-encrypted packet."""
-        try:
-            return self._session.decrypt(user_id, media_type, packet)
-        except Exception:
-            return packet  # passthrough on error
-
-    def get_user_ids(self) -> list:
-        return self._session.get_user_ids()
-
-    def get_encryption_stats(self, media_type=None):
-        return self._session.get_encryption_stats(media_type)
-
-    def can_passthrough(self, user_id: int) -> bool:
-        return self._session.can_passthrough(user_id)
-
-    # ── GoLive streaming extras ───────────────────────────────────────────────
+        """DAVE-encrypt an Opus frame before transport encryption."""
+        result = self._encryptor.encrypt(dave.MediaType.audio, self._SSRC, data)
+        if result is None:
+            return data  # passthrough (no key yet)
+        return result
 
     def register_video_ssrc(self, video_ssrc: int) -> None:
         """Register a video SSRC with the H.264 codec so DAVE can encrypt it."""
-        # davey handles this transparently via encrypt() with Codec.h264
-        log.debug("[DAVE] register_video_ssrc(%s)", video_ssrc)
+        try:
+            self._encryptor.assign_ssrc_to_codec(video_ssrc, dave.Codec.h264)
+        except Exception as exc:
+            log.warning("[DAVE] register_video_ssrc(%s) failed: %s", video_ssrc, exc)
 
     def encrypt_h264(self, video_ssrc: int, data: bytes) -> bytes:
         """DAVE-encrypt an H.264 RTP payload before transport encryption."""
+        result = self._encryptor.encrypt(dave.MediaType.video, video_ssrc, data)
+        if result is None:
+            return data  # passthrough (no key yet)
+        return result
+
+    def decrypt(self, user_id: int, media_type, packet: bytes) -> bytes:
+        """DAVE-decrypt an incoming media packet for a specific user ID."""
+        target_uid_str = str(user_id) if user_id is not None else str(self._user_id)
+        if target_uid_str != self._active_decryptor_user_id:
+            ratchet = self._session.get_key_ratchet(target_uid_str)
+            if ratchet is not None:
+                try:
+                    self._decryptor.transition_to_key_ratchet(ratchet)
+                    self._decryptor.transition_to_passthrough_mode(False)
+                    self._active_decryptor_user_id = target_uid_str
+                except Exception:
+                    pass
+
+        if media_type == 1 or media_type == getattr(dave, "MediaType", None).video or str(media_type).lower() == "video":
+            m_type = dave.MediaType.video
+        else:
+            m_type = dave.MediaType.audio
         try:
-            return self._session.encrypt(
-                davey.MediaType.video, davey.Codec.h264, data
-            )
+            res = self._decryptor.decrypt(m_type, packet)
+            if res is not None:
+                return res
         except Exception:
-            return data  # passthrough on error
+            pass
+        return packet
 
-    # ── Properties ────────────────────────────────────────────────────────────
+    def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
+        """DAVE-decrypt an incoming H.264 RTP payload after transport decryption."""
+        target_uid_str = str(user_id) if user_id else (str(ssrc) if ssrc else None)
+        active_key = target_uid_str or str(self._user_id)
 
-    @property
-    def ready(self) -> bool:
-        return self._session.ready
+        try:
+            self._decryptor.transition_to_passthrough_mode(False)
+        except Exception:
+            pass
 
-    @property
-    def status(self):
-        return self._session.status
+        if active_key != self._active_decryptor_user_id:
+            ratchet = None
+            for lookup in (target_uid_str, str(ssrc) if ssrc else None, str(self._user_id)):
+                if not lookup:
+                    continue
+                try:
+                    ratchet = self._session.get_key_ratchet(lookup)
+                    if ratchet is not None:
+                        break
+                except Exception:
+                    pass
 
-    @property
-    def epoch(self):
-        return self._session.epoch
+            if ratchet is not None:
+                try:
+                    self._decryptor.transition_to_key_ratchet(ratchet)
+                    self._decryptor.transition_to_passthrough_mode(False)
+                    self._active_decryptor_user_id = active_key
+                    log.info("[DAVE-VIDEO] Transitioned decryptor key ratchet to %s", active_key)
+                except Exception as ex:
+                    log.debug("[DAVE-VIDEO] ratchet transition note: %s", ex)
+
+        try:
+            res = self._decryptor.decrypt(dave.MediaType.video, data)
+            if res is not None:
+                return res
+            st = self._decryptor.get_stats(dave.MediaType.video)
+            log.warning(
+                "[DAVE-VIDEO] decrypt returned None (len=%d, attempts=%d, success=%d, fail=%d, missing_key=%d, invalid_nonce=%d, pass=%d)",
+                len(data),
+                st.decrypt_attempts,
+                st.decrypt_success_count,
+                st.decrypt_failure_count,
+                st.decrypt_missing_key_count,
+                st.decrypt_invalid_nonce_count,
+                st.passthrough_count,
+            )
+        except Exception as ex:
+            log.warning("[DAVE-VIDEO] decrypt_h264 exception for ssrc=%s user_id=%s: %s", ssrc, user_id, ex)
+
+        return data
 
     def __repr__(self) -> str:
-        return repr(self._session)
+        return (
+            f"<DaveSession(libdave) epoch={self._epoch} ready={self._ready} "
+            f"status={self.status}>"
+        )
 
 
 # ── Patch helper ──────────────────────────────────────────────────────────────
@@ -201,7 +382,8 @@ def patch_reinit(voice_state_module) -> None:
     """
     Monkey-patch VoiceConnectionState.reinit_dave_session so that every
     freshly-created DaveSession gets a back-reference (_voice_state) to the
-    VoiceConnectionState that owns it.
+    VoiceConnectionState that owns it. This lets _get_recognized_users() read
+    the current voice-channel member list.
 
     Call once from bot.py after patching discord.voice_state.davey:
         davey_compat.patch_reinit(discord.voice_state)
