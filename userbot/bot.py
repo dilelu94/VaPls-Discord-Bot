@@ -2919,6 +2919,7 @@ async def _leave_if_empty(guild: discord.Guild):
 @client.event
 async def on_ready():
     log.info(f"Userbot online as {client.user} (id={client.user.id})")
+    autoErrorTracker.bind_asyncio_exception_handler()
     if not config.VAPLS_BOT_ID:
         log.error(
             "VAPLS_BOT_ID is unset (0) — userbot relay /invoke_* endpoints "
@@ -4997,6 +4998,7 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
     metadata = data.get("metadata")
     is_premium = bool(data.get("is_premium", False))
     display_name = str(data.get("display_name", ""))
+    user_count = int(data.get("user_count", 1))
     # Log raw (unfiltered) activity before any quality modifications
     adb.log_raw_activity(
         user_id,
@@ -5026,6 +5028,7 @@ async def _relay_activity_log(request: web.Request) -> web.Response:
             metadata=metadata,
             is_premium=is_premium,
             display_name=display_name,
+            user_count=user_count,
         )
         # Award pet evolution points based on activity type
         pet_pts = 0

@@ -343,6 +343,11 @@ golive: encoder probe OK → libx264
    - _Causas_: (a) Al responder comandos con `ctx.respond(..., view=view)` o `safe_respond()`, no se guardaba la referencia `view.message` o `view.bound_interaction`. Al expirar el timeout (60s–300s), `BaseView.on_timeout()` no podía editar el mensaje de Discord para remover los botones (`view=None`). (b) En comandos como `/mascota`, `ctx.respond()` devolvía un objeto `discord.Interaction` que era asignado a `view.message`. Al expirar el timeout, `on_timeout()` ejecutaba `await self.message.edit(view=None)`, lanzando `AttributeError: 'Interaction' object has no attribute 'edit'`, fallando silenciosamente la remoción de botones.
    - **Fixes**: (a) Se actualizó `BaseView.on_timeout()` en `baseView.py` con duck-typing para tratar a `self.message` si es una `discord.Interaction` como `bound_interaction`. (b) Se actualizó `safe_respond()` en `bot.py` para usar `wait=True` cuando se envía una `view` por `followup.send()` y auto-vincular `view.message` o `view.bound_interaction` en todas las respuestas de comandos.
 
+8. **(2026-09-29) Optimización de sensibilidad wake-word, simplificación del prompt STT y log de presencia de usuarios (`user_count`)**:
+   - _Causas_: (a) El prompt STT con instrucciones de dialecto ("Español rioplatense con voseo") causaba alucinaciones fonéticas en Whisper large-v3. (b) La verificación post-STT exigía estrictamente la palabra "che", descartando llamados válidos. (c) Faltaba registrar la cantidad de usuarios en canal en `adb.log_activity` desde el relay HTTP.
+   - **Fixes**: (a) Prompt STT simplificado a frases naturales estándar ("Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá."). (b) Verificación `_whisper_confirms_indio` actualizada para validar cualquier variante de `_WAKE_WORD_TOKENS` sin exigir "che" y tolerar puntuación. (c) Expansión de partículas de invocación (`ey`, `hey`, `oye`, `hola`, `de`, `se`, etc.) en la gramática VOSK para Preset 1. (d) Propagación de `user_count` en `_log_activity` en `bot.py` y `_relay_activity_log` en `userbot/bot.py`.
+
+
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
 El detector de wake-word del userbot corre VOSK con una **gramática restringida**

@@ -1258,6 +1258,11 @@ def _stop_idle_watchdog(guild_id: int):
 @client.event
 async def on_ready():
     log.info("GoLive online as %s (id=%s)", client.user, client.user.id)
+    try:
+        import autoErrorTracker
+        autoErrorTracker.bind_asyncio_exception_handler()
+    except Exception:
+        pass
     for guild in client.guilds:
         if guild.id not in _active_streams:
             me = getattr(guild, "me", None) or guild.get_member(client.user.id)

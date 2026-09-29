@@ -175,6 +175,7 @@ async def _log_activity(
     value: float = 1.0,
     metadata: dict | None = None,
     display_name: str = "",
+    user_count: int = 1,
 ):
     if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
         return
@@ -188,6 +189,7 @@ async def _log_activity(
         "value": value,
         "metadata": metadata or {},
         "display_name": display_name,
+        "user_count": user_count,
     }
     if quality_score is not None:
         payload["quality_score"] = quality_score
