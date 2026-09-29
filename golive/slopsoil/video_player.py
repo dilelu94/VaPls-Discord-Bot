@@ -1356,7 +1356,7 @@ class H264VideoPlayer(threading.Thread):
             else:
                 vf_str = f"{vf_str},subtitles={':'.join(sub_opts)}"
 
-        rate_args: list[str] = ["-re"] if (not self._live and not is_url) else []
+        rate_args: list[str] = ["-re"] if not self._live else []
         fflags = "+discardcorrupt"
         reconnect_args = (
             [
