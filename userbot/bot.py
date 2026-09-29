@@ -674,13 +674,15 @@ class TranscriberSink(voice_recv.AudioSink):
         guild_id = self.user_guilds.get(user_id)
         if guild_id is not None:
             try:
-                if _channel_has_others(guild_id):
+                cnt = _channel_non_bot_count(guild_id)
+                if cnt >= 2:
                     adb.log_activity(
                         user_id,
                         guild_id,
                         "voice_vad",
                         duration_secs=secs,
                         quality_score=0.05,
+                        user_count=cnt,
                     )
             except Exception as e:
                 log.warning(f"[MMR] failed to log voice activity for {user_id}: {e}")
@@ -2552,15 +2554,19 @@ client._connection.parsers["STREAM_SERVER_UPDATE"] = _parse_stream_server_update
 client._connection.parsers["STREAM_CREATE"] = _parse_stream_create
 
 
-def _channel_has_others(guild_id: int) -> bool:
-    """Return True if the userbot's voice channel has >= 2 non-bot users."""
+def _channel_non_bot_count(guild_id: int) -> int:
+    """Return the count of non-bot users in the userbot's voice channel."""
     for vc in client.voice_clients:
         if vc.guild.id == guild_id and vc.channel:
-            non_bot = sum(
+            return sum(
                 1 for m in vc.channel.members if not m.bot and m.id != client.user.id
             )
-            return non_bot >= 2
-    return False
+    return 0
+
+
+def _channel_has_others(guild_id: int) -> bool:
+    """Return True if the userbot's voice channel has >= 2 non-bot users."""
+    return _channel_non_bot_count(guild_id) >= 2
 
 
 def _guild_allowed(guild_id: int) -> bool:
