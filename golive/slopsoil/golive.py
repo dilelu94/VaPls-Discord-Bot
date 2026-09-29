@@ -158,9 +158,7 @@ class GoLiveConnection:
 
     @property
     def max_dave_protocol_version(self) -> int:
-        # Return 0 for secondary GoLive stream socket so Discord uses standard XSalsa20/XChaCha20 transport encryption
-        # without dropping the socket on DAVE MLS key rotation.
-        return 0
+        return davey_compat.DAVE_PROTOCOL_VERSION
 
     @property
     def can_encrypt(self) -> bool:
@@ -173,8 +171,7 @@ class GoLiveConnection:
     async def reinit_dave_session(self, force: bool = False) -> None:
         if self.dave_protocol_version > 0:
             log.info("SlopSoilVoiceConnection: re-initializing DaveSession (force=%s)", force)
-            # channel_id for go-live DAVE group is server_id - 1
-            dave_channel_id = self.server_id - 1  # type: ignore[operator]
+            dave_channel_id = self.channel_id
             if self.dave_session is not None:
                 self.dave_session.reinit(
                     self.dave_protocol_version, self.user.id, dave_channel_id
