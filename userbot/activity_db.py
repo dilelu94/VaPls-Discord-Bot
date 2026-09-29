@@ -447,8 +447,6 @@ def log_activity(
 
     weight = _get_weight(activity_type)
     weight_factor = min(1.0, weight / 4.0)
-    actual = 0.5 + (q - 0.5) * weight_factor
-    actual = max(0.0, min(1.0, actual))
 
     # Get current MMR
     cur = _conn.execute(
@@ -469,6 +467,15 @@ def log_activity(
 
     # Expected: Glicko probability this user "wins" the activity
     expected = _expected_score(r, rd)
+
+    # Positive activity (q >= 0.2) awards rating relative to expected score and quality q
+    if q >= 0.2 and weight > 0:
+        actual = expected + 0.10 * q * max(0.1, weight_factor)
+        actual = min(0.99, actual)
+    else:
+        actual = 0.5 + (q - 0.5) * weight_factor
+        actual = max(0.0, min(1.0, actual))
+
     new_r, new_rd = _glicko_update(r, rd, actual, expected)
     delta = new_r - r
 

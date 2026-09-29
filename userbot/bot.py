@@ -2556,10 +2556,16 @@ client._connection.parsers["STREAM_CREATE"] = _parse_stream_create
 
 def _channel_non_bot_count(guild_id: int) -> int:
     """Return the count of non-bot users in the userbot's voice channel."""
+    golive_id = getattr(config, "GOLIVE_USER_ID", 1541984338386620492)
+    userbot_id = getattr(config, "USERBOT_USER_ID", 519594605520486428)
     for vc in client.voice_clients:
         if vc.guild.id == guild_id and vc.channel:
             return sum(
-                1 for m in vc.channel.members if not m.bot and m.id != client.user.id
+                1 for m in vc.channel.members
+                if not m.bot
+                and m.id != client.user.id
+                and m.id != userbot_id
+                and m.id != golive_id
             )
     return 0
 

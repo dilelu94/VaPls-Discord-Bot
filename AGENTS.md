@@ -778,11 +778,13 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 ## 📦 Últimos cambios
 
-### 2026-09-29 — MMR: fix decaimiento por inactividad + multiplicador por concurrencia en canal
+### 2026-09-29 — MMR: fix decaimiento por inactividad + multiplicador por concurrencia en canal + exclusión de GoLive
 
 1. **Decaimiento continuo por inactividad (`userbot/activity_db.py`)**: Se corrigió el cálculo de decaimiento donde los usuarios inactivos quedaban estancados en 1500 MMR o no bajaban de ese piso. Ahora el decaimiento reduce el rating hacia `min_rating` (1000) a razón de `decay_rating_per_day` (5 pts/día tras 24h de inactividad).
 2. **Decaimiento dinámico en lectura (`_apply_decay_on_read`)**: Las consultas `/ranking`, `/actividad`, `get_leaderboard` y el dashboard web `/admin` calculan el decaimiento en vivo para usuarios inactivos sin requerir escrituras ni esperar a que el usuario vuelva a estar activo.
 3. **Multiplicador por concurrencia (`occupancy_boost_max`)**: Actividades en canales de voz o interacciones con más personas escalan su calidad de 1.0x (a 2 usuarios) hasta 1.4x (`occupancy_boost_max`) al alcanzar 10+ usuarios no-bot en el canal.
+4. **Exclusión de bots del sistema (`_channel_non_bot_count`)**: Se aseguró la exclusión tanto de `USERBOT_USER_ID` como de `GOLIVE_USER_ID` (`1541984338386620492`) del conteo de miembros no-bot en canal de voz, evitando falsos positivos de presencia humana.
+5. **Ganancia positiva continua por participación**: Se ajustó el cálculo de `actual` para que realizar actividades válidas (`q >= 0.2`) otorgue deltas positivos en base a la expectativa actual del usuario, evitando que usuarios activos en ratings altos pierdan MMR al interactuar.
 
 ### 2026-06-20 — GoLive: fix encoder ARM + fix timeout HLS
 
