@@ -683,8 +683,10 @@ SQLite con 4 tablas:
 | initial_deviation    | 350     | RD inicial (máxima incertidumbre)              |
 | min_deviation        | 30      | Piso de RD (nunca baja de esto)                |
 | max_deviation        | 500     | Techo de RD                                    |
+| min_rating           | 1000    | Piso mínimo de MMR ante decaimiento por inactividad |
 | decay_per_day        | 10      | Cuánto sube la RD por día sin actividad        |
-| decay_rating_per_day | 1       | Cuánto rating pierde por día sin actividad     |
+| decay_rating_per_day | 5       | Cuánto rating pierde por día de inactividad    |
+| occupancy_boost_max  | 1.4     | Multiplicador máximo de calidad por concurrencia en canal (hasta 10 usuarios) |
 | spam_window_seconds  | 10      | Ventana de tiempo para detectar spam           |
 | spam_max_events      | 5       | Máximo de eventos del mismo tipo en la ventana |
 | premium_multiplier   | 0.85    | Multiplicador de quality para usuarios premium |
@@ -695,9 +697,10 @@ SQLite con 4 tablas:
 1. `expected = _expected_score(r, rd)` — probabilidad de que el usuario "gane" la actividad (default vs system rating 1500/350).
 2. `actual = 0.5 + (quality - 0.5) * weight_factor` — qué tan bien le fue, modulado por el peso de la actividad.
 3. `delta = new_r - r` — ajuste Glicko-1 estándar con `g`, `d2`.
-4. **Spam detection**: si hay más de `spam_max_events` del mismo tipo en `spam_window_seconds`, la calidad se reduce (0.5 → 0.3 → 0.1).
-5. **Premium**: multiplica quality por `premium_multiplier` (0.85).
-6. **Decay**: si pasó >1 día sin actividad, la RD sube y el rating converge a 1500.
+4. **Occupancy boost**: escala la calidad de la actividad según la cantidad de miembros humanos en canal (`user_count`), de 1.0x (a 2 usuarios) hasta `occupancy_boost_max` (1.4x a 10+ usuarios).
+5. **Spam detection**: si hay más de `spam_max_events` del mismo tipo en `spam_window_seconds`, la calidad se reduce (0.5 → 0.3 → 0.1).
+6. **Premium**: multiplica quality por `premium_multiplier` (0.85).
+7. **Decay continuo**: si pasó >1 día sin actividad, la RD sube y el rating decae a razón de `decay_rating_per_day` (5 pts/día) hacia `min_rating` (1000). Además, las consultas (`get_leaderboard`, `get_user_stats`, `get_all_data`) aplican el decaimiento dinámico en lectura (`_apply_decay_on_read`) para reflejar la inactividad inmediatamente sin congelar ratings.
 
 ### Cómo se disparan las actividades (`bot.py`)
 
@@ -770,6 +773,12 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 21. **`transferHistory` sin guard**: se removió el chequeo `if not mgr.sessions.get(token)` que retornaba vacío para tokens desconocidos. Ahora siempre devuelve el historial completo desde `_history.jsonl`.
 
 ## 📦 Últimos cambios
+
+### 2026-09-29 — MMR: fix decaimiento por inactividad + multiplicador por concurrencia en canal
+
+1. **Decaimiento continuo por inactividad (`userbot/activity_db.py`)**: Se corrigió el cálculo de decaimiento donde los usuarios inactivos quedaban estancados en 1500 MMR o no bajaban de ese piso. Ahora el decaimiento reduce el rating hacia `min_rating` (1000) a razón de `decay_rating_per_day` (5 pts/día tras 24h de inactividad).
+2. **Decaimiento dinámico en lectura (`_apply_decay_on_read`)**: Las consultas `/ranking`, `/actividad`, `get_leaderboard` y el dashboard web `/admin` calculan el decaimiento en vivo para usuarios inactivos sin requerir escrituras ni esperar a que el usuario vuelva a estar activo.
+3. **Multiplicador por concurrencia (`occupancy_boost_max`)**: Actividades en canales de voz o interacciones con más personas escalan su calidad de 1.0x (a 2 usuarios) hasta 1.4x (`occupancy_boost_max`) al alcanzar 10+ usuarios no-bot en el canal.
 
 ### 2026-06-20 — GoLive: fix encoder ARM + fix timeout HLS
 

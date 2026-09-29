@@ -307,3 +307,41 @@ class TestDecay:
         adb.log_activity(1, 100, "message", value=1)
         mmr = _get_mmr(1, 100)
         assert mmr["rating"] < high
+
+    def test_idle_decay_decreases_mmr_below_1500(self, monkeypatch):
+        """Inactive users continuously lose MMR below 1500 initial rating."""
+        start_ts = 1000000
+        monkeypatch.setattr(adb, "_now", lambda: start_ts)
+        adb.log_activity(1, 100, "message", value=1)
+        
+        # 30 days later without any activity
+        monkeypatch.setattr(adb, "_now", lambda: start_ts + 86400 * 30)
+        stats = adb.get_user_stats(1, 100)
+        assert stats is not None
+        # 30 days * 5 decay_rating_per_day = 150 points lost
+        assert stats["rating"] < 1400
+
+    def test_dynamic_decay_on_read(self, monkeypatch):
+        """Leaderboard reflects dynamic decay on read for idle users."""
+        start_ts = 1000000
+        monkeypatch.setattr(adb, "_now", lambda: start_ts)
+        adb.log_activity(1, 100, "message", value=1)
+        adb.log_activity(2, 100, "message", value=1)
+
+        # User 1 remains idle for 40 days, User 2 has fresh activity at day 39
+        monkeypatch.setattr(adb, "_now", lambda: start_ts + 86400 * 39)
+        adb.log_activity(2, 100, "message", value=1)
+
+        monkeypatch.setattr(adb, "_now", lambda: start_ts + 86400 * 40)
+        lb = adb.get_leaderboard(100)
+        # User 2 should be ranked above User 1 because User 1 decayed for 40 days
+        assert lb[0]["user_id"] == 2
+        assert lb[1]["user_id"] == 1
+        assert lb[1]["rating"] < lb[0]["rating"]
+
+    def test_occupancy_boost(self):
+        """Higher user_count in voice/activity scales quality score and MMR gain."""
+        delta_2 = adb.log_activity(1, 100, "voice_vad", duration_secs=30, user_count=2)
+        delta_10 = adb.log_activity(2, 100, "voice_vad", duration_secs=30, user_count=10)
+        # user_count=10 gets max occupancy boost (1.4x), yielding higher delta than user_count=2
+        assert delta_10 > delta_2
