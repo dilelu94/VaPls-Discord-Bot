@@ -455,6 +455,41 @@ async def test_revoke_sessions_for_guild():
 
 
 @pytest.mark.asyncio
+async def test_revoke_sessions_for_guild_zero_does_not_wipe_other_guilds():
+    sess_dm = session_manager.create_session(author_id=1, author_name="dm_user", channel_id=100, guild_id=0)
+    sess_guild = session_manager.create_session(author_id=2, author_name="guild_user", channel_id=200, guild_id=999)
+
+    assert session_manager.validate_token(sess_dm.token) is True
+    assert session_manager.validate_token(sess_guild.token) is True
+
+    revoked_count = session_manager.revoke_sessions_for_guild(0)
+    assert revoked_count == 1
+    assert session_manager.validate_token(sess_dm.token) is False
+    assert session_manager.validate_token(sess_guild.token) is True
+
+
+@pytest.mark.asyncio
+async def test_bot_voice_disconnect_does_not_revoke_stremio_session():
+    from bot import on_voice_state_update, bot
+
+    sess = session_manager.create_session(author_id=1, author_name="user", channel_id=100, guild_id=555)
+    assert session_manager.validate_token(sess.token) is True
+
+    member = bot.user
+    before = MagicMock()
+    before.channel.guild.id = 555
+    before.channel.name = "General Voice"
+    after = MagicMock()
+    after.channel = None  # Bot leaves voice channel
+
+    with patch("bot.analytics.capture"):
+        await on_voice_state_update(member, before, after)
+
+    # Session token MUST still be valid after main bot voice disconnect
+    assert session_manager.validate_token(sess.token) is True
+
+
+@pytest.mark.asyncio
 async def test_stop_stream_for_guild_revokes_sessions():
     from bot import stop_stream_for_guild
 

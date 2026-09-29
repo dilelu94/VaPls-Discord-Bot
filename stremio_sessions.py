@@ -96,7 +96,7 @@ class StremioSessionManager:
 
     def revoke_sessions_for_guild(self, guild_id: int) -> int:
         """Revokes/expires all session tokens associated with a given guild ID."""
-        to_remove = [t for t, s in self.sessions.items() if s.guild_id == guild_id or guild_id == 0]
+        to_remove = [t for t, s in self.sessions.items() if s.guild_id == guild_id]
         for t in to_remove:
             self.sessions.pop(t, None)
         if to_remove:

@@ -806,12 +806,6 @@ async def on_voice_state_update(member, before, after):
             except Exception:
                 log.exception("failed to stop idle watchdog")
             try:
-                from stremio_sessions import session_manager
-
-                session_manager.revoke_sessions_for_guild(before.channel.guild.id)
-            except Exception:
-                log.exception("failed to revoke stremio sessions on voice disconnect")
-            try:
                 from playCommand import guildPlayers
 
                 _player = guildPlayers.get(before.channel.guild.id)
