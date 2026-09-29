@@ -158,7 +158,9 @@ class GoLiveConnection:
 
     @property
     def max_dave_protocol_version(self) -> int:
-        return davey_compat.DAVE_PROTOCOL_VERSION
+        # Return 0 for secondary GoLive stream socket so Discord uses standard XSalsa20/XChaCha20 transport encryption
+        # without dropping the socket on DAVE MLS key rotation.
+        return 0
 
     @property
     def can_encrypt(self) -> bool:
