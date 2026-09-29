@@ -501,12 +501,19 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 60.0) -> str
         if url.startswith(("http://", "https://"))
         else []
     )
+    user_agent_str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    headers_args = [
+        "-user_agent", user_agent_str,
+        "-headers", f"User-Agent: {user_agent_str}\r\n",
+    ] if url.startswith(("http://", "https://")) else []
+
     sub_path_srt = os.path.join(tempfile.gettempdir(), f"vapls_sub_{uuid.uuid4().hex[:8]}.srt")
     cmd_srt = [
         "ffmpeg",
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
+        *headers_args,
         *reconnect_args,
         "-discard:v", "all",
         "-discard:a", "all",
@@ -532,6 +539,7 @@ def _extract_subtitle_file(url: str, sub_idx: int, timeout: float = 60.0) -> str
         "-y",
         "-hide_banner",
         "-loglevel", "quiet",
+        *headers_args,
         *reconnect_args,
         "-discard:v", "all",
         "-discard:a", "all",
@@ -639,9 +647,21 @@ def _fetch_opensubtitles_file(
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             subs = data.get("subtitles", [])
+            target_ep = episode or 1
             def score_sub(s: dict) -> int:
                 lang = str(s.get("lang", "")).lower()
                 name = str(s.get("subtitleFileName", "") or s.get("id", "") or s.get("lang", "")).lower()
+
+                # Disqualify if filename explicitly references a different episode
+                m_ep = re.search(r"[sS]\d+[eE](\d+)", name)
+                if m_ep:
+                    if int(m_ep.group(1)) != target_ep:
+                        return -1000
+                else:
+                    m_e2 = re.search(r"\b[eE](\d+)\b", name)
+                    if m_e2 and int(m_e2.group(1)) != target_ep:
+                        return -1000
+
                 # 1. Latino
                 if lang in ("spa-la", "es-mx", "es-ar", "es-cl", "es-co") or any(k in name for k in ("latino", "latin america", "latin", "spa-la", "es-mx")):
                     return 300
