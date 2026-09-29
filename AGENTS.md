@@ -347,6 +347,10 @@ golive: encoder probe OK → libx264
    - _Causas_: (a) El prompt STT con instrucciones de dialecto ("Español rioplatense con voseo") causaba alucinaciones fonéticas en Whisper large-v3. (b) La verificación post-STT exigía estrictamente la palabra "che", descartando llamados válidos. (c) Faltaba registrar la cantidad de usuarios en canal en `adb.log_activity` desde el relay HTTP.
    - **Fixes**: (a) Prompt STT simplificado a frases naturales estándar ("Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá."). (b) Verificación `_whisper_confirms_indio` actualizada para validar cualquier variante de `_WAKE_WORD_TOKENS` sin exigir "che" y tolerar puntuación. (c) Expansión de partículas de invocación (`ey`, `hey`, `oye`, `hola`, `de`, `se`, etc.) en la gramática VOSK para Preset 1. (d) Propagación de `user_count` en `_log_activity` en `bot.py` y `_relay_activity_log` en `userbot/bot.py`.
 
+9. **(2026-09-29) Captura global de excepciones no manejadas en tareas asíncronas (`asyncio.create_task`) y enriquecimiento de Auto-Bug en GitHub Issues**:
+   - _Causas_: (a) Las excepciones no atrapadas en tareas en segundo plano lanzadas con `asyncio.create_task(...)` y no escuchadas con `await` o `result()` no pasaban por `sys.excepthook` al ser procesadas por el recopilador de basura de asyncio. (b) El contexto de ejecución de las Issues automáticas de GitHub no incluía argumentos de comandos slash ni metadatos de corrutinas/tareas.
+   - **Fixes**: (a) Se implementó `custom_asyncio_exception_handler` y `bind_asyncio_exception_handler` en `autoErrorTracker.py`, registrándolo en los event loops de `bot.py`, `userbot/bot.py` y `golive/bot.py`. (b) Se enriqueció `_extract_context` para parsear argumentos de comandos slash (`CommandArgs`) y metadatos de tareas en segundo plano (`TaskName`, `Coroutine`).
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
