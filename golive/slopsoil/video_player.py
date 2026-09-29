@@ -1331,7 +1331,7 @@ class H264VideoPlayer(threading.Thread):
         use_filter_complex = False
 
         if not sub_file and sub_idx >= 0 and is_url:
-            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=35.0)
+            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=5.0)
             if not sub_file:
                 search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
                 sub_file = _fetch_opensubtitles_file(
