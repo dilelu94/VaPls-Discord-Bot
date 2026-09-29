@@ -26,7 +26,7 @@ Codex, Copilot, u otro) DEBE cumplir esta checklist sin excepciones:
       el trabajo completo.
 - [ ] No marcar una tarea como terminada si hay tests rojos, aunque el cambio
       parezca trivial.
-- [ ] Actualizar siempre la documentación en `AGENTS.md` (y/o en `docs/`), editando o agregando información detallada sobre los cambios realizados justo antes de hacer commit y pushear.
+- [ ] Actualizar siempre la documentación en `AGENTS.md` (y/o en `docs/`), editando o agregando información detallada sobre los cambios realizados justo antes de hacer commit y pushear. Además, mostrar obligatoriamente en el resumen de cambios al usuario un fragmento con el texto nuevo o editado de la documentación.
 - [ ] Realizar `git commit` y `git push origin master` inmediatamente después de completar cada cambio o tarea (con la suite en verde) para que GitHub despliegue los cambios automáticamente en OCI.
 
 **Hook de git (pre-push):** el repositorio incluye `.githooks/pre-push`, que
@@ -66,7 +66,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 - **Reutilización de código existente:** Auditar y reutilizar siempre las funciones, clases o métodos que ya existen antes de crear nuevas si cumplen la función necesaria.
 - **YouTube requiere PoT primero:** Todo lo que use o interactúe con YouTube (descargas, reproducción, yt-dlp, streaming, etc.) debe pasar obligatoriamente por el servicio de PoT (Proof of Work Token, `YT_DLP_POT_BASE_URL`) en primer lugar.
 - **Manejo global de Botones/Views:** Al enviar o responder interacciones que incluyan un `view` con botones (especialmente efímeros), **NUNCA** usar `safe_defer()` / `defer()` seguido de `followup.send(..., view=view)` sin `wait=True`. py-cord registra la vista en `ViewStore` sin `message_id` cuando `wait=False` (default), haciendo que Discord tire `This interaction failed` al presionar cualquier botón. Usar siempre `ctx.respond(..., view=view)` o `interaction.response.send_message(..., view=view)` directamente. Además, toda vista interactiva DEBE heredar de `BaseView` (`baseView.py`) para que al expirar el `timeout` los botones desaparezcan automáticamente del mensaje (`view=None`).
-- **Actualización obligatoria de documentación antes del Commit:** Antes de realizar `git commit` y `git push`, se debe actualizar siempre el archivo `AGENTS.md` (o la documentación correspondiente en `docs/`), editando o agregando información basada en lo que se realizó en la tarea o fix.
+- **Actualización obligatoria de documentación y fragmento en el resumen:** Antes de realizar `git commit` y `git push`, se debe actualizar siempre el archivo `AGENTS.md` (o la documentación correspondiente en `docs/`), editando o agregando información basada en lo que se realizó en la tarea o fix. En el mensaje final al usuario tras el push, se DEBE incluir siempre un fragmento (snippet) con los cambios o adiciones realizados en la documentación como parte del resumen.
 - **Commit, Push a Master y Deploy a OCI:** Realizar siempre `git commit` y `git push origin master` tras completar cada cambio o tarea. Tras cada push a `master`, GitHub Actions ejecutará automáticamente el pipeline de CI/CD que despliega los cambios en la instancia de producción en OCI (Oracle Cloud Infrastructure).
 
 ## 🌐 Servidor de producción (2026-05-30)

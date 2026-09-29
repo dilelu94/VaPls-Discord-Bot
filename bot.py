@@ -483,6 +483,7 @@ async def on_ready():
     """
     global _api_runner
     log.info(f"Bot online as {bot.user}")
+    autoErrorTracker.bind_asyncio_exception_handler()
     if _api_runner is None:
         try:
             _api_runner = await startApiServer(bot)

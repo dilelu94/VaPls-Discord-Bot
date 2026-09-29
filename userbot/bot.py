@@ -918,6 +918,21 @@ _PRESET_1_PATTERNS: tuple[tuple[str, str], ...] = (
     ("che", "indio"),
     ("que", "indio"),  # VOSK-small often hears "che" as "que"
     ("eh", "indio"),  # seen on speakers where "che" comes out as "eh"
+    ("ey", "indio"),
+    ("hey", "indio"),
+    ("oye", "indio"),
+    ("hola", "indio"),
+    ("de", "indio"),
+    ("se", "indio"),
+    ("te", "indio"),
+    ("me", "indio"),
+    ("le", "indio"),
+    ("ne", "indio"),
+    ("a", "indio"),
+    ("o", "indio"),
+    ("y", "indio"),
+    ("en", "indio"),
+    ("es", "indio"),
     ("indio", "ponete"),
     ("indio", "poneme"),
     ("indio", "por"),  # VOSK-small collapses "ponete"/"poneme" → "por"
@@ -1149,7 +1164,20 @@ def _build_vosk_grammar() -> str:
             "que indio",
             "eh indio",
             "ey indio",
+            "hey indio",
+            "oye indio",
             "hola indio",
+            "de indio",
+            "se indio",
+            "te indio",
+            "me indio",
+            "le indio",
+            "ne indio",
+            "a indio",
+            "o indio",
+            "y indio",
+            "en indio",
+            "es indio",
         ] + phrases
         phrases.insert(phrases.index("che"), "que")
         phrases.insert(phrases.index("che") + 1, "eh")
@@ -1161,7 +1189,20 @@ def _build_vosk_grammar() -> str:
             "que indio",
             "eh indio",
             "ey indio",
+            "hey indio",
+            "oye indio",
             "hola indio",
+            "de indio",
+            "se indio",
+            "te indio",
+            "me indio",
+            "le indio",
+            "ne indio",
+            "a indio",
+            "o indio",
+            "y indio",
+            "en indio",
+            "es indio",
         ]
         extra_lone = ["que", "eh"]
         combined = invocations + phrases + extra_lone + _PRESET_3_FILLER

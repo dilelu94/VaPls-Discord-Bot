@@ -52,6 +52,7 @@ DEFAULT_CFG = {
     "system_deviation": "350",
     "decay_per_day": "10",
     "decay_rating_per_day": "5",
+    "occupancy_boost_max": "1.4",
     "pet_point_decay_per_day": "10",
     "spam_window_seconds": "10",
     "spam_max_events": "5",
@@ -421,6 +422,7 @@ def log_activity(
     metadata: dict | None = None,
     is_premium: bool = False,
     display_name: str = "",
+    user_count: int = 1,
 ) -> float:
     """Log an activity and update the user's MMR.
 
@@ -435,6 +437,13 @@ def log_activity(
     q = q * spam_q
     if is_premium:
         q = q * (_get_cfg_float("premium_multiplier") or 0.85)
+
+    # Occupancy boost: scale quality if user_count >= 2 (up to 10 users max)
+    if user_count >= 2:
+        max_boost = _get_cfg_float("occupancy_boost_max") or 1.4
+        capped_users = min(10, user_count)
+        occ_boost = 1.0 + (capped_users - 2) * (max_boost - 1.0) / 8.0
+        q = q * occ_boost
 
     weight = _get_weight(activity_type)
     weight_factor = min(1.0, weight / 4.0)
@@ -464,21 +473,18 @@ def log_activity(
     delta = new_r - r
 
     # Apply inactivity decay if more than 1 day since last activity
-    if row and now - last_at > 86400:
-        days_idle = (now - last_at) / 86400
-        decay_rd = _get_cfg_float("decay_per_day") or 10
-        decay_r = _get_cfg_float("decay_rating_per_day") or 1
-        new_rd = min(
-            _get_cfg_float("max_deviation") or 500,
-            new_rd + decay_rd * days_idle,
-        )
-        if new_r > 1500:
-            new_r = max(1500, new_r - decay_r * days_idle)
-        elif new_r < 1500:
-            new_r = min(1500, new_r + decay_r * days_idle)
+    if row and last_at > 0 and now - last_at > 86400:
+        days_idle = (now - last_at) / 86400.0
+        decay_rd = _get_cfg_float("decay_per_day") or 10.0
+        decay_r = _get_cfg_float("decay_rating_per_day") or 5.0
+        min_r = _get_cfg_float("min_rating") or 1000.0
+        max_rd = _get_cfg_float("max_deviation") or 500.0
+
+        new_rd = min(max_rd, new_rd + decay_rd * days_idle)
+        new_r = max(min_r, new_r - decay_r * days_idle)
         delta = new_r - r
 
-        pet_decay_rate = _get_cfg_float("pet_point_decay_per_day") or 10
+        pet_decay_rate = _get_cfg_float("pet_point_decay_per_day") or 10.0
         if pet_decay_rate > 0:
             decay = int(days_idle * pet_decay_rate)
             if decay > 0:
@@ -572,6 +578,42 @@ def log_raw_activity(
 # ---- Queries ---------------------------------------------------------------
 
 
+def _apply_decay_on_read(row: dict, now_ts: int | None = None) -> dict:
+    """Calculate effective MMR and deviation accounting for passive decay since last activity."""
+    r = dict(row)
+    now_ts = now_ts or _now()
+    last_at = r.get("last_activity_at", 0)
+    if last_at > 0 and now_ts - last_at > 86400:
+        days_idle = (now_ts - last_at) / 86400.0
+        decay_rd = _get_cfg_float("decay_per_day") or 10.0
+        decay_r = _get_cfg_float("decay_rating_per_day") or 5.0
+        min_r = _get_cfg_float("min_rating") or 1000.0
+        max_rd = _get_cfg_float("max_deviation") or 500.0
+
+        r["rating"] = round(max(min_r, r["rating"] - decay_r * days_idle), 1)
+        r["deviation"] = round(min(max_rd, r["deviation"] + decay_rd * days_idle), 1)
+    return r
+
+
+def apply_decay_sweep() -> None:
+    """Persist decay updates for all users who have been inactive > 24h."""
+    if _conn is None:
+        return
+    now_ts = _now()
+    cur = _conn.execute(
+        "SELECT * FROM user_mmr WHERE last_activity_at > 0 AND (? - last_activity_at) > 86400",
+        (now_ts,),
+    )
+    rows = cur.fetchall()
+    for row in rows:
+        d = _apply_decay_on_read(dict(row), now_ts=now_ts)
+        _conn.execute(
+            "UPDATE user_mmr SET rating=?, deviation=?, updated_at=? WHERE user_id=? AND guild_id=?",
+            (d["rating"], d["deviation"], now_ts, row["user_id"], row["guild_id"]),
+        )
+    _conn.commit()
+
+
 def get_user_stats(user_id: int, guild_id: int) -> dict | None:
     if _conn is None:
         return None
@@ -584,7 +626,7 @@ def get_user_stats(user_id: int, guild_id: int) -> dict | None:
     row = cur.fetchone()
     if row is None:
         return None
-    r = dict(row)
+    r = _apply_decay_on_read(dict(row))
     # Recent activity breakdown
     cur2 = _conn.execute(
         """SELECT activity_type, COUNT(*) AS cnt, SUM(rating_delta) AS total_delta
@@ -661,11 +703,12 @@ def get_leaderboard(guild_id: int, limit: int = 20) -> list[dict]:
     cur = _conn.execute(
         """SELECT user_id, rating, deviation, total_activities,
                   last_activity_at, display_name
-           FROM user_mmr WHERE guild_id=?
-           ORDER BY rating DESC LIMIT ?""",
-        (guild_id, limit),
+           FROM user_mmr WHERE guild_id=?""",
+        (guild_id,),
     )
-    return [dict(row) for row in cur.fetchall()]
+    decayed_rows = [_apply_decay_on_read(dict(row)) for row in cur.fetchall()]
+    decayed_rows.sort(key=lambda x: x["rating"], reverse=True)
+    return decayed_rows[:limit]
 
 
 def get_recent_activity(guild_id: int, limit: int = 50) -> list[dict]:
@@ -695,11 +738,12 @@ def get_all_data() -> dict:
     if _conn is None:
         return {"mmr": [], "activity": [], "daily": [], "config": {}}
     mmr = [
-        dict(row)
+        _apply_decay_on_read(dict(row))
         for row in _conn.execute(
-            "SELECT * FROM user_mmr ORDER BY rating DESC"
+            "SELECT * FROM user_mmr"
         ).fetchall()
     ]
+    mmr.sort(key=lambda x: x["rating"], reverse=True)
     activity = [
         dict(row)
         for row in _conn.execute(

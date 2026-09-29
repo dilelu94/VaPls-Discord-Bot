@@ -73,6 +73,31 @@ def _extract_context(
         if command:
             context["Command"] = f"/{command}"
 
+        # Extract slash command options/args if available
+        selected_options = (
+            getattr(ctx, "selected_options", None)
+            or getattr(ctx, "options", None)
+            or getattr(ctx, "kwargs", None)
+        )
+        if selected_options:
+            try:
+                if isinstance(selected_options, list):
+                    opts_formatted = []
+                    for opt in selected_options:
+                        if isinstance(opt, dict):
+                            opts_formatted.append(f"{opt.get('name')}={opt.get('value')!r}")
+                        elif hasattr(opt, "name") and hasattr(opt, "value"):
+                            opts_formatted.append(f"{getattr(opt, 'name')}={getattr(opt, 'value')!r}")
+                        else:
+                            opts_formatted.append(str(opt))
+                    context["CommandArgs"] = ", ".join(opts_formatted)
+                elif isinstance(selected_options, dict):
+                    context["CommandArgs"] = ", ".join(f"{k}={v!r}" for k, v in selected_options.items())
+                else:
+                    context["CommandArgs"] = str(selected_options)
+            except Exception:
+                pass
+
         author = getattr(ctx, "author", None) or getattr(ctx, "user", None)
         if author:
             disp_name = getattr(author, "display_name", None) or getattr(author, "name", "unknown")
@@ -91,7 +116,7 @@ def _extract_context(
     if extra:
         for k, v in extra.items():
             if v is not None:
-                context[str(k).capitalize()] = str(v)
+                context[str(k)] = str(v)
 
     return context
 
@@ -346,6 +371,64 @@ class GitHubErrorLoggingHandler(logging.Handler):
             )
 
 
+def custom_asyncio_exception_handler(
+    loop: asyncio.AbstractEventLoop,
+    context: dict[str, Any],
+) -> None:
+    """Asyncio loop exception handler to catch unhandled background task errors."""
+    exc: Optional[BaseException] = context.get("exception")
+    msg: str = context.get("message", "Unhandled exception in background asyncio task")
+
+    task = context.get("task") or context.get("future")
+    extra: dict[str, Any] = {"AsyncioLoopMessage": msg}
+
+    if task is not None:
+        if hasattr(task, "get_name"):
+            try:
+                extra["TaskName"] = task.get_name()
+            except Exception:
+                pass
+        try:
+            coro = getattr(task, "get_coro", lambda: None)()
+            if coro is not None:
+                extra["Coroutine"] = getattr(coro, "__qualname__", getattr(coro, "__name__", str(coro)))
+        except Exception:
+            pass
+
+    target_exc = exc if exc is not None else RuntimeError(f"Asyncio Loop Error: {msg}")
+
+    _submit_error_task(
+        target_exc,
+        process_name=_current_process_name,
+        logger_name="asyncio.loop",
+        extra=extra,
+    )
+
+    try:
+        loop.default_exception_handler(context)
+    except Exception:
+        pass
+
+
+def bind_asyncio_exception_handler(
+    loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> None:
+    """Bind the custom asyncio exception handler to the specified or active event loop."""
+    target_loop = loop
+    if target_loop is None:
+        try:
+            target_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                target_loop = asyncio.get_event_loop()
+            except RuntimeError:
+                target_loop = None
+
+    if target_loop is not None and not target_loop.is_closed():
+        target_loop.set_exception_handler(custom_asyncio_exception_handler)
+        logger.info("Bound custom asyncio loop exception handler to loop %s", target_loop)
+
+
 def init_auto_error_tracker(process_name: str = "main-bot") -> None:
     """Initialize automatic GitHub issue error tracking for the current process.
 
@@ -391,4 +474,8 @@ def init_auto_error_tracker(process_name: str = "main-bot") -> None:
 
         threading.excepthook = custom_thread_excepthook
 
+    # 4. Bind asyncio loop exception handler if event loop exists
+    bind_asyncio_exception_handler()
+
     logger.info("Auto error tracker initialized for process '%s'", process_name)
+
