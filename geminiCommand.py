@@ -3060,6 +3060,10 @@ def _actions_from_function_calls(function_calls: list[dict]) -> list[tuple[str, 
             continue
         args = call.get("args") or {}
         raw = args.get(arg_key) if isinstance(args, dict) else None
+
+        if raw is None and action == "MAKE_CLIP" and arg_key == "duration":
+            raw = "1m"
+
         if not isinstance(raw, str):
             logger.warning(
                 "indio: tool %s missing string arg '%s' (got %r)", name, arg_key, raw

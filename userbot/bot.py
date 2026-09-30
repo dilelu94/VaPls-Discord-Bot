@@ -851,7 +851,9 @@ def _run_whisper(pcm_16k_bytes: bytes) -> str:
         initial_prompt="Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá.",
         condition_on_previous_text=False,
     )
-    return " ".join(s.text.strip() for s in segments if s.text).strip()
+    result = " ".join(s.text.strip() for s in segments if s.text).strip()
+    log.info(f"[LOCAL-STT] Transcribed {len(pcm_16k_bytes)} bytes using faster-whisper (local): {result!r}")
+    return result
 
 
 def _run_whisper_wake(pcm_16k_bytes: bytes) -> str:

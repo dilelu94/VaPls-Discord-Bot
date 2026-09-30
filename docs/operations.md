@@ -93,3 +93,8 @@ Userbot service example:
   quedó `active` (mirá `journalctl -u <svc>` en el server). Una git-dep
   reinstalada a un master roto es el sospechoso clásico — verificá que sigan
   pinneadas.
+
+### Troubleshooting de Voz e IA (2026-09-29)
+
+- **Comandos de Voz con parámetros faltantes**: Se corrigió un bug donde Gemini ignoraba la ejecución de herramientas opcionales (como `make_clip`) si la transcripción fonética resultaba en palabras sin sentido (ej. "clipeá metón"). Ahora `geminiCommand.py` asigna el valor por defecto `"1m"` para la duración si Gemini omite el parámetro, evitando que el comando fracase silenciosamente.
+- **Logs de transcripción (STT)**: Se agregaron logs detallados en `userbot/bot.py` (`_run_whisper`) para imprimir explícitamente cuando `faster-whisper` (local) realiza una transcripción, y exactamente qué texto generó, alineándolo con el nivel de detalle que ya tenía Groq.
