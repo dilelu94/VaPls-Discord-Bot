@@ -9,10 +9,8 @@ _recover_from_invalid_commit instead of silently falling back to unencrypted pas
 from unittest.mock import MagicMock
 import pytest
 
+dave = pytest.importorskip("dave")
 from davey_compat import DaveSession
-
-
-import dave
 
 
 def test_process_commit_raises_on_rejection():
