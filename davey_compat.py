@@ -242,34 +242,32 @@ class DaveSession:
         try:
             result = self._session.process_commit(commit)
             if isinstance(result, dave.RejectType):
-                log.warning("[DAVE] Commit REJECTED: %s — switching to passthrough mode", result.name)
-                self.set_passthrough_mode(True)
-                return
+                log.warning("[DAVE] Commit REJECTED: %s — raising for gateway recovery", result.name)
+                raise RuntimeError(f"MLS commit rejected: {result.name}")
             if isinstance(result, dict) and result:
                 self._epoch = max(result.keys())
                 log.info("[DAVE] Commit processed OK, epoch=%s", self._epoch)
             self._refresh_key()
         except Exception as exc:
-            log.warning("[DAVE] process_commit note: %s — switching to passthrough mode", exc)
-            self.set_passthrough_mode(True)
+            log.warning("[DAVE] process_commit error: %s — raising for gateway recovery", exc)
+            raise
 
     def process_welcome(self, welcome: bytes) -> None:
-        """Process incoming DAVE Welcome message. Falls back to passthrough mode on rejection."""
+        """Process incoming DAVE Welcome message. Raises on rejection so gateway can recover."""
         log.info("[DAVE] Processing MLS welcome (size=%d)", len(welcome))
         recognized = self._get_recognized_users()
         try:
             result = self._session.process_welcome(welcome, recognized)
             if result is None:
-                log.warning("[DAVE] Welcome REJECTED by libdave — switching to passthrough mode")
-                self.set_passthrough_mode(True)
-                return
+                log.warning("[DAVE] Welcome REJECTED by libdave — raising for gateway recovery")
+                raise RuntimeError("MLS welcome rejected by libdave")
             if isinstance(result, dict) and result:
                 self._epoch = max(result.keys())
                 log.info("[DAVE] Welcome processed OK, epoch=%s", self._epoch)
             self._refresh_key()
         except Exception as exc:
-            log.warning("[DAVE] process_welcome note: %s — switching to passthrough mode", exc)
-            self.set_passthrough_mode(True)
+            log.warning("[DAVE] process_welcome error: %s — raising for gateway recovery", exc)
+            raise
 
     def encrypt_opus(self, data: bytes) -> bytes:
         """DAVE-encrypt an Opus frame before transport encryption."""
