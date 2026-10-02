@@ -644,11 +644,7 @@ _last_disconnect_reaction: dict[tuple[int, int], float] = {}
 _DEFAULT_DISCONNECT_REACTION: dict = {
     "chance": 0.01,
     "phrases": [
-        "Se fue {name}.",
-        "Chao {name}.",
-        "{name} se mandó a mudar.",
-        "Hasta luego {name}.",
-        "Se rajó {name}.",
+        "Se re calentó {name}.",
     ],
 }
 
