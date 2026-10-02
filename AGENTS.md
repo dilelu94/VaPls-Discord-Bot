@@ -379,8 +379,8 @@ golive: encoder probe OK → libx264
     - **Throttle**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`.
     - **Tests**: `tests/test_disconnect_reaction.py` (17 pruebas).
 
-13. **(2026-10-02) Variaciones de efectos de audio para el saludo de Enrique (`users.py`)**:
-    - **Descripción**: Se integraron 13 variaciones de efectos y modelos RVC de audio para Enrique (`Audios/enrique_*.mp3`: radio AM, fantasma, cueva, alien, lofi, cyberpunk, bajo el agua, distorsión, phaser, RVC Mila/Viny/Juji/Tobi) con peso equilibrado (weight: 14) en su lista de saludos en `users.py` y `data/users.json`.
+13. **(2026-10-02) Variaciones de efectos de audio y RVC para el saludo de Enrique (`data/users.json` / `users.py`)**:
+    - **Descripción**: Se generaron e integraron variaciones de efectos de sonido (radio AM, fantasma, cueva, alien, lofi, cyberpunk, bajo el agua, distorsión, phaser) e inferencias de voces RVC (Mila, Viny, Juji, Tobi) a partir de `enrique.mp3`. Todos los audios generados se normalizaron de forma segura con filtro EBU R128 `loudnorm` (`I=-16:TP=-1.5:LRA=11`) para evitar volúmenes excesivos, y se registraron como opciones de saludo con peso normal (`weight: 14`) en `data/users.json` y `users.py`.
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
