@@ -512,6 +512,22 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 14
             },
             {
+                "path": "Audios/enrique_mila_rvc.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_viny_rvc.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_juji_rvc.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_tobi_rvc.mp3",
+                "weight": 14
+            },
+            {
                 "path": "Secretos/enrique_invertido.mp3",
                 "weight": 1
             },
