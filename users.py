@@ -521,10 +521,44 @@ def _load() -> tuple[dict[int, dict], dict[str, list[str]], list[dict]]:
     return users, group_lore, non_discord
 
 
-USERS: dict[int, dict]
-GROUP_LORE: dict[str, list[str]]
-NON_DISCORD_MEMBERS: list[dict]
-USERS, GROUP_LORE, NON_DISCORD_MEMBERS = _load()
+USERS: dict[int, dict] = {}
+GROUP_LORE: dict[str, list[str]] = {}
+NON_DISCORD_MEMBERS: list[dict] = []
+_last_mtime: float = 0.0
+
+
+def reload_users_if_changed(force: bool = False) -> None:
+    """Reload users data from ``data/users.json`` if the file mtime has changed."""
+    global _last_mtime, USERS, GROUP_LORE, NON_DISCORD_MEMBERS
+    path = _USERS_PATH
+    try:
+        if os.path.exists(path):
+            mtime = os.path.getmtime(path)
+            if force or mtime != _last_mtime:
+                u, g, n = _load()
+                USERS.clear()
+                USERS.update(u)
+                GROUP_LORE.clear()
+                GROUP_LORE.update(g)
+                NON_DISCORD_MEMBERS.clear()
+                NON_DISCORD_MEMBERS.extend(n)
+                _last_mtime = mtime
+        else:
+            if force or _last_mtime == 0.0:
+                u, g, n = _load()
+                USERS.clear()
+                USERS.update(u)
+                GROUP_LORE.clear()
+                GROUP_LORE.update(g)
+                NON_DISCORD_MEMBERS.clear()
+                NON_DISCORD_MEMBERS.extend(n)
+                _last_mtime = -1.0
+    except Exception as e:
+        _log.warning("Failed to reload users from %s: %s", path, e)
+
+
+reload_users_if_changed(force=True)
+
 
 
 def get_allowed_instagram_usernames() -> set[str]:

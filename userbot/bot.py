@@ -3023,7 +3023,11 @@ async def on_voice_state_update(member, before, after):
             await _join_channel(after.channel)
             try:
                 vc = _vc_for_guild(guild)
-                if vc is not None and vc.channel.id == after.channel.id:
+                if (
+                    vc is not None
+                    and getattr(vc, "channel", None) is not None
+                    and vc.channel.id == after.channel.id
+                ):
                     asyncio.create_task(
                         greeting.play_user_greeting(
                             vc,

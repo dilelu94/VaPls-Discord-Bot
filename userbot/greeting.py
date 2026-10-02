@@ -300,16 +300,21 @@ def calculate_effective_weights(
 def _users_map() -> dict:
     """Late import so tests can monkeypatch ``users.USERS`` after import."""
     try:
-        from users import USERS
+        import users
+        if hasattr(users, "reload_users_if_changed"):
+            users.reload_users_if_changed()
+        return users.USERS or {}
     except Exception:
         return {}
-    return USERS or {}
 
 
 def _locate_audio_file(rel: Optional[str]) -> Optional[str]:
     """Find absolute path for a relative audio path if it exists on disk, else None."""
     if not rel or not isinstance(rel, str) or not rel.strip():
         return None
+    rel = rel.replace("\\", "/")
+    if os.path.isabs(rel) and os.path.exists(rel):
+        return rel
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     custom_audio_dir = getattr(config, "CUSTOM_AUDIO_PATH", "/home/ubuntu/vapls-discord-bot/audio_output")
     candidates = [
@@ -317,7 +322,7 @@ def _locate_audio_file(rel: Optional[str]) -> Optional[str]:
         os.path.join(repo_root, "audio_output", rel),
         os.path.join(repo_root, rel),
     ]
-    if rel.startswith("Audios/") or rel.startswith("Audios\\"):
+    if rel.startswith("Audios/"):
         candidates.append(os.path.join(custom_audio_dir, rel[7:]))
         candidates.append(os.path.join(repo_root, "audio_output", rel[7:]))
 
@@ -411,6 +416,10 @@ def _is_vc_ready(vc) -> bool:
             return False
         if hasattr(ws, "open") and not type(getattr(ws, "open")).__module__.startswith("unittest.mock") and getattr(ws, "open") is False:
             return False
+        conn = getattr(vc, "_connection", None)
+        dave_sess = getattr(conn, "dave_session", None)
+        if dave_sess is not None and not type(dave_sess).__module__.startswith("unittest.mock") and getattr(dave_sess, "ready", False) is False:
+            return False
         return True
     except Exception:
         return bool(vc.is_connected())
@@ -425,6 +434,13 @@ async def _wait_until_ready(vc, *, timeout_seconds: float = 10.0) -> bool:
         await asyncio.sleep(0.25)
     return False
 
+
+async def _greeting_watchdog(timeout: float = 30.0):
+    await asyncio.sleep(timeout)
+    global _greeting_playing
+    if _greeting_playing:
+        logger.warning("[GREETING] watchdog auto-cleared stuck _greeting_playing flag")
+        _greeting_playing = False
 
 
 _last_user_greeting: dict[tuple[int, int], float] = {}
@@ -493,7 +509,7 @@ async def play_user_greeting(
         return False
 
     # Greeting audio has absolute priority over Indio's voice/audio.
-    # If VC is currently playing, interrupt it.
+    # If VC is currently playing, interrupt it and wait for it to fully stop.
     try:
         if vc.is_playing():
             logger.info(
@@ -501,9 +517,22 @@ async def play_user_greeting(
                 channel_id, user_id,
             )
             vc.stop()
-            await asyncio.sleep(0.1)
+            deadline = time.monotonic() + 1.0
+            while vc.is_playing() and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
     except Exception:
         logger.exception("[GREETING] error while stopping previous audio on vc (channel=%s)", channel_id)
+
+    # Re-check DAVE session readiness and attempt re-initialization if needed
+    try:
+        conn = getattr(vc, "_connection", None)
+        dave_sess = getattr(conn, "dave_session", None)
+        if dave_sess is not None and not type(dave_sess).__module__.startswith("unittest.mock") and getattr(dave_sess, "ready", False) is False:
+            logger.info("[GREETING] DAVE session not ready (channel=%s), attempting reinit...", channel_id)
+            if hasattr(conn, "reinit_dave_session"):
+                await conn.reinit_dave_session()
+    except Exception as e:
+        logger.warning("[GREETING] DAVE session reinit attempt failed (channel=%s): %s", channel_id, e)
 
     _last_greeting[channel_id] = now
     _last_user_greeting[(channel_id, user_id)] = now
@@ -518,6 +547,7 @@ async def play_user_greeting(
         except Exception:
             source = discord.FFmpegOpusAudio(path)
         vc.play(source, after=_on_greeting_end)
+        asyncio.create_task(_greeting_watchdog(30.0))
         logger.info("[GREETING] playing %s (user=%s, channel=%s)",
                     path, user_id, channel_id)
         return True

@@ -700,3 +700,90 @@ def test_missing_audio_in_weighted_list_filtered_out(fake_users, _audio_dir):
     assert resolved is not None
     assert resolved.endswith("Mila/Milapollo.mp3")
 
+
+def test_users_reloads_dynamically_when_file_mtime_changes(tmp_path, monkeypatch):
+    """When data/users.json is updated on disk, reload_users_if_changed updates USERS in-place."""
+    import json
+    import os
+    import time
+    import users
+
+    users_file = tmp_path / "users.json"
+    initial_data = {
+        "users": {
+            "999111": {"name": "TestUser", "greeting": "test.mp3"}
+        }
+    }
+    users_file.write_text(json.dumps(initial_data), encoding="utf-8")
+    monkeypatch.setattr(users, "_USERS_PATH", str(users_file))
+    monkeypatch.setattr(users, "_last_mtime", 0.0)
+
+    users.reload_users_if_changed(force=True)
+    assert 999111 in users.USERS
+    assert users.USERS[999111]["name"] == "TestUser"
+
+    # Modify file and update mtime
+    updated_data = {
+        "users": {
+            "999111": {"name": "TestUserUpdated", "greeting": "new_test.mp3"}
+        }
+    }
+    users_file.write_text(json.dumps(updated_data), encoding="utf-8")
+    os.utime(str(users_file), (time.time() + 10, time.time() + 10))
+
+    users.reload_users_if_changed()
+    assert users.USERS[999111]["name"] == "TestUserUpdated"
+    assert users.USERS[999111]["greeting"] == "new_test.mp3"
+
+
+async def test_play_user_greeting_polls_vc_until_stop_completes(fake_users, _audio_dir, monkeypatch):
+    """When vc is playing, play_user_greeting calls vc.stop() and waits until vc.is_playing() becomes False."""
+    audio = _audio_dir / "g.mp3"
+    audio.write_bytes(b"fake")
+    fake_users({42: {"greeting": "g.mp3"}})
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+
+    playing_states = [True, True, False]
+
+    def mock_is_playing():
+        if playing_states:
+            return playing_states.pop(0)
+        return False
+
+    vc = _make_vc(playing=True)
+    vc.is_playing = mock_is_playing
+
+    played = await greeting.play_user_greeting(vc, user_id=42, channel_id=100)
+    assert played is True
+    vc.stop.assert_called_once()
+    vc.play.assert_called_once()
+
+
+async def test_play_user_greeting_reinits_dave_session_if_not_ready(fake_users, _audio_dir, monkeypatch):
+    """When DAVE session exists on vc._connection but ready is False, attempts reinit_dave_session."""
+    audio = _audio_dir / "g.mp3"
+    audio.write_bytes(b"fake")
+    fake_users({42: {"greeting": "g.mp3"}})
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+
+    vc = _make_vc()
+    dave_mock = SimpleNamespace(ready=False)
+    reinit_mock = MagicMock(return_value=asyncio.sleep(0))
+    vc._connection = SimpleNamespace(dave_session=dave_mock, reinit_dave_session=reinit_mock)
+
+    # _is_vc_ready will return True if we mock dave_session to ready=True during poll
+    monkeypatch.setattr(greeting, "_is_vc_ready", lambda v: True)
+
+    played = await greeting.play_user_greeting(vc, user_id=42, channel_id=100)
+    assert played is True
+    reinit_mock.assert_called_once()
+
+
+async def test_greeting_watchdog_auto_resets_stuck_flag():
+    """Watchdog task auto-clears _greeting_playing if timer expires."""
+    greeting._greeting_playing = True
+    watchdog_task = asyncio.create_task(greeting._greeting_watchdog(timeout=0.01))
+    await watchdog_task
+    assert greeting._greeting_playing is False
+
+
