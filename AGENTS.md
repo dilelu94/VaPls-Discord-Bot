@@ -156,7 +156,7 @@ guild con pre-descarga en segundo plano.
 
 ### 4) Saludos y Audios Secretos (`Secretos/`)
 
-Todos los audios raros o secretos configurados como saludos en `users.json` / `users.py` deben residir en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`). La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), la cual mantiene una copia tanto en `Secretos/` (`audio_output/Secretos/04 - He Follado con Cocodrilos.mp3`) como en `Canciones/Mila/` (`audio_output/Canciones/Mila/04 - He Follado con Cocodrilos.mp3`).
+Todos los audios raros o secretos configurados como saludos en `users.json` / `users.py` (como `mr-krabs-money_z55UHab.mp3` de Seba con 1% de probabilidad) deben residir en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`), la cual es ignorada automáticamente por el Soundpad. Los saludos estándar deben ubicarse en `Audios/` y nunca en subcarpetas personales por usuario (ej. `Seba/` o `Caro/`) para evitar que el Soundpad detecte y muestre dichas carpetas en su panel interactivo. La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), la cual mantiene una copia tanto en `Secretos/` (`audio_output/Secretos/04 - He Follado con Cocodrilos.mp3`) como en `Canciones/Mila/` (`audio_output/Canciones/Mila/04 - He Follado con Cocodrilos.mp3`).
 
 ## 📡 Integración con el bot de Telegram
 
@@ -381,6 +381,9 @@ golive: encoder probe OK → libx264
 
 13. **(2026-10-02) Variaciones de efectos de audio y RVC para el saludo de Enrique (`data/users.json` / `users.py`)**:
     - **Descripción**: Se generaron e integraron variaciones de efectos de sonido (radio AM, fantasma, cueva, alien, lofi, cyberpunk, bajo el agua, distorsión, phaser) e inferencias de voces RVC (Mila, Viny, Juji, Tobi) a partir de `enrique.mp3`. Todos los audios generados se normalizaron de forma segura con filtro EBU R128 `loudnorm` (`I=-16:TP=-1.5:LRA=11`) para evitar volúmenes excesivos, y se registraron como opciones de saludo con peso normal (`weight: 14`) en `data/users.json` y `users.py`.
+
+14. **(2026-10-02) Audio secreto del saludo de Magote (`Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3`)**:
+    - **Descripción**: Se asignó `Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3` como saludo de probabilidad baja (1% de chance con sistema de pity) para Magote (`310165756384116736`) en `users.py` y `data/users.json`, manteniendo el fallback de síntesis TTS de su nombre para el 99% de las entradas normales.
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)

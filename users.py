@@ -247,7 +247,7 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 33
             },
             {
-                "path": "Seba/moneymoneymoney.mp3",
+                "path": "Audios/moneymoneymoney.mp3",
                 "weight": 33
             },
             {
@@ -334,7 +334,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         "name": "Caro",
         "greeting": [
             "Audios/snoop-dogg-smoke-weed-everyday.mp3",
-            "Caro/noo-la-policia.mp3"
+            "Audios/noo-la-policia.mp3"
         ],
         "traits": [
             "pronombres: ella",
@@ -584,6 +584,16 @@ _FALLBACK_USERS: dict[int, dict] = {
     },
     310165756384116736: {
         "name": "Magote",
+        "greeting": [
+            {
+                "path": None,
+                "weight": 99
+            },
+            {
+                "path": "Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3",
+                "weight": 1
+            }
+        ],
         "traits": [
             "pronombres: él",
             "nombre real: Daniel",
