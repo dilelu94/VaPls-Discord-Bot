@@ -359,6 +359,25 @@ golive: encoder probe OK → libx264
     - _Causas_: (a) `users.py` cargaba `data/users.json` una sola vez al importar el módulo; ante cualquier cambio en `data/users.json` (rutas de audio, nuevos usuarios, apodos o pesos), los cambios no se reflejaban sin reiniciar el bot. (b) Cuando un usuario entraba al canal mientras había audio reproduciéndose en el voice client, `vc.stop()` no terminaba de liberar el hilo del reproductor antes de invocar `vc.play(source)`, arrojando `discord.ClientException: Already playing audio.` y cancelando la reproducción del saludo. (c) Falta de polling de estado para la sesión DAVE E2EE antes de iniciar playback. (d) Si la callback `after` de py-cord no se ejecutaba por una desconexión abrupta, el flag `_greeting_playing` quedaba en `True` indefinidamente bloqueando el relay de voz TTS.
     - **Fixes**: (a) Se implementó `reload_users_if_changed()` en `users.py` para recargar e actualizar `USERS` in-place automáticamente cuando `data/users.json` cambie su mtime en disco. (b) Se agregó polling en `play_user_greeting` tras `vc.stop()` para asegurar que `vc.is_playing()` sea `False` antes de `vc.play()`. (c) Se verificó la disponibilidad de `dave_session.ready` en `_is_vc_ready` con re-inicialización transparente ante fallas. (d) Se agregó `_greeting_watchdog` para autolimpiar el flag `_greeting_playing` de forma segura tras 30s.
 
+12. **(2026-10-02) Reacción TTS dinámica por usuario al desconectarse del canal de voz (`disconnect_reaction`)**:
+    - **Descripción**: El userbot puede reaccionar con una frase de TTS sintetizada en voz cuando un usuario se desconecta del canal de voz donde el Indio está presente. La probabilidad y las frases son configurables por usuario en `data/users.json` (o el fallback `users.py`) mediante la clave `disconnect_reaction`.
+    - **Configuración** (en `data/users.json`, por usuario):
+      ```json
+      "disconnect_reaction": {
+        "chance": 0.20,
+        "phrases": [
+          "Se re calentó el {name}.",
+          "Se re calentó el puto de {name}.",
+          "{name} se re calentó loco."
+        ]
+      }
+      ```
+      - `chance`: probabilidad de disparar la reacción (float 0.0–1.0). Por defecto 0.20 (20%) para Chalo.
+      - `phrases`: lista de frases plantilla. `{name}` se reemplaza con el nombre canónico del usuario (del campo `name` en `users.USERS`, o `member.display_name`, o `"usuario"` como fallback final).
+    - **Implementación**: `get_user_disconnect_config(user_id)` y `play_user_disconnect_reaction(vc, ...)` en `userbot/greeting.py`. El disparador está en `on_voice_state_update` de `userbot/bot.py` — solo reacciona cuando el usuario se desconecta completamente (no al cambiar de canal) y el Indio estaba en el mismo canal.
+    - **Throttle**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`.
+    - **Tests**: `tests/test_disconnect_reaction.py` (16 pruebas).
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

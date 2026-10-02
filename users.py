@@ -176,6 +176,21 @@ _FALLBACK_USERS: dict[int, dict] = {
             "pescó un pescado con forma de pija",
             "se hizo un tatuaje diseñado con inteligencia artificial (IA)",
         ],
+        "disconnect_reaction": {
+            "chance": 0.20,
+            "phrases": [
+                "Se re calentó el {name}.",
+                "Se re calentó el puto de {name}.",
+                "Se enojó el {name} y tiró del cable.",
+                "{name} se re calentó loco.",
+                "Mirá cómo se fue el {name}, re caliente.",
+                "Re caliente el {name}, chau.",
+                "Ah listo, se calentó el {name}.",
+                "Se calentó el pescallo y tiró Alt F4.",
+                "Le dio un derrame de bronca al {name} y deslogueó.",
+                "Chao {name}, andá a enfriarte la cabeza.",
+            ],
+        },
     },
     471420397049479180: {
         "name": "Fide",

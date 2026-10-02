@@ -636,3 +636,121 @@ async def play_wake_sound(client, *, user_id: int) -> bool:
     except Exception:
         logger.exception("[WAKE-SOUND] play failed (channel=%s)", channel_id)
         return False
+
+
+_last_disconnect_reaction: dict[tuple[int, int], float] = {}
+
+
+def get_user_disconnect_config(user_id: int) -> Optional[dict]:
+    """Retrieve the per-user disconnect reaction config dict from USERS if present.
+
+    Returns:
+        Dict with keys 'chance' (float) and 'phrases' (list[str]), or None.
+    """
+    if user_id is None:
+        return None
+    users = _users_map()
+    info = (
+        users.get(user_id)
+        or (users.get(int(user_id)) if str(user_id).isdigit() else None)
+        or users.get(str(user_id))
+        or {}
+    )
+    cfg = info.get("disconnect_reaction")
+    if isinstance(cfg, dict) and cfg.get("phrases"):
+        return cfg
+    return None
+
+
+async def play_user_disconnect_reaction(
+    vc,
+    *,
+    channel_id: int,
+    user_id: int,
+    member: Optional[discord.Member] = None,
+    display_name: Optional[str] = None,
+) -> bool:
+    """Play a random TTS reaction audio on ``vc`` when ``user_id`` disconnects.
+
+    Evaluated against the user's ``disconnect_reaction`` configuration in ``users.USERS``
+    (e.g., probability roll ``chance``).
+
+    Returns:
+        True if reaction audio was scheduled to play; False otherwise.
+    """
+    if not getattr(config, "GREETING_ENABLED", True):
+        return False
+    if user_id is None:
+        return False
+    if member is not None and getattr(member, "bot", False):
+        return False
+
+    cfg = get_user_disconnect_config(user_id)
+    if not cfg:
+        return False
+
+    chance = float(cfg.get("chance", 0.20))
+    if random.random() >= chance:
+        logger.info(
+            "[DISCONNECT-REACTION] random chance roll failed (user=%s, chance=%.2f)",
+            user_id,
+            chance,
+        )
+        return False
+
+    now = time.time()
+    last_user = _last_disconnect_reaction.get((channel_id, user_id), 0.0)
+    throttle_sec = float(getattr(config, "DISCONNECT_REACTION_THROTTLE_SECONDS", 15.0))
+    if now - last_user < throttle_sec:
+        logger.info(
+            "[DISCONNECT-REACTION] throttled (channel=%s, user=%s, %.1fs since last)",
+            channel_id,
+            user_id,
+            now - last_user,
+        )
+        return False
+
+    if not await _wait_until_ready(vc):
+        logger.info("[DISCONNECT-REACTION] vc never ready (channel=%s)", channel_id)
+        return False
+
+    phrases = cfg.get("phrases")
+    if not phrases or not isinstance(phrases, list):
+        return False
+
+    chosen_template = random.choice(phrases)
+    name = get_user_greeting_name(user_id, member=member, display_name=display_name) or "usuario"
+    text = chosen_template.replace("{name}", name)
+
+    path = None
+    try:
+        import tts
+        path = tts.generate_tts_wav(text)
+    except Exception:
+        logger.exception("[DISCONNECT-REACTION] TTS generation failed for user=%s text=%r", user_id, text)
+        return False
+
+    if path is None or not os.path.exists(path):
+        logger.warning("[DISCONNECT-REACTION] audio file missing or invalid for user=%s", user_id)
+        return False
+
+    _last_disconnect_reaction[(channel_id, user_id)] = now
+
+    try:
+        opts = get_ffmpeg_greeting_opts()
+        try:
+            source = discord.FFmpegOpusAudio(path, options=opts)
+        except Exception:
+            source = discord.FFmpegOpusAudio(path)
+        vc.play(source)
+        logger.info(
+            "[DISCONNECT-REACTION] playing '%s' (user=%s, channel=%s)",
+            text,
+            user_id,
+            channel_id,
+        )
+        return True
+    except Exception:
+        logger.exception("[DISCONNECT-REACTION] play failed (channel=%s)", channel_id)
+        return False
+

@@ -3044,6 +3044,29 @@ async def on_voice_state_update(member, before, after):
 
     if before.channel and (not after.channel or after.channel.id != before.channel.id):
         await _leave_if_empty(guild)
+        # Fire disconnect TTS reaction if configured for this user
+        if not after.channel:
+            vc = _vc_for_guild(guild)
+            if (
+                vc is not None
+                and getattr(vc, "channel", None) is not None
+                and vc.channel.id == before.channel.id
+            ):
+                try:
+                    asyncio.create_task(
+                        greeting.play_user_disconnect_reaction(
+                            vc,
+                            channel_id=before.channel.id,
+                            user_id=member.id,
+                            member=member,
+                        ),
+                        name=f"disconnect-reaction-{member.id}",
+                    )
+                except Exception as e:
+                    log.exception("[DISCONNECT-REACTION] schedule failed for user=%s", member.id)
+                    analytics.capture_exception(
+                        e, properties={"action": "disconnect_reaction_schedule_failed"}
+                    )
 
 
 
