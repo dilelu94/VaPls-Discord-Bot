@@ -81,6 +81,7 @@ def _audio_dir(monkeypatch, tmp_path):
     tts_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(ubcfg, "GREETING_TTS_DIR", str(tts_dir))
     monkeypatch.setattr(ubcfg, "GREETING_TTS_META_PATH", str(tmp_path / "greeting_tts_meta.json"))
+    monkeypatch.setattr(ubcfg, "GREETING_JOIN_DELAY_SECONDS", 0.0)
     return tmp_path
 
 

@@ -385,6 +385,10 @@ golive: encoder probe OK → libx264
 14. **(2026-10-02) Audio secreto del saludo de Magote (`Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3`)**:
     - **Descripción**: Se asignó `Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3` como saludo de probabilidad baja (1% de chance con sistema de pity) para Magote (`310165756384116736`) en `users.py` y `data/users.json`, manteniendo el fallback de síntesis TTS de su nombre para el 99% de las entradas normales.
 
+15. **(2026-10-02) Delay de conexión de voz/DAVE E2EE (`GREETING_JOIN_DELAY_SECONDS`) y reubicación de archivos de audio**:
+    - _Causas_: (a) Cuando un usuario entraba al canal de voz, `play_user_greeting` se ejecutaba instantáneamente en t=0s. El cliente de Discord del usuario recién entrado requiere entre 1.0s y 1.5s para completar la conexión de red UDP y la negociación de claves DAVE E2EE. En audios muy cortos (ej. `Fish Carrot.m4a` de Miles, que dura 0.58s), la reproducción se completaba íntegramente en los primeros 600ms en el vacío antes de que la voz del usuario estuviera lista. (b) Los archivos `moneymoneymoney.mp3` y `noo-la-policia.mp3` se configuraron apuntando a `Audios/`, pero seguían en las carpetas `Seba/` y `Caro/` en el servidor OCI, provocando fallas de archivo no encontrado.
+    - **Fixes**: (a) Se agregó la configuración `GREETING_JOIN_DELAY_SECONDS` (default `1.2` segundos) en `userbot/config.py` y `userbot/greeting.py` para permitir que el cliente que entra complete el handshake de voz/DAVE antes de emitir el saludo. (b) Se copiaron y verificaron los archivos de audio en las carpetas físicas `audio_output/Audios/` y `audio_output/Secretos/` en el servidor de producción OCI.
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

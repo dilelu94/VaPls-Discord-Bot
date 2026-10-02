@@ -560,6 +560,10 @@ async def play_user_greeting(
         logger.info("[GREETING] vc never ready (channel=%s)", channel_id)
         return False
 
+    join_delay = float(getattr(config, "GREETING_JOIN_DELAY_SECONDS", 1.2))
+    if join_delay > 0:
+        await asyncio.sleep(join_delay)
+
     member_count = 1
     try:
         channel = getattr(vc, "channel", None)
