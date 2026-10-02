@@ -640,9 +640,24 @@ async def play_wake_sound(client, *, user_id: int) -> bool:
 
 _last_disconnect_reaction: dict[tuple[int, int], float] = {}
 
+# Fallback reaction applied to any user not explicitly configured.
+_DEFAULT_DISCONNECT_REACTION: dict = {
+    "chance": 0.01,
+    "phrases": [
+        "Se fue {name}.",
+        "Chao {name}.",
+        "{name} se mandó a mudar.",
+        "Hasta luego {name}.",
+        "Se rajó {name}.",
+    ],
+}
+
 
 def get_user_disconnect_config(user_id: int) -> Optional[dict]:
-    """Retrieve the per-user disconnect reaction config dict from USERS if present.
+    """Retrieve the per-user disconnect reaction config dict from USERS.
+
+    Returns the user-specific config if present, otherwise the global default
+    (1% chance with generic phrases). Returns None only for None user_id.
 
     Returns:
         Dict with keys 'chance' (float) and 'phrases' (list[str]), or None.
@@ -659,7 +674,8 @@ def get_user_disconnect_config(user_id: int) -> Optional[dict]:
     cfg = info.get("disconnect_reaction")
     if isinstance(cfg, dict) and cfg.get("phrases"):
         return cfg
-    return None
+    # Fall back to default: 1% chance for any user not explicitly configured.
+    return _DEFAULT_DISCONNECT_REACTION
 
 
 async def play_user_disconnect_reaction(

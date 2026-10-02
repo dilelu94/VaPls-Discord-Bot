@@ -11,9 +11,8 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
-
 import pytest
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Module loader (same pattern as test_userbot_greeting.py)
@@ -101,16 +100,21 @@ def test_returns_config_when_present(fake_users):
     assert len(result["phrases"]) == 3
 
 
-def test_returns_none_when_absent(fake_users):
-    """Users without disconnect_reaction return None."""
+def test_returns_default_when_absent(fake_users):
+    """Users without disconnect_reaction fall back to the global default (1% chance)."""
     fake_users({200: {"name": "Mila", "traits": []}})
-    assert greeting.get_user_disconnect_config(200) is None
+    result = greeting.get_user_disconnect_config(200)
+    assert result is not None
+    assert result["chance"] == pytest.approx(0.01)
+    assert len(result["phrases"]) > 0
 
 
-def test_returns_none_for_unknown_user(fake_users):
-    """Unknown users return None."""
+def test_returns_default_for_unknown_user(fake_users):
+    """Unknown users (not in USERS at all) also get the global default."""
     fake_users({})
-    assert greeting.get_user_disconnect_config(9999) is None
+    result = greeting.get_user_disconnect_config(9999)
+    assert result is not None
+    assert result["chance"] == pytest.approx(0.01)
 
 
 def test_returns_none_for_none_user_id(fake_users):
@@ -118,10 +122,12 @@ def test_returns_none_for_none_user_id(fake_users):
     assert greeting.get_user_disconnect_config(None) is None
 
 
-def test_returns_none_for_config_without_phrases(fake_users):
-    """Config missing 'phrases' key is treated as absent."""
+def test_returns_default_for_config_without_phrases(fake_users):
+    """Config missing 'phrases' key falls back to the global default."""
     fake_users({100: {"disconnect_reaction": {"chance": 0.5}}})
-    assert greeting.get_user_disconnect_config(100) is None
+    result = greeting.get_user_disconnect_config(100)
+    assert result is not None
+    assert result["chance"] == pytest.approx(0.01)  # default, not the malformed config
 
 
 # ---------------------------------------------------------------------------
@@ -167,11 +173,35 @@ async def test_skips_when_random_roll_fails(fake_users, monkeypatch, tmp_path):
     vc.play.assert_not_called()
 
 
-async def test_skips_user_without_disconnect_reaction(fake_users, monkeypatch):
-    """Users without disconnect_reaction configured are silently skipped."""
+async def test_default_reaction_fires_at_1pct_roll(fake_users, monkeypatch, tmp_path):
+    """A user without disconnect_reaction still fires the default reaction if roll passes."""
     fake_users({200: {"name": "Mila"}})
-    # Even if we force roll to pass, nothing happens
-    monkeypatch.setattr(greeting.random, "random", lambda: 0.0)
+
+    fake_wav = tmp_path / "reaction.wav"
+    fake_wav.write_bytes(b"fake")
+
+    import tts as _tts_module
+
+    def fake_generate(text, output_path=None):
+        fake_wav.write_bytes(b"fake")
+        return str(fake_wav)
+
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate)
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
+    # Force the 1% roll to pass
+    monkeypatch.setattr(greeting.random, "random", lambda: 0.001)
+
+    vc = _make_vc()
+    result = await greeting.play_user_disconnect_reaction(vc, channel_id=1, user_id=200)
+    assert result is True
+    vc.play.assert_called_once()
+
+
+async def test_default_reaction_skips_when_roll_fails(fake_users, monkeypatch):
+    """Default 1% reaction is skipped when roll >= 0.01."""
+    fake_users({200: {"name": "Mila"}})
+    monkeypatch.setattr(greeting.random, "random", lambda: 0.50)
 
     vc = _make_vc()
     result = await greeting.play_user_disconnect_reaction(vc, channel_id=1, user_id=200)

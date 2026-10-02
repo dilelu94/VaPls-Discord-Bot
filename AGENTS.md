@@ -374,9 +374,11 @@ golive: encoder probe OK → libx264
       ```
       - `chance`: probabilidad de disparar la reacción (float 0.0–1.0). Por defecto 0.20 (20%) para Chalo.
       - `phrases`: lista de frases plantilla. `{name}` se reemplaza con el nombre canónico del usuario (del campo `name` en `users.USERS`, o `member.display_name`, o `"usuario"` como fallback final).
+    - **Fallback global**: cualquier usuario sin `disconnect_reaction` configurado recibe automáticamente el `_DEFAULT_DISCONNECT_REACTION` (1% de chance, frases genéricas: "Se fue {name}.", "Chao {name}.", "{name} se mandó a mudar.", etc.). No hace falta configurar nada para que el sistema reaccione a cualquier usuario.
     - **Implementación**: `get_user_disconnect_config(user_id)` y `play_user_disconnect_reaction(vc, ...)` en `userbot/greeting.py`. El disparador está en `on_voice_state_update` de `userbot/bot.py` — solo reacciona cuando el usuario se desconecta completamente (no al cambiar de canal) y el Indio estaba en el mismo canal.
     - **Throttle**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`.
-    - **Tests**: `tests/test_disconnect_reaction.py` (16 pruebas).
+    - **Tests**: `tests/test_disconnect_reaction.py` (17 pruebas).
+
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
