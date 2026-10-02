@@ -384,6 +384,134 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 14
             },
             {
+                "path": "Audios/enrique_monstruo.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_robot.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_slowed_reverb.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_telefono_8bit.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_megafono.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_submarino.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_demonio_infernal.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_tremolo_glitch.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_ovni_sci_fi.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_psiquico.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_darth_vader.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_bass_boosted.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_walkie_talkie.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_eco_espacial.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_turbina_avion.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_estadio_gritando.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_pitufo.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_vecino_pared.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_chipmunk_ultrafast.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_gigante.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_licuadora.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_ardilla.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_catedral_eco.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_radio_am_antigua.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_fantasma_espectral.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_cueva_misteriosa.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_extraterrestre_alien.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_lofi_retro.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_cyberpunk_glitch.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_bajo_el_agua_profundo.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_distorsion_saturado.mp3",
+                "weight": 14
+            },
+            {
+                "path": "Audios/enrique_phaser_psiquico.mp3",
+                "weight": 14
+            },
+            {
                 "path": "Secretos/enrique_invertido.mp3",
                 "weight": 1
             },

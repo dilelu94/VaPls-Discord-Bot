@@ -379,6 +379,8 @@ golive: encoder probe OK → libx264
     - **Throttle**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`.
     - **Tests**: `tests/test_disconnect_reaction.py` (17 pruebas).
 
+13. **(2026-10-02) Variaciones de efectos de audio para el saludo de Enrique (`users.py`)**:
+    - **Descripción**: Se integraron 9 variaciones de efectos de audio para Enrique (`Audios/enrique_*.mp3`: radio AM, fantasma, cueva, alien, lofi, cyberpunk, bajo el agua, distorsión, phaser) con peso equilibrado (weight: 14) en su lista de saludos en `users.py`.
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
