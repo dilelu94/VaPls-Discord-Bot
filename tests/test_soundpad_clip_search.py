@@ -134,10 +134,10 @@ def test_iter_clips_filters_greeting_files_and_keeps_non_greetings(tmp_path):
     # Greeting files configured in USERS
     _touch(str(root / "Mila" / "Milapollo.mp3"))
     _touch(str(root / "Secretos" / "fuego_intoxicados.mp3"))
-    _touch(str(root / "Seba" / "moneymoneymoney.mp3"))
+    _touch(str(root / "Audios" / "moneymoneymoney.mp3"))
     # Non-greeting clips in the same folders
     _touch(str(root / "Mila" / "hola_che.opus"))
-    _touch(str(root / "Seba" / "risas.mp3"))
+    _touch(str(root / "Memes" / "risas.mp3"))
 
     found = {os.path.basename(path) for path, _ in iter_clips(str(root))}
     assert "hola_che.opus" in found
