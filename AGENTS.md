@@ -375,9 +375,9 @@ golive: encoder probe OK → libx264
       - `chance`: probabilidad de disparar la reacción (float 0.0–1.0). Por defecto 0.20 (20%) para Chalo.
       - `phrases`: lista de frases plantilla. `{name}` se reemplaza con el nombre canónico del usuario (del campo `name` en `users.USERS`, o `member.display_name`, o `"usuario"` como fallback final).
     - **Fallback global**: cualquier usuario sin `disconnect_reaction` configurado recibe automáticamente el `_DEFAULT_DISCONNECT_REACTION` (1% de chance, frase genérica: `"Se re calentó {name}."`). No hace falta configurar nada para que el sistema reaccione a cualquier usuario.
-    - **Implementación**: `get_user_disconnect_config(user_id)` y `play_user_disconnect_reaction(vc, ...)` en `userbot/greeting.py`. El disparador está en `on_voice_state_update` de `userbot/bot.py` — solo reacciona cuando el usuario se desconecta completamente (no al cambiar de canal) y el Indio estaba en el mismo canal.
+    - **Mezcla simultánea de audio**: Si coincide el disparo de un saludo y una reacción de desconexión (o dos audios simultáneos) en el mismo canal de voz mientras `vc.is_playing()` es `True`, `_prepare_audio_source` en `userbot/greeting.py` utiliza un filtro `filter_complex` con `amix=inputs=2:duration=longest` en FFmpeg. Esto combina el audio existente (continuando desde su posición transcurrida `-ss elapsed`) con el nuevo audio para reproducir ambos audios en vivo al mismo tiempo sin interrumpir ninguno.
     - **Throttle**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`.
-    - **Tests**: `tests/test_disconnect_reaction.py` (17 pruebas).
+    - **Tests**: `tests/test_disconnect_reaction.py` (18 pruebas).
 
 13. **(2026-10-02) Variaciones de efectos de audio y RVC para el saludo de Enrique (`data/users.json` / `users.py`)**:
     - **Descripción**: Se generaron e integraron variaciones de efectos de sonido (radio AM, fantasma, cueva, alien, lofi, cyberpunk, bajo el agua, distorsión, phaser) e inferencias de voces RVC (Mila, Viny, Juji, Tobi) a partir de `enrique.mp3`. Todos los audios generados se normalizaron de forma segura con filtro EBU R128 `loudnorm` (`I=-16:TP=-1.5:LRA=11`) para evitar volúmenes excesivos, y se registraron como opciones de saludo con peso normal (`weight: 14`) en `data/users.json` y `users.py`.

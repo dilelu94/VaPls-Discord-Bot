@@ -406,3 +406,31 @@ async def test_tts_failure_returns_false(fake_users, monkeypatch):
     result = await greeting.play_user_disconnect_reaction(vc, channel_id=1, user_id=100)
     assert result is False
     vc.play.assert_not_called()
+
+
+async def test_simultaneous_audio_mixing_when_vc_playing(fake_users, tmp_path, monkeypatch):
+    """When vc is playing an active audio and disconnect reaction fires, it mixes audios simultaneously."""
+    fake_users({100: {"name": "Chalo", "disconnect_reaction": _chalo_config(chance=1.0)}})
+    existing_audio = tmp_path / "existing.mp3"
+    existing_audio.write_bytes(b"fake audio data")
+
+    tts_audio = tmp_path / "reaction.wav"
+    tts_audio.write_bytes(b"reaction data")
+
+    import tts as _tts_module
+    monkeypatch.setattr(_tts_module, "generate_tts_wav", lambda *a, **kw: str(tts_audio))
+    monkeypatch.setitem(sys.modules, "tts", _tts_module)
+
+    # Set active audio state in greeting module
+    greeting._active_audio[1] = {"path": str(existing_audio), "start_time": greeting.time.time() - 2.0}
+
+    monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **kw: SimpleNamespace(args=a, kwargs=kw))
+    monkeypatch.setattr(greeting.discord, "FFmpegPCMAudio", lambda *a, **kw: SimpleNamespace(args=a, kwargs=kw))
+
+    vc = _make_vc(playing=True)
+    result = await greeting.play_user_disconnect_reaction(vc, channel_id=1, user_id=100)
+
+    assert result is True
+    vc.play.assert_called_once()
+    assert greeting._active_audio.get(1) is not None
+

@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import random
+import shlex
 import time
 from typing import Optional
 
@@ -48,6 +49,76 @@ def is_greeting_playing() -> bool:
 def _on_greeting_end(err=None) -> None:
     global _greeting_playing
     _greeting_playing = False
+
+
+_active_audio: dict[int, dict] = {}
+
+
+def _make_after_callback(channel_id: int, original_after=None):
+    def after_cb(error=None):
+        _active_audio.pop(channel_id, None)
+        if original_after:
+            try:
+                original_after(error)
+            except Exception:
+                logger.exception("[GREETING] error in after_cb callback")
+    return after_cb
+
+
+def _prepare_audio_source(vc, channel_id: int, new_path: str):
+    """Prepare an FFmpeg audio source for ``new_path`` on ``vc``.
+
+    If ``vc.is_playing()`` is True and a previous audio path is active in
+    ``_active_audio[channel_id]``, constructs an FFmpeg ``amix`` filter source
+    that mixes the ongoing audio (continuing from its elapsed position) with
+    ``new_path`` simultaneously. Otherwise, creates a standard Opus audio source.
+    """
+    now = time.time()
+    active = _active_audio.get(channel_id)
+    vol = getattr(config, "GREETING_VOLUME", 0.8)
+
+    if (
+        vc is not None
+        and hasattr(vc, "is_playing")
+        and vc.is_playing()
+        and active
+        and active.get("path")
+        and os.path.exists(active["path"])
+    ):
+        elapsed = max(0.0, now - active.get("start_time", now))
+        if 0.0 <= elapsed <= 60.0:
+            existing_path = active["path"]
+            logger.info(
+                "[GREETING-MIX] mixing ongoing audio (%s at %.2fs) with new audio (%s)",
+                existing_path, elapsed, new_path
+            )
+            before_opts = f'-ss {elapsed:.2f} -i {shlex.quote(existing_path)}'
+            opts = f'-filter_complex "[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=0,dynaudnorm=p=0.95:f=200,volume={vol}"'
+            try:
+                vc.stop()
+            except Exception:
+                pass
+            try:
+                source = discord.FFmpegOpusAudio(new_path, before_options=before_opts, options=opts)
+            except Exception:
+                source = discord.FFmpegPCMAudio(new_path, before_options=before_opts, options=opts)
+            _active_audio[channel_id] = {"path": new_path, "start_time": now}
+            return source
+
+    # Normal single-audio source
+    if vc is not None and hasattr(vc, "is_playing") and vc.is_playing():
+        try:
+            vc.stop()
+        except Exception:
+            pass
+
+    opts = get_ffmpeg_greeting_opts()
+    try:
+        source = discord.FFmpegOpusAudio(new_path, options=opts)
+    except Exception:
+        source = discord.FFmpegOpusAudio(new_path)
+    _active_audio[channel_id] = {"path": new_path, "start_time": now}
+    return source
 
 
 # In-memory pity state: {user_id: {rel_path: miss_count}}
@@ -508,20 +579,6 @@ async def play_user_greeting(
         logger.info("[GREETING] no audio clip or TTS available for user=%s", user_id)
         return False
 
-    # Greeting audio has absolute priority over Indio's voice/audio.
-    # If VC is currently playing, interrupt it and wait for it to fully stop.
-    try:
-        if vc.is_playing():
-            logger.info(
-                "[GREETING] interrupting ongoing audio for user greeting priority (channel=%s, user=%s)",
-                channel_id, user_id,
-            )
-            vc.stop()
-            deadline = time.monotonic() + 1.0
-            while vc.is_playing() and time.monotonic() < deadline:
-                await asyncio.sleep(0.05)
-    except Exception:
-        logger.exception("[GREETING] error while stopping previous audio on vc (channel=%s)", channel_id)
 
     # Re-check DAVE session readiness and attempt re-initialization if needed
     try:
@@ -541,12 +598,8 @@ async def play_user_greeting(
     _greeting_playing = True
 
     try:
-        opts = get_ffmpeg_greeting_opts()
-        try:
-            source = discord.FFmpegOpusAudio(path, options=opts)
-        except Exception:
-            source = discord.FFmpegOpusAudio(path)
-        vc.play(source, after=_on_greeting_end)
+        source = _prepare_audio_source(vc, channel_id, path)
+        vc.play(source, after=_make_after_callback(channel_id, _on_greeting_end))
         asyncio.create_task(_greeting_watchdog(30.0))
         logger.info("[GREETING] playing %s (user=%s, channel=%s)",
                     path, user_id, channel_id)
@@ -749,12 +802,8 @@ async def play_user_disconnect_reaction(
     _last_disconnect_reaction[(channel_id, user_id)] = now
 
     try:
-        opts = get_ffmpeg_greeting_opts()
-        try:
-            source = discord.FFmpegOpusAudio(path, options=opts)
-        except Exception:
-            source = discord.FFmpegOpusAudio(path)
-        vc.play(source)
+        source = _prepare_audio_source(vc, channel_id, path)
+        vc.play(source, after=_make_after_callback(channel_id))
         logger.info(
             "[DISCONNECT-REACTION] playing '%s' (user=%s, channel=%s)",
             text,
