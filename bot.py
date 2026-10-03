@@ -181,6 +181,11 @@ async def _log_activity(
         return
     if user_id in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID} or (bot.user and user_id == bot.user.id):
         return
+    import users
+    if hasattr(users, "reload_users_if_changed"):
+        users.reload_users_if_changed()
+    if users.USERS and user_id not in users.USERS:
+        return
     url = urljoin(config.INDIO_RELAY_URL, "/activity/log")
     payload = {
         "user_id": user_id,
@@ -414,6 +419,61 @@ async def _classify_and_log_message(
 
     if tasks:
         await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _analyze_message_media_and_links(message):
+    """Background worker to analyze image/video/link content and store user tastes."""
+    if not message.guild or not message.author or message.author.bot:
+        return
+
+    import media_analyzer
+    guild_id = message.guild.id
+    display_name = message.author.display_name or message.author.name
+    content = message.content or ""
+    attachments = getattr(message, "attachments", None) or []
+
+    # 1. Attachments (Images & Videos)
+    for att in attachments:
+        ct = (att.content_type or "").lower()
+        if ct.startswith("image/"):
+            try:
+                img_bytes = await att.read()
+                if img_bytes:
+                    statement = await media_analyzer.analyze_content_interest(
+                        display_name, "imagen", image_bytes=img_bytes, image_mime=ct
+                    )
+                    if statement:
+                        await geminiCommand.record_user_interest(guild_id, display_name, statement)
+            except Exception:
+                log.debug("image taste analysis failed", exc_info=True)
+
+        elif ct.startswith("video/"):
+            try:
+                frame_bytes = await media_analyzer.extract_video_middle_frame(att.url)
+                if frame_bytes:
+                    statement = await media_analyzer.analyze_content_interest(
+                        display_name, "video", image_bytes=frame_bytes, image_mime="image/jpeg"
+                    )
+                    if statement:
+                        await geminiCommand.record_user_interest(guild_id, display_name, statement)
+            except Exception:
+                log.debug("video taste analysis failed", exc_info=True)
+
+    # 2. Links
+    if content:
+        urls = _URL_RE.findall(content)
+        for url in urls[:2]:
+            if media_analyzer.is_analyzable_url(url):
+                try:
+                    meta = await media_analyzer.extract_link_metadata(url)
+                    if meta:
+                        statement = await media_analyzer.analyze_content_interest(
+                            display_name, "enlace/publicación", link_meta=meta
+                        )
+                        if statement:
+                            await geminiCommand.record_user_interest(guild_id, display_name, statement)
+                except Exception:
+                    log.debug("link taste analysis failed", exc_info=True)
 
 
 geminiKeys.load_from_disk()
@@ -985,6 +1045,7 @@ async def on_message(message):
                 display_name=message.author.display_name,
             )
         )
+        asyncio.create_task(_analyze_message_media_and_links(message))
         return
 
     content = (message.content or "").strip()
@@ -3379,11 +3440,15 @@ async def ranking(ctx):
         await safe_respond(ctx, "❌ No pude obtener el ranking (relay no disponible).")
         return
 
+    import users
+    if hasattr(users, "reload_users_if_changed"):
+        users.reload_users_if_changed()
+
     rows = data.get("leaderboard", [])
     filtered_rows = []
     for row in rows:
         uid = row["user_id"]
-        if uid in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}:
+        if uid in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID} or (users.USERS and uid not in users.USERS):
             continue
         member = ctx.guild.get_member(uid)
         if member is None:
@@ -3656,12 +3721,16 @@ async def estadisticas(
     ranking_pos = None
     total_users = 0
     target_rating = None
+    import users
+    if hasattr(users, "reload_users_if_changed"):
+        users.reload_users_if_changed()
+
     if lb_data:
         rows = lb_data.get("leaderboard", [])
         human_rows = []
         for row in rows:
             uid_row = row["user_id"]
-            if uid_row in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}:
+            if uid_row in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID} or (users.USERS and uid_row not in users.USERS):
                 continue
             m = ctx.guild.get_member(uid_row)
             if m and m.bot:

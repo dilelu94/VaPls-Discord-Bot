@@ -817,11 +817,11 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 ## 📦 Últimos cambios
 
-### 2026-10-03 — Exclusión estricta de bots y userbots del ranking MMR
+### 2026-10-03 — Exclusión estricta de bots, userbots y usuarios no registrados (Main Characters) del ranking MMR
 
-1. **Filtro centralizado en `userbot/activity_db.py`**: Se definió `SYSTEM_BOT_IDS` (`{1541984338386620492, 519594605520486428}`) para ignorar automáticamente a los userbots (`golive`, `Indio`) en `log_activity()` (retornando 0.0 MMR delta) y excluirlos de las consultas del leaderboard en `get_leaderboard()`.
-2. **Purga automática de entradas residuales (`_purge_old`)**: `_purge_old()` elimina cualquier registro previo de bots en la tabla `user_mmr`.
-3. **Filtrado en comandos de Discord (`bot.py`)**: `_log_activity()`, el comando `/ranking` y el cálculo de posiciones en `/estadisticas` descartan explícitamente tanto `SYSTEM_BOT_IDS` como cualquier miembro con `member.bot == True`, asegurando que la tabla de posiciones sea exclusiva de usuarios humanos ("main characters").
+1. **Restricción a Main Characters (`users.USERS` / `data/users.json`)**: El sistema MMR (`userbot/activity_db.py` y `bot.py`) ahora ignora el registro de actividades (`log_activity`) y excluye del leaderboard (`get_leaderboard`, `/ranking`, `/estadisticas`) a cualquier usuario que no pertenezca a la lista oficial de miembros en `data/users.json` / `users.USERS` (evitando que usuarios casuales o desconocidos como `juliyo` ingresen al ranking).
+2. **Purga automática de usuarios no registrados (`_purge_old`)**: `_purge_old()` purga de la tabla `user_mmr` tanto a los userbots del sistema (`GOLIVE_USER_ID`, `USERBOT_USER_ID`) como a cualquier ID de usuario que no figure en `data/users.json`.
+3. **Filtrado en comandos de Discord (`bot.py`)**: `_log_activity()`, el comando `/ranking` y el cálculo de posiciones en `/estadisticas` validan explícitamente `user_id in users.USERS`, asegurando que la tabla de posiciones sea 100 % exclusiva de los *Main Characters*.
 
 ### 2026-09-29 — MMR: fix decaimiento por inactividad + multiplicador por concurrencia en canal + exclusión de GoLive
 
