@@ -426,6 +426,8 @@ async def _analyze_message_media_and_links(message):
     """Background worker to analyze image/video/link content and store user tastes."""
     if not message.guild or not message.author or message.author.bot:
         return
+    if message.author.id == config.USERBOT_USER_ID or (bot.user and message.author.id == bot.user.id):
+        return
 
     import media_analyzer
     guild_id = message.guild.id
@@ -526,6 +528,7 @@ async def _analyze_message_media_and_links(message):
                     channel_id=message.channel.id,
                     user_id=message.author.id,
                     source_message_id=message.id,
+                    no_redirect=True,
                 )
             else:
                 log.info("Skipped JoJo spontaneous reply due to random roll (prob=%.2f)", prob)

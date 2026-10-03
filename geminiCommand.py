@@ -5997,6 +5997,7 @@ async def indioFromVoice(
     speaker_name: Optional[str] = None,
     source_message_id: Optional[int] = None,
     from_voice: bool = False,
+    no_redirect: bool = False,
     replied_content: Optional[str] = None,
     replied_author: Optional[str] = None,
     attachment_urls: Optional[list[dict]] = None,
@@ -6008,24 +6009,22 @@ async def indioFromVoice(
     Shares the same per-guild memory bucket (_indio_memory_key returns
     "guild-<id>") so voice + slash invocations build on the same history.
 
-    ``from_voice`` exenta a la wake-word de voz del override
+    ``from_voice`` or ``no_redirect`` exenta a la wake-word del override
     ``INDIO_REPLY_CHANNEL_ID``: cuando es True, la respuesta queda en el
-    ``channel_id`` provisto por el caller (típicamente el transcript channel
-    del userbot) y no se dispara el flujo de redirect (header, DM, delete del
-    fuente). Wake-word de texto y otros callers no-voz siguen aplicando el
-    override.
+    ``channel_id`` provisto por el caller y no se dispara el flujo de redirect
+    (header, DM, delete del fuente). Wake-word de texto y otros callers no-voz
+    siguen aplicando el override.
     """
     pregunta = (pregunta or "").strip()
     if not pregunta:
         return
     # Override de canal: cuando INDIO_REPLY_CHANNEL_ID esta seteado, las
     # respuestas del Indio aterrizan ahi. La wake-word de voz queda exenta
-    # (from_voice=True): el transcript del userbot ya cae en su canal
-    # dedicado y mover la respuesta a otro lado genera ruido. Si el mensaje
+    # (from_voice=True) igual que no_redirect=True. Si el mensaje
     # fue un reply a otro mensaje (replied_content), la respuesta se queda
     # en el canal original y se postea como reply al invocador.
     original_channel_id = channel_id
-    if config.INDIO_REPLY_CHANNEL_ID and not from_voice and replied_content is None:
+    if config.INDIO_REPLY_CHANNEL_ID and not from_voice and not no_redirect and replied_content is None:
         target_chan = bot.get_channel(config.INDIO_REPLY_CHANNEL_ID)
         if target_chan is not None and getattr(target_chan, "guild", None) is not None:
             channel_id = config.INDIO_REPLY_CHANNEL_ID
@@ -6535,6 +6534,7 @@ async def askIndio(
     user_id: int = 0,
     source_message_id: Optional[int] = None,
     is_voice: bool = False,
+    no_redirect: bool = False,
     replied_content: Optional[str] = None,
     replied_author: Optional[str] = None,
     attachment_urls: Optional[list[dict]] = None,
@@ -6600,6 +6600,7 @@ async def askIndio(
         speaker_name=speaker_name,
         source_message_id=source_message_id,
         from_voice=is_voice,
+        no_redirect=no_redirect,
         replied_content=replied_content,
         replied_author=replied_author,
         attachment_urls=attachment_urls,
