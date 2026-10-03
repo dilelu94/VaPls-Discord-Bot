@@ -401,6 +401,9 @@ golive: encoder probe OK → libx264
     - _Causas_: (a) Los archivos `moneymoneymoney.mp3` y `noo-la-policia.mp3` se configuraron apuntando a `Audios/`, pero seguían en las carpetas `Seba/` y `Caro/` en el servidor OCI, provocando fallas de archivo no encontrado. (b) Para audios ultracortos, la sincronización de sesión DAVE E2EE se valida dinámicamente en `_wait_until_ready`.
     - **Fixes**: (a) Se copiaron y verificaron los archivos de audio en las carpetas físicas `audio_output/Audios/` y `audio_output/Secretos/` en el servidor de producción OCI. (b) Se mantuvo el retraso de inicio en `0.0s` (`GREETING_JOIN_DELAY_SECONDS = 0.0`) para reproducción inmediata.
 
+16. **(2026-10-03) Actualización de texto en la pantalla de Acceso Denegado / Enlace Expirado de Stremio (`apiServer.py`)**:
+    - **Descripción**: Se actualizó el texto informativo en la plantilla HTML `_build_stremio_access_denied_html()` de `apiServer.py` para indicar que el nuevo enlace generado vía `/stream stremio` en Discord es *"válido por la duración del stream"* en lugar de *"válido por 10 minutos"*.
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

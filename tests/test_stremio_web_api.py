@@ -62,6 +62,7 @@ async def test_stremio_unauthenticated_access_rejected(mock_bot):
         text = await resp.text()
         assert "Acceso Denegado" in text
         assert "/stream stremio" in text
+        assert "válido por la duración del stream" in text
 
         # 2. GET /api/stremio/search without token -> 403 JSON
         resp_search = await client.get("/api/stremio/search?q=Naruto")
