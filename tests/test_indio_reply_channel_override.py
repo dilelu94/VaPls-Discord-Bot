@@ -23,7 +23,10 @@ async def _drain():
         await asyncio.sleep(0)
     pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
     if pending:
-        await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=0.5)
+        except asyncio.TimeoutError:
+            pass
 
 
 def _fake_target_channel(channel_id=9999, guild_id=100):
