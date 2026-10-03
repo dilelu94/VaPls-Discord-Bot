@@ -817,6 +817,12 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 
 ## 📦 Últimos cambios
 
+### 2026-10-03 — Exclusión estricta de bots y userbots del ranking MMR
+
+1. **Filtro centralizado en `userbot/activity_db.py`**: Se definió `SYSTEM_BOT_IDS` (`{1541984338386620492, 519594605520486428}`) para ignorar automáticamente a los userbots (`golive`, `Indio`) en `log_activity()` (retornando 0.0 MMR delta) y excluirlos de las consultas del leaderboard en `get_leaderboard()`.
+2. **Purga automática de entradas residuales (`_purge_old`)**: `_purge_old()` elimina cualquier registro previo de bots en la tabla `user_mmr`.
+3. **Filtrado en comandos de Discord (`bot.py`)**: `_log_activity()`, el comando `/ranking` y el cálculo de posiciones en `/estadisticas` descartan explícitamente tanto `SYSTEM_BOT_IDS` como cualquier miembro con `member.bot == True`, asegurando que la tabla de posiciones sea exclusiva de usuarios humanos ("main characters").
+
 ### 2026-09-29 — MMR: fix decaimiento por inactividad + multiplicador por concurrencia en canal + exclusión de GoLive
 
 1. **Decaimiento continuo por inactividad (`userbot/activity_db.py`)**: Se corrigió el cálculo de decaimiento donde los usuarios inactivos quedaban estancados en 1500 MMR o no bajaban de ese piso. Ahora el decaimiento reduce el rating hacia `min_rating` (1000) a razón de `decay_rating_per_day` (5 pts/día tras 24h de inactividad).

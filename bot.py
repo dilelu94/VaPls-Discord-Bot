@@ -179,6 +179,8 @@ async def _log_activity(
 ):
     if not config.INDIO_RELAY_URL or not config.INDIO_RELAY_SECRET:
         return
+    if user_id in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID} or (bot.user and user_id == bot.user.id):
+        return
     url = urljoin(config.INDIO_RELAY_URL, "/activity/log")
     payload = {
         "user_id": user_id,
@@ -3378,9 +3380,24 @@ async def ranking(ctx):
         return
 
     rows = data.get("leaderboard", [])
-    if not rows:
+    filtered_rows = []
+    for row in rows:
+        uid = row["user_id"]
+        if uid in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}:
+            continue
+        member = ctx.guild.get_member(uid)
+        if member is None:
+            try:
+                member = await ctx.guild.fetch_member(uid)
+            except Exception:
+                member = None
+        if member and member.bot:
+            continue
+        filtered_rows.append((row, member))
+
+    if not filtered_rows:
         await safe_respond(
-            ctx, "📊 Todavía no hay datos de actividad en este servidor."
+            ctx, "📊 Todavía no hay datos de actividad de usuarios en este servidor."
         )
         return
 
@@ -3390,16 +3407,10 @@ async def ranking(ctx):
         color=0xE94560,
     )
     medals = ["🥇", "🥈", "🥉"]
-    for i, row in enumerate(rows[:15]):
+    for i, (row, member) in enumerate(filtered_rows[:15]):
         uid = row["user_id"]
         rating = round(row["rating"], 1)
         prefix = medals[i] if i < 3 else f"**{i + 1}.**"
-        member = ctx.guild.get_member(uid)
-        if member is None:
-            try:
-                member = await ctx.guild.fetch_member(uid)
-            except Exception:
-                member = None
         name = (
             member.display_name
             if member
@@ -3647,8 +3658,17 @@ async def estadisticas(
     target_rating = None
     if lb_data:
         rows = lb_data.get("leaderboard", [])
-        total_users = len(rows)
-        for i, row in enumerate(rows):
+        human_rows = []
+        for row in rows:
+            uid_row = row["user_id"]
+            if uid_row in {config.USERBOT_USER_ID, config.GOLIVE_USER_ID}:
+                continue
+            m = ctx.guild.get_member(uid_row)
+            if m and m.bot:
+                continue
+            human_rows.append(row)
+        total_users = len(human_rows)
+        for i, row in enumerate(human_rows):
             if row["user_id"] == uid:
                 ranking_pos = i + 1
                 target_rating = round(row["rating"], 1)

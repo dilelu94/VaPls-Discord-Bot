@@ -60,6 +60,11 @@ DEFAULT_CFG = {
     "k_factor": "1.0",
 }
 
+SYSTEM_BOT_IDS: set[int] = {
+    1541984338386620492,  # GoLive userbot
+    519594605520486428,   # El Indio userbot
+}
+
 
 def _get_cfg_int(key: str) -> int:
     v = get_config(key)
@@ -453,7 +458,7 @@ def log_activity(
 
     Returns the rating delta (positive = MMR gain, negative = loss).
     """
-    if _conn is None:
+    if _conn is None or user_id in SYSTEM_BOT_IDS:
         return 0.0
     now = _now()
 
@@ -572,6 +577,11 @@ def _purge_old() -> None:
     cutoff = _now() - 31536000
     for t in ("activity_log", "raw_activity_log"):
         _conn.execute(f"DELETE FROM {t} WHERE created_at < ?", (cutoff,))
+    bot_placeholders = ",".join("?" for _ in SYSTEM_BOT_IDS)
+    _conn.execute(
+        f"DELETE FROM user_mmr WHERE user_id IN ({bot_placeholders})",
+        tuple(SYSTEM_BOT_IDS),
+    )
     _conn.commit()
 
 
@@ -738,7 +748,11 @@ def get_leaderboard(guild_id: int, limit: int = 20) -> list[dict]:
            FROM user_mmr WHERE guild_id=?""",
         (guild_id,),
     )
-    decayed_rows = [_apply_decay_on_read(dict(row)) for row in cur.fetchall()]
+    decayed_rows = [
+        _apply_decay_on_read(dict(row))
+        for row in cur.fetchall()
+        if row["user_id"] not in SYSTEM_BOT_IDS
+    ]
     decayed_rows.sort(key=lambda x: x["rating"], reverse=True)
     return decayed_rows[:limit]
 

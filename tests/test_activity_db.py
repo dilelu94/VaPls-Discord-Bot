@@ -377,3 +377,38 @@ class TestResetAllMMR:
         assert stats_tobi["rating"] == 1000.0
         assert adb.get_config("min_rating") == "0"
 
+
+class TestSystemBotExclusion:
+    def test_system_bots_ignored_in_log_activity(self):
+        """System bot IDs (GoLive, Userbot) return 0.0 delta and are not inserted into user_mmr."""
+        golive_id = 1541984338386620492
+        delta = adb.log_activity(golive_id, 100, "voice_session", duration_secs=300)
+        assert delta == 0.0
+        assert adb.get_user_stats(golive_id, 100) is None
+
+    def test_system_bots_filtered_from_leaderboard(self):
+        """System bots are omitted from leaderboard results."""
+        golive_id = 1541984338386620492
+        adb.log_activity(1, 100, "message", value=1)
+        # Force insert a bot entry directly to simulate existing legacy DB rows
+        adb._conn.execute(
+            "INSERT INTO user_mmr (user_id, guild_id, rating) VALUES (?, 100, 1600)",
+            (golive_id,),
+        )
+        lb = adb.get_leaderboard(100)
+        uids = [r["user_id"] for r in lb]
+        assert golive_id not in uids
+        assert 1 in uids
+
+    def test_purge_old_deletes_system_bots_from_user_mmr(self):
+        """_purge_old removes system bot rows from user_mmr."""
+        golive_id = 1541984338386620492
+        adb._conn.execute(
+            "INSERT INTO user_mmr (user_id, guild_id, rating) VALUES (?, 100, 1600)",
+            (golive_id,),
+        )
+        adb._purge_old()
+        cur = adb._conn.execute("SELECT 1 FROM user_mmr WHERE user_id=?", (golive_id,))
+        assert cur.fetchone() is None
+
+
