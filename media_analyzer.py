@@ -289,17 +289,19 @@ async def check_jojo_reference(
     link_meta: Optional[Dict[str, Any]] = None,
     image_mime: str = "image/jpeg",
 ) -> Optional[str]:
-    """Check if text, link metadata, or image/video contains a JoJo's Bizarre Adventure reference.
+    """Check if text, link metadata, or image/video contains a subtle or explicit JoJo reference.
 
+    Evaluates subtle visual poses (e.g. a twisted tree branch looking like a JoJo pose),
+    bizarre shapes, dynamic silhouettes, as well as explicit JoJo memes/quotes.
     Returns a short description of the reference if detected, or None otherwise.
     """
-    # 1. Text keyword check
+    # 1. Quick text keyword fallback
     if text:
         match = _JOJO_KEYWORDS_RE.search(text)
         if match:
             return f"Expresión en texto '{match.group(0)}'"
 
-    # 2. Link metadata check
+    # 2. Quick link metadata fallback
     if link_meta:
         combined = (
             f"{link_meta.get('title', '')} {link_meta.get('description', '')} "
@@ -309,35 +311,50 @@ async def check_jojo_reference(
         if match:
             return f"Publicación/Video titulado '{link_meta.get('title', 'Link')}'"
 
-    # 3. Vision check (Gemini Flash-Lite)
+    # 3. Multimodal Vision / Creative check via Gemini Flash-Lite
+    system_instruction = (
+        "Sos un detector especializado de referencias al anime/manga JoJo's Bizarre Adventure (JoJo). "
+        f"Tu tarea es analizar el contenido ({content_type}) enviado por '{user_name}' "
+        "y encontrar si hay CUALQUIER detalle —ya sea explícito, sutil o abstracto— que pueda interpretarse "
+        "como una referencia, postura o meme de JoJo.\n\n"
+        "Ejemplos de referencias sutiles y abstractas:\n"
+        "- Una rama de árbol retorcida, estatua o silueta que parece estar haciendo una pose dramática o bizarra de JoJo.\n"
+        "- Un animal (gato, perro) o figura en una postura exagerada o postura de Stand.\n"
+        "- Sombras, ángulos o paletas de colores dramáticas estilo JoJo.\n"
+        "- Memes clásicos (Dio, Jotaro, Stands, 'To Be Continued...', 'Kono DIO da', 'Za Warudo', 'ゴゴゴ / Menacing').\n\n"
+        "Reglas:\n"
+        "1. Si encuentras CUALQUIER elemento visual, forma o detalle que parezca una pose o referencia a JoJo, "
+        "responde ÚNICAMENTE en 1 sola frase corta describiendo qué detalle parece una referencia (ej: 'Una rama torcida que parece un personaje de JoJo posando dramáticamente').\n"
+        "2. Si no hay absolutamente nada que pueda relacionarse ni de forma sutil o graciosa con JoJo, responde ÚNICAMENTE la palabra: 'NO'."
+    )
+
+    image_parts = None
+    user_msg = f"Contenido enviado por {user_name}:"
+
     if image_bytes:
-        system_instruction = (
-            "Sos un detector especializado de referencias al manga/anime JoJo's Bizarre Adventure. "
-            "Analizá la imagen adjunta y responde ÚNICAMENTE si identificas de forma clara una "
-            "referencia, personaje (Jotaro, Dio, Giorno, etc.), Stand, pose o meme clásico de JoJo's "
-            "(ej: 'Kono DIO da', 'You were expecting X, but it was me, Dio!', 'To Be Continued...', "
-            "'Oh? You're approaching me?', onomatopeyas ゴゴゴ, etc.).\n\n"
-            "Reglas de respuesta:\n"
-            "- Si ES una referencia a JoJo's, responde en 1 frase muy corta describiendo el elemento "
-            "(ej: 'Meme de Dio Brando Kono DIO Da', 'Pose o personaje de JoJo's Bizarre Adventure').\n"
-            "- Si NO es una referencia a JoJo's, responde ÚNICAMENTE la palabra: 'NO'."
-        )
         b64_data = base64.b64encode(image_bytes).decode("utf-8")
         image_parts = [{"inlineData": {"mimeType": image_mime, "data": b64_data}}]
+        user_msg += " (ver imagen adjunta)"
 
-        try:
-            reply = await geminiClient.generate(
-                user_message=f"¿Esta imagen de {user_name} es una referencia a JoJo?",
-                system_instruction=system_instruction,
-                image_parts=image_parts,
-                model=getattr(config, "GEMINI_MODEL_LITE", "gemini-2.5-flash-lite"),
-                timeout_sec=15.0,
-            )
-            if reply and reply.text:
-                resp = reply.text.strip()
-                if resp.upper() != "NO" and not resp.startswith("HTTP"):
-                    return resp
-        except Exception as e:
-            logger.debug("check_jojo_reference vision check failed: %s", e)
+    if text and not image_bytes:
+        user_msg += f"\nTexto: {text}"
+
+    if link_meta:
+        user_msg += f"\n- Enlace: {link_meta.get('url')}\n- Título: {link_meta.get('title')}\n- Descripción: {link_meta.get('description', '')[:200]}"
+
+    try:
+        reply = await geminiClient.generate(
+            user_message=user_msg,
+            system_instruction=system_instruction,
+            image_parts=image_parts,
+            model=getattr(config, "GEMINI_MODEL_LITE", "gemini-2.5-flash-lite"),
+            timeout_sec=15.0,
+        )
+        if reply and reply.text:
+            resp = reply.text.strip()
+            if resp.upper() != "NO" and not resp.startswith("HTTP"):
+                return resp
+    except Exception as e:
+        logger.debug("check_jojo_reference Gemini check failed: %s", e)
 
     return None

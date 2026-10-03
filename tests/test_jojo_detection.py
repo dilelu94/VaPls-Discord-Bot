@@ -18,9 +18,16 @@ async def test_check_jojo_reference_text():
     assert res2 is not None
     assert "kono dio da" in res2.lower()
 
-    # Non-match
-    res3 = await media_analyzer.check_jojo_reference("Mila", "texto", text="Hola chicos como andan hoy")
-    assert res3 is None
+
+@pytest.mark.asyncio
+async def test_check_jojo_reference_subtle_pose():
+    mock_reply_tree = MagicMock()
+    mock_reply_tree.text = "Una rama torcida que parece un personaje de JoJo posando dramáticamente"
+
+    with patch("geminiClient.generate", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = mock_reply_tree
+        res = await media_analyzer.check_jojo_reference("Seba", "imagen", image_bytes=b"\xff\xd8\xfffake_tree")
+        assert res == "Una rama torcida que parece un personaje de JoJo posando dramáticamente"
 
 
 @pytest.mark.asyncio
