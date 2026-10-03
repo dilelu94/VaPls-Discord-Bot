@@ -1,0 +1,507 @@
+[
+  {
+    "rule": 0,
+    "text": "Don't mess with cats (nor any animals).",
+    "translation": "No te metas con los gatos (ni con ningún animal)."
+  },
+  {
+    "rule": 1,
+    "text": "Do not talk about /b/.",
+    "translation": "No hables de /b/."
+  },
+  {
+    "rule": 2,
+    "text": "You do NOT talk about /b/.",
+    "translation": "NO hables de /b/."
+  },
+  {
+    "rule": 3,
+    "text": "We are Anonymous.",
+    "translation": "Somos Anonymous."
+  },
+  {
+    "rule": 4,
+    "text": "We are Legion.",
+    "translation": "Somos Legión."
+  },
+  {
+    "rule": 5,
+    "text": "We do not forgive. We do not forget.",
+    "translation": "No perdonamos. No olvidamos."
+  },
+  {
+    "rule": 6,
+    "text": "/b/ is not your personal army.",
+    "translation": "/b/ no es tu ejército personal."
+  },
+  {
+    "rule": 7,
+    "text": "No matter how much you love debating, keep in mind that no one on the internet debates.",
+    "translation": "Nadie en internet debate objetivamente (solo se burlan de ti o de tus padres)."
+  },
+  {
+    "rule": 8,
+    "text": "Anonymous can be an uncaring, senseless monster.",
+    "translation": "Anonymous puede ser un monstruo insensible e insensato."
+  },
+  {
+    "rule": 9,
+    "text": "Anonymous is still able to deliver.",
+    "translation": "Anonymous aún es capaz de lograr lo que se propone (deliver)."
+  },
+  {
+    "rule": 10,
+    "text": "There are no real rules about posting.",
+    "translation": "No hay reglas reales sobre publicar contenido."
+  },
+  {
+    "rule": 11,
+    "text": "There are no real rules about moderation either. Enjoy your ban.",
+    "translation": "Tampoco hay reglas reales sobre la moderación (disfruta tu ban)."
+  },
+  {
+    "rule": 12,
+    "text": "Anything you say can and will be used against you.",
+    "translation": "Todo lo que digas puede y será usado en tu contra."
+  },
+  {
+    "rule": 13,
+    "text": "Anything you say can and will be turned into something else.",
+    "translation": "Todo lo que digas puede y será transformado en algo diferente."
+  },
+  {
+    "rule": 14,
+    "text": "Do not argue with trolls. It means they win.",
+    "translation": "No discutas con trolls; significa que ellos ganan."
+  },
+  {
+    "rule": 15,
+    "text": "The harder you try, the harder you will fail.",
+    "translation": "Cuanto más te esfuerces, más duro fallarás."
+  },
+  {
+    "rule": 16,
+    "text": "If you fail in epic proportions, it may just become a winning failure.",
+    "translation": "Si fallas en proporciones épicas, puede convertirse en un fallo ganador (winning failure)."
+  },
+  {
+    "rule": 17,
+    "text": "Every win fails eventually.",
+    "translation": "Cada victoria o triunfo termina fallando eventualmente."
+  },
+  {
+    "rule": 18,
+    "text": "Everything that can be labeled can be hated.",
+    "translation": "Todo lo que se pueda etiquetar, se puede odiar."
+  },
+  {
+    "rule": 19,
+    "text": "The more you hate it, the stronger it gets.",
+    "translation": "Cuanto más lo odies, más fuerte se vuelve en la red."
+  },
+  {
+    "rule": 20,
+    "text": "Nothing is to be taken seriously.",
+    "translation": "Nada en internet debe tomarse en serio."
+  },
+  {
+    "rule": 21,
+    "text": "Pictures or it didn't happen.",
+    "translation": "Fotos o no sucedió (Pics or it didn't happen)."
+  },
+  {
+    "rule": 22,
+    "text": "Original content is original only for a few seconds before it's no longer original.",
+    "translation": "El contenido original solo es original durante unos segundos antes de dejar de serlo."
+  },
+  {
+    "rule": 23,
+    "text": "Copy pasta is made to ruin every last bit of originality.",
+    "translation": "Los copypastas están hechos para arruinar la originalidad."
+  },
+  {
+    "rule": 24,
+    "text": "Every post is always a repost of a repost.",
+    "translation": "Cada publicación es siempre un repost de un repost."
+  },
+  {
+    "rule": 25,
+    "text": "Relation to the original topic decreases with every post.",
+    "translation": "La relación con el tema original disminuye con cada comentario posterior."
+  },
+  {
+    "rule": 26,
+    "text": "Any topic can be easily turned into something totally unrelated.",
+    "translation": "Cualquier tema puede convertirse fácilmente en algo totalmente no relacionado."
+  },
+  {
+    "rule": 27,
+    "text": "Always question a person's sexual preferences without any real reason.",
+    "translation": "Cuestiona siempre las preferencias sexuales de una persona sin ninguna razón real."
+  },
+  {
+    "rule": 28,
+    "text": "Always question a person's gender just in case it's really a man.",
+    "translation": "Cuestiona siempre el género de una persona por si acaso es realmente un hombre."
+  },
+  {
+    "rule": 29,
+    "text": "On the internet, men are men, women are also men, and kids are undercover FBI agents.",
+    "translation": "En internet, los hombres son hombres, las mujeres también son hombres y los niños son agentes del FBI."
+  },
+  {
+    "rule": 30,
+    "text": "Girls do not exist on the internet.",
+    "translation": "Las chicas no existen en internet."
+  },
+  {
+    "rule": 31,
+    "text": "Tits or GTFO. The choice is yours.",
+    "translation": "Muestra los pechos o vete (Tits or GTFO)."
+  },
+  {
+    "rule": 32,
+    "text": "You must have pictures to prove your statements. Anything can be explained with a picture.",
+    "translation": "Debes tener fotos para probar tus afirmaciones; todo se explica con una imagen."
+  },
+  {
+    "rule": 33,
+    "text": "Lurk more. It's never enough.",
+    "translation": "Lurkea más (Lurk more). Nunca es suficiente."
+  },
+  {
+    "rule": 34,
+    "text": "If it exists, there is porn of it. No exceptions.",
+    "translation": "Si existe, hay porno de ello. Sin excepciones."
+  },
+  {
+    "rule": 35,
+    "text": "If there is no porn of it, porn will be made of it.",
+    "translation": "Si no hay porno de ello, se hará porno de ello."
+  },
+  {
+    "rule": 36,
+    "text": "No matter what it is, it's somebody's fetish.",
+    "translation": "No importa qué sea, es el fetiche de alguien."
+  },
+  {
+    "rule": 37,
+    "text": "No matter how fucked up it is, there is always worse than what you just saw.",
+    "translation": "No importa qué tan jodido sea algo, siempre hay algo peor que lo que acabas de ver."
+  },
+  {
+    "rule": 38,
+    "text": "No real limits of any kind apply here. Not even the sky.",
+    "translation": "No se aplican límites reales de ningún tipo aquí. Ni siquiera el cielo."
+  },
+  {
+    "rule": 39,
+    "text": "Caps lock is cruise control for cool.",
+    "translation": "Caps Lock es el control de crucero para ser genial."
+  },
+  {
+    "rule": 40,
+    "text": "Even with cruise control, you still have to steer.",
+    "translation": "Incluso con el control de crucero, aún tienes que maniobrar."
+  },
+  {
+    "rule": 41,
+    "text": "It needs more desu. No exceptions.",
+    "translation": "Necesita más desu. Sin excepciones."
+  },
+  {
+    "rule": 42,
+    "text": "Nothing is sacred.",
+    "translation": "Nada es sagrado / Lleva siempre tu toalla."
+  },
+  {
+    "rule": 43,
+    "text": "The more beautiful and pure a thing is, the more satisfying it is to corrupt.",
+    "translation": "Cuanto más hermosa y pura sea una cosa, más satisfactorio es corromperla."
+  },
+  {
+    "rule": 44,
+    "text": "If it exists, there is a version of it for your fandom.",
+    "translation": "Si existe, hay una versión de ello para tu fandom."
+  },
+  {
+    "rule": 45,
+    "text": "If there is not, there will be.",
+    "translation": "Si no la hay, la habrá."
+  },
+  {
+    "rule": 46,
+    "text": "The internet is serious business.",
+    "translation": "Internet es un asunto serio (Serious business)."
+  },
+  {
+    "rule": 47,
+    "text": "The only good hentai is Yuri.",
+    "translation": "El único hentai bueno es el Yuri."
+  },
+  {
+    "rule": 48,
+    "text": "The pool is always closed.",
+    "translation": "La piscina siempre está cerrada (The pool is closed)."
+  },
+  {
+    "rule": 49,
+    "text": "You cannot divide by zero just because the calculator says so.",
+    "translation": "No puedes dividir por cero solo porque la calculadora lo diga."
+  },
+  {
+    "rule": 50,
+    "text": "A crossover, no matter how improbable, will eventually happen.",
+    "translation": "Un crossover, sin importar qué tan improbable sea, eventualmente ocurrirá."
+  },
+  {
+    "rule": 51,
+    "text": "Long cat is long.",
+    "translation": "Long cat es largo (Long cat is long)."
+  },
+  {
+    "rule": 52,
+    "text": "If you get Rick rolled, you must watch the entire video.",
+    "translation": "Si te hacen un Rickroll, debes ver el video completo."
+  },
+  {
+    "rule": 53,
+    "text": "If a country is not specified in a post, it is expected that the poster or commenter is in the US.",
+    "translation": "Si no se especifica un país, se asume que el usuario está en EE. UU."
+  },
+  {
+    "rule": 54,
+    "text": "If you can't find it, it doesn't exist.",
+    "translation": "Si no puedes encontrarlo en internet, no existe."
+  },
+  {
+    "rule": 55,
+    "text": "Someone will see a fandom reference in any post.",
+    "translation": "Alguien verá una referencia a su fandom en cualquier publicación."
+  },
+  {
+    "rule": 56,
+    "text": "If it exists, there is a Minecraft mod of it.",
+    "translation": "Si existe, hay un mod de Minecraft de ello."
+  },
+  {
+    "rule": 57,
+    "text": "Everyone has an opinion and will post it in the comments even if nobody asked.",
+    "translation": "Todos tienen una opinión en los comentarios y la darán aunque nadie la pida."
+  },
+  {
+    "rule": 58,
+    "text": "Trying to remove something from the internet triggers the Streisand Effect.",
+    "translation": "Intentar borrar algo provoca el Efecto Streisand."
+  },
+  {
+    "rule": 59,
+    "text": "Internet culture changes faster than real life.",
+    "translation": "La cultura de internet cambia más rápido que la vida real."
+  },
+  {
+    "rule": 60,
+    "text": "Every long conversation will end in a wild argument.",
+    "translation": "Toda conversación larga terminará en una discusión descontrolada."
+  },
+  {
+    "rule": 61,
+    "text": "Chuck Norris is the exception. No exceptions.",
+    "translation": "Chuck Norris es la excepción. Sin excepciones."
+  },
+  {
+    "rule": 62,
+    "text": "It has been cracked and pirated.",
+    "translation": "Todo software o juego ha sido crackeado y pirateado."
+  },
+  {
+    "rule": 63,
+    "text": "For every given male character, there is a female version of that character and vice versa.",
+    "translation": "Para cada personaje masculino, hay una versión femenina (genderbend), y viceversa."
+  },
+  {
+    "rule": 64,
+    "text": "If it exists, there is an alternate universe version of it.",
+    "translation": "Si existe, hay una versión de universo alternativo (AU) de ello."
+  },
+  {
+    "rule": 65,
+    "text": "If there isn't, there will be.",
+    "translation": "Si no la hay, la habrá."
+  },
+  {
+    "rule": 66,
+    "text": "Everything has a fandom. Everything.",
+    "translation": "Todo tiene un fandom. Todo."
+  },
+  {
+    "rule": 67,
+    "text": "90% of fanfiction is the stuff of nightmares.",
+    "translation": "El 90% del fanfiction es material de pesadillas."
+  },
+  {
+    "rule": 68,
+    "text": "Milhouse will never be a meme ever.",
+    "translation": "Milhouse nunca será un meme jamás."
+  },
+  {
+    "rule": 69,
+    "text": "Nice.",
+    "translation": "Nice."
+  },
+  {
+    "rule": 70,
+    "text": "Do not talk about the 100 million get failure.",
+    "translation": "No hables sobre el fallo de los 100 millones de GET."
+  },
+  {
+    "rule": 71,
+    "text": "Do not share your personal information or password with anyone.",
+    "translation": "No compartas tu información personal ni tu contraseña con nadie."
+  },
+  {
+    "rule": 72,
+    "text": "If a song exists, there's an 8bit/vocaloid version of it.",
+    "translation": "Si existe una canción, hay una versión de 8 bits / Vocaloid de ella."
+  },
+  {
+    "rule": 73,
+    "text": "If it exists, someone made a duck out of it.",
+    "translation": "Si existe, alguien ha hecho un pato de ello."
+  },
+  {
+    "rule": 74,
+    "text": "Rule is to remain untouched.",
+    "translation": "La regla debe permanecer intocable."
+  },
+  {
+    "rule": 75,
+    "text": "The more popular a multiplayer game is, the more toxic its community becomes.",
+    "translation": "Cuanto más popular es un juego multijugador, más tóxica es su comunidad."
+  },
+  {
+    "rule": 76,
+    "text": "If there is a screen, AO3 will be seen.",
+    "translation": "Si hay una pantalla, AO3 (Archive of Our Own) será visto en ella."
+  },
+  {
+    "rule": 77,
+    "text": "The internet makes you stupid.",
+    "translation": "Internet te hace estúpido."
+  },
+  {
+    "rule": 78,
+    "text": "There is a wiki of it. No exceptions.",
+    "translation": "Hay una wiki de ello. Sin excepciones."
+  },
+  {
+    "rule": 79,
+    "text": "Wikipedia isn't a primary source, but everyone checks it first.",
+    "translation": "Wikipedia no es fuente primaria, pero todos la consultan primero."
+  },
+  {
+    "rule": 80,
+    "text": "Gore is always present on the internet. No exceptions.",
+    "translation": "El gore siempre está presente en internet. Sin excepciones."
+  },
+  {
+    "rule": 81,
+    "text": "Anonymous is a fool by default.",
+    "translation": "Anonymous es un tonto por defecto."
+  },
+  {
+    "rule": 82,
+    "text": "Valve does not make trilogies.",
+    "translation": "Valve no hace trilogías (Half-Life 3 no existe)."
+  },
+  {
+    "rule": 83,
+    "text": "If any door, hole, portal, or room transition exists, it can lead to 8-3.",
+    "translation": "Cualquier puerta, agujero o portal puede llevar al nivel 8-3 (Ultrakill)."
+  },
+  {
+    "rule": 84,
+    "text": "Writing in caps means you are screaming.",
+    "translation": "Escribir en mayúsculas significa que estás gritando."
+  },
+  {
+    "rule": 85,
+    "text": "If a thread stays open long enough, someone will bump a 5-year-old discussion.",
+    "translation": "Si un hilo dura lo suficiente, alguien revivirá una discusión de hace años."
+  },
+  {
+    "rule": 86,
+    "text": "If it exists, you can play Bad Apple on it. No exceptions.",
+    "translation": "Si existe, puedes reproducir Bad Apple en ello. Sin excepciones."
+  },
+  {
+    "rule": 87,
+    "text": "Do not speak of the bite of 87.",
+    "translation": "No hables del mordisco del 87 (The Bite of 87)."
+  },
+  {
+    "rule": 88,
+    "text": "Anonymous rules the internet. No exceptions.",
+    "translation": "Anonymous gobierna internet / Toda discusión escala a la Ley de Godwin."
+  },
+  {
+    "rule": 89,
+    "text": "Sarcasm requires /s if you don't want to be misunderstood.",
+    "translation": "El sarcasmo requiere /s si no quieres ser malinterpretado."
+  },
+  {
+    "rule": 90,
+    "text": "Every anime sure have Jojo referenced. No exceptions.",
+    "translation": "Todo anime tiene una referencia a JoJo's Bizarre Adventure."
+  },
+  {
+    "rule": 91,
+    "text": "There is always an equal opposite on the internet. No exceptions.",
+    "translation": "Siempre hay un opuesto igual en internet / El contenido cringe vive para siempre."
+  },
+  {
+    "rule": 92,
+    "text": "On the internet nobody knows you're a dog.",
+    "translation": "En internet nadie sabe si eres un perro escribiendo desde su casa."
+  },
+  {
+    "rule": 93,
+    "text": "If it exists, you can play Doom on it. No exceptions.",
+    "translation": "Si existe, puedes jugar Doom en ello. Sin excepciones."
+  },
+  {
+    "rule": 94,
+    "text": "Every person is trans until proven otherwise.",
+    "translation": "Toda persona es trans hasta que se demuestre lo contrario."
+  },
+  {
+    "rule": 95,
+    "text": "Modders always fix the game that developers left broken.",
+    "translation": "Los modders siempre arreglan el juego que los desarrolladores dejaron roto."
+  },
+  {
+    "rule": 96,
+    "text": "Portal is becoming the new Doom.",
+    "translation": "Portal se está convirtiendo en el nuevo Doom."
+  },
+  {
+    "rule": 97,
+    "text": "The cake is a lie. No exceptions.",
+    "translation": "La tarta es una mentira (The cake is a lie)."
+  },
+  {
+    "rule": 98,
+    "text": "A single typo can become the entire focus of a discussion.",
+    "translation": "Un solo error tipográfico (typo) se convierte en el foco de toda la discusión."
+  },
+  {
+    "rule": 99,
+    "text": "If you have no bricks to shit, you are made of fail and aids.",
+    "translation": "Si no tienes ladrillos para cagar (bricks to shit), estás hecho de fallos y SIDA / Una discusión online nunca termina."
+  },
+  {
+    "rule": 100,
+    "text": "Don't go beyond 100. Any rule past 100 is fake.",
+    "translation": "Cualquier regla después de la 100 no existe, es falsa o fue inventada. / Si existe, probablemente hay 100 de ello."
+  }
+]

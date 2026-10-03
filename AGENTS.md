@@ -135,6 +135,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `israel_alerts.py`: Feed en tiempo real de alertas de emergencia (RedAlert Israel).
 - `chat_db.py`: Búsqueda de texto completo (SQLite FTS5) para el historial de mensajes de los canales de texto.
 - `media_analyzer.py`: Extracción de fotogramas de video con FFmpeg, metadatos de enlaces (yt-dlp/OpenGraph) y análisis de intereses de usuario para la memoria a largo plazo del Indio.
+- `data/internet_rules.json`: Registro persistente en JSON de las 101 Reglas de Internet (Regla 0 a 100) con su texto original en inglés y traducción al español.
 
 ## 🔬 Detalles de Implementación Clave
 
