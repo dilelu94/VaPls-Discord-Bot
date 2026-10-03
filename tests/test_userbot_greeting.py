@@ -679,6 +679,19 @@ def test_greeting_volume_option(monkeypatch):
     assert "volume=0.5" in greeting.get_ffmpeg_greeting_opts()
 
 
+def test_short_audio_padding(monkeypatch):
+    """get_ffmpeg_greeting_opts adds adelay=1000|1000 when audio duration < 1.5s."""
+    monkeypatch.setattr(greeting, "get_audio_duration", lambda path: 0.5 if "short" in path else 3.0)
+    
+    opts_short = greeting.get_ffmpeg_greeting_opts("short.mp3")
+    assert "adelay=1000|1000" in opts_short
+    assert "volume=0.8" in opts_short
+
+    opts_long = greeting.get_ffmpeg_greeting_opts("long.mp3")
+    assert "adelay" not in opts_long
+    assert "volume=0.8" in opts_long
+
+
 def test_missing_audio_in_weighted_list_filtered_out(fake_users, _audio_dir):
     """When a user's greeting list contains a non-existent file alongside an existing file,
     the missing file is filtered out so it never causes fallback to TTS."""

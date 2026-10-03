@@ -27,9 +27,40 @@ import config
 
 logger = logging.getLogger("userbot.greeting")
 
-def get_ffmpeg_greeting_opts() -> str:
+_duration_cache: dict[str, float] = {}
+
+
+def get_audio_duration(path: str) -> Optional[float]:
+    """Return duration of audio file in seconds, cached in memory."""
+    if not path or not isinstance(path, str) or not os.path.exists(path):
+        return None
+    if path in _duration_cache:
+        return _duration_cache[path]
+    try:
+        import subprocess
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", path
+        ]
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=2.0)
+        if out:
+            dur = float(out.decode().strip())
+            _duration_cache[path] = dur
+            return dur
+    except Exception:
+        pass
+    return None
+
+
+def get_ffmpeg_greeting_opts(path: Optional[str] = None) -> str:
     vol = getattr(config, "GREETING_VOLUME", 0.8)
-    return f'-af "dynaudnorm=p=0.95:f=200,volume={vol}"'
+    filters = []
+    if path:
+        dur = get_audio_duration(path)
+        if dur is not None and dur < 1.5:
+            filters.append("adelay=1000|1000")
+    filters.append(f"dynaudnorm=p=0.95:f=200,volume={vol}")
+    return f'-af "{",".join(filters)}"'
 
 
 FFMPEG_NORMALIZE_OPTS = get_ffmpeg_greeting_opts()
@@ -112,7 +143,7 @@ def _prepare_audio_source(vc, channel_id: int, new_path: str):
         except Exception:
             pass
 
-    opts = get_ffmpeg_greeting_opts()
+    opts = get_ffmpeg_greeting_opts(new_path)
     try:
         source = discord.FFmpegOpusAudio(new_path, options=opts)
     except Exception:

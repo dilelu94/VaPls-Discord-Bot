@@ -404,6 +404,10 @@ golive: encoder probe OK → libx264
 16. **(2026-10-03) Actualización de texto en la pantalla de Acceso Denegado / Enlace Expirado de Stremio (`apiServer.py`)**:
     - **Descripción**: Se actualizó el texto informativo en la plantilla HTML `_build_stremio_access_denied_html()` de `apiServer.py` para indicar que el nuevo enlace generado vía `/stream stremio` en Discord es *"válido por la duración del stream"* en lugar de *"válido por 10 minutos"*.
 
+17. **(2026-10-03) Padding automático de silencio inicial para audios de saludo cortos (< 1.5s)**:
+    - _Causa_: Audios ultracortos (como `Fish Carrot.m4a` de Miles, con duración de 0.58s) comenzaban a sonar de inmediato a t=0.1s tras la llegada a la sala, pero el cliente de Discord del usuario tarda entre 1.0s y 1.2s en negociar la conexión UDP/DAVE E2EE y abrir sus altavoces, haciendo que el audio terminara de sonar antes de que el usuario pudiese escucharlo.
+    - **Fix**: Se agregó inspección de duración vía `ffprobe` (`get_audio_duration`). Si la duración del audio es menor a 1.5s, se inyecta automáticamente el filtro `-af "adelay=1000|1000,..."` en FFmpeg. Esto añade 1.0s de silencio inicial permitiendo que los altavoces del cliente se abran justo a tiempo para escuchar el audio completo sin retrasar los audios normales o largos.
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
