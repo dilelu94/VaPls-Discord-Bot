@@ -210,9 +210,8 @@ GREETING_RARE_THRESHOLD = float(os.getenv("GREETING_RARE_THRESHOLD", "0.05"))
 GREETING_TTS_DIR = os.getenv("GREETING_TTS_DIR", "data/greeting_tts")
 # Archivo JSON donde se guarda la metadata (mapeo usuario -> nombre sintetizado) para detectar cambios de nombre.
 GREETING_TTS_META_PATH = os.getenv("GREETING_TTS_META_PATH", "data/greeting_tts_meta.json")
-# Delay en segundos antes de reproducir el saludo cuando un usuario entra a voz.
-# Permite que el cliente de Discord del usuario complete la conexión de red y el handshake DAVE E2EE.
-GREETING_JOIN_DELAY_SECONDS = float(os.getenv("GREETING_JOIN_DELAY_SECONDS", "1.2"))
+# Delay opcional en segundos antes de reproducir el saludo cuando un usuario entra a voz (default 0.0s = inmediato).
+GREETING_JOIN_DELAY_SECONDS = float(os.getenv("GREETING_JOIN_DELAY_SECONDS", "0.0"))
 # Volumen por defecto para la reproducción de greetings (0.8 = 80%).
 GREETING_VOLUME = float(os.getenv("GREETING_VOLUME", "0.8"))
 # Volumen por defecto para la síntesis TTS del Indio (0.7 = 70%).
