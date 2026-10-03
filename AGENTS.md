@@ -134,6 +134,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `petGenerator.py` / `pet-renderer/`: Sistema de mascota virtual evolutiva (`/mascota`) con renderizado ASCII y GIF.
 - `israel_alerts.py`: Feed en tiempo real de alertas de emergencia (RedAlert Israel).
 - `chat_db.py`: Búsqueda de texto completo (SQLite FTS5) para el historial de mensajes de los canales de texto.
+- `media_analyzer.py`: Extracción de fotogramas de video con FFmpeg, metadatos de enlaces (yt-dlp/OpenGraph) y análisis de intereses de usuario para la memoria a largo plazo del Indio.
 
 ## 🔬 Detalles de Implementación Clave
 
@@ -157,6 +158,15 @@ guild con pre-descarga en segundo plano.
 ### 4) Saludos y Audios Secretos (`Secretos/`)
 
 Todos los audios raros o secretos configurados como saludos en `users.json` / `users.py` (como `mr-krabs-money_z55UHab.mp3` de Seba con 1% de probabilidad) deben residir en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`), la cual es ignorada automáticamente por el Soundpad. Los saludos estándar deben ubicarse en `Audios/` y nunca en subcarpetas personales por usuario (ej. `Seba/` o `Caro/`) para evitar que el Soundpad detecte y muestre dichas carpetas en su panel interactivo. La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), la cual mantiene una copia tanto en `Secretos/` (`audio_output/Secretos/04 - He Follado con Cocodrilos.mp3`) como en `Canciones/Mila/` (`audio_output/Canciones/Mila/04 - He Follado con Cocodrilos.mp3`).
+
+### 5) Análisis de Multimedia, Enlaces y Memoria de Gustos (`media_analyzer.py`)
+
+El bot incluye un trabajador en segundo plano en `bot.py` (`_analyze_message_media_and_links`) que analiza de forma asíncrona imágenes, videos y enlaces compartidos por los usuarios en los canales de texto de Discord:
+- **Imágenes**: Se envían a Gemini Vision (`gemini-2.5-flash-lite`).
+- **Videos**: Se obtiene la duración con `ffprobe` y se extrae un fotograma del medio ($D/2$) con `ffmpeg` para enviarlo a Gemini Vision.
+- **Enlaces**: Se extraen metadatos mediante `yt-dlp` en modo metadatos o tags OpenGraph con `aiohttp`.
+- **Registro en Memoria**: `analyze_content_interest()` genera una frase resumida sobre el interés demostrado por el usuario (ej: *"A Seba le interesan los videos de autos antiguos"*), la cual se almacena en `_indio_long_term["users"][usuario]["gustos"]` mediante `geminiCommand.record_user_interest()`.
+- **Prompt del Indio**: El campo `gustos` se inyecta naturalmente en `_format_long_term()` para que el Indio conozca los intereses de cada integrante durante las conversaciones.
 
 ## 📡 Integración con el bot de Telegram
 

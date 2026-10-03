@@ -2223,6 +2223,7 @@ _INDIO_USER_FIELDS: tuple[str, ...] = (
     "anecdotas",
     "descripcion",
     "fotos",
+    "gustos",
 )
 
 
@@ -2336,6 +2337,7 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
             anec = data.get("anecdotas") or []
             desc = data.get("descripcion") or []
             fotos = data.get("fotos") or []
+            gustos = data.get("gustos") or []
             chunk = [f"- {name}:"]
             if traits:
                 chunk.append(f"   rasgos: {'; '.join(traits)}")
@@ -2343,6 +2345,8 @@ def _format_long_term(lt: dict, current_members: Optional[list[str]] = None) -> 
                 chunk.append(f"   descripción física: {'; '.join(desc)}")
             if fotos:
                 chunk.append(f"   fotos/aspecto: {'; '.join(fotos)}")
+            if gustos:
+                chunk.append(f"   gustos e intereses: {'; '.join(gustos[:5])}")
             # Randomly sample preguntas_tipicas: sometimes 0, sometimes 1
             if qs:
                 if random.random() < 0.2:
@@ -3537,6 +3541,41 @@ async def _execute_save_memory(guild_id: int, arg: str, replied_content: str = "
         await _persist_indio_state()
 
     return True, f"saved '{content[:40]}'"
+
+
+async def record_user_interest(guild_id: int, target_user: str, interest_statement: str) -> bool:
+    """Record a media/link interest statement for a user in _indio_long_term."""
+    if not guild_id or not target_user or not interest_statement:
+        return False
+
+    lt_key = f"guild-{guild_id}"
+    async with _dispatch_lock_for(guild_id):
+        lt = dict(_indio_long_term.get(lt_key, {}))
+        users_dict = dict(lt.get("users") or {})
+
+        matched_key = target_user
+        for u_key in users_dict.keys():
+            if u_key.lower() == target_user.lower():
+                matched_key = u_key
+                break
+
+        u_data = dict(users_dict.get(matched_key) or {})
+        u_gustos = list(u_data.get("gustos") or [])
+
+        cleaned_statement = interest_statement.strip()
+        if cleaned_statement and cleaned_statement not in u_gustos:
+            u_gustos.append(cleaned_statement)
+            if len(u_gustos) > 10:
+                u_gustos = u_gustos[-10:]
+            u_data["gustos"] = u_gustos
+            users_dict[matched_key] = u_data
+            lt["users"] = users_dict
+            _indio_long_term[lt_key] = lt
+            await _persist_indio_state()
+            logger.info("Recorded interest for %s in guild %s: %s", matched_key, guild_id, cleaned_statement)
+            return True
+
+    return False
 
 
 async def _dispatch_indio_actions(
