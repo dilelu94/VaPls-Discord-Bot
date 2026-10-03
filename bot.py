@@ -475,6 +475,57 @@ async def _analyze_message_media_and_links(message):
                 except Exception:
                     log.debug("link taste analysis failed", exc_info=True)
 
+    # 3. JoJo Reference Check (In parallel, spontaneous Indio reply without polluting memory)
+    try:
+        jojo_ref = None
+        if content:
+            jojo_ref = await media_analyzer.check_jojo_reference(display_name, "texto", text=content)
+
+        if not jojo_ref and attachments:
+            for att in attachments:
+                ct = (att.content_type or "").lower()
+                if ct.startswith("image/"):
+                    try:
+                        img_bytes = await att.read()
+                        if img_bytes:
+                            jojo_ref = await media_analyzer.check_jojo_reference(
+                                display_name, "imagen", image_bytes=img_bytes, image_mime=ct
+                            )
+                    except Exception:
+                        pass
+                elif ct.startswith("video/"):
+                    try:
+                        frame_bytes = await media_analyzer.extract_video_middle_frame(att.url)
+                        if frame_bytes:
+                            jojo_ref = await media_analyzer.check_jojo_reference(
+                                display_name, "video", image_bytes=frame_bytes, image_mime="image/jpeg"
+                            )
+                    except Exception:
+                        pass
+                if jojo_ref:
+                    break
+
+        if jojo_ref:
+            log.info("JoJo reference detected in message by %s: %s", display_name, jojo_ref)
+            jojo_prompt = (
+                f"[REACCIÓN ESPONTÁNEA: El usuario {display_name} acaba de compartir "
+                f"un contenido que incluye una referencia a JoJo's Bizarre Adventure ({jojo_ref}). "
+                f"Decí de forma graciosa y natural con tu tono casual que es una JoJo referencia "
+                f"(ej: '¿¡Eso es una JoJo referencia?!', 'Kono DIO da!', 'Yare yare daze...') "
+                f"y agregá cualquier comentario gracioso que quieras.]"
+            )
+            await geminiCommand.askIndio(
+                bot,
+                jojo_prompt,
+                speaker_name=display_name,
+                guild_id=guild_id,
+                channel_id=message.channel.id,
+                user_id=message.author.id,
+                source_message_id=message.id,
+            )
+    except Exception:
+        log.debug("jojo reference check failed", exc_info=True)
+
 
 geminiKeys.load_from_disk()
 groqKeys.load_from_disk()

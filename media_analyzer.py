@@ -32,6 +32,16 @@ _IGNORED_DOMAINS = {
     "media.discordapp.net/emojis",
 }
 
+_JOJO_KEYWORDS_RE = re.compile(
+    r"\b("
+    r"jojo|jojos|jotaro|dio brando|za warudo|yare yare|kono dio da|muda muda|ora ora|wryyy+|"
+    r"stardust crusaders|golden wind|stone ocean|giorno|zipper man|killer queen|bites the dust|"
+    r"speedwagon|is that a jojo reference|jojo reference|stand user|giorno theme|ゴゴゴ|menacing|"
+    r"phantom blood|battle tendency|diamond is unbreakable|steel ball run|jojolion|jojolands"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 def is_analyzable_url(url: str) -> bool:
     """Check if a URL is valid for content/interest analysis."""
@@ -266,5 +276,68 @@ async def analyze_content_interest(
                 return cleaned + "."
     except Exception as e:
         logger.warning("analyze_content_interest failed for user %s: %s", user_name, e)
+
+    return None
+
+
+async def check_jojo_reference(
+    user_name: str,
+    content_type: str,
+    *,
+    text: str = "",
+    image_bytes: Optional[bytes] = None,
+    link_meta: Optional[Dict[str, Any]] = None,
+    image_mime: str = "image/jpeg",
+) -> Optional[str]:
+    """Check if text, link metadata, or image/video contains a JoJo's Bizarre Adventure reference.
+
+    Returns a short description of the reference if detected, or None otherwise.
+    """
+    # 1. Text keyword check
+    if text:
+        match = _JOJO_KEYWORDS_RE.search(text)
+        if match:
+            return f"Expresión en texto '{match.group(0)}'"
+
+    # 2. Link metadata check
+    if link_meta:
+        combined = (
+            f"{link_meta.get('title', '')} {link_meta.get('description', '')} "
+            f"{' '.join(link_meta.get('tags') or [])}"
+        )
+        match = _JOJO_KEYWORDS_RE.search(combined)
+        if match:
+            return f"Publicación/Video titulado '{link_meta.get('title', 'Link')}'"
+
+    # 3. Vision check (Gemini Flash-Lite)
+    if image_bytes:
+        system_instruction = (
+            "Sos un detector especializado de referencias al manga/anime JoJo's Bizarre Adventure. "
+            "Analizá la imagen adjunta y responde ÚNICAMENTE si identificas de forma clara una "
+            "referencia, personaje (Jotaro, Dio, Giorno, etc.), Stand, pose o meme clásico de JoJo's "
+            "(ej: 'Kono DIO da', 'You were expecting X, but it was me, Dio!', 'To Be Continued...', "
+            "'Oh? You're approaching me?', onomatopeyas ゴゴゴ, etc.).\n\n"
+            "Reglas de respuesta:\n"
+            "- Si ES una referencia a JoJo's, responde en 1 frase muy corta describiendo el elemento "
+            "(ej: 'Meme de Dio Brando Kono DIO Da', 'Pose o personaje de JoJo's Bizarre Adventure').\n"
+            "- Si NO es una referencia a JoJo's, responde ÚNICAMENTE la palabra: 'NO'."
+        )
+        b64_data = base64.b64encode(image_bytes).decode("utf-8")
+        image_parts = [{"inlineData": {"mimeType": image_mime, "data": b64_data}}]
+
+        try:
+            reply = await geminiClient.generate(
+                user_message=f"¿Esta imagen de {user_name} es una referencia a JoJo?",
+                system_instruction=system_instruction,
+                image_parts=image_parts,
+                model=getattr(config, "GEMINI_MODEL_LITE", "gemini-2.5-flash-lite"),
+                timeout_sec=15.0,
+            )
+            if reply and reply.text:
+                resp = reply.text.strip()
+                if resp.upper() != "NO" and not resp.startswith("HTTP"):
+                    return resp
+        except Exception as e:
+            logger.debug("check_jojo_reference vision check failed: %s", e)
 
     return None

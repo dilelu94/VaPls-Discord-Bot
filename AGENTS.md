@@ -167,6 +167,7 @@ El bot incluye un trabajador en segundo plano en `bot.py` (`_analyze_message_med
 - **Videos**: Se obtiene la duración con `ffprobe` y se extrae un fotograma del medio ($D/2$) con `ffmpeg` para enviarlo a Gemini Vision.
 - **Enlaces**: Se extraen metadatos mediante `yt-dlp` en modo metadatos o tags OpenGraph con `aiohttp`.
 - **Registro en Memoria**: `analyze_content_interest()` genera una frase resumida sobre el interés demostrado por el usuario (ej: *"A Seba le interesan los videos de autos antiguos"*), la cual se almacena en `_indio_long_term["users"][usuario]["gustos"]` mediante `geminiCommand.record_user_interest()`.
+- **Detección de Referencias a JoJo**: `check_jojo_reference()` evalúa en paralelo patrones regex/keywords (`za warudo`, `kono dio da`, `yare yare`, `muda muda`, `ora ora`, `wryyy`, `is that a jojo reference`, `ゴゴゴ`, etc.) y análisis visual con Gemini Vision. Si detecta una referencia a JoJo's, gatilla una respuesta espontánea del Indio en el canal reconociendo la JoJo referencia (*"¿¡Eso es una JoJo referencia?!"*, *"Kono DIO da!"*, etc.) de forma graciosa sin contaminar la memoria a largo plazo.
 - **Prompt del Indio**: El campo `gustos` se inyecta naturalmente en `_format_long_term()` para que el Indio conozca los intereses de cada integrante durante las conversaciones.
 
 ## 📡 Integración con el bot de Telegram
