@@ -11,6 +11,7 @@ import json
 import io
 import logging
 import asyncio
+import random
 import re
 import time
 import datetime
@@ -506,23 +507,28 @@ async def _analyze_message_media_and_links(message):
                     break
 
         if jojo_ref:
+            prob = getattr(config, "JOJO_REPLY_PROBABILITY", 0.25)
             log.info("JoJo reference detected in message by %s: %s", display_name, jojo_ref)
-            jojo_prompt = (
-                f"[REACCIÓN ESPONTÁNEA: El usuario {display_name} acaba de compartir "
-                f"un contenido que incluye una referencia a JoJo's Bizarre Adventure ({jojo_ref}). "
-                f"Decí de forma graciosa y natural con tu tono casual que es una JoJo referencia "
-                f"(ej: '¿¡Eso es una JoJo referencia?!', 'Kono DIO da!', 'Yare yare daze...') "
-                f"y agregá cualquier comentario gracioso que quieras.]"
-            )
-            await geminiCommand.askIndio(
-                bot,
-                jojo_prompt,
-                speaker_name=display_name,
-                guild_id=guild_id,
-                channel_id=message.channel.id,
-                user_id=message.author.id,
-                source_message_id=message.id,
-            )
+            if random.random() < prob:
+                log.info("Triggering JoJo spontaneous reply for %s (roll passed prob=%.2f)", display_name, prob)
+                jojo_prompt = (
+                    f"[REACCIÓN ESPONTÁNEA: El usuario {display_name} acaba de compartir "
+                    f"un contenido que incluye una referencia a JoJo's Bizarre Adventure ({jojo_ref}). "
+                    f"Decí de forma graciosa y natural con tu tono casual que es una JoJo referencia "
+                    f"(ej: '¿¡Eso es una JoJo referencia?!', 'Kono DIO da!', 'Yare yare daze...') "
+                    f"y agregá cualquier comentario gracioso que quieras.]"
+                )
+                await geminiCommand.askIndio(
+                    bot,
+                    jojo_prompt,
+                    speaker_name=display_name,
+                    guild_id=guild_id,
+                    channel_id=message.channel.id,
+                    user_id=message.author.id,
+                    source_message_id=message.id,
+                )
+            else:
+                log.info("Skipped JoJo spontaneous reply due to random roll (prob=%.2f)", prob)
     except Exception:
         log.debug("jojo reference check failed", exc_info=True)
 

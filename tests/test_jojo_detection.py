@@ -70,8 +70,25 @@ async def test_analyze_message_media_and_links_triggers_jojo_reply():
     msg.attachments = []
     msg.channel = MagicMock(id=111222333)
 
-    with patch("geminiCommand.askIndio", new_callable=AsyncMock) as mock_ask:
-        await bot._analyze_message_media_and_links(msg)
-        assert mock_ask.called
-        call_args = mock_ask.call_args
-        assert "JOJO" in call_args[0][1] or "JoJo" in call_args[0][1]
+    with patch("random.random", return_value=0.1):
+        with patch("geminiCommand.askIndio", new_callable=AsyncMock) as mock_ask:
+            await bot._analyze_message_media_and_links(msg)
+            assert mock_ask.called
+            call_args = mock_ask.call_args
+            assert "JOJO" in call_args[0][1] or "JoJo" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_analyze_message_media_and_links_skips_jojo_reply_on_random_roll():
+    msg = MagicMock()
+    msg.guild = MagicMock(id=123456789)
+    msg.author = MagicMock(id=987654321, display_name="Seba", bot=False)
+    msg.content = "No te la puedo creer, za warudo total esto"
+    msg.attachments = []
+    msg.channel = MagicMock(id=111222333)
+
+    # Roll high (> 0.25), so reply is skipped
+    with patch("random.random", return_value=0.95):
+        with patch("geminiCommand.askIndio", new_callable=AsyncMock) as mock_ask:
+            await bot._analyze_message_media_and_links(msg)
+            assert not mock_ask.called

@@ -298,3 +298,7 @@ TWITCH_AUTOSTREAM_CHANNELS = [c.strip() for c in _raw_twitch_channels.split(",")
 TWITCH_AUTOSTREAM_CHECK_INTERVAL = int(os.getenv("TWITCH_AUTOSTREAM_CHECK_INTERVAL", "120"))
 TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID = int(os.getenv("TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID", "0"))
 
+# --- JoJo reference spontaneous reply --------------------------------------
+# Probabilidad (0.0 a 1.0) de que el Indio intervenga espontáneamente al detectar una JoJo referencia.
+JOJO_REPLY_PROBABILITY = float(os.getenv("JOJO_REPLY_PROBABILITY", "0.25"))
+
