@@ -119,3 +119,12 @@ def test_unknown_user_field_is_ignored(monkeypatch):
     for value in dossiers["TestGhost"].values():
         assert "PASSWORD_LEAK_CANARY" not in value
         assert all("nota interna" not in v for v in value)
+
+
+def test_seba_father_anecdote_present():
+    """Verify Seba's new anecdote about becoming a father is loaded in static traits."""
+    dossiers = _static_user_traits()
+    assert "Seba" in dossiers
+    seba_anec = dossiers["Seba"].get("anecdotas", [])
+    assert any("papa" in a.lower() or "papá" in a.lower() for a in seba_anec)
+

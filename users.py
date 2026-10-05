@@ -270,6 +270,7 @@ _FALLBACK_USERS: dict[int, dict] = {
         ],
         "anecdotas": [
             "no invito a nadie al casamiento",
+            "va a ser papá y no les dijo nada a los amigos",
         ],
         "descripcion": [
             "Un hombre joven de cuello notablemente largo y rasgos judíos, aspecto prolijo y adinerado.",

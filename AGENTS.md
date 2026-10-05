@@ -156,9 +156,9 @@ El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 `/play` descarga con yt-dlp, reproduce con FFmpeg y mantiene cola/estado por
 guild con pre-descarga en segundo plano.
 
-### 4) Saludos y Audios Secretos (`Secretos/`)
+### 4) Saludos, Lore y Memoria de Usuarios (`users.json` / `users.py`)
 
-Todos los audios raros o secretos configurados como saludos en `users.json` / `users.py` (como `mr-krabs-money_z55UHab.mp3` de Seba con 1% de probabilidad) deben residir en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`), la cual es ignorada automáticamente por el Soundpad. Los saludos estándar deben ubicarse en `Audios/` y nunca en subcarpetas personales por usuario (ej. `Seba/` o `Caro/`) para evitar que el Soundpad detecte y muestre dichas carpetas en su panel interactivo. La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), la cual mantiene una copia tanto en `Secretos/` (`audio_output/Secretos/04 - He Follado con Cocodrilos.mp3`) como en `Canciones/Mila/` (`audio_output/Canciones/Mila/04 - He Follado con Cocodrilos.mp3`).
+Todos los perfiles de usuario, saludos, rasgos y anécdotas estáticas del grupo (como que Seba va a ser papá y no les dijo nada a sus amigos, o la anécdota del casamiento) se definen en `data/users.json` con fallback en `users.py`. Todos los audios raros o secretos configurados como saludos en `users.json` / `users.py` (como `mr-krabs-money_z55UHab.mp3` de Seba con 1% de probabilidad) deben residir en la carpeta `Secretos/` dentro de `CUSTOM_AUDIO_PATH` (`audio_output/Secretos/`), la cual es ignorada automáticamente por el Soundpad. Los saludos estándar deben ubicarse en `Audios/` y nunca en subcarpetas personales por usuario (ej. `Seba/` o `Caro/`) para evitar que el Soundpad detecte y muestre dichas carpetas en su panel interactivo. La única excepción es la canción de Mila (`04 - He Follado con Cocodrilos.mp3`), la cual mantiene una copia tanto en `Secretos/` (`audio_output/Secretos/04 - He Follado con Cocodrilos.mp3`) como en `Canciones/Mila/` (`audio_output/Canciones/Mila/04 - He Follado con Cocodrilos.mp3`).
 
 ### 5) Análisis de Multimedia, Enlaces y Memoria de Gustos (`media_analyzer.py`)
 
