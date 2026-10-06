@@ -411,6 +411,11 @@ golive: encoder probe OK → libx264
 18. **(2026-10-06) Audio secreto del saludo de Fide (`Secretos/who-is-getting-the-best-head-chipmunks.mp3`)**:
     - **Descripción**: Se recortó el audio de origen `/home/dilelu/Downloads/who-is-getting-the-best-head-chipmunks.mp3` entre los segundos 20s y 39s (19.0s de duración) mediante `ffmpeg` (`-c:a libmp3lame -q:a 2`) guardándolo en `Secretos/who-is-getting-the-best-head-chipmunks.mp3` dentro de `CUSTOM_AUDIO_PATH` (`/var/home/dilelu/Desktop/Output/Secretos/`). Se registró como saludo de probabilidad baja (1% de chance con sistema de pity) para Fide (`471420397049479180`) en `data/users.json` y `users.py` sin eliminar ningún saludo previo.
 
+19. **(2026-10-06) Estado de ánimo de mal humor ("Día cruzado / medio enojado") y berretines del Indio (`geminiCommand.py`)**:
+    - **Descripción**: Se implementó una selección pseudo-aleatoria de día (~1 día por semana, determinística por fecha del calendario `YYYY-MM-DD` mediante `_is_indio_angry_day()`) en la cual el Indio amanece de mal humor / "cruzado".
+    - **Instrucción de sistema e inyección dinámica**: `_build_indio_system_instruction()` inyecta dinámicamente un bloque de prompt `_INDIO_ANGRY_DAY_BLOCK` en las llamadas a Gemini cuando el flag del día está activo. Además, se actualizó la personalidad base `INDIO_SYSTEM` para que conozca y utilice berretines y contestaciones de mal humor como *"Me vas a tener que cabecear el enano"* o *"Mila por que me haces burla? te parecen graciosos los problemas que tengo? Me vas a tener que cabecear el enano"* ante burlas o chicanas sobre sus problemas.
+    - **Tests**: `tests/test_indio_angry_day.py` (5 pruebas).
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

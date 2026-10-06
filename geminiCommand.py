@@ -239,6 +239,7 @@ bardeo o los chistes internos pesados se usan de forma muy esporádica y ÚNICAM
 si el tono del otro es claramente de chicana/joda, o si te preguntan directo por eso. \
 Con Viny en particular, controlá las burlas sobre que no labura, es pelado o estudia programación: no lo \
 cargues tanto ni tan seguido, tratá de hablarle con buena onda la mayor parte del tiempo. \
+De vez en cuando, o si te buscan la boca, te cargan o te hacen burla sobre tus problemas (especialmente si Mila te hace burla), te ponés medio enojado, te cruzás y tirás berretines de mal humor como "Me vas a tener que cabecear el enano" o "Mila por que me haces burla? te parecen graciosos los problemas que tengo? Me vas a tener que cabecear el enano". \
 Tu tono en charlas informales sobre mujeres, belleza o atracción física (ej. si en el grupo \
 comentan o preguntan sobre el físico o atributos de una piba, como las tetas, \
 el lomo o la figura), actuás como un hombre más del grupo y un viejo veterano de la barra: \
@@ -342,6 +343,62 @@ emoji o "los nuevos emojis del server", mirá la lista de abajo y respondé en \
 base a eso — no hagas el bobo si los tenés a mano, tirá uno o dos pegando el \
 código y listo.
 """
+
+_INDIO_ANGRY_DAY_BLOCK = """\
+[ESTADO DE ÁNIMO DEL DÍA: MEDIO ENOJADO / DÍA CRUZADO]
+Hoy tuviste un mal día y estás medio enojado, rancio, cruzado y de pocas pulgas. \
+Si te cargan, te hacen burla, o la charla se pone molesta (especialmente si Mila u otro te burla o salta con tus problemas), \
+reaccionás con mal humor y tirás berretines rabiosos de la barra. \
+Tus expresiones y berretines clave para responder con bronca cuando te cargan o te hacen burla son:
+- "Me vas a tener que cabecear el enano"
+- "Mila por que me haces burla? te parecen graciosos los problemas que tengo? Me vas a tener que cabecear el enano"
+- Saltás a recriminar indignado si les parecen graciosos tus problemas y los mandás a cabecear el enano.
+"""
+
+
+def _is_indio_angry_day(date_str: str | None = None) -> bool:
+    """Determine if today is an 'angry / cruzado' day for the Indio.
+
+    Occurs pseudo-randomly ~1 day per week (1 out of 7 chance) deterministically
+    seeded by the calendar date (YYYY-MM-DD), so it stays consistent throughout
+    the entire day.
+    """
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    return random.Random(date_str).randint(0, 6) == 0
+
+
+def _get_indio_mood_block(date_str: str | None = None) -> str:
+    """Return the mood instruction block if today is an angry day, else empty string."""
+    if _is_indio_angry_day(date_str):
+        return _INDIO_ANGRY_DAY_BLOCK
+    return ""
+
+
+def _build_indio_system_instruction(
+    lt_block: str = "",
+    emoji_block: str = "",
+    recent_block: str = "",
+    date_str: str | None = None,
+) -> str:
+    """Build full system_instruction for the Indio persona.
+
+    Combines base INDIO_SYSTEM persona, long-term memory notes, guild emojis,
+    daily mood block (if today is an angry/cruzado day), catalog of images,
+    and recent spontaneous stories.
+    """
+    mood_block = _get_indio_mood_block(date_str)
+    stable_extras = "\n\n".join(
+        b for b in (lt_block, emoji_block, mood_block) if b
+    )
+    system_instruction = INDIO_SYSTEM + (
+        f"\n\n{stable_extras}" if stable_extras else ""
+    )
+    system_instruction = _inject_image_catalog(system_instruction)
+    if recent_block:
+        system_instruction += "\n\n" + recent_block
+    return system_instruction
+
 
 _INDIO_TOOLS = [
     {
@@ -5632,14 +5689,10 @@ async def indioLogic(
     # Stable cache prefix: persona + long-term notes + emojis (change rarely
     # within a session). Player state is volatile (current track/queue) so it
     # rides in volatile_context, out of the cached system prompt.
-    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (
-        f"\n\n{stable_extras}" if stable_extras else ""
-    )
-    system_instruction = _inject_image_catalog(system_instruction)
     recent_block = _format_recent_stories(guild_id)
-    if recent_block:
-        system_instruction += "\n\n" + recent_block
+    system_instruction = _build_indio_system_instruction(
+        lt_block=lt_block, emoji_block=emoji_block, recent_block=recent_block
+    )
 
     t0 = time.monotonic()
     # Solo activamos el aviso de rotación cuando el Indio responde en el canal
@@ -6105,14 +6158,10 @@ async def indioFromVoice(
     # Stable cache prefix: persona + long-term notes + emojis (change rarely
     # within a session). Player state is volatile (current track/queue) so it
     # rides in volatile_context, out of the cached system prompt.
-    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (
-        f"\n\n{stable_extras}" if stable_extras else ""
-    )
-    system_instruction = _inject_image_catalog(system_instruction)
     recent_block = _format_recent_stories(guild_id)
-    if recent_block:
-        system_instruction += "\n\n" + recent_block
+    system_instruction = _build_indio_system_instruction(
+        lt_block=lt_block, emoji_block=emoji_block, recent_block=recent_block
+    )
 
     # ---- Context from replied-to message + image download ----
     volatile = player_block or None
@@ -6696,14 +6745,10 @@ async def indioInstagramCommentLogic(
     emoji_block = _format_guild_emojis(guild)
     player_block = _format_player_state(bot, guild_id)
 
-    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (
-        f"\n\n{stable_extras}" if stable_extras else ""
-    )
-    system_instruction = _inject_image_catalog(system_instruction)
     recent_block = _format_recent_stories(guild_id)
-    if recent_block:
-        system_instruction += "\n\n" + recent_block
+    system_instruction = _build_indio_system_instruction(
+        lt_block=lt_block, emoji_block=emoji_block, recent_block=recent_block
+    )
 
     logger.info(
         f"[INSTAGRAM-COMMENTS-INDIO] Generating reply to @{sender_username}'s comment (speaker: {speaker})"
@@ -6900,14 +6945,10 @@ async def indioInstagramScraperLogic(
         emoji_block = _format_guild_emojis(guild)
         player_block = _format_player_state(bot, guild_id)
 
-        stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-        system_instruction = INDIO_SYSTEM + (
-            f"\n\n{stable_extras}" if stable_extras else ""
-        )
-        system_instruction = _inject_image_catalog(system_instruction)
         recent_block = _format_recent_stories(guild_id)
-        if recent_block:
-            system_instruction += "\n\n" + recent_block
+        system_instruction = _build_indio_system_instruction(
+            lt_block=lt_block, emoji_block=emoji_block, recent_block=recent_block
+        )
         # Los DMs de Instagram no pueden despachar tools de Discord (play_music,
         # etc.): pasarlas hace que Gemini a veces responda solo
         # con un functionCall sin texto y el DM quede en "..." silencioso.
@@ -7074,14 +7115,10 @@ async def generate_indio_telegram_response(
     emoji_block = _format_guild_emojis(guild) if guild else ""
     player_block = _format_player_state(bot, guild_id) if bot else ""
 
-    stable_extras = "\n\n".join(b for b in (lt_block, emoji_block) if b)
-    system_instruction = INDIO_SYSTEM + (
-        f"\n\n{stable_extras}" if stable_extras else ""
-    )
-    system_instruction = _inject_image_catalog(system_instruction)
     recent_block = _format_recent_stories(guild_id)
-    if recent_block:
-        system_instruction += "\n\n" + recent_block
+    system_instruction = _build_indio_system_instruction(
+        lt_block=lt_block, emoji_block=emoji_block, recent_block=recent_block
+    )
 
     tagged_message = f"{speaker}: {prompt}"
 
