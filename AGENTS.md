@@ -411,10 +411,11 @@ golive: encoder probe OK → libx264
 18. **(2026-10-06) Audio secreto del saludo de Fide (`Secretos/who-is-getting-the-best-head-chipmunks.mp3`)**:
     - **Descripción**: Se recortó el audio de origen `/home/dilelu/Downloads/who-is-getting-the-best-head-chipmunks.mp3` entre los segundos 20s y 39s (19.0s de duración) mediante `ffmpeg` (`-c:a libmp3lame -q:a 2`) guardándolo en `Secretos/who-is-getting-the-best-head-chipmunks.mp3` dentro de `CUSTOM_AUDIO_PATH` (`/var/home/dilelu/Desktop/Output/Secretos/`). Se registró como saludo de probabilidad baja (1% de chance con sistema de pity) para Fide (`471420397049479180`) en `data/users.json` y `users.py` sin eliminar ningún saludo previo.
 
-19. **(2026-10-06) Estado de ánimo de mal humor ("Día cruzado / medio enojado") y pool de berretines del Indio (`geminiCommand.py`)**:
+19. **(2026-10-06) Estado de ánimo de mal humor ("Día cruzado / medio enojado"), pool de berretines y anuncio automático en `#soreteposting` (`geminiCommand.py`)**:
     - **Descripción**: Se implementó una selección pseudo-aleatoria de día (~1 día por semana, determinística por fecha del calendario `YYYY-MM-DD` mediante `_is_indio_angry_day()`) en la cual el Indio amanece de mal humor / "cruzado".
+    - **Anuncio automático único en `#soreteposting`**: `check_and_post_indio_angry_announcement()` evalúa en segundo plano (bucle de 30 min y en `on_ready`) si hoy es día cruzado. Publica **una sola vez al día** un mensaje de aviso en el canal `#soreteposting` (ej. *"Hoy estoy de pocas pulgas así que no jodan."*) relayeado como el Indio real, guardando la fecha anunciada en `data/indio_angry_announcement.json` para no spammear ni duplicar tras reinicios.
     - **Instrucción de sistema e inyección dinámica**: `_build_indio_system_instruction()` inyecta dinámicamente un bloque de prompt `_INDIO_ANGRY_DAY_BLOCK` en las llamadas a Gemini cuando el flag del día está activo. Incluye un repertorio variado de berretines rioplatenses (*"cabecear el enano"*, *"¿te comiste un payaso hoy?"*, *"no me busqués la boca"*, *"no me hinchés los quinotos"*, etc.) y la regla estricta de no repetir la misma frase calcada.
-    - **Tests**: `tests/test_indio_angry_day.py` (5 pruebas).
+    - **Tests**: `tests/test_indio_angry_day.py` (6 pruebas).
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)

@@ -645,6 +645,13 @@ async def on_ready():
     except Exception:
         log.exception("story watcher startup failed")
 
+    # Start Indio angry day announcement loop (#soreteposting warning).
+    try:
+        asyncio.create_task(geminiCommand.start_angry_announcement_loop(bot))
+        log.info("indio angry announcement loop started")
+    except Exception:
+        log.exception("indio angry announcement loop startup failed")
+
     # Start scheduled daily stream
     try:
         if not scheduled_daily_stream.is_running():

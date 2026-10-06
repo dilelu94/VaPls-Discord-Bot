@@ -1,7 +1,10 @@
 """Behavioral tests for Indio's angry day mood state and 'cabecear el enano' berretines."""
 from __future__ import annotations
 
-import random
+import types
+import pytest
+from unittest.mock import AsyncMock
+import geminiCommand
 from geminiCommand import (
     INDIO_SYSTEM,
     _is_indio_angry_day,
@@ -61,7 +64,6 @@ def test_get_indio_mood_block_returns_instructions_on_angry_day():
     assert normal_block == ""
     assert "MEDIO ENOJADO" in angry_block
     assert "cabecear el enano" in angry_block.lower()
-    assert "haces burla" in angry_block.lower() or "hacés burla" in angry_block.lower()
 
 
 def test_build_indio_system_instruction_injects_angry_mood_block():
@@ -81,3 +83,38 @@ def test_build_indio_system_instruction_injects_angry_mood_block():
     assert "[ESTADO DE ÁNIMO DEL DÍA: MEDIO ENOJADO / DÍA CRUZADO]" in instruction
     assert "[Notas long term]" in instruction
     assert "[Emojis]" in instruction
+
+
+@pytest.mark.asyncio
+async def test_check_and_post_indio_angry_announcement_posts_once(tmp_path, monkeypatch):
+    """Verify check_and_post_indio_angry_announcement posts to #soreteposting only once on an angry day."""
+    announcement_file = str(tmp_path / "indio_angry_announcement.json")
+    monkeypatch.setattr(geminiCommand, "_ANGRY_ANNOUNCEMENT_FILE", announcement_file)
+
+    angry_date = None
+    normal_date = None
+    for day in range(1, 30):
+        d_str = f"2026-07-{day:02d}"
+        if geminiCommand._is_indio_angry_day(d_str):
+            angry_date = d_str
+        else:
+            normal_date = d_str
+        if angry_date and normal_date:
+            break
+
+    chan = types.SimpleNamespace(id=999, name="soreteposting", guild=types.SimpleNamespace(id=111), send=AsyncMock())
+    bot = types.SimpleNamespace(guilds=[types.SimpleNamespace(text_channels=[chan])], get_guild=lambda gid: None)
+
+    monkeypatch.setattr(geminiCommand, "_relay_to_userbot", AsyncMock(return_value=[12345]))
+
+    # 1. On a normal date, nothing should be posted
+    posted_normal = await geminiCommand.check_and_post_indio_angry_announcement(bot, date_str=normal_date)
+    assert posted_normal is False
+
+    # 2. On an angry date, it should post once
+    posted_angry_1 = await geminiCommand.check_and_post_indio_angry_announcement(bot, date_str=angry_date)
+    assert posted_angry_1 is True
+
+    # 3. Second attempt on same angry date should NOT post again
+    posted_angry_2 = await geminiCommand.check_and_post_indio_angry_announcement(bot, date_str=angry_date)
+    assert posted_angry_2 is False

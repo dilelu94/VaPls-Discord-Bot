@@ -4999,6 +4999,113 @@ def _is_soreteposting_channel(channel) -> bool:
     return "soreteposting" in cname or "sorete-posting" in cname
 
 
+_ANGRY_ANNOUNCEMENT_FILE = os.path.join(
+    os.path.dirname(config.INDIO_MEMORY_PATH), "indio_angry_announcement.json"
+)
+_INDIO_ANGRY_ANNOUNCEMENTS = [
+    "Hoy estoy de pocas pulgas así que no jodan.",
+    "Aviso al grupo: hoy ando rancio y cruzado, ni me busquen la boca.",
+    "Che, hoy amanecí de mal humor y con pocas pulgas, no me rompan las pelotas.",
+    "Hoy estoy medio enojado y cruzado, no estoy para chicanas de dos pesos.",
+    "Aviso formal: hoy no me hinches los quinotos que ando de muy mal humor.",
+]
+
+
+def _get_soreteposting_channel(bot: discord.Bot, guild_id: int | None = None) -> discord.TextChannel | None:
+    """Find the #soreteposting channel in the bot's guilds."""
+    guilds = getattr(bot, "guilds", []) or []
+    if guild_id:
+        target_guild = bot.get_guild(guild_id)
+        if target_guild:
+            guilds = [target_guild]
+
+    for g in guilds:
+        for ch in getattr(g, "text_channels", []) or []:
+            if _is_soreteposting_channel(ch):
+                return ch
+    return None
+
+
+def _load_angry_announcement_date() -> str:
+    """Load last announced angry date from disk."""
+    if not os.path.exists(_ANGRY_ANNOUNCEMENT_FILE):
+        return ""
+    try:
+        with open(_ANGRY_ANNOUNCEMENT_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data.get("last_announced_date", "")
+    except Exception:
+        return ""
+
+
+def _save_angry_announcement_date(date_str: str) -> None:
+    """Save last announced angry date to disk."""
+    try:
+        os.makedirs(os.path.dirname(_ANGRY_ANNOUNCEMENT_FILE), exist_ok=True)
+        with open(_ANGRY_ANNOUNCEMENT_FILE, "w", encoding="utf-8") as f:
+            json.dump({"last_announced_date": date_str}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning("failed to save angry announcement date: %s", e)
+
+
+async def check_and_post_indio_angry_announcement(
+    bot: discord.Bot, date_str: str | None = None
+) -> bool:
+    """Check if today is an angry day and post a warning once per day in #soreteposting.
+
+    Returns True if an announcement was posted, False otherwise.
+    """
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+
+    if not _is_indio_angry_day(date_str):
+        return False
+
+    last_announced = _load_angry_announcement_date()
+    if last_announced == date_str:
+        return False
+
+    chan = _get_soreteposting_channel(bot)
+    if chan is None:
+        logger.warning(
+            "check_and_post_indio_angry_announcement: #soreteposting channel not found"
+        )
+        return False
+
+    announcement = random.Random(date_str).choice(_INDIO_ANGRY_ANNOUNCEMENTS)
+
+    relayed = await _relay_to_userbot(
+        chan.id, announcement, None, guild_id=getattr(chan.guild, "id", None)
+    )
+    if not relayed:
+        try:
+            await chan.send(announcement)
+        except Exception as e:
+            logger.warning(
+                "failed to post angry announcement to #soreteposting: %s", e
+            )
+            return False
+
+    _save_angry_announcement_date(date_str)
+    logger.info(
+        "Posted Indio angry day announcement to #%s (date=%s): %s",
+        getattr(chan, "name", "channel"),
+        date_str,
+        announcement,
+    )
+    return True
+
+
+async def start_angry_announcement_loop(bot: discord.Bot) -> None:
+    """Periodically check (every 30 min) if today is an angry day to post announcement in #soreteposting."""
+    while True:
+        try:
+            await check_and_post_indio_angry_announcement(bot)
+        except Exception:
+            logger.exception("angry announcement loop iteration failed")
+        await asyncio.sleep(1800)
+
+
 async def record_soreteposting_chat_message(message: discord.Message) -> bool:
     """Record a chat message from #soreteposting into Indio's short-term history.
 
