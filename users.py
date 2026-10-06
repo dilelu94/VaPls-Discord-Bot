@@ -206,6 +206,10 @@ _FALLBACK_USERS: dict[int, dict] = {
             {
                 "path": "Secretos/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
                 "weight": 1
+            },
+            {
+                "path": "Secretos/who-is-getting-the-best-head-chipmunks.mp3",
+                "weight": 1
             }
         ],
         "traits": [

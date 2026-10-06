@@ -801,3 +801,16 @@ async def test_greeting_watchdog_auto_resets_stuck_flag():
     assert greeting._greeting_playing is False
 
 
+def test_fide_greeting_config_includes_chipmunks_secret(fake_users, _audio_dir):
+    """Verify Fide's greeting config includes who-is-getting-the-best-head-chipmunks.mp3 with weight 1."""
+    import users
+    users.reload_users_if_changed(force=True)
+    fide_cfg = users.USERS.get(471420397049479180, {})
+    greetings = fide_cfg.get("greeting", [])
+    paths = [g["path"] for g in greetings if isinstance(g, dict)]
+    assert "Secretos/who-is-getting-the-best-head-chipmunks.mp3" in paths
+    chipmunks_item = next(g for g in greetings if g.get("path") == "Secretos/who-is-getting-the-best-head-chipmunks.mp3")
+    assert chipmunks_item["weight"] == 1
+
+
+

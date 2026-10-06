@@ -408,6 +408,9 @@ golive: encoder probe OK → libx264
     - _Causa_: Audios ultracortos (como `Fish Carrot.m4a` de Miles, con duración de 0.58s) comenzaban a sonar de inmediato a t=0.1s tras la llegada a la sala, pero el cliente de Discord del usuario tarda entre 1.0s y 1.2s en negociar la conexión UDP/DAVE E2EE y abrir sus altavoces, haciendo que el audio terminara de sonar antes de que el usuario pudiese escucharlo.
     - **Fix**: Se agregó inspección de duración vía `ffprobe` (`get_audio_duration`). Si la duración del audio es menor a 1.5s, se inyecta automáticamente el filtro `-af "adelay=1000|1000,..."` en FFmpeg. Esto añade 1.0s de silencio inicial permitiendo que los altavoces del cliente se abran justo a tiempo para escuchar el audio completo sin retrasar los audios normales o largos.
 
+18. **(2026-10-06) Audio secreto del saludo de Fide (`Secretos/who-is-getting-the-best-head-chipmunks.mp3`)**:
+    - **Descripción**: Se recortó el audio de origen `/home/dilelu/Downloads/who-is-getting-the-best-head-chipmunks.mp3` entre los segundos 20s y 39s (19.0s de duración) mediante `ffmpeg` (`-c:a libmp3lame -q:a 2`) guardándolo en `Secretos/who-is-getting-the-best-head-chipmunks.mp3` dentro de `CUSTOM_AUDIO_PATH` (`/var/home/dilelu/Desktop/Output/Secretos/`). Se registró como saludo de probabilidad baja (1% de chance con sistema de pity) para Fide (`471420397049479180`) en `data/users.json` y `users.py` sin eliminar ningún saludo previo.
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
