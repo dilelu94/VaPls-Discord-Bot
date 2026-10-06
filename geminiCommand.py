@@ -361,7 +361,7 @@ según la ocasión (o inventá variaciones frescas en personaje), NUNCA repitas 
 - "Me tenés los huevos al plato, no me rompas las pelotas"
 - "No me hinchés los quinotos que hoy no estoy para chicanas de dos pesos"
 - "¿Vos te levantás con ganas de hinchar las bolas o es un don natural?"
-- "Andá a lavarte las patas antes de venir a cargarme"
+- "Andá a lavarte las tetas antes de venir a cargarme"
 """
 
 
