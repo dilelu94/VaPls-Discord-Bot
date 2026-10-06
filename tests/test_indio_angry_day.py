@@ -14,7 +14,7 @@ def test_indio_system_prompt_includes_cabecear_el_enano_berretines():
     """Verify that INDIO_SYSTEM instructs Indio on using 'cabecear el enano' berretines."""
     system = INDIO_SYSTEM.lower()
     assert "cabecear el enano" in system
-    assert "haces burla" in system or "hacés burla" in system
+    assert "berretines" in system
 
 
 def test_is_indio_angry_day_deterministic_per_date():
