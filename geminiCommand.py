@@ -1793,6 +1793,11 @@ def _stamp_history_for_prompt(history: list[dict], now: float) -> list[dict]:
             # Recent — leave it alone.
             out.append({k: v for k, v in turn.items() if k != "ts"})
             continue
+        if turn.get("role") != "user":
+            # Only stamp user turns — model turns must stay clean so Gemini doesn't
+            # learn to prefix its own responses with "(hace X)" temporal tags.
+            out.append({k: v for k, v in turn.items() if k != "ts"})
+            continue
         tag = f"({_humanize_age(age)}) " if age is not None else "(hace tiempo) "
         new_parts = []
         for part in turn.get("parts", []):
@@ -4825,6 +4830,10 @@ async def _play_chosen_song(bot, guild_id: int, song: dict) -> None:
         )
 
 
+_AGE_TAG_PREFIX_RE = re.compile(
+    r"^\s*\([hH]ace\s+[^)]+\)\s*",
+)
+
 _INDIO_PREFIX_RE = re.compile(
     r"^\s*[\[\(]?\s*(el\s+)?indio\s*[\]\)]?\s*[:\-—]\s*",
     re.IGNORECASE,
@@ -4884,15 +4893,17 @@ def _get_known_speaker_names() -> set[str]:
 
 def _strip_speaker_prefix(text: str, speaker_name: Optional[str] = None) -> str:
     """Drop a leading "[indio]:" / "Indio:" / "[Miles]:" / "Enrique:" / "(el indio) -"
-    style prefix from a model reply. The model sometimes mirrors the speaker tag
-    format it sees in user turns even though INDIO_SYSTEM tells it not to.
+    style prefix or temporal tag like "(hace 1 h)" from a model reply. The model
+    sometimes mirrors the speaker tag or age tag format it sees in user turns even
+    though INDIO_SYSTEM tells it not to.
 
-    Applies first the indio-specific stripper (also catches bareword "Indio:"
-    without brackets), then the generic bracketed-name stripper, then the
-    unbracketed speaker tag stripper."""
+    Applies first the age-tag stripper, then the indio-specific stripper (also
+    catches bareword "Indio:" without brackets), then the generic bracketed-name
+    stripper, then the unbracketed speaker tag stripper."""
     if not text:
         return text
-    out = _INDIO_PREFIX_RE.sub("", text, count=1)
+    out = _AGE_TAG_PREFIX_RE.sub("", text, count=1)
+    out = _INDIO_PREFIX_RE.sub("", out, count=1)
     out = _LEADING_SPEAKER_PREFIX_RE.sub("", out, count=1)
 
     m = _UNBRACKETED_SPEAKER_PREFIX_RE.match(out)

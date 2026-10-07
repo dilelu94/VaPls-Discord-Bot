@@ -423,6 +423,12 @@ golive: encoder probe OK → libx264
     - **Fix**: Se antepuso la comprobación `if target_channel.id == afk_target.id: return False` al inicio de `_should_follow_user()`, garantizando que el userbot nunca ingrese al canal AFK bajo ninguna circunstancia.
     - **Tests**: `tests/test_userbot_follow_policy.py` (23 pruebas).
 
+21. **(2026-10-07) Corrección de prefijo `(hace X)` en respuestas del Indio (`geminiCommand.py`)**:
+    - **Descripción**: Se corrigió el comportamiento por el cual el Indio agregaba un prefijo temporal como `(hace 1 h)` al comienzo de sus respuestas.
+    - **Causa**: `_stamp_history_for_prompt` etiquetaba todos los turnos antiguos del historial (anteriores a 15 min) con un prefijo temporal `(hace X)`. Al etiquetar indiscriminadamente turnos con `role == "model"` (las respuestas pasadas del bot), el modelo Gemini interpretaba que las respuestas del asistente debían comenzar con dicho formato y lo replicaba al inicio de sus mensajes (ej. `"(hace 1 h) Suicidio, ¡Kono DIO da!..."`).
+    - **Fix**: (a) Se modificó `_stamp_history_for_prompt` para etiquetar **únicamente** los turnos de `role == "user"`, conservando los turnos de `role == "model"` sin alterar. (b) Se integró la expresión regular `_AGE_TAG_PREFIX_RE` dentro de `_strip_speaker_prefix` para purgar de forma preventiva cualquier etiqueta `(hace X)` que Gemini intente escribir al inicio de una respuesta.
+    - **Tests**: `tests/test_indio_memory_timestamp.py` (6 pruebas).
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

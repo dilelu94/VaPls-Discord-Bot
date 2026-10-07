@@ -59,8 +59,8 @@ def test_legacy_turn_without_ts_is_tagged_as_old():
 
 def test_mixed_recent_and_old_get_distinguished():
     """Realistic case: a long history with old turns + a fresh exchange.
-    The fresh ones stay clean, the old ones get tagged. That's the whole
-    point — Gemini sees the seam between past and present."""
+    Old user turns get tagged; old model turns stay clean so Gemini doesn't
+    learn to prefix its responses with timestamp tags. Fresh turns stay clean."""
     from geminiCommand import _stamp_history_for_prompt
     now = time.time()
     history = [
@@ -70,11 +70,21 @@ def test_mixed_recent_and_old_get_distinguished():
         _turn("model", "qué onda capo",      ts=now - 25),
     ]
     out = _stamp_history_for_prompt(history, now)
+    # Old user turn gets tagged.
     assert out[0]["parts"][0]["text"].startswith("(hace")
-    assert out[1]["parts"][0]["text"].startswith("(hace")
-    # The fresh ones are untouched.
+    # Old model turn stays clean!
+    assert out[1]["parts"][0]["text"] == "todo piola"
+    # Fresh ones stay clean.
     assert out[2]["parts"][0]["text"] == "che indio hola"
     assert out[3]["parts"][0]["text"] == "qué onda capo"
+
+
+def test_strip_speaker_prefix_removes_leading_age_tag():
+    """If Gemini echoes a leading '(hace 1 h)' tag in its reply, it must be stripped."""
+    from geminiCommand import _strip_speaker_prefix
+    raw = "(hace 1 h) Suicidio, ¡Kono DIO da! Otra JoJo referencia"
+    cleaned = _strip_speaker_prefix(raw)
+    assert cleaned == "Suicidio, ¡Kono DIO da! Otra JoJo referencia"
 
 
 def test_stamping_does_not_mutate_input():
@@ -86,3 +96,4 @@ def test_stamping_does_not_mutate_input():
     _ = _stamp_history_for_prompt(original, now)
     assert original[0]["parts"][0]["text"] == "hola"
     assert original[0]["ts"] == now - 86400
+
