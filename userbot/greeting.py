@@ -778,22 +778,35 @@ async def play_user_disconnect_reaction(
     Returns:
         True if reaction audio was scheduled to play; False otherwise.
     """
+    user_label = getattr(member, "display_name", display_name or str(user_id))
+    logger.info(
+        "[DISCONNECT-REACTION] Evaluating disconnect reaction for user=%s (%s) in channel=%s",
+        user_id,
+        user_label,
+        channel_id,
+    )
     if not getattr(config, "GREETING_ENABLED", True):
+        logger.info("[DISCONNECT-REACTION] GREETING_ENABLED is False — skipping for user=%s", user_id)
         return False
     if user_id is None:
+        logger.info("[DISCONNECT-REACTION] user_id is None — skipping")
         return False
     if member is not None and getattr(member, "bot", False):
+        logger.info("[DISCONNECT-REACTION] user %s is a bot — skipping", user_id)
         return False
 
     cfg = get_user_disconnect_config(user_id)
     if not cfg:
+        logger.info("[DISCONNECT-REACTION] No disconnect config found for user=%s — skipping", user_id)
         return False
 
     chance = float(cfg.get("chance", 1.0))
-    if random.random() >= chance:
+    roll = random.random()
+    if roll >= chance:
         logger.info(
-            "[DISCONNECT-REACTION] random chance roll failed (user=%s, chance=%.2f)",
+            "[DISCONNECT-REACTION] Random chance roll failed for user=%s (roll=%.3f >= chance=%.2f)",
             user_id,
+            roll,
             chance,
         )
         return False
@@ -803,35 +816,44 @@ async def play_user_disconnect_reaction(
     throttle_sec = float(getattr(config, "DISCONNECT_REACTION_THROTTLE_SECONDS", 15.0))
     if now - last_user < throttle_sec:
         logger.info(
-            "[DISCONNECT-REACTION] throttled (channel=%s, user=%s, %.1fs since last)",
-            channel_id,
+            "[DISCONNECT-REACTION] Throttled for user=%s (channel=%s, elapsed=%.1fs < throttle=%.1fs)",
             user_id,
+            channel_id,
             now - last_user,
+            throttle_sec,
         )
         return False
 
+    logger.info("[DISCONNECT-REACTION] Waiting for voice client to be ready (channel=%s)...", channel_id)
     if not await _wait_until_ready(vc):
-        logger.info("[DISCONNECT-REACTION] vc never ready (channel=%s)", channel_id)
+        logger.warning("[DISCONNECT-REACTION] Voice client never ready (channel=%s)", channel_id)
         return False
 
     phrases = cfg.get("phrases")
     if not phrases or not isinstance(phrases, list):
+        logger.warning("[DISCONNECT-REACTION] Phrases list empty or invalid for user=%s", user_id)
         return False
 
     chosen_template = random.choice(phrases)
     name = get_user_greeting_name(user_id, member=member, display_name=display_name) or "usuario"
     text = chosen_template.replace("{name}", name)
 
+    logger.info(
+        "[DISCONNECT-REACTION] Generating TTS wav for user=%s (%s): %r",
+        user_id,
+        name,
+        text,
+    )
     path = None
     try:
         import tts
         path = tts.generate_tts_wav(text)
-    except Exception:
-        logger.exception("[DISCONNECT-REACTION] TTS generation failed for user=%s text=%r", user_id, text)
+    except Exception as e:
+        logger.exception("[DISCONNECT-REACTION] TTS generation failed for user=%s text=%r: %s", user_id, text, e)
         return False
 
     if path is None or not os.path.exists(path):
-        logger.warning("[DISCONNECT-REACTION] audio file missing or invalid for user=%s", user_id)
+        logger.warning("[DISCONNECT-REACTION] Audio file missing or invalid for user=%s path=%s", user_id, path)
         return False
 
     _last_disconnect_reaction[(channel_id, user_id)] = now
@@ -840,13 +862,14 @@ async def play_user_disconnect_reaction(
         source = _prepare_audio_source(vc, channel_id, path)
         vc.play(source, after=_make_after_callback(channel_id))
         logger.info(
-            "[DISCONNECT-REACTION] playing '%s' (user=%s, channel=%s)",
+            "[DISCONNECT-REACTION] REPRODUCING DISCONNECT AUDIO: '%s' (user=%s, channel=%s, file=%s)",
             text,
             user_id,
             channel_id,
+            path,
         )
         return True
-    except Exception:
-        logger.exception("[DISCONNECT-REACTION] play failed (channel=%s)", channel_id)
+    except Exception as e:
+        logger.exception("[DISCONNECT-REACTION] Playback failed on channel=%s for user=%s: %s", channel_id, user_id, e)
         return False
 

@@ -3047,11 +3047,18 @@ async def on_voice_state_update(member, before, after):
         # Fire disconnect TTS reaction if configured for this user
         if not after.channel:
             vc = _vc_for_guild(guild)
+            user_disp = getattr(member, "display_name", str(member.id))
             if (
                 vc is not None
                 and getattr(vc, "channel", None) is not None
                 and vc.channel.id == before.channel.id
             ):
+                log.info(
+                    "[VOICE-DISCONNECT] User %s (id=%s) disconnected from %s — scheduling disconnect reaction",
+                    user_disp,
+                    member.id,
+                    before.channel.name,
+                )
                 try:
                     asyncio.create_task(
                         greeting.play_user_disconnect_reaction(
@@ -3063,10 +3070,18 @@ async def on_voice_state_update(member, before, after):
                         name=f"disconnect-reaction-{member.id}",
                     )
                 except Exception as e:
-                    log.exception("[DISCONNECT-REACTION] schedule failed for user=%s", member.id)
+                    log.exception("[DISCONNECT-REACTION] schedule failed for user=%s: %s", member.id, e)
                     analytics.capture_exception(
                         e, properties={"action": "disconnect_reaction_schedule_failed"}
                     )
+            else:
+                log.info(
+                    "[VOICE-DISCONNECT] User %s (id=%s) disconnected from %s, but userbot is in %s",
+                    user_disp,
+                    member.id,
+                    before.channel.name,
+                    getattr(getattr(vc, "channel", None), "name", "None") if vc else "None",
+                )
 
 
 
