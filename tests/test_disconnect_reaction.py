@@ -101,11 +101,11 @@ def test_returns_config_when_present(fake_users):
 
 
 def test_returns_default_when_absent(fake_users):
-    """Users without disconnect_reaction fall back to the global default (1% chance)."""
+    """Users without disconnect_reaction fall back to the global default (100% chance)."""
     fake_users({200: {"name": "Mila", "traits": []}})
     result = greeting.get_user_disconnect_config(200)
     assert result is not None
-    assert result["chance"] == pytest.approx(0.01)
+    assert result["chance"] == pytest.approx(1.0)
     assert len(result["phrases"]) > 0
 
 
@@ -114,7 +114,7 @@ def test_returns_default_for_unknown_user(fake_users):
     fake_users({})
     result = greeting.get_user_disconnect_config(9999)
     assert result is not None
-    assert result["chance"] == pytest.approx(0.01)
+    assert result["chance"] == pytest.approx(1.0)
 
 
 def test_returns_none_for_none_user_id(fake_users):
@@ -127,7 +127,7 @@ def test_returns_default_for_config_without_phrases(fake_users):
     fake_users({100: {"disconnect_reaction": {"chance": 0.5}}})
     result = greeting.get_user_disconnect_config(100)
     assert result is not None
-    assert result["chance"] == pytest.approx(0.01)  # default, not the malformed config
+    assert result["chance"] == pytest.approx(1.0)  # default, not the malformed config
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +189,7 @@ async def test_default_reaction_fires_at_1pct_roll(fake_users, monkeypatch, tmp_
     monkeypatch.setattr(_tts_module, "generate_tts_wav", fake_generate)
     monkeypatch.setitem(sys.modules, "tts", _tts_module)
     monkeypatch.setattr(greeting.discord, "FFmpegOpusAudio", lambda *a, **k: SimpleNamespace())
-    # Force the 1% roll to pass
+    # Force the roll to pass
     monkeypatch.setattr(greeting.random, "random", lambda: 0.001)
 
     vc = _make_vc()
@@ -199,8 +199,8 @@ async def test_default_reaction_fires_at_1pct_roll(fake_users, monkeypatch, tmp_
 
 
 async def test_default_reaction_skips_when_roll_fails(fake_users, monkeypatch):
-    """Default 1% reaction is skipped when roll >= 0.01."""
-    fake_users({200: {"name": "Mila"}})
+    """Default reaction is skipped when roll >= chance."""
+    fake_users({200: {"name": "Mila", "disconnect_reaction": {"chance": 0.20, "phrases": ["bye"]}}})
     monkeypatch.setattr(greeting.random, "random", lambda: 0.50)
 
     vc = _make_vc()

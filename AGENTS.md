@@ -384,9 +384,9 @@ golive: encoder probe OK → libx264
         ]
       }
       ```
-      - `chance`: probabilidad de disparar la reacción (float 0.0–1.0). Por defecto 0.20 (20%) para Chalo.
+      - `chance`: probabilidad de disparar la reacción (float 0.0–1.0). Configurada en `1.0` (100%) para pruebas de integración y testeo directo en vivo.
       - `phrases`: lista de frases plantilla. `{name}` se reemplaza con el nombre canónico del usuario (del campo `name` en `users.USERS`, o `member.display_name`, o `"usuario"` como fallback final).
-    - **Fallback global**: cualquier usuario sin `disconnect_reaction` configurado recibe automáticamente el `_DEFAULT_DISCONNECT_REACTION` (1% de chance, frase genérica: `"Se re calentó {name}."`). No hace falta configurar nada para que el sistema reaccione a cualquier usuario.
+    - **Fallback global**: cualquier usuario sin `disconnect_reaction` configurado recibe automáticamente el `_DEFAULT_DISCONNECT_REACTION` (configurada en `1.0` / 100% para pruebas en vivo, frase genérica: `"Se re calentó {name}."`). No hace falta configurar nada para que el sistema reaccione a cualquier usuario.
     - **Mezcla simultánea de audio**: Si coincide el disparo de un saludo y una reacción de desconexión (o dos audios simultáneos) en el mismo canal de voz mientras `vc.is_playing()` es `True`, `_prepare_audio_source` en `userbot/greeting.py` utiliza un filtro `filter_complex` con `amix=inputs=2:duration=longest` en FFmpeg. Esto combina el audio existente (continuando desde su posición transcurrida `-ss elapsed`) con el nuevo audio para reproducir ambos audios en vivo al mismo tiempo sin interrumpir ninguno.
     - **Throttle**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`.
     - **Tests**: `tests/test_disconnect_reaction.py` (18 pruebas).
