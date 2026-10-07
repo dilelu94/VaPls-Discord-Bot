@@ -128,7 +128,7 @@
         "se hizo un tatuaje diseñado con inteligencia artificial (IA)"
       ],
       "disconnect_reaction": {
-        "chance": 1.0,
+        "chance": 0.20,
         "phrases": [
           "Se re calentó el {name}.",
           "Se re calentó el puto de {name}.",

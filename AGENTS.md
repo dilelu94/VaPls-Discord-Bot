@@ -429,6 +429,10 @@ golive: encoder probe OK → libx264
     - **Fix**: (a) Se modificó `_stamp_history_for_prompt` para etiquetar **únicamente** los turnos de `role == "user"`, conservando los turnos de `role == "model"` sin alterar. (b) Se integró la expresión regular `_AGE_TAG_PREFIX_RE` dentro de `_strip_speaker_prefix` para purgar de forma preventiva cualquier etiqueta `(hace X)` que Gemini intente escribir al inicio de una respuesta.
     - **Tests**: `tests/test_indio_memory_timestamp.py` (6 pruebas).
 
+22. **(2026-10-07) Ajustes de berretines del mal humor y probabilidad de desconexión de Chalo (`geminiCommand.py` / `data/users.json`)**:
+    - **Ajuste de berretines**: Se corrigió la frase de mal humor en `_INDIO_ANGRY_DAY_BLOCK` a `"- \"¿Qué te pasa, te comiste un payaso hoy? Andá a hacerte el chistoso a otro lado\""` para que suene natural en la jerga rioplatense.
+    - **Probabilidad de desconexión de Chalo**: Se configuró expresamente la clave `disconnect_reaction.chance` a `0.20` (20%) para Chalo (`309714566265438221`) en `data/users.json` y `users.py`.
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
