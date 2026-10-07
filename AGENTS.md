@@ -430,7 +430,7 @@ golive: encoder probe OK → libx264
     - **Tests**: `tests/test_indio_memory_timestamp.py` (6 pruebas).
 
 22. **(2026-10-07) Ajustes de berretines del mal humor y probabilidad de desconexión de Chalo (`geminiCommand.py` / `data/users.json`)**:
-    - **Ajuste de berretines**: Se corrigió la frase de mal humor en `_INDIO_ANGRY_DAY_BLOCK` a `"- \"¿Qué te pasa, te comiste un payaso hoy? Andá a hacerte el chistoso a otro lado\""` para que suene natural en la jerga rioplatense.
+    - **Ajuste de berretines**: Se corrigió la frase de mal humor en `_INDIO_ANGRY_DAY_BLOCK` a `"- \"¿Qué te pasa, te comiste un payaso hoy? Andá a hacerte el chistoso a otro lado\""` y se agregaron las frases `"- \"Andá a hacerte ortear\""` y `"- \"¿Por qué no me sopapeás la papirola?\""` al pool de frases del Indio cruzado.
     - **Probabilidad de desconexión de Chalo**: Se configuró expresamente la clave `disconnect_reaction.chance` a `0.20` (20%) para Chalo (`309714566265438221`) en `data/users.json` y `users.py`.
 
 
