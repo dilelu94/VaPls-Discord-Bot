@@ -417,6 +417,12 @@ golive: encoder probe OK → libx264
     - **Instrucción de sistema e inyección dinámica**: `_build_indio_system_instruction()` inyecta dinámicamente un bloque de prompt `_INDIO_ANGRY_DAY_BLOCK` en las llamadas a Gemini cuando el flag del día está activo. Incluye un repertorio variado de berretines rioplatenses (*"cabecear el enano"*, *"¿te comiste un payaso hoy?"*, *"no me busqués la boca"*, *"no me hinchés los quinotos"*, etc.) y la regla estricta de no repetir la misma frase calcada.
     - **Tests**: `tests/test_indio_angry_day.py` (6 pruebas).
 
+20. **(2026-10-07) Protección contra seguimiento al canal AFK en el Userbot (`userbot/bot.py`)**:
+    - **Descripción**: Se corrigió `_should_follow_user()` para evitar que el userbot (Indio) siga a los usuarios cuando son movidos manualmente o por inactividad de Discord al canal AFK del servidor (`target_channel.guild.afk_channel`).
+    - **Causa**: Cuando un usuario era movido al canal AFK, el canal previo quedaba sin humanos. `_should_follow_user()` evaluaba `not _channel_has_humans(current_channel)` antes de verificar si el canal destino era el canal AFK, ocasionando que el Indio entrara al canal AFK persiguiendo al usuario desconectado/inactivo.
+    - **Fix**: Se antepuso la comprobación `if target_channel.id == afk_target.id: return False` al inicio de `_should_follow_user()`, garantizando que el userbot nunca ingrese al canal AFK bajo ninguna circunstancia.
+    - **Tests**: `tests/test_userbot_follow_policy.py` (23 pruebas).
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

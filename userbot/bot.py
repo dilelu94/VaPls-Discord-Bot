@@ -2701,26 +2701,32 @@ def _should_follow_user(
     """Decide whether the userbot should move to ``target_channel`` when a
     user just joined/switched there.
 
-    Returns False (stay put) when the userbot is already in a different
-    channel of the same guild and that channel still has at least one human
-    — abandoning the people still there to follow a single mover is wrong.
+    Returns False (stay put) when:
+    - ``target_channel`` is None or is the guild's AFK channel.
+    - The userbot is already in a different channel of the same guild and that
+      channel still has at least one human — abandoning the people still there
+      to follow a single mover is wrong.
 
     Returns True when:
-    - The userbot is not in any channel yet (first join).
+    - The userbot is not in any channel yet (first join) and target is non-AFK.
     - The userbot is already in ``target_channel`` (no-op / re-greet).
     - The userbot's current channel has no other humans (everyone left).
     - The userbot is sitting in the guild's AFK channel. The AFK channel is
       a parking spot for idle users; the bot should never anchor there at
       the cost of ignoring active movers elsewhere.
     """
-    if current_channel is None:
-        return True
     if target_channel is None:
         return False
+    # Never follow any user into the guild's AFK channel
+    afk_target = getattr(getattr(target_channel, "guild", None), "afk_channel", None)
+    if afk_target is not None and getattr(afk_target, "id", None) == target_channel.id:
+        return False
+    if current_channel is None:
+        return True
     if current_channel.id == target_channel.id:
         return True
-    afk = getattr(getattr(current_channel, "guild", None), "afk_channel", None)
-    if afk is not None and getattr(afk, "id", None) == current_channel.id:
+    afk_curr = getattr(getattr(current_channel, "guild", None), "afk_channel", None)
+    if afk_curr is not None and getattr(afk_curr, "id", None) == current_channel.id:
         return True
     return not _channel_has_humans(current_channel, self_id=self_id)
 

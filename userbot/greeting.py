@@ -730,7 +730,7 @@ _last_disconnect_reaction: dict[tuple[int, int], float] = {}
 
 # Fallback reaction applied to any user not explicitly configured.
 _DEFAULT_DISCONNECT_REACTION: dict = {
-    "chance": 1.0,
+    "chance": 0.01,
     "phrases": [
         "Se re calentó {name}.",
     ],

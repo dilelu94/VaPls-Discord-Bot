@@ -239,3 +239,22 @@ def test_guild_without_afk_channel_does_not_crash():
     current = _channel(111, 222, channel_id=1, name="general", guild=guild)
     target = _channel(333, channel_id=2, name="other", guild=guild)
     assert should_follow(current, target) is False
+
+
+def test_never_follow_into_afk_channel():
+    """The bot must NEVER follow a user into the guild's AFK channel,
+    even if the current channel is empty."""
+    afk = SimpleNamespace(id=99)
+    guild = SimpleNamespace(afk_channel=afk)
+    current = _channel(channel_id=1, name="general", guild=guild)  # empty
+    target = SimpleNamespace(id=99, name="afk", guild=guild, members=[])
+    assert should_follow(current, target) is False
+
+
+def test_do_not_join_afk_channel_when_not_in_vc():
+    """If the bot is not in any VC (current_channel is None), it should still
+    refuse to join the AFK channel."""
+    afk = SimpleNamespace(id=99)
+    guild = SimpleNamespace(afk_channel=afk)
+    target = SimpleNamespace(id=99, name="afk", guild=guild, members=[])
+    assert should_follow(None, target) is False
