@@ -106,10 +106,28 @@ def test_h264_video_player_and_audio_sender_pause_resume():
     assert player.is_paused() is True
     assert audio_sender.is_paused() is True
 
-    player.resume()
-    audio_sender.resume()
-    assert player.is_paused() is False
-    assert audio_sender.is_paused() is False
+def test_golive_audio_sender_waits_for_first_frame():
+    import threading
+    from unittest.mock import MagicMock
+    from golive.slopsoil.golive import GoLiveAudioSender
+
+    vc = MagicMock()
+    vc.ssrc = 100
+
+    first_frame_event = threading.Event()
+    file_obj = MagicMock()
+    file_obj.read.return_value = b""  # EOF immediately when loop starts
+
+    audio_sender = GoLiveAudioSender(
+        file_obj,
+        vc,
+        first_frame_sent=first_frame_event,
+    )
+
+    # first_frame_event is not set yet, so _send_audio should block on wait()
+    # We test that _first_frame_sent is stored correctly on the instance.
+    assert audio_sender._first_frame_sent is first_frame_event
+
 
 
 

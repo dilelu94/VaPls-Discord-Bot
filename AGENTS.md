@@ -368,77 +368,20 @@ golive: encoder probe OK → libx264
     - _Causa_: Durante la transmisión en vivo (ej. Twitch autostream), al ocurrir re-keying de voz o cambios de miembros en el canal de voz, Discord envió un commit MLS DAVE. `libdave` rechazó el commit (`MLS commit message was for unexpected group`). Sin embargo, `davey_compat.py` (y `golive/davey_compat.py`) atrapaba todas las excepciones y `dave.RejectType`, cambiando silenciosamente a modo passthrough (`set_passthrough_mode(True)` — envío de video H.264 sin cifrar) y **sin elevar una excepción**. Como no había error elevado, la gateway de `discord.py-self` nunca ejecutaba `await state._recover_from_invalid_commit(transition_id)`, impidiendo la regeneración de la clave DAVE. Los clientes de Discord, esperando DAVE E2EE, no podían decodificar las tramas sin cifrar y la imagen del stream se congelaba/trababa para los espectadores.
     - **Fix**: Se modificó `davey_compat.py` y `golive/davey_compat.py` en `process_commit` y `process_welcome` para elevar la excepción (`raise RuntimeError(...)`) ante rechazos de `libdave`. Esto permite que la gateway de `discord.py-self` capture la excepción y ejecute `_recover_from_invalid_commit`, notificando `MLS_INVALID_COMMIT_WELCOME` a Discord y restableciendo la sesión DAVE de forma transparente sin congelar la transmisión. Se agregó la prueba unitaria `tests/test_dave_commit_recovery.py`.
 
-11. **(2026-10-01) Robustez y recarga dinámica del sistema de Greetings (`users.py` / `userbot/greeting.py`)**:
-    - _Causas_: (a) `users.py` cargaba `data/users.json` una sola vez al importar el módulo; ante cualquier cambio en `data/users.json` (rutas de audio, nuevos usuarios, apodos o pesos), los cambios no se reflejaban sin reiniciar el bot. (b) Cuando un usuario entraba al canal mientras había audio reproduciéndose en el voice client, `vc.stop()` no terminaba de liberar el hilo del reproductor antes de invocar `vc.play(source)`, arrojando `discord.ClientException: Already playing audio.` y cancelando la reproducción del saludo. (c) Falta de polling de estado para la sesión DAVE E2EE antes de iniciar playback. (d) Si la callback `after` de py-cord no se ejecutaba por una desconexión abrupta, el flag `_greeting_playing` quedaba en `True` indefinidamente bloqueando el relay de voz TTS.
-    - **Fixes**: (a) Se implementó `reload_users_if_changed()` en `users.py` para recargar e actualizar `USERS` in-place automáticamente cuando `data/users.json` cambie su mtime en disco. (b) Se agregó polling en `play_user_greeting` tras `vc.stop()` para asegurar que `vc.is_playing()` sea `False` antes de `vc.play()`. (c) Se verificó la disponibilidad de `dave_session.ready` en `_is_vc_ready` con re-inicialización transparente ante fallas. (d) Se agregó `_greeting_watchdog` para autolimpiar el flag `_greeting_playing` de forma segura tras 30s.
-
-12. **(2026-10-02) Reacción TTS dinámica por usuario al desconectarse del canal de voz (`disconnect_reaction`)**:
-    - **Descripción**: El userbot puede reaccionar con una frase de TTS sintetizada en voz cuando un usuario se desconecta del canal de voz donde el Indio está presente. La probabilidad y las frases son configurables por usuario en `data/users.json` (o el fallback `users.py`) mediante la clave `disconnect_reaction`.
-    - **Configuración** (en `data/users.json`, por usuario):
-      ```json
-      "disconnect_reaction": {
-        "chance": 0.20,
-        "phrases": [
-          "Se re calentó el {name}.",
-          "Se re calentó el puto de {name}.",
-          "{name} se re calentó loco."
-        ]
-      }
-      ```
-      - `chance`: probabilidad de disparar la reacción (float 0.0–1.0). Configurada en `1.0` (100%) para pruebas de integración y testeo directo en vivo.
-      - `phrases`: lista de frases plantilla. `{name}` se reemplaza con el nombre canónico del usuario (del campo `name` en `users.USERS`, o `member.display_name`, o `"usuario"` como fallback final).
-    - **Fallback global**: cualquier usuario sin `disconnect_reaction` configurado recibe automáticamente el `_DEFAULT_DISCONNECT_REACTION` (configurada en `1.0` / 100% para pruebas en vivo, frase genérica: `"Se re calentó {name}."`). No hace falta configurar nada para que el sistema reaccione a cualquier usuario.
-    - **Mezcla simultánea de audio**: Si coincide el disparo de un saludo y una reacción de desconexión (o dos audios simultáneos) en el mismo canal de voz mientras `vc.is_playing()` es `True`, `_prepare_audio_source` en `userbot/greeting.py` utiliza un filtro `filter_complex` con `amix=inputs=2:duration=longest` en FFmpeg. Esto combina el audio existente (continuando desde su posición transcurrida `-ss elapsed`) con el nuevo audio para reproducir ambos audios en vivo al mismo tiempo sin interrumpir ninguno.
-    - **Throttle y trazabilidad de logs**: configurable con `DISCONNECT_REACTION_THROTTLE_SECONDS` (default 15s) por par `(channel_id, user_id)`. Incluye logs detallados paso a paso (`[VOICE-DISCONNECT]` y `[DISCONNECT-REACTION]`) en `userbot/bot.py` y `userbot/greeting.py` para auditar cuándo se detecta una desconexión, la evaluación del roll/throttle, la síntesis TTS y el inicio del playback en el canal de voz.
-    - **Tests**: `tests/test_disconnect_reaction.py` (18 pruebas).
-
-13. **(2026-10-02) Variaciones de efectos de audio y RVC para el saludo de Enrique (`data/users.json` / `users.py`)**:
-    - **Descripción**: Se generaron e integraron variaciones de efectos de sonido (radio AM, fantasma, cueva, alien, lofi, cyberpunk, bajo el agua, distorsión, phaser) e inferencias de voces RVC (Mila, Viny, Juji, Tobi) a partir de `enrique.mp3`. Todos los audios generados se normalizaron de forma segura con filtro EBU R128 `loudnorm` (`I=-16:TP=-1.5:LRA=11`) para evitar volúmenes excesivos, y se registraron como opciones de saludo con peso normal (`weight: 14`) en `data/users.json` y `users.py`.
-
-14. **(2026-10-02) Audio secreto del saludo de Magote (`Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3`)**:
-    - **Descripción**: Se asignó `Secretos/the-goofiest-ahh-sounds-youll-ever-hear_jcHlCoB.mp3` como saludo de probabilidad baja (1% de chance con sistema de pity) para Magote (`310165756384116736`) en `users.py` y `data/users.json`, manteniendo el fallback de síntesis TTS de su nombre para el 99% de las entradas normales.
-
-15. **(2026-10-02) Corrección de reproducción inmediata y reubicación de archivos de audio de saludos**:
-    - _Causas_: (a) Los archivos `moneymoneymoney.mp3` y `noo-la-policia.mp3` se configuraron apuntando a `Audios/`, pero seguían en las carpetas `Seba/` y `Caro/` en el servidor OCI, provocando fallas de archivo no encontrado. (b) Para audios ultracortos, la sincronización de sesión DAVE E2EE se valida dinámicamente en `_wait_until_ready`.
-    - **Fixes**: (a) Se copiaron y verificaron los archivos de audio en las carpetas físicas `audio_output/Audios/` y `audio_output/Secretos/` en el servidor de producción OCI. (b) Se mantuvo el retraso de inicio en `0.0s` (`GREETING_JOIN_DELAY_SECONDS = 0.0`) para reproducción inmediata.
-
-16. **(2026-10-03) Actualización de texto en la pantalla de Acceso Denegado / Enlace Expirado de Stremio (`apiServer.py`)**:
-    - **Descripción**: Se actualizó el texto informativo en la plantilla HTML `_build_stremio_access_denied_html()` de `apiServer.py` para indicar que el nuevo enlace generado vía `/stream stremio` en Discord es *"válido por la duración del stream"* en lugar de *"válido por 10 minutos"*.
-
-17. **(2026-10-03) Padding automático de silencio inicial para audios de saludo cortos (< 1.5s)**:
-    - _Causa_: Audios ultracortos (como `Fish Carrot.m4a` de Miles, con duración de 0.58s) comenzaban a sonar de inmediato a t=0.1s tras la llegada a la sala, pero el cliente de Discord del usuario tarda entre 1.0s y 1.2s en negociar la conexión UDP/DAVE E2EE y abrir sus altavoces, haciendo que el audio terminara de sonar antes de que el usuario pudiese escucharlo.
-    - **Fix**: Se agregó inspección de duración vía `ffprobe` (`get_audio_duration`). Si la duración del audio es menor a 1.5s, se inyecta automáticamente el filtro `-af "adelay=1000|1000,..."` en FFmpeg. Esto añade 1.0s de silencio inicial permitiendo que los altavoces del cliente se abran justo a tiempo para escuchar el audio completo sin retrasar los audios normales o largos.
-
-18. **(2026-10-06) Audio secreto del saludo de Fide (`Secretos/who-is-getting-the-best-head-chipmunks.mp3`)**:
-    - **Descripción**: Se recortó el audio de origen `/home/dilelu/Downloads/who-is-getting-the-best-head-chipmunks.mp3` entre los segundos 20s y 39s (19.0s de duración) mediante `ffmpeg` (`-c:a libmp3lame -q:a 2`) guardándolo en `Secretos/who-is-getting-the-best-head-chipmunks.mp3` dentro de `CUSTOM_AUDIO_PATH` (`/var/home/dilelu/Desktop/Output/Secretos/`). Se registró como saludo de probabilidad baja (1% de chance con sistema de pity) para Fide (`471420397049479180`) en `data/users.json` y `users.py` sin eliminar ningún saludo previo.
-
-19. **(2026-10-06) Estado de ánimo de mal humor ("Día cruzado / medio enojado"), pool de berretines y anuncio automático en `#soreteposting` (`geminiCommand.py`)**:
-    - **Descripción**: Se implementó una selección pseudo-aleatoria de día (~1 día por semana, determinística por fecha del calendario `YYYY-MM-DD` mediante `_is_indio_angry_day()`) en la cual el Indio amanece de mal humor / "cruzado".
-    - **Anuncio automático único en `#soreteposting`**: `check_and_post_indio_angry_announcement()` evalúa en segundo plano (bucle de 30 min y en `on_ready`) si hoy es día cruzado. Publica **una sola vez al día** un mensaje de aviso en el canal `#soreteposting` (ej. *"Hoy estoy de pocas pulgas así que no jodan."*) relayeado como el Indio real, guardando la fecha anunciada en `data/indio_angry_announcement.json` para no spammear ni duplicar tras reinicios.
-    - **Instrucción de sistema e inyección dinámica**: `_build_indio_system_instruction()` inyecta dinámicamente un bloque de prompt `_INDIO_ANGRY_DAY_BLOCK` en las llamadas a Gemini cuando el flag del día está activo. Incluye un repertorio variado de berretines rioplatenses (*"cabecear el enano"*, *"¿te comiste un payaso hoy?"*, *"no me busqués la boca"*, *"no me hinchés los quinotos"*, etc.) y la regla estricta de no repetir la misma frase calcada.
-    - **Tests**: `tests/test_indio_angry_day.py` (6 pruebas).
-
-20. **(2026-10-07) Protección contra seguimiento al canal AFK en el Userbot (`userbot/bot.py`)**:
-    - **Descripción**: Se corrigió `_should_follow_user()` para evitar que el userbot (Indio) siga a los usuarios cuando son movidos manualmente o por inactividad de Discord al canal AFK del servidor (`target_channel.guild.afk_channel`).
-    - **Causa**: Cuando un usuario era movido al canal AFK, el canal previo quedaba sin humanos. `_should_follow_user()` evaluaba `not _channel_has_humans(current_channel)` antes de verificar si el canal destino era el canal AFK, ocasionando que el Indio entrara al canal AFK persiguiendo al usuario desconectado/inactivo.
-    - **Fix**: Se antepuso la comprobación `if target_channel.id == afk_target.id: return False` al inicio de `_should_follow_user()`, garantizando que el userbot nunca ingrese al canal AFK bajo ninguna circunstancia.
-    - **Tests**: `tests/test_userbot_follow_policy.py` (23 pruebas).
-
-21. **(2026-10-07) Corrección de prefijo `(hace X)` en respuestas del Indio (`geminiCommand.py`)**:
-    - **Descripción**: Se corrigió el comportamiento por el cual el Indio agregaba un prefijo temporal como `(hace 1 h)` al comienzo de sus respuestas.
-    - **Causa**: `_stamp_history_for_prompt` etiquetaba todos los turnos antiguos del historial (anteriores a 15 min) con un prefijo temporal `(hace X)`. Al etiquetar indiscriminadamente turnos con `role == "model"` (las respuestas pasadas del bot), el modelo Gemini interpretaba que las respuestas del asistente debían comenzar con dicho formato y lo replicaba al inicio de sus mensajes (ej. `"(hace 1 h) Suicidio, ¡Kono DIO da!..."`).
-    - **Fix**: (a) Se modificó `_stamp_history_for_prompt` para etiquetar **únicamente** los turnos de `role == "user"`, conservando los turnos de `role == "model"` sin alterar. (b) Se integró la expresión regular `_AGE_TAG_PREFIX_RE` dentro de `_strip_speaker_prefix` para purgar de forma preventiva cualquier etiqueta `(hace X)` que Gemini intente escribir al inicio de una respuesta.
-    - **Tests**: `tests/test_indio_memory_timestamp.py` (6 pruebas).
-
-22. **(2026-10-07) Ajustes de berretines del mal humor y probabilidad de desconexión de Chalo (`geminiCommand.py` / `data/users.json`)**:
-    - **Ajuste de berretines**: Se corrigió la frase de mal humor en `_INDIO_ANGRY_DAY_BLOCK` a `"- \"¿Qué te pasa, te comiste un payaso hoy? Andá a hacerte el chistoso a otro lado\""` y se agregaron las frases `"- \"Andá a hacerte ortear\""` y `"- \"¿Por qué no me sopapeás la papirola?\""` al pool de frases del Indio cruzado.
-    - **Probabilidad de desconexión de Chalo**: Se configuró expresamente la clave `disconnect_reaction.chance` a `0.20` (20%) para Chalo (`309714566265438221`) en `data/users.json` y `users.py`.
-
 23. **(2026-10-08) Auto-Bug en GitHub Issues al responder a audios clipeados (`transcriptBugTracker.py`)**:
     - **Descripción**: Se implementó la detección de `reply` en mensajes de Discord sobre clips de audio transcritos (`audio_escuchado_*.wav` / `🎙️ **...**`) o sobre las respuestas del Indio asociadas a ellos.
     - **Funcionalidad**: Extrae la corrección enviada por el usuario, la transcripción errónea del STT, la respuesta generada por el Indio, y la URL directa del archivo de audio adjunto. Genera automáticamente un Issue en GitHub etiquetado con `autobug` y `stt-error`, e incluye una instrucción explícita de depuración para descargar el audio y re-procesarlo / enviarlo a Grok para depurar la calidad del STT.
     - **Deduplicación**: Deduplica reportes sobre la misma transcripción utilizando `<!-- transcript-bug-id: <message_id> -->` agregando comentarios de reincidencia ante múltiples replies. Reacciona con `🐛` en el mensaje de Discord.
     - **Tests**: `tests/test_transcript_bug_tracker.py` (7 pruebas).
+
+24. **(2026-10-08) Solución a desincronización de audio y video en `/stream` GoLive con YouTube VODs**:
+    - _Causas_:
+      (a) **`-re` y `-reconnect` no se aplicaban al stream de audio**: Cuando yt-dlp devuelve audio y video en URLs separadas `(video_url, audio_url)` para VODs de YouTube, `_ffmpeg_cmd` colocaba `-re` y `-reconnect` globalmente antes de `input_args`. En FFmpeg CLI, las opciones previas a `-i` solo aplican al primer `-i` (video). Así, la pista de audio (input 1) era leída a máxima velocidad de red sin rate-limit, saturando el FIFO con segundos de adelanto respecto al video.
+      (b) **`GoLiveAudioSender` no esperaba al primer frame de video (`first_frame_sent`)**: `H264VideoPlayer` seteaba `first_frame_sent` al emitir la primera trama H.264, pero `GoLiveAudioSender` transmitía Opus inmediatamente al abrir el FIFO, desfasando los timestamps iniciales.
+    - **Fixes**:
+      (a) Se ajustó `_ffmpeg_cmd` en `golive/slopsoil/video_player.py` para inyectar `-re` y `-reconnect` de forma scoped antes de **cada** argumento `-i`.
+      (b) Se vinculó `first_frame_sent` a `GoLiveAudioSender` (`golive/slopsoil/golive.py`, `engine.py` y `golive/bot.py`), haciendo que la transmisión de audio espere a la emisión del primer cuadro de video antes de iniciar el reloj de tiempo real `t0`.
+      (c) **Tests**: `tests/test_video_player_tracks.py` y `tests/test_quack_control.py`.
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)

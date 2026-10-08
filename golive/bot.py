@@ -390,6 +390,7 @@ class GoLiveStream:
             is_source_active=self.video_player.is_source_active,
             initial_seq=self._audio_seq,
             initial_ts=self._audio_ts,
+            first_frame_sent=self.video_player.first_frame_sent,
         )
         self.audio_sender.start()
         log.info("[STREAM] Audio sender started for '%s'", self.title)

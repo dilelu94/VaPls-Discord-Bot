@@ -1306,7 +1306,17 @@ class H264VideoPlayer(threading.Thread):
             input_args = []
             for u in self._url:
                 is_u = u.startswith(("http://", "https://", "rtmp://", "rtsp://"))
+                if not self._live:
+                    input_args += ["-re"]
                 if is_u:
+                    input_args += [
+                        "-reconnect", "1",
+                        "-reconnect_streamed", "1",
+                        "-reconnect_delay_max", "10",
+                        "-reconnect_on_network_error", "1",
+                        "-reconnect_at_eof", "1",
+                        "-reconnect_on_http_error", "4xx,5xx",
+                    ]
                     ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                     input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
                 if is_u and self._live and "googlevideo.com" not in u:
@@ -1317,7 +1327,17 @@ class H264VideoPlayer(threading.Thread):
             audio_map = f"1:a:{a_idx}?"
         else:
             input_args = []
+            if not self._live:
+                input_args += ["-re"]
             if is_url:
+                input_args += [
+                    "-reconnect", "1",
+                    "-reconnect_streamed", "1",
+                    "-reconnect_delay_max", "10",
+                    "-reconnect_on_network_error", "1",
+                    "-reconnect_at_eof", "1",
+                    "-reconnect_on_http_error", "4xx,5xx",
+                ]
                 ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 input_args += ["-user_agent", ua, "-headers", f"User-Agent: {ua}\r\n"]
             if is_url and self._live and "googlevideo.com" not in primary_url:
@@ -1356,20 +1376,7 @@ class H264VideoPlayer(threading.Thread):
             else:
                 vf_str = f"{vf_str},subtitles={':'.join(sub_opts)}"
 
-        rate_args: list[str] = ["-re"] if not self._live else []
         fflags = "+discardcorrupt"
-        reconnect_args = (
-            [
-                "-reconnect", "1",
-                "-reconnect_streamed", "1",
-                "-reconnect_delay_max", "10",
-                "-reconnect_on_network_error", "1",
-                "-reconnect_at_eof", "1",
-                "-reconnect_on_http_error", "4xx,5xx",
-            ]
-            if is_url
-            else []
-        )
         if use_filter_complex:
             video_out_args = [
                 "-filter_complex", filter_complex_str,
@@ -1405,8 +1412,6 @@ class H264VideoPlayer(threading.Thread):
             *probe_args,
             "-fflags",
             fflags,
-            *rate_args,
-            *reconnect_args,
             *input_args,
             *video_out_args,
             *(

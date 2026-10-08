@@ -299,6 +299,13 @@ Los canales se obtienen de [iptv-org](https://github.com/iptv-org/iptv), que man
 
 **Fix:** `sudo systemctl status golive-userbot` y revisar logs con `journalctl -u golive-userbot -n 50`.
 
+### Desincronización de audio y video (A/V desync) en YouTube VODs
+
+**Causa:** (a) Cuando `yt-dlp` entrega URLs separadas de video y audio `(video_url, audio_url)` para VODs (ej. YouTube), las opciones de entrada `-re` y `-reconnect` se aplicaban globalmente afectando solo al primer `-i` (video), haciendo que la pista de audio se leyera a máxima velocidad de red sin rate-limit. (b) `GoLiveAudioSender` no esperaba al primer cuadro de video (`first_frame_sent`), iniciando la transmisión de audio antes de que el video comenzara a emitirse.
+
+**Fix:** Scoping de `-re` y `-reconnect` a cada argumento `-i` en `_ffmpeg_cmd` (`golive/slopsoil/video_player.py`) y sincronización de inicio de audio en `GoLiveAudioSender` mediante `first_frame_sent`.
+
+
 ---
 
 ## Alineación con slopsoil

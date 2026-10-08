@@ -479,6 +479,7 @@ class GoLiveAudioSender(threading.Thread):
         is_source_active: Callable[[], bool] | None = None,
         initial_seq: int = 0,
         initial_ts: int = 0,
+        first_frame_sent: threading.Event | None = None,
     ) -> None:
         super().__init__(name="GoLiveAudio", daemon=True)
         self._f = file_obj
@@ -490,6 +491,7 @@ class GoLiveAudioSender(threading.Thread):
         # FIFO gap during a software-encoder fallback restart.  When set, a short
         # read is treated as that gap (wait for the new writer) rather than EOF.
         self._is_source_active = is_source_active
+        self._first_frame_sent = first_frame_sent
 
         self._seq: int = initial_seq & 0xFFFF
         self._ts: int = initial_ts & 0xFFFF_FFFF
@@ -520,6 +522,11 @@ class GoLiveAudioSender(threading.Thread):
 
     def _send_audio(self) -> None:
         encoder = _opus.Encoder()
+
+        # Wait for the first video frame to be emitted so audio and video start in sync
+        if self._first_frame_sent is not None and not self._first_frame_sent.is_set():
+            log.info("GoLiveAudio: waiting for first video frame before starting audio...")
+            self._first_frame_sent.wait(timeout=10.0)
 
         # A/V lip-sync offset (STREAM_AV_SYNC_MS). Positive advances audio by
         # discarding backlogged initial audio (fixes "audio behind"); negative

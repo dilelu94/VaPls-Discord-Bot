@@ -300,6 +300,7 @@ async def start_live_stream(
                 file_obj=f,
                 conn=conn,
                 is_source_active=video_player.is_source_active,
+                first_frame_sent=video_player.first_frame_sent,
             )
             audio_sender.start()
             log.info("go-live audio sender started for '%s'", title)

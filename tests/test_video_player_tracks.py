@@ -109,4 +109,31 @@ def test_ffmpeg_cmd_start_time_multiple_inputs():
         assert cmd_tuple[idx + 2] == "-i"
 
 
+def test_ffmpeg_cmd_multiple_inputs_re_and_reconnect():
+    vc = MagicMock()
+    vc.ssrc = 100
+
+    video_url = "https://googlevideo.com/videoplayback_video"
+    audio_url = "https://googlevideo.com/videoplayback_audio"
+
+    player_tuple = H264VideoPlayer((video_url, audio_url), vc, live=False)
+    cmd = player_tuple._ffmpeg_cmd()
+
+    i_indices = [i for i, arg in enumerate(cmd) if arg == "-i"]
+    assert len(i_indices) == 2
+
+    # Verify that -re precedes BOTH -i arguments
+    re_indices = [i for i, arg in enumerate(cmd) if arg == "-re"]
+    assert len(re_indices) == 2, f"-re should be specified before each input, found {re_indices} in {cmd}"
+    assert re_indices[0] < i_indices[0]
+    assert i_indices[0] < re_indices[1] < i_indices[1]
+
+    # Verify that -reconnect precedes BOTH -i arguments
+    reconnect_indices = [i for i, arg in enumerate(cmd) if arg == "-reconnect"]
+    assert len(reconnect_indices) == 2, f"-reconnect should be specified before each input, found {reconnect_indices} in {cmd}"
+    assert reconnect_indices[0] < i_indices[0]
+    assert i_indices[0] < reconnect_indices[1] < i_indices[1]
+
+
+
 
