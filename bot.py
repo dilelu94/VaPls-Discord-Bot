@@ -48,6 +48,7 @@ import adivinadorCommand
 from adivinadorCommand import start_headbanz_game
 from idleWatchdog import start_idle_watchdog, stop_idle_watchdog
 import transferCommand
+import transcriptBugTracker
 from transferCommand import manager as transferManager
 import storyManager
 import petGenerator
@@ -1113,6 +1114,7 @@ async def on_message(message):
             )
         )
         asyncio.create_task(_analyze_message_media_and_links(message))
+        asyncio.create_task(transcriptBugTracker.check_and_report_transcript_bug(message))
         return
 
     content = (message.content or "").strip()

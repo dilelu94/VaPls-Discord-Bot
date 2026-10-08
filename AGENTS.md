@@ -134,6 +134,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `petGenerator.py` / `pet-renderer/`: Sistema de mascota virtual evolutiva (`/mascota`) con renderizado ASCII y GIF.
 - `israel_alerts.py`: Feed en tiempo real de alertas de emergencia (RedAlert Israel).
 - `chat_db.py`: Búsqueda de texto completo (SQLite FTS5) para el historial de mensajes de los canales de texto.
+- `transcriptBugTracker.py`: Generador de Auto-Bug en GitHub Issues al responder a audios de transcripción de voz clipeados.
 - `media_analyzer.py`: Extracción de fotogramas de video con FFmpeg, metadatos de enlaces (yt-dlp/OpenGraph) y análisis de intereses de usuario para la memoria a largo plazo del Indio.
 - `data/internet_rules.json`: Registro persistente en JSON de las 101 Reglas de Internet (Regla 0 a 100) con su texto original en inglés y traducción al español.
 
@@ -432,6 +433,12 @@ golive: encoder probe OK → libx264
 22. **(2026-10-07) Ajustes de berretines del mal humor y probabilidad de desconexión de Chalo (`geminiCommand.py` / `data/users.json`)**:
     - **Ajuste de berretines**: Se corrigió la frase de mal humor en `_INDIO_ANGRY_DAY_BLOCK` a `"- \"¿Qué te pasa, te comiste un payaso hoy? Andá a hacerte el chistoso a otro lado\""` y se agregaron las frases `"- \"Andá a hacerte ortear\""` y `"- \"¿Por qué no me sopapeás la papirola?\""` al pool de frases del Indio cruzado.
     - **Probabilidad de desconexión de Chalo**: Se configuró expresamente la clave `disconnect_reaction.chance` a `0.20` (20%) para Chalo (`309714566265438221`) en `data/users.json` y `users.py`.
+
+23. **(2026-10-08) Auto-Bug en GitHub Issues al responder a audios clipeados (`transcriptBugTracker.py`)**:
+    - **Descripción**: Se implementó la detección de `reply` en mensajes de Discord sobre clips de audio transcritos (`audio_escuchado_*.wav` / `🎙️ **...**`) o sobre las respuestas del Indio asociadas a ellos.
+    - **Funcionalidad**: Extrae la corrección enviada por el usuario, la transcripción errónea del STT, la respuesta generada por el Indio, y la URL directa del archivo de audio adjunto. Genera automáticamente un Issue en GitHub etiquetado con `autobug` y `stt-error`, e incluye una instrucción explícita de depuración para descargar el audio y re-procesarlo / enviarlo a Grok para depurar la calidad del STT.
+    - **Deduplicación**: Deduplica reportes sobre la misma transcripción utilizando `<!-- transcript-bug-id: <message_id> -->` agregando comentarios de reincidencia ante múltiples replies. Reacciona con `🐛` en el mensaje de Discord.
+    - **Tests**: `tests/test_transcript_bug_tracker.py` (7 pruebas).
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
