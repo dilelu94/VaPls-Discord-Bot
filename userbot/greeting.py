@@ -154,6 +154,7 @@ def _prepare_audio_source(vc, channel_id: int, new_path: str):
 
 # In-memory pity state: {user_id: {rel_path: miss_count}}
 _pity_state: dict[int, dict[str, int]] = {}
+_last_pity_time: dict[int, float] = {}
 _pity_loaded = False
 
 # In-memory name TTS metadata cache: {user_id: {"name": name, "path": path}}
@@ -175,22 +176,42 @@ def _get_name_tts_dir() -> str:
 
 def load_pity_state(path: Optional[str] = None) -> dict[int, dict[str, int]]:
     """Load pity counters from JSON file into in-memory ``_pity_state``."""
-    global _pity_state, _pity_loaded
+    global _pity_state, _pity_loaded, _last_pity_time
     file_path = path or _get_pity_file_path()
     try:
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 raw = json.load(f)
-            _pity_state = {
-                int(uid): {str(p): int(cnt) for p, cnt in paths.items()}
-                for uid, paths in raw.items()
-                if isinstance(paths, dict)
-            }
+            new_pity_state = {}
+            new_last_pity_time = {}
+            for uid_str, paths in raw.items():
+                if isinstance(paths, dict):
+                    try:
+                        uid = int(uid_str)
+                    except ValueError:
+                        continue
+                    counts = {}
+                    for p, cnt in paths.items():
+                        if p == "_last_pity_time":
+                            try:
+                                new_last_pity_time[uid] = float(cnt)
+                            except (ValueError, TypeError):
+                                pass
+                        else:
+                            try:
+                                counts[str(p)] = int(cnt)
+                            except (ValueError, TypeError):
+                                pass
+                    new_pity_state[uid] = counts
+            _pity_state = new_pity_state
+            _last_pity_time = new_last_pity_time
         else:
             _pity_state = {}
+            _last_pity_time = {}
     except Exception:
         logger.exception("[GREETING] failed to load pity state from %s", file_path)
         _pity_state = {}
+        _last_pity_time = {}
     _pity_loaded = True
     return _pity_state
 
@@ -203,8 +224,14 @@ def save_pity_state(path: Optional[str] = None) -> None:
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
         tmp_path = file_path + ".tmp"
+        dump_data = {}
+        for uid, counts in _pity_state.items():
+            user_data = dict(counts)
+            if uid in _last_pity_time:
+                user_data["_last_pity_time"] = _last_pity_time[uid]
+            dump_data[str(uid)] = user_data
         with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump({str(uid): counts for uid, counts in _pity_state.items()}, f, indent=2)
+            json.dump(dump_data, f, indent=2)
         os.replace(tmp_path, file_path)
     except Exception:
         logger.exception("[GREETING] failed to save pity state to %s", file_path)
@@ -484,13 +511,28 @@ def resolve_greeting_path(
             return None
         chosen_path = random.choices(paths, weights=weights, k=1)[0]
         if record_pity and rare_paths:
+            now = time.time()
+            cooldown_sec = float(getattr(config, "GREETING_PITY_COOLDOWN_SECONDS", 3600.0))
             user_counts = _pity_state.setdefault(user_id, {})
-            if chosen_path in rare_paths:
-                user_counts[chosen_path] = 0
-            for r_path in rare_paths:
-                if r_path != chosen_path:
-                    user_counts[r_path] = user_counts.get(r_path, 0) + 1
-            save_pity_state()
+            last_time = _last_pity_time.get(user_id, 0.0)
+
+            if now - last_time >= cooldown_sec:
+                if chosen_path in rare_paths:
+                    user_counts[chosen_path] = 0
+                for r_path in rare_paths:
+                    if r_path != chosen_path:
+                        user_counts[r_path] = user_counts.get(r_path, 0) + 1
+                _last_pity_time[user_id] = now
+                save_pity_state()
+            else:
+                if chosen_path in rare_paths:
+                    user_counts[chosen_path] = 0
+                    save_pity_state()
+                else:
+                    logger.info(
+                        "[GREETING] Pity miss increment skipped for user=%s (%.1fs < %.1fs cooldown)",
+                        user_id, now - last_time, cooldown_sec,
+                    )
         rel = chosen_path
     if not isinstance(rel, str) or not rel.strip():
         return None

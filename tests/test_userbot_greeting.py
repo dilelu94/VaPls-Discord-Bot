@@ -53,6 +53,7 @@ def _reset_throttle():
     greeting._last_greeting.clear()
     greeting._last_user_greeting.clear()
     greeting._pity_state.clear()
+    greeting._last_pity_time.clear()
     greeting._pity_loaded = True
     greeting._name_tts_meta.clear()
     greeting._name_tts_loaded = True
@@ -60,6 +61,7 @@ def _reset_throttle():
     greeting._last_greeting.clear()
     greeting._last_user_greeting.clear()
     greeting._pity_state.clear()
+    greeting._last_pity_time.clear()
     greeting._pity_loaded = False
     greeting._name_tts_meta.clear()
     greeting._name_tts_loaded = False
@@ -273,19 +275,25 @@ def test_pity_counter_increments_on_miss_and_resets_on_hit(fake_users, monkeypat
         }
     })
 
-    # Simulate 3 rolls where common is picked every time
+    # Simulate 3 rolls where common is picked every time, with >1h between rolls
     monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
+    t0 = time.time()
+
+    monkeypatch.setattr(greeting.time, "time", lambda: t0)
     greeting.resolve_greeting_path(30)
     assert greeting._pity_state[30]["rare.mp3"] == 1
 
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 3601)
     greeting.resolve_greeting_path(30)
     assert greeting._pity_state[30]["rare.mp3"] == 2
 
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 7202)
     greeting.resolve_greeting_path(30)
     assert greeting._pity_state[30]["rare.mp3"] == 3
 
     # Now simulate rare is picked
     monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["rare.mp3"])
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 7210)
     greeting.resolve_greeting_path(30)
     assert greeting._pity_state[30]["rare.mp3"] == 0
 
@@ -301,13 +309,17 @@ def test_multiple_rare_audios_track_independently(fake_users, monkeypatch):
         }
     })
 
+    t0 = time.time()
+
     # 1. common picked -> both rare_a and rare_b increment
+    monkeypatch.setattr(greeting.time, "time", lambda: t0)
     monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
     greeting.resolve_greeting_path(40)
     assert greeting._pity_state[40]["rare_a.mp3"] == 1
     assert greeting._pity_state[40]["rare_b.mp3"] == 1
 
-    # 2. rare_a picked -> rare_a resets to 0, rare_b increments to 2
+    # 2. rare_a picked 1 hour later -> rare_a resets to 0, rare_b increments to 2
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 3601)
     monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["rare_a.mp3"])
     greeting.resolve_greeting_path(40)
     assert greeting._pity_state[40]["rare_a.mp3"] == 0
@@ -327,15 +339,54 @@ def test_pity_state_persists_to_disk_and_reloads(fake_users, tmp_path, monkeypat
         }
     })
 
+    t0 = 1700000000.0
+    monkeypatch.setattr(greeting.time, "time", lambda: t0)
     monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
     greeting.resolve_greeting_path(50)
     assert pity_file.exists()
 
     # Clear memory and reload from disk
     greeting._pity_state.clear()
+    greeting._last_pity_time.clear()
     greeting._pity_loaded = False
     loaded = greeting.load_pity_state(str(pity_file))
     assert loaded[50]["rare.mp3"] == 1
+    assert greeting._last_pity_time[50] == t0
+
+
+def test_pity_cooldown_prevents_spam_increment_within_one_hour(fake_users, monkeypatch):
+    """KEY BEHAVIOR: Joins/leaves within 1 hour do NOT increment pity miss counts."""
+    fake_users({
+        80: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 99},
+                {"path": "rare.mp3", "weight": 1},
+            ]
+        }
+    })
+
+    t0 = 100000.0
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
+
+    # 1st join at t0 -> miss incremented (+1)
+    monkeypatch.setattr(greeting.time, "time", lambda: t0)
+    greeting.resolve_greeting_path(80)
+    assert greeting._pity_state[80]["rare.mp3"] == 1
+
+    # 2nd join at t0 + 300 (5 mins) -> within 1h -> skipped!
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 300)
+    greeting.resolve_greeting_path(80)
+    assert greeting._pity_state[80]["rare.mp3"] == 1
+
+    # 3rd join at t0 + 1800 (30 mins) -> within 1h -> skipped!
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 1800)
+    greeting.resolve_greeting_path(80)
+    assert greeting._pity_state[80]["rare.mp3"] == 1
+
+    # 4th join at t0 + 3605 (60 mins + 5s) -> >1h -> incremented (+2)!
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 3605)
+    greeting.resolve_greeting_path(80)
+    assert greeting._pity_state[80]["rare.mp3"] == 2
 
 
 async def test_throttled_greeting_does_not_advance_pity(fake_users, _audio_dir, monkeypatch):

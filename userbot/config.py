@@ -206,6 +206,9 @@ GREETING_PITY_PATH = os.getenv("GREETING_PITY_PATH", "data/greeting_pity.json")
 # Umbral de probabilidad base (por defecto 5% = 0.05) por debajo del cual un audio
 # es considerado raro (ej. los audios de 1%) y acumula probabilidad progresiva (pity).
 GREETING_RARE_THRESHOLD = float(os.getenv("GREETING_RARE_THRESHOLD", "0.05"))
+# Tiempo mínimo de espera (cooldown en segundos) entre incrementos de pity por usuario (default 3600s = 1 hora)
+# para evitar abusos por entrar y salir repetidamente de canales de voz.
+GREETING_PITY_COOLDOWN_SECONDS = float(os.getenv("GREETING_PITY_COOLDOWN_SECONDS", "3600"))
 # Directorio donde se almacenan temporalmente los audios TTS generados para nombres sin greeting base.
 GREETING_TTS_DIR = os.getenv("GREETING_TTS_DIR", "data/greeting_tts")
 # Archivo JSON donde se guarda la metadata (mapeo usuario -> nombre sintetizado) para detectar cambios de nombre.
