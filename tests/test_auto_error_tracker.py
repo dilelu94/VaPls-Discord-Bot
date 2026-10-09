@@ -195,3 +195,20 @@ def test_logging_handler_ignores_aiohttp_server_noise():
         handler.emit(record)
         mock_submit.assert_not_called()
 
+
+@pytest.mark.asyncio
+async def test_close_issue_calls_api():
+    import githubIssues
+
+    with patch("githubIssues.add_comment", new=AsyncMock(return_value=True)) as mock_comment, \
+         patch("aiohttp.ClientSession.patch") as mock_patch:
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_patch.return_value.__aenter__.return_value = mock_resp
+
+        ok = await githubIssues.close_issue(76, comment="Resolved in master")
+        assert ok is True
+        mock_comment.assert_called_once_with(76, body="Resolved in master")
+
+

@@ -594,7 +594,7 @@ Cuando un issue se cierra, el grupo local se **oculta** (`hidden: True`) en vez 
 | Archivo                 | Rol                                                                                                             |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `suggestionsCommand.py` | Toda la lógica: modelo (`Group`, `Submission`), store, clasificación, GitHub sync                               |
-| `githubIssues.py`       | Cliente asincrónico de la GitHub REST API (`create_issue`, `add_comment`, `update_issue`, `list_closed_issues`) |
+| `githubIssues.py`       | Cliente asincrónico de la GitHub REST API (`create_issue`, `add_comment`, `update_issue`, `close_issue`, `list_closed_issues`) |
 | `bot.py:224-234`        | `on_ready`: auto-migrate + auto-sync al arrancar                                                                |
 | `apiServer.py:808-839`  | Endpoint `/github-webhook`                                                                                      |
 

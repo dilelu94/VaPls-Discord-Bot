@@ -270,3 +270,37 @@ async def reopen_issue(issue_number: int) -> bool:
         logger.exception("GitHub reopen issue network error")
         return False
 
+
+async def close_issue(issue_number: int, *, comment: Optional[str] = None) -> bool:
+    """Close a GitHub issue and optionally add a closing comment.
+
+    Returns ``True`` on success, ``False`` on failure.
+    """
+    if not _enabled():
+        return False
+
+    if comment:
+        await add_comment(issue_number, body=comment)
+
+    url = f"{_API_BASE}/repos/{config.GITHUB_REPO}/issues/{issue_number}"
+    payload = {"state": "closed"}
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=_TIMEOUT_SEC)
+        async with aiohttp.ClientSession(timeout=timeout) as sess:
+            async with sess.patch(url, json=payload, headers=_headers()) as resp:
+                if resp.status >= 400:
+                    text = await resp.text()
+                    logger.error(
+                        "GitHub close issue failed (HTTP %d): %s",
+                        resp.status,
+                        text[:500],
+                    )
+                    return False
+                logger.info("GitHub issue #%d closed", issue_number)
+                return True
+    except Exception:
+        logger.exception("GitHub close issue network error")
+        return False
+
+
