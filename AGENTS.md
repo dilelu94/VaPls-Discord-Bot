@@ -56,7 +56,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 **VaPls-Discord-Bot** corre en dos procesos:
 
 - **Main bot**: comandos, playback de audio, soundpad, Gemini, HTTP API y puente con Telegram.
-- **Userbot** (alias _Indio_): transcripción de voz (DAVE/E2EE) con `faster-whisper` y captura de voice-reply para Telegram.
+- **Userbot** (alias _Indio_): transcripción de voz (DAVE/E2EE) con `Gemini 2.5 Flash` (fallback Groq Cloud) y captura de voice-reply para Telegram.
 
 ## 🛠️ Principios de Programación de Lógica
 
@@ -114,7 +114,7 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 - **Lenguaje:** Python 3.10+
 - **Discord bot:** `py-cord`
 - **Userbot:** `discord.py-self` + `discord-ext-voice-recv`
-- **STT:** `faster-whisper` (CTranslate2, offline, modelo `small` int8 en el server ARM 2/12)
+- **STT:** `Gemini 2.5 Flash` (multimodal nativo de audio) con fallback a Groq Cloud (`whisper-large-v3`). Cero alucinaciones locales de faster-whisper.
 - **TTS:** `piper-tts` (modelo `es_ES-davefx-medium` nativo de voz masculina sin filtros)
 - **Audio:** `FFmpeg`, `audioop`
 - **HTTP:** `aiohttp`
@@ -127,7 +127,7 @@ ssh -i /var/home/dilelu/.ssh/vapls ubuntu@141.148.84.55 \
 Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture.md)):
 
 - `bot.py`: entrada principal, inicialización de discord client y registro de slash commands.
-- `userbot/bot.py`: transcripción de voz (DAVE/E2EE) con `faster-whisper`, VOSK wake-word detector, relay HTTP y actividad MMR.
+- `userbot/bot.py`: transcripción de voz (DAVE/E2EE) con `Gemini 2.5 Flash`, VOSK wake-word detector, relay HTTP y actividad MMR.
 - `playCommand.py`: cola de música, reproducción con FFmpeg y yt-dlp.
 - `soundpadCommand.py`: UI e interacción con clips locales del soundpad.
 - `geminiCommand.py`: `/vapls` (sin memoria) e `/indio` (memoria por guild + memoria destilada).
@@ -158,12 +158,14 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 `dave.decrypt()` después del AEAD, permitiendo decodificar audio en canales E2EE.
 
-### 2) Pipeline de transcripción (TranscriberSink)
+### 2) Pipeline de transcripción (TranscriberSink / WakeWordSink)
 
 1. Recibe PCM desde `voice_recv`.
 2. Convierte a mono y re-samplea a 16 kHz.
-3. Ejecuta `faster-whisper` (modelo `small`, `int8`, CPU threads = vCPU count) y genera texto final.
-4. `on_transcript` publica en un canal de texto y/o forwardea por HTTP al main bot (`/indio` para wake word, opcional `/message` con `ENABLE_HTTP_FORWARD`).
+3. VOSK realiza el gating inicial del wake word ("indio" / "che indio").
+4. Tras el corte de silencio, envía el audio a `Gemini 2.5 Flash` (base64 WAV con rotación de keys de `geminiKeys.py` y fallback a Groq Cloud).
+5. Valida que el texto confirme la invocación al Indio (`_stt_confirms_indio`); si no contiene "indio", descarta el falso positivo.
+6. `on_transcript` publica en el canal de texto y forwardea por HTTP al main bot (`_dispatch_to_indio`).
 
 ### 3) Playback de música (GuildPlayer)
 
@@ -463,9 +465,9 @@ pip install --force-reinstall --no-deps \
 
 Si encontrás el error a futuro: re-correr los 3 comandos en el venv del userbot.
 
-### 2) Modelo `faster-whisper` se descarga en el primer arranque
+### 2) Transcripción de voz (STT) con Gemini 2.5 Flash
 
-La primera vez que `indio-userbot.service` levanta en un server fresh, baja el modelo (`Systran/faster-whisper-<size>`) de HuggingFace — agrega ~30-60s al startup. Cachea en `~/.cache/huggingface/` (o `WHISPER_CACHE_DIR` si está seteado). Se dispone del token `HUGGINGFACE_API_TOKEN` en `.env` / `config.py` para autenticar descargas o APIs de Hugging Face si fuera requerido.
+El userbot ya no descarga ni ejecuta modelos locales pesados de Hugging Face. Convierte el PCM capturado (16 kHz mono) a WAV en memoria y lo envía vía API REST multimodal a **Gemini 2.5 Flash** con rotación automática de API keys (`geminiKeys.py`). Dispone además de fallback transparente a Groq Cloud (`whisper-large-v3`).
 
 ### 3) DAVE patch en el userbot
 

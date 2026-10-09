@@ -180,3 +180,20 @@ async def test_generate_and_post_weekly_patch_notes_e2e(tmp_path, sample_commits
     assert second_run is None
     # No new messages sent
     assert len(sent_messages) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_and_post_weekly_patch_notes_error_logging(sample_commits, monkeypatch):
+    """When Discord channel send fails, an exception is raised so autoErrorTracker logs an Auto-Bug."""
+    async def fake_commits(days=7):
+        return sample_commits
+
+    monkeypatch.setattr(patch_notes_generator, "get_recent_git_commits", fake_commits)
+
+    fake_channel = MagicMock()
+    fake_channel.send = AsyncMock(side_effect=RuntimeError("Discord connection timeout"))
+    fake_bot = MagicMock()
+    fake_bot.get_channel = MagicMock(return_value=fake_channel)
+
+    with pytest.raises(RuntimeError, match="Discord connection timeout"):
+        await patch_notes_generator.generate_and_post_weekly_patch_notes(fake_bot, force=True)

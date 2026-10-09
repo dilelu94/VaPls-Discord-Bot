@@ -4057,7 +4057,7 @@ async def help_cmd(ctx):
             "Corre en **dos procesos**:\n"
             "• **Main bot** (este) — slash commands, música, soundpad, Gemini.\n"
             "• **Userbot (Indio)** — escucha voz en canales E2EE, transcribe "
-            "con faster-whisper y responde al wake-word *indio*."
+            "con Gemini 2.5 Flash y responde al wake-word *indio*."
         ),
         color=0x5865F2,
     )

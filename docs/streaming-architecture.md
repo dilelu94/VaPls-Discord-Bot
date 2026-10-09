@@ -223,7 +223,7 @@ STREAM_PACKET_PACE=0.75
 El indio **no tiene nada de video streaming**. Se eliminó `userbot/streamer.py` y todo el relay `/stream`, `/stopstream`. Es exclusivamente voice-input:
 
 - Voice receive via `discord-ext-voice-recv`
-- ASR con faster-whisper + VOSK (wake word "indio")
+- ASR con Gemini 2.5 Flash (fallback Groq) + VOSK (wake word "indio")
 - Transcripción → relay al bot principal vía `/indio`
 - **NO** hace streaming de video
 - **NO** tiene endpoint `/stream` en su relay

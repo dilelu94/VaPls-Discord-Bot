@@ -3,13 +3,13 @@
 ## Server
 
 - **Producción**: Oracle Cloud Ampere A1 — 2 OCPU (Neoverse N1 aarch64) / 12 GB RAM.
-- **Stack**: Ubuntu 22.04+ aarch64. `faster-whisper` (CTranslate2 con wheels aarch64), `py-cord`, `discord.py-self`, `ffmpeg`.
+- **Stack**: Ubuntu 22.04+ aarch64. `py-cord`, `discord.py-self`, `ffmpeg`, Gemini 2.5 Flash STT (con fallback a Groq Cloud).
 - **⚠️ Python 3.10 (constraint de runtime)**: el server corre **Python 3.10.12**
   (el `python3` que trae Ubuntu 22.04), en ambos venvs (`venv/`, `userbot/venv/`).
   **Esa es la única versión soportada en producción** y la única sobre la que
   gatea la CI. Si bumpeás el target de Python, actualizá la matriz en
   `.github/workflows/ci.yml` y este doc en el mismo cambio.
-- **Razón del upgrade desde E2.1.Micro (1 GB)**: faster-whisper `base` saturaba la CPU (~27s para 1.4s de audio); el modelo `small` ahora corre real-time con concurrencia 5 y deja headroom para `/play` simultáneo.
+- **Razón del upgrade desde E2.1.Micro (1 GB)**: Permite headroom holgado de RAM y CPU para `/play` simultáneo, GoLive streaming y el bot multimodal sin saturar el sistema.
 
 ## CI/CD pipeline
 
@@ -108,4 +108,4 @@ Userbot service example:
 ### Troubleshooting de Voz e IA (2026-09-29)
 
 - **Comandos de Voz con parámetros faltantes**: Se corrigió un bug donde Gemini ignoraba la ejecución de herramientas opcionales (como `make_clip`) si la transcripción fonética resultaba en palabras sin sentido (ej. "clipeá metón"). Ahora `geminiCommand.py` asigna el valor por defecto `"1m"` para la duración si Gemini omite el parámetro, evitando que el comando fracase silenciosamente.
-- **Logs de transcripción (STT)**: Se agregaron logs detallados en `userbot/bot.py` (`_run_whisper`) para imprimir explícitamente cuando `faster-whisper` (local) realiza una transcripción, y exactamente qué texto generó, alineándolo con el nivel de detalle que ya tenía Groq.
+- **Logs de transcripción (STT)**: Se agregaron logs detallados en `userbot/bot.py` (`_run_gemini_stt` / `_run_groq_stt`) para imprimir explícitamente cuando Gemini o Groq realizan una transcripción, y exactamente qué texto generó.

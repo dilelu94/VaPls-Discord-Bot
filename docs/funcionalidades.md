@@ -228,12 +228,12 @@ El proceso más técnico. Funciones clave:
 - **DAVE patch**: monkey-patchea el descifrado de `voice_recv` para aplicar
   `dave.decrypt()` y poder oír audio en canales E2EE. (+ parche de resiliencia de
   Opus para no crashear.)
-- **Pipeline STT**: recibe PCM → mono → resample a 16 kHz → **faster-whisper**
-  (modelo `small`, int8, CPU).
+- **Pipeline STT**: recibe PCM → mono → resample a 16 kHz → **Gemini 2.5 Flash** (multimodal REST con rotación de keys y fallback a Groq Whisper Cloud).
 - **Wake word con VOSK** (`WakeWordSink`): VOSK corre barato todo el tiempo con
   una gramática restringida; **solo cuando detecta "indio"** (y variantes
-  fonéticas) dispara Whisper sobre el audio. Tiene pre-buffer (capta lo dicho
-  antes del wake word), filtrado de falsos positivos y límites de concurrencia
+  fonéticas) dispara la transcripción de Gemini sobre el audio. Gemini confirma
+  que realmente se haya dicho "che indio" o "indio", filtrando falsos positivos.
+  Tiene pre-buffer (capta lo dicho antes del wake word) y límites de concurrencia
   (3 mientras hay música, 5 si no).
 - Al detectar pregunta válida → la manda al `/indio` del main bot (con
   `is_voice=True`); el main bot prefija el texto con `[voz] ` antes de

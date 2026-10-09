@@ -43,12 +43,13 @@ async def get_recent_git_commits(days: int = 7, repo_dir: Optional[str] = None) 
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            logger.warning("git log failed with code %d: %s", proc.returncode, stderr.decode().strip())
+            logger.warning("[PATCH NOTES] git log failed with code %d: %s", proc.returncode, stderr.decode().strip())
             return []
         lines = [line.strip() for line in stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        logger.info("[PATCH NOTES] Retrieved %d git commits from the last %d days.", len(lines), days)
         return lines
     except Exception as exc:
-        logger.error("Error executing git log: %s", exc)
+        logger.exception("[PATCH NOTES] Error executing git log: %s", exc)
         return []
 
 
@@ -197,6 +198,7 @@ async def generate_patch_notes_with_gemini(commits: list[str], date_str: str) ->
     )
 
     try:
+        logger.info("[PATCH NOTES] Sending %d commit(s) to Gemini API for dynamic patch notes analysis...", len(commits))
         reply = await geminiClient.generate(
             user_message=user_prompt,
             system_instruction=system_instruction,
@@ -204,10 +206,26 @@ async def generate_patch_notes_with_gemini(commits: list[str], date_str: str) ->
         )
         parsed = _extract_json_from_gemini_response(reply.text)
         if parsed and "discord_highlight" in parsed and "sections" in parsed:
+            cat = parsed["discord_highlight"].get("category_title", "Unknown")
+            h_items = len(parsed["discord_highlight"].get("items", []))
+            secs = len(parsed.get("sections", []))
+            logger.info(
+                "[PATCH NOTES] Gemini successfully generated patch notes (category='%s', highlight_items=%d, sections=%d)",
+                cat,
+                h_items,
+                secs,
+            )
             return parsed
-        logger.warning("Gemini output could not be parsed as expected JSON: %s", reply.text[:200])
+        logger.warning(
+            "[PATCH NOTES] Gemini response did not contain expected JSON structure: %s. Using fallback.",
+            reply.text[:200],
+        )
     except Exception as exc:
-        logger.warning("Failed to generate patch notes via Gemini: %s. Using fallback.", exc)
+        logger.warning(
+            "[PATCH NOTES] Gemini API call failed (%s: %s). Activating automatic structured fallback.",
+            type(exc).__name__,
+            exc,
+        )
 
     return _build_fallback_patch_notes(commits, date_str)
 
@@ -257,7 +275,7 @@ def save_cron_state(state: dict[str, Any], path: Optional[str] = None) -> None:
         with open(state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
     except Exception as exc:
-        logger.error("Could not save patch notes cron state: %s", exc)
+        logger.exception("[PATCH NOTES] Could not save patch notes cron state: %s", exc)
 
 
 async def generate_and_post_weekly_patch_notes(
@@ -273,20 +291,20 @@ async def generate_and_post_weekly_patch_notes(
     if not force:
         # Check if today is Friday (weekday 4 in Python: Monday=0, Sunday=6)
         if now.weekday() != 4:
-            logger.info("Today (%s) is not Friday. Skipping weekly patch notes.", today_iso)
+            logger.info("[PATCH NOTES] Today (%s) is not Friday (weekday=%d). Skipping weekly patch notes.", today_iso, now.weekday())
             return None
 
         # Check if already executed today
         state = load_cron_state()
         if state.get("last_run_date") == today_iso:
-            logger.info("Weekly patch notes already executed on %s. Skipping.", today_iso)
+            logger.info("[PATCH NOTES] Weekly patch notes already executed today (%s). Skipping.", today_iso)
             return None
 
-    logger.info("Generating weekly patch notes (date=%s, force=%s)...", date_formatted, force)
+    logger.info("[PATCH NOTES] Generating weekly patch notes (date=%s, force=%s)...", date_formatted, force)
 
     commits = await get_recent_git_commits(days=7)
     if not commits and not force:
-        logger.info("No commits found in the last 7 days. Skipping weekly patch notes.")
+        logger.info("[PATCH NOTES] No commits found in the last 7 days. Skipping weekly patch notes.")
         return None
 
     patch_data = await generate_patch_notes_with_gemini(commits, date_formatted)
@@ -303,6 +321,7 @@ async def generate_and_post_weekly_patch_notes(
         sections=sections,
     )
     url = get_patch_notes_url(token)
+    logger.info("[PATCH NOTES] Created token %s (ttl=24h). URL: %s", token[:8], url)
     message_text = format_discord_patch_notes_message(date_formatted, highlight, url)
 
     # Resolve target Discord channel
@@ -315,28 +334,41 @@ async def generate_and_post_weekly_patch_notes(
             import geminiCommand
 
             target_channel = geminiCommand._get_soreteposting_channel(bot)
+            if target_channel:
+                logger.info("[PATCH NOTES] Resolved #soreteposting channel via geminiCommand (id=%s)", getattr(target_channel, "id", None))
         except Exception as exc:
-            logger.debug("Failed getting soreteposting channel via geminiCommand: %s", exc)
+            logger.debug("[PATCH NOTES] Failed getting soreteposting channel via geminiCommand: %s", exc)
 
     if not target_channel and hasattr(bot, "get_channel"):
         story_ch_id = getattr(config, "INDIO_STORY_CHANNEL_ID", 451580655650996236)
         if story_ch_id:
             target_channel = bot.get_channel(story_ch_id)
+            if target_channel:
+                logger.info("[PATCH NOTES] Resolved fallback story channel (id=%s)", story_ch_id)
 
     sent_msg = None
     if target_channel and hasattr(target_channel, "send"):
         try:
             sent_msg = await target_channel.send(message_text)
-            logger.info("Posted weekly patch notes to #%s (id=%s)", getattr(target_channel, "name", "channel"), getattr(sent_msg, "id", None))
+            logger.info(
+                "[PATCH NOTES] Successfully posted weekly patch notes to #%s (channel_id=%s, msg_id=%s)",
+                getattr(target_channel, "name", "channel"),
+                getattr(target_channel, "id", None),
+                getattr(sent_msg, "id", None),
+            )
         except Exception as exc:
-            logger.error("Failed to send weekly patch notes to channel: %s", exc)
+            logger.exception("[PATCH NOTES] Failed to send weekly patch notes to Discord channel: %s", exc)
+            raise
     else:
-        logger.warning("Could not find a valid Discord text channel to post weekly patch notes.")
+        err = RuntimeError("No valid Discord text channel found (#soreteposting) to post weekly patch notes.")
+        logger.exception("[PATCH NOTES] %s", err)
+        raise err
 
     # Persist state
     state = load_cron_state()
     state["last_run_date"] = today_iso
     save_cron_state(state)
+    logger.info("[PATCH NOTES] Successfully persisted cron run state (last_run_date=%s).", today_iso)
 
     return {
         "token": token,

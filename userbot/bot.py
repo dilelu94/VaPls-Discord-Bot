@@ -1,7 +1,7 @@
 """
 VaPls userbot: listens to Discord voice channels using a real user account
 (so DAVE E2EE works naturally) and transcribes Spanish speech with
-faster-whisper. When the wake word "indio" / "che indio" is detected at the
+Gemini 2.5 Flash (with Groq fallback). When the wake word "indio" / "che indio" is detected at the
 start of a transcript, the pregunta is forwarded to the main bot's /indio
 endpoint so the indio persona can reply.
 
@@ -9,7 +9,7 @@ Runs separately from the main Discord bot — the main bot still handles
 /play, /soundpad, slash commands, etc. This userbot is voice-input-only.
 
 Library stack: discord.py-self (user-token client) + discord-ext-voice-recv
-(voice receive extension) + faster-whisper (CTranslate2-based ASR).
+(voice receive extension) + Gemini 2.5 Flash / Groq Whisper multimodal STT.
 """
 
 import asyncio
@@ -49,6 +49,7 @@ _spec.loader.exec_module(config)
 
 sys.modules["userbot_config"] = config
 import groqKeys
+import geminiKeys
 
 import discord.gateway
 try:
@@ -389,8 +390,9 @@ async def _patched_reinit(self):
 _VCS.reinit_dave_session = _patched_reinit
 
 
-# ---------- Whisper setup --------------------------------------------------
+# ---------- Speech-to-Text setup (Gemini & Groq Cloud) ---------------------
 
+import base64
 import re
 import threading
 from collections import defaultdict, deque
@@ -399,29 +401,6 @@ try:
     import numpy as np
 except Exception:
     np = None
-try:
-    from faster_whisper import WhisperModel
-except Exception:
-    WhisperModel = None
-
-if getattr(config, "WHISPER_ENABLED", False) and WhisperModel is not None:
-    log.info(
-        f"Loading faster-whisper model '{config.WHISPER_MODEL}' "
-        f"(compute_type={config.WHISPER_COMPUTE_TYPE}, "
-        f"cpu_threads={config.WHISPER_CPU_THREADS}) ..."
-    )
-    whisper_model = WhisperModel(
-        config.WHISPER_MODEL,
-        device="cpu",
-        compute_type=config.WHISPER_COMPUTE_TYPE,
-        cpu_threads=config.WHISPER_CPU_THREADS,
-        num_workers=1,
-        download_root=config.WHISPER_CACHE_DIR or None,
-    )
-    log.info("✅ Whisper model loaded.")
-else:
-    log.info("WHISPER_ENABLED=false (or faster_whisper not present). Local Whisper model not loaded.")
-    whisper_model = None
 
 import unicodedata
 
@@ -827,68 +806,153 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
     return ""
 
 
-async def _transcribe_pcm(pcm_16k_bytes: bytes) -> str:
-    """Transcribe s16le 16k mono PCM bytes using configured STT_PROVIDER (groq or local)."""
-    provider = getattr(config, "STT_PROVIDER", "local").lower()
-    has_groq = bool(groqKeys.active_keys() or getattr(config, "GROQ_API_KEY", ""))
-    if provider == "groq" or (provider == "local" and has_groq):
-        return await _run_groq_stt(pcm_16k_bytes)
-    elif provider == "local" and getattr(config, "WHISPER_ENABLED", False):
-        return await asyncio.to_thread(_run_whisper, pcm_16k_bytes)
+async def _run_gemini_stt(pcm_16k_bytes: bytes) -> str:
+    """Send s16le 16k mono PCM bytes to Gemini API for speech-to-text with key rotation and retry on 429."""
+    if not pcm_16k_bytes:
+        return ""
+
+    pool = geminiKeys.active_keys()
+    if not pool:
+        pool = list(getattr(config, "GEMINI_API_KEYS", []))
+    if not pool:
+        legacy = getattr(config, "GEMINI_API_KEY", "")
+        if legacy:
+            pool = [legacy]
+    if not pool:
+        log.warning("[GEMINI-STT] No Gemini API keys configured")
+        return ""
+
+    # Convert s16le 16k mono PCM bytes to WAV format in-memory
+    wav_buf = io.BytesIO()
+    with wave.open(wav_buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(pcm_16k_bytes)
+    audio_b64 = base64.b64encode(wav_buf.getvalue()).decode("utf-8")
+
+    model_name = getattr(config, "GEMINI_STT_MODEL", "gemini-2.5-flash")
+    url_template = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    endpoint = url_template.format(model=model_name)
+
+    body = {
+        "system_instruction": {
+            "parts": [
+                {
+                    "text": (
+                        "Sos el transcriptor de voz oficial de un bot de Discord argentino. "
+                        "Tu tarea es escuchar el audio y transcribir exactamente lo que se dice palabra por palabra "
+                        "en español, con puntuación natural y respetando los modismos rioplatenses. "
+                        "Si la persona llama al bot, se le llama 'Indio' o 'Che Indio'. "
+                        "Respondé ÚNICAMENTE con el texto transcrito literal. "
+                        "Si no hay voz humana inteligible o es solo silencio/ruido de fondo, no respondas nada."
+                    )
+                }
+            ]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {
+                        "inline_data": {
+                            "mime_type": "audio/wav",
+                            "data": audio_b64,
+                        }
+                    },
+                    {"text": "Transcribí exactamente lo dicho en el audio:"},
+                ],
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.0,
+            "maxOutputTokens": 256,
+        },
+    }
+
+    attempts = max(1, len(pool))
+    used_keys: set[str] = set()
+
+    for attempt in range(attempts):
+        api_key = geminiKeys.get_next_gemini_key()
+        if not api_key:
+            break
+        if api_key in used_keys and len(used_keys) >= len(pool):
+            break
+        used_keys.add(api_key)
+
+        try:
+            session = await _get_http()
+            async with session.post(
+                endpoint,
+                params={"key": api_key},
+                headers={"Content-Type": "application/json"},
+                json=body,
+                timeout=aiohttp.ClientTimeout(total=8.0),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    candidates = data.get("candidates") or []
+                    if candidates:
+                        cand = candidates[0] or {}
+                        content = cand.get("content") or {}
+                        parts = content.get("parts") or []
+                        text_chunks = [p.get("text", "") for p in parts if isinstance(p, dict) and p.get("text")]
+                        text = "".join(text_chunks).strip()
+                        log.info(
+                            f"[GEMINI-STT] Transcribed {len(pcm_16k_bytes)} bytes using key "
+                            f"...{api_key[-6:]}: {text!r}"
+                        )
+                        return text
+                    return ""
+                elif resp.status == 429:
+                    body_text = await resp.text()
+                    log.warning(
+                        f"[GEMINI-STT] Key ...{api_key[-6:]} rate-limited (HTTP 429): {body_text[:150]}; "
+                        f"putting on 60s cooldown and rotating key"
+                    )
+                    geminiKeys.mark_key_cooldown(api_key, 60.0)
+                    continue
+                elif resp.status in (401, 403):
+                    body_text = await resp.text()
+                    log.error(
+                        f"[GEMINI-STT] Key ...{api_key[-6:]} invalid/unauthorized (HTTP {resp.status}): {body_text[:150]}; "
+                        f"marking dead and rotating key"
+                    )
+                    geminiKeys.mark_key_dead(api_key)
+                    continue
+                else:
+                    body_text = await resp.text()
+                    log.error(f"[GEMINI-STT] Gemini API returned HTTP {resp.status}: {body_text[:200]}")
+                    return ""
+        except Exception as e:
+            log.exception(f"[GEMINI-STT] Failed to transcribe audio via Gemini API: {e}")
+            analytics.capture_exception(e, properties={"action": "gemini_stt_failed"})
+            return ""
+
     return ""
 
 
-def _run_whisper(pcm_16k_bytes: bytes) -> str:
-    """Run Whisper on s16le 16k mono bytes. Returns concatenated text."""
-    if whisper_model is None:
-        return ""
-    audio = np.frombuffer(pcm_16k_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-    segments, _info = whisper_model.transcribe(
-        audio,
-        language="es",
-        beam_size=1,
-        vad_filter=True,
-        initial_prompt="Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá.",
-        condition_on_previous_text=False,
-    )
-    result = " ".join(s.text.strip() for s in segments if s.text).strip()
-    log.info(f"[LOCAL-STT] Transcribed {len(pcm_16k_bytes)} bytes using faster-whisper (local): {result!r}")
-    return result
+async def _transcribe_pcm(pcm_16k_bytes: bytes) -> str:
+    """Transcribe s16le 16k mono PCM bytes using configured STT_PROVIDER (gemini primary, groq fallback)."""
+    provider = getattr(config, "STT_PROVIDER", "gemini").lower()
+    has_gemini = bool(geminiKeys.active_keys() or getattr(config, "GEMINI_API_KEYS", []) or getattr(config, "GEMINI_API_KEY", ""))
+    has_groq = bool(groqKeys.active_keys() or getattr(config, "GROQ_API_KEY", ""))
 
+    # Primary provider: Gemini
+    if provider == "gemini" or (provider != "groq" and has_gemini):
+        text = await _run_gemini_stt(pcm_16k_bytes)
+        if text:
+            return text
+        log.warning("[STT] Gemini transcription empty or failed, trying Groq fallback")
 
-def _run_whisper_wake(pcm_16k_bytes: bytes) -> str:
-    """Whisper pass tuned for the SHORT wake-word region (~1.5s of "che indio").
+    # Fallback provider: Groq
+    if has_groq:
+        text = await _run_groq_stt(pcm_16k_bytes)
+        if text:
+            return text
 
-    Used by preset 4 to confirm the wake word. Differs from :func:`_run_whisper`
-    (which transcribes the full command) in ways that matter on a brief clip:
-
-      - ``vad_filter=False``: the VAD trims brief leading speech, which would
-        cut the very wake word we're trying to confirm.
-      - ``initial_prompt`` biases the decoder toward "che indio" so it writes
-        "indio" instead of dropping it or hearing "cheneo".
-      - tighter hallucination guards (``no_speech_threshold`` / log-prob /
-        compression ratio): marginal short clips otherwise emit boilerplate
-        like YouTube-subtitle text. A hallucination won't contain "indio", so
-        it's correctly rejected downstream.
-    """
-    if whisper_model is None:
-        # If whisper is disabled, assume VOSK got it right and return the wake word
-        # so the pipeline doesn't abort. (Though _run_whisper will still return "")
-        return "indio"
-    audio = np.frombuffer(pcm_16k_bytes, dtype=np.int16).astype(np.float32) / 32768.0
-    segments, _info = whisper_model.transcribe(
-        audio,
-        language="es",
-        beam_size=1,
-        vad_filter=False,
-        temperature=0.0,
-        no_speech_threshold=0.6,
-        log_prob_threshold=-1.0,
-        compression_ratio_threshold=2.4,
-        condition_on_previous_text=False,
-        initial_prompt="Che indio.",
-    )
-    return " ".join(s.text.strip() for s in segments if s.text).strip()
+    return ""
 
 
 # ---------- VOSK wake-word recognizer (gating layer for Whisper) -----------
@@ -1997,7 +2061,7 @@ class WakeWordSink(voice_recv.AudioSink):
             )
 
             # Post-STT verification: transcript MUST confirm the wake word ("che indio" / "indio").
-            if not _whisper_confirms_indio(text):
+            if not _stt_confirms_indio(text):
                 log.info(
                     "[WAKE] user=%s: 'indio' NOT confirmed in STT transcript (%r); discarding false positive",
                     user_id,
@@ -2106,7 +2170,7 @@ def _has_text_beyond_wake_word(text: str) -> bool:
 def _whisper_confirms_indio(text: str) -> bool:
     """True iff the normalized transcript contains "indio" or one of its phonetic variants.
 
-    Used by preset 4 and post-STT verification to confirm the wake word.
+    Used by post-STT verification to confirm the wake word.
     """
     if not text:
         return False
@@ -2124,6 +2188,10 @@ def _whisper_confirms_indio(text: str) -> bool:
         any(w_tok in tok for w_tok in _WAKE_WORD_TOKENS)
         for tok in tokens
     )
+
+
+# Backward compatibility alias
+_stt_confirms_indio = _whisper_confirms_indio
 
 
 # s16le mono @16kHz: bytes per second of audio (2 bytes/sample × 16000).

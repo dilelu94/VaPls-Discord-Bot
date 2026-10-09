@@ -12,9 +12,8 @@ discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self@v2.1.0
 # discord.py-self AFTER this so it wins the `discord` namespace.
 # Pinned to a commit verified to import cleanly against discord.py-self v2.1.0.
 discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voice-recv@ac04ea7b0941112e83767cf1c1469b408fa06748
-faster-whisper>=1.0
 # Lightweight ASR used as wake-word detector with a restricted grammar.
-# Keeps Whisper idle until the word "indio" is heard.
+# Keeps audio processing idle until the word "indio" is heard.
 vosk>=0.3.45
 numpy
 python-dotenv

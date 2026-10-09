@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import tempfile
+import time
 from typing import Optional
 
 import analytics
@@ -36,6 +37,8 @@ _GEMINI_KEY_RE = re.compile(r"\b(?:AIza[\w-]{20,80}|AQ\.[A-Za-z0-9_\-]{20,120})"
 
 _keys: list[dict] = []  # cada item: {"key", "owner_name", "owner_id", "note", "source"}
 _lock = asyncio.Lock()
+_key_cooldowns: dict[str, float] = {}
+_next_key_idx: int = 0
 
 
 def extract_keys_from_text(text: str) -> list[str]:
@@ -56,6 +59,43 @@ def extract_keys_from_text(text: str) -> list[str]:
 def active_keys() -> list[str]:
     """Return the raw key strings currently in the pool, in donation order."""
     return [item["key"] for item in _keys if item.get("key")]
+
+
+def get_next_gemini_key() -> Optional[str]:
+    """Return the next healthy Gemini API key in the pool using round-robin rotation."""
+    global _next_key_idx
+    keys = active_keys()
+    if not keys:
+        keys = list(getattr(config, "GEMINI_API_KEYS", []))
+    if not keys:
+        legacy = getattr(config, "GEMINI_API_KEY", "")
+        if legacy:
+            keys = [legacy]
+    if not keys:
+        return None
+    now = time.monotonic()
+    available = [k for k in keys if _key_cooldowns.get(k, 0.0) <= now]
+    if not available:
+        return min(keys, key=lambda k: _key_cooldowns.get(k, 0.0))
+    start = _next_key_idx % len(keys)
+    for offset in range(len(keys)):
+        candidate = keys[(start + offset) % len(keys)]
+        if candidate in available:
+            _next_key_idx = (start + offset + 1) % len(keys)
+            return candidate
+    return keys[0]
+
+
+def mark_key_cooldown(key: str, seconds: float = 60.0) -> None:
+    """Put a key into temporary cooldown (e.g. on HTTP 429)."""
+    if key:
+        _key_cooldowns[key] = time.monotonic() + seconds
+
+
+def mark_key_dead(key: str) -> None:
+    """Put an invalid/expired key into 24h cooldown (HTTP 401/403)."""
+    if key:
+        _key_cooldowns[key] = time.monotonic() + 86400.0
 
 
 def list_entries() -> list[dict]:
