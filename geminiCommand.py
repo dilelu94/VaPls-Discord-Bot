@@ -3272,46 +3272,91 @@ def _gate_play_sound_actions(
     return kept
 
 
-# --- play_music anti-misfire gate -------------------------------------------
-# Mismo patrón que _gate_play_sound_actions: verificar determinísticamente
-# sobre el mensaje crudo del usuario que haya verbo de orden. Sin esto, Gemini
-# puede llamar play_music para cualquier input de voz aunque no haya pedido
-# musical (caso real: "Quiero que sea su racista" → play_music).
-#
-# NO filtra por "query concreta": "poné algo" es un pedido válido aunque el
-# target sea genérico. El gate solo corta los casos donde no hay NINGÚN verbo
-# de orden en el mensaje del usuario.
+_PAUSE_ORDER_RE = re.compile(
+    r"\b(paus[aaáeé]|fren[aaáeé]|par[aaáeé](\s+la)?\s+musica)\b",
+    re.IGNORECASE,
+)
+_RESUME_ORDER_RE = re.compile(
+    r"\b(resum[iií]|continu[aaáeé]|despaus[aaáeé]|(pone|metele|dame)\s+play|\bplay\b)\b",
+    re.IGNORECASE,
+)
+_SKIP_ORDER_RE = re.compile(
+    r"\b(salte[aaáeé]|skip|siguient|pas[aaáeé]\s+(de\s+)?tema)\b",
+    re.IGNORECASE,
+)
+_STOP_ORDER_RE = re.compile(
+    r"\b(par[aaáeé](\s+la)?\s+musica|cort[aaáeé]la?|basta\b|\bstop\b)\b",
+    re.IGNORECASE,
+)
 
 
 def _gate_play_music_actions(
     actions: list[tuple[str, str]], raw_text: str
 ) -> list[tuple[str, str]]:
-    """Filtra play_music espurios. Solo deja pasar cuando el mensaje del
-    usuario tiene un verbo imperativo de reproducción (tirá, poneme, metele,
-    etc.). Sin verbo no hay pedido musical. El resto de las acciones pasa
-    intacto.
+    """Filtra play_music y herramientas de control de reproducción (pause, resume, skip, stop) espurios.
+    Solo deja pasar cuando el mensaje del usuario tiene un verbo de orden.
+    Sin verbo no hay orden de reproducción/control.
 
     Los mensajes de voz (``[voz]``) se saltan el gate porque la ASR puede
     distorsionar el verbo (ej. "Pone" → "Opres") — Gemini ya decidió llamar
-    play_music y confiamos en su criterio para transcripciones ruidosas."""
+    la tool y confiamos en su criterio para transcripciones ruidosas."""
     if not actions:
         return actions
     if raw_text and raw_text.strip().startswith("[voz]"):
         return actions
-    has_order = _has_play_sound_order(raw_text)
+
+    norm_text = _strip_accents_lower(raw_text or "")
+    has_play_order = _has_play_sound_order(raw_text)
+    has_pause_order = bool(_PAUSE_ORDER_RE.search(norm_text))
+    has_resume_order = bool(_RESUME_ORDER_RE.search(norm_text))
+    has_skip_order = bool(_SKIP_ORDER_RE.search(norm_text))
+    has_stop_order = bool(_STOP_ORDER_RE.search(norm_text))
+
     kept: list[tuple[str, str]] = []
     for action, arg in actions:
-        if action != "PLAY_MUSIC":
-            kept.append((action, arg))
-            continue
-        if has_order:
-            kept.append((action, arg))
+        if action == "PLAY_MUSIC":
+            if has_play_order:
+                kept.append((action, arg))
+            else:
+                logger.info(
+                    "indio PLAY_MUSIC suprimido: sin verbo de orden (msg=%r, query=%r)",
+                    (raw_text or "")[:80],
+                    arg,
+                )
+        elif action == "PAUSE_MUSIC":
+            if has_pause_order:
+                kept.append((action, arg))
+            else:
+                logger.info(
+                    "indio PAUSE_MUSIC suprimido: sin verbo de pausa (msg=%r)",
+                    (raw_text or "")[:80],
+                )
+        elif action == "RESUME_MUSIC":
+            if has_resume_order:
+                kept.append((action, arg))
+            else:
+                logger.info(
+                    "indio RESUME_MUSIC suprimido: sin verbo de reanudación (msg=%r)",
+                    (raw_text or "")[:80],
+                )
+        elif action == "SKIP_MUSIC":
+            if has_skip_order:
+                kept.append((action, arg))
+            else:
+                logger.info(
+                    "indio SKIP_MUSIC suprimido: sin verbo de saltear (msg=%r)",
+                    (raw_text or "")[:80],
+                )
+        elif action == "STOP_MUSIC":
+            if has_stop_order:
+                kept.append((action, arg))
+            else:
+                logger.info(
+                    "indio STOP_MUSIC suprimido: sin verbo de parar (msg=%r)",
+                    (raw_text or "")[:80],
+                )
         else:
-            logger.info(
-                "indio PLAY_MUSIC suprimido: sin verbo de orden (msg=%r, query=%r)",
-                (raw_text or "")[:80],
-                arg,
-            )
+            kept.append((action, arg))
     return kept
 
 
@@ -6428,7 +6473,7 @@ async def indioFromVoice(
     # reproduccion en vez del canal de texto general. La accion musical
     # ya se manda a INDIO_PLAY_CHANNEL_ID via _dispatch_indio_actions,
     # pero el texto del Indio ("🎵 Ahí va") antes caia en INDIO_REPLY_CHANNEL_ID.
-    if not from_voice and replied_content is None and config.INDIO_PLAY_CHANNEL_ID:
+    if not from_voice and not no_redirect and replied_content is None and config.INDIO_PLAY_CHANNEL_ID:
         if _had_music:
             _play_chan = bot.get_channel(config.INDIO_PLAY_CHANNEL_ID)
             if (

@@ -383,6 +383,10 @@ golive: encoder probe OK → libx264
       (b) Se vinculó `first_frame_sent` a `GoLiveAudioSender` (`golive/slopsoil/golive.py`, `engine.py` y `golive/bot.py`), haciendo que la transmisión de audio espere a la emisión del primer cuadro de video antes de iniciar el reloj de tiempo real `t0`.
       (c) **Tests**: `tests/test_video_player_tracks.py` y `tests/test_quack_control.py`.
 
+25. **(2026-10-09) Anti-misfire gate para herramientas de control de reproducción y corrección de `no_redirect`**:
+    - **Descripción**: Se agregaron verificaciones determinísticas en `_gate_play_music_actions` (`geminiCommand.py`) para herramientas de reproducción/control (`PAUSE_MUSIC`, `RESUME_MUSIC`, `SKIP_MUSIC`, `STOP_MUSIC`). Previene que llamadas a herramientas espurias producidas por alucinaciones de la IA ejecuten acciones no deseadas o muestren respuestas del tipo `"⏸️ Pausando — no había reproductor activo"`. Además, se corrigió la validación de `no_redirect` en `indioFromVoice` para evitar la redirección forzada al canal de música cuando `no_redirect=True` está activo.
+    - **Tests**: `tests/test_playback_control_gating.py`.
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 
