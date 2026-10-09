@@ -300,5 +300,5 @@ TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID = int(os.getenv("TWITCH_AUTOSTREAM_TARGET_CH
 
 # --- JoJo reference spontaneous reply --------------------------------------
 # Probabilidad (0.0 a 1.0) de que el Indio intervenga espontáneamente al detectar una JoJo referencia.
-JOJO_REPLY_PROBABILITY = float(os.getenv("JOJO_REPLY_PROBABILITY", "0.05"))
+JOJO_REPLY_PROBABILITY = float(os.getenv("JOJO_REPLY_PROBABILITY", "0.15"))
 
