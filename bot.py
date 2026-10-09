@@ -669,6 +669,14 @@ async def on_ready():
     except Exception:
         log.exception("twitch autostream monitor task startup failed")
 
+    # Start scheduled weekly patch notes task
+    try:
+        if not scheduled_weekly_patch_notes.is_running():
+            scheduled_weekly_patch_notes.start()
+        log.info("scheduled weekly patch notes task started")
+    except Exception:
+        log.exception("scheduled weekly patch notes task startup failed")
+
 
     # Start Israel alerts listener.
     global _alert_listener
@@ -4973,6 +4981,59 @@ async def twitch_autostream_monitor():
 @twitch_autostream_monitor.before_loop
 async def before_twitch_autostream():
     await bot.wait_until_ready()
+
+
+# --- Scheduled Weekly Patch Notes (Fridays at 19:00 UTC-3) ---
+@tasks.loop(time=datetime.time(hour=19, minute=0, tzinfo=datetime.timezone(datetime.timedelta(hours=-3))))
+async def scheduled_weekly_patch_notes():
+    """Background task running every Friday at 19:00 UTC-3 to generate and post patch notes."""
+    import patch_notes_generator
+
+    # Skip immediate execution on task startup (iteration 0) if not at scheduled time (19:00 UTC-3)
+    if scheduled_weekly_patch_notes.current_loop == 0:
+        tz = datetime.timezone(datetime.timedelta(hours=-3))
+        now = datetime.datetime.now(tz)
+        if not (now.hour == 19 and now.minute <= 5):
+            log.info(
+                "[SCHEDULED PATCH NOTES] Skipping immediate execution on startup (current time %s is not 19:00).",
+                now.strftime("%H:%M"),
+            )
+            return
+
+    log.info("[SCHEDULED PATCH NOTES] Running weekly patch notes task.")
+    try:
+        await patch_notes_generator.generate_and_post_weekly_patch_notes(bot, force=False)
+    except Exception:
+        log.exception("[SCHEDULED PATCH NOTES] Failed generating or posting weekly patch notes.")
+
+
+@scheduled_weekly_patch_notes.before_loop
+async def before_scheduled_weekly_patch_notes():
+    await bot.wait_until_ready()
+
+
+@bot.slash_command(
+    name="notas-parche-generar",
+    description="Genera y publica manualmente las notas de parche semanales (Owner only)",
+    guild_ids=config.DEBUG_GUILD_IDS,
+)
+async def notas_parche_generar_cmd(
+    ctx: discord.ApplicationContext,
+    force: discord.Option(bool, "Forzar generación sin importar el día", default=True),  # type: ignore
+):
+    if ctx.author.id != config.OWNER_ID:
+        await ctx.respond("⛔ Solo el dueño del bot puede usar este comando.", ephemeral=True)
+        return
+
+    await safe_defer(ctx, ephemeral=True)
+    import patch_notes_generator
+
+    res = await patch_notes_generator.generate_and_post_weekly_patch_notes(bot, force=force)
+    if not res:
+        await ctx.respond("⚠️ No se generaron notas de parche (quizás no hubo commits o ya se ejecutó hoy).", ephemeral=True)
+        return
+
+    await ctx.respond(f"✅ Notas de parche generadas y enviadas:\n{res['url']}", ephemeral=True)
 
 
 if __name__ == "__main__":

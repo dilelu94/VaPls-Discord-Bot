@@ -68,6 +68,7 @@ class PatchNotesManager:
         version: str = "2.6",
         ttl_seconds: int = 86400,
         title: str = "Notas de Parche v2.6",
+        sections: Optional[list[dict[str, Any]]] = None,
     ) -> str:
         """Generate a cryptographically secure token valid for `ttl_seconds` (default 24h)."""
         self._cleanup_old_tokens()
@@ -79,6 +80,7 @@ class PatchNotesManager:
             "title": title,
             "created_at": now,
             "expires_at": now + ttl_seconds,
+            "sections": sections,
         }
         self._save()
         logger.info("Created patch notes token %s (version=%s, ttl=%ds)", token[:8], version, ttl_seconds)
@@ -141,6 +143,203 @@ class PatchNotesManager:
         remaining_secs = max(0, int(expires_at - time.time()))
         rem_hours = remaining_secs // 3600
         rem_minutes = (remaining_secs % 3600) // 60
+
+        sections_data = token_data.get("sections")
+        if sections_data and isinstance(sections_data, list):
+            rendered_sections = []
+            for sec in sections_data:
+                sec_icon = html.escape(str(sec.get("icon", "📝")))
+                sec_title = html.escape(str(sec.get("title", "Mejoras del Sistema")))
+                items_html = []
+                for item in sec.get("items", []):
+                    raw_tag = str(item.get("tag", "Mejora"))
+                    tag = html.escape(raw_tag)
+                    raw_type = str(item.get("tag_type") or "").lower()
+                    if not raw_type:
+                        tag_lower = raw_tag.lower()
+                        if "buff" in tag_lower or "nuevo" in tag_lower:
+                            raw_type = "buff"
+                        elif "nerf" in tag_lower:
+                            raw_type = "nerf"
+                        elif "fix" in tag_lower or "arreglo" in tag_lower:
+                            raw_type = "fix"
+                        elif "feat" in tag_lower:
+                            raw_type = "feat"
+                        else:
+                            raw_type = "qol"
+                    css_tag = f"tag-{raw_type}" if raw_type in ("buff", "nerf", "fix", "feat", "qol") else "tag-qol"
+                    header = html.escape(str(item.get("header") or item.get("title") or ""))
+                    desc = html.escape(str(item.get("desc", "")))
+                    dialogues = item.get("dialogues")
+                    dialogue_html = ""
+                    if dialogues and isinstance(dialogues, list):
+                        dialogue_lines = "<br>\n".join(html.escape(str(d)) for d in dialogues)
+                        dialogue_html = f'\n            <div class="dialogue-box">\n              {dialogue_lines}\n            </div>'
+                    items_html.append(f"""        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag {css_tag}">{tag}</span>
+            {header}
+          </div>
+          <div class="item-desc">
+            {desc}{dialogue_html}
+          </div>
+        </li>""")
+                sec_content = "\n".join(items_html)
+                rendered_sections.append(f"""    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">{sec_icon}</span>
+        <span>{sec_title}</span>
+      </div>
+      <ul class="patch-list">
+{sec_content}
+      </ul>
+    </div>""")
+            sections_html_block = "\n\n".join(rendered_sections)
+        else:
+            sections_html_block = """    <!-- 1. ANTI-EXPLOITS & LOOT -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">🛡️</span>
+        <span>Saludos Raros & Pity</span>
+      </div>
+      <ul class="patch-list">
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-nerf">Ajuste</span>
+            Cooldown de Pity en Saludos Raros
+          </div>
+          <div class="item-desc">
+            Se implementó un <strong>cooldown de 1 hora</strong> para el incremento de pity por usuario. Se evita entrar y salir repetidamente del canal de voz para forzar audios raros (como el Don Cangrejo de Seba).
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 2. NETCODE & GOLIVE -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">📺</span>
+        <span>GoLive Streaming</span>
+      </div>
+      <ul class="patch-list">
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-buff">Mejora</span>
+            Sincronización Audio / Video (A/V Sync)
+          </div>
+          <div class="item-desc">
+            Se eliminó el desfasaje en transmisiones GoLive (IPTV, HLS y Stremio). Ahora el audio inicia exactamente con la emisión del primer fotograma (<code>first_frame_sent</code>).
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 3. COMPORTAMIENTO DEL INDIO -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">🧠</span>
+        <span>Respuestas y Comportamiento del Indio</span>
+      </div>
+      <ul class="patch-list">
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-buff">Nuevo</span>
+            Nuevas Frases cuando anda cruzado
+          </div>
+          <div class="item-desc">
+            Se sumaron nuevas respuestas al repertorio del Indio:
+            <div class="dialogue-box">
+              💬 "andá a hacerte ortear"<br>
+              💬 "¿por qué no me sopapeás la papirola?"
+            </div>
+          </div>
+        </li>
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-fix">Arreglo</span>
+            Corrección en bardeadas ('cabecear el enano')
+          </div>
+          <div class="item-desc">
+            Se corrigió la intención de la frase para asegurar que el bardeo se dirija al interlocutor y no hacia sí mismo.
+          </div>
+        </li>
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-fix">Arreglo</span>
+            Control de Reproducción de Música
+          </div>
+          <div class="item-desc">
+            Se agregaron filtros para evitar que el Indio corte o cambie canciones por error mientras conversa en el chat.
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 4. IA & NAVEGACIÓN DE VOZ -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">🗺️</span>
+        <span>IA & Navegación en Canales de Voz</span>
+      </div>
+      <ul class="patch-list">
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-fix">Fix / Pathfinding</span>
+            Restricción de Canales AFK
+          </div>
+          <div class="item-desc">
+            El Indio ya no seguirá a los usuarios cuando se muevan o sean movidos a los canales AFK del servidor.
+          </div>
+        </li>
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-qol">Ajuste de Probabilidad</span>
+            Eventos de Desconexión de Usuarios
+          </div>
+          <div class="item-desc">
+            Probabilidad de reacción al desconectarse un usuario rebalanceada a <strong>1% global</strong>, y calibrada en <strong>20% para la salida de Chalo</strong>.
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 5. SISTEMA DE REPORTES -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">🐛</span>
+        <span>Sistema de Reportes & Misiones</span>
+      </div>
+      <ul class="patch-list">
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-feat">Feature</span>
+            Auto-Bug Tracker en GitHub Issues
+          </div>
+          <div class="item-desc">
+            Al responder directamente a un audio clipeado con transcripción fallida de STT, el bot crea automáticamente un reporte de issue en GitHub con los datos de depuración. Se incorporó además la función <code>close_issue</code> para cerrar tickets resueltos.
+          </div>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 6. HISTORIAS & MULTIMEDIA -->
+    <div class="section-card">
+      <div class="section-title">
+        <span class="section-icon">🖼️</span>
+        <span>Historias & Multimedia</span>
+      </div>
+      <ul class="patch-list">
+        <li class="patch-item">
+          <div class="item-header">
+            <span class="patch-tag tag-qol">QoL</span>
+            Galería Curada e Interacción de Historias
+          </div>
+          <div class="item-desc">
+            Sincronización del manifiesto de imágenes curadas y mejoras en el procesamiento del feedback al responder a historias espontáneas del Indio.
+          </div>
+        </li>
+      </ul>
+    </div>"""
 
         return f"""<!DOCTYPE html>
 <html lang="es">
@@ -365,150 +564,7 @@ class PatchNotesManager:
       <p class="subtitle">Registro oficial de cambios y mejoras del bot</p>
     </div>
 
-    <!-- 1. ANTI-EXPLOITS & LOOT -->
-    <div class="section-card">
-      <div class="section-title">
-        <span class="section-icon">🛡️</span>
-        <span>Saludos Raros & Pity</span>
-      </div>
-      <ul class="patch-list">
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-nerf">Ajuste</span>
-            Cooldown de Pity en Saludos Raros
-          </div>
-          <div class="item-desc">
-            Se implementó un <strong>cooldown de 1 hora</strong> para el incremento de pity por usuario. Se evita entrar y salir repetidamente del canal de voz para forzar audios raros (como el Don Cangrejo de Seba).
-          </div>
-        </li>
-      </ul>
-    </div>
-
-    <!-- 2. NETCODE & GOLIVE -->
-    <div class="section-card">
-      <div class="section-title">
-        <span class="section-icon">📺</span>
-        <span>GoLive Streaming</span>
-      </div>
-      <ul class="patch-list">
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-buff">Mejora</span>
-            Sincronización Audio / Video (A/V Sync)
-          </div>
-          <div class="item-desc">
-            Se eliminó el desfasaje en transmisiones GoLive (IPTV, HLS y Stremio). Ahora el audio inicia exactamente con la emisión del primer fotograma (<code>first_frame_sent</code>).
-          </div>
-        </li>
-      </ul>
-    </div>
-
-    <!-- 3. COMPORTAMIENTO DEL INDIO -->
-    <div class="section-card">
-      <div class="section-title">
-        <span class="section-icon">🧠</span>
-        <span>Respuestas y Comportamiento del Indio</span>
-      </div>
-      <ul class="patch-list">
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-buff">Nuevo</span>
-            Nuevas Frases cuando anda cruzado
-          </div>
-          <div class="item-desc">
-            Se sumaron nuevas respuestas al repertorio del Indio:
-            <div class="dialogue-box">
-              💬 "andá a hacerte ortear"<br>
-              💬 "¿por qué no me sopapeás la papirola?"
-            </div>
-          </div>
-        </li>
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-fix">Arreglo</span>
-            Corrección en bardeadas ('cabecear el enano')
-          </div>
-          <div class="item-desc">
-            Se corrigió la intención de la frase para asegurar que el bardeo se dirija al interlocutor y no hacia sí mismo.
-          </div>
-        </li>
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-fix">Arreglo</span>
-            Control de Reproducción de Música
-          </div>
-          <div class="item-desc">
-            Se agregaron filtros para evitar que el Indio corte o cambie canciones por error mientras conversa en el chat.
-          </div>
-        </li>
-      </ul>
-    </div>
-
-    <!-- 4. IA & NAVEGACIÓN DE VOZ -->
-    <div class="section-card">
-      <div class="section-title">
-        <span class="section-icon">🗺️</span>
-        <span>IA & Navegación en Canales de Voz</span>
-      </div>
-      <ul class="patch-list">
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-fix">Fix / Pathfinding</span>
-            Restricción de Canales AFK
-          </div>
-          <div class="item-desc">
-            El Indio ya no seguirá a los usuarios cuando se muevan o sean movidos a los canales AFK del servidor.
-          </div>
-        </li>
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-qol">Ajuste de Probabilidad</span>
-            Eventos de Desconexión de Usuarios
-          </div>
-          <div class="item-desc">
-            Probabilidad de reacción al desconectarse un usuario rebalanceada a <strong>1% global</strong>, y calibrada en <strong>20% para la salida de Chalo</strong>.
-          </div>
-        </li>
-      </ul>
-    </div>
-
-    <!-- 5. SISTEMA DE REPORTES -->
-    <div class="section-card">
-      <div class="section-title">
-        <span class="section-icon">🐛</span>
-        <span>Sistema de Reportes & Misiones</span>
-      </div>
-      <ul class="patch-list">
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-feat">Feature</span>
-            Auto-Bug Tracker en GitHub Issues
-          </div>
-          <div class="item-desc">
-            Al responder directamente a un audio clipeado con transcripción fallida de STT, el bot crea automáticamente un reporte de issue en GitHub con los datos de depuración. Se incorporó además la función <code>close_issue</code> para cerrar tickets resueltos.
-          </div>
-        </li>
-      </ul>
-    </div>
-
-    <!-- 6. HISTORIAS & MULTIMEDIA -->
-    <div class="section-card">
-      <div class="section-title">
-        <span class="section-icon">🖼️</span>
-        <span>Historias & Multimedia</span>
-      </div>
-      <ul class="patch-list">
-        <li class="patch-item">
-          <div class="item-header">
-            <span class="patch-tag tag-qol">QoL</span>
-            Galería Curada e Interacción de Historias
-          </div>
-          <div class="item-desc">
-            Sincronización del manifiesto de imágenes curadas y mejoras en el procesamiento del feedback al responder a historias espontáneas del Indio.
-          </div>
-        </li>
-      </ul>
-    </div>
+{sections_html_block}
 
     <div class="footer">
       VaPls Discord Bot &bull; Oracle Cloud Infrastructure (OCI) &bull; Este enlace temporal vence automáticamente en 24 horas.
@@ -642,3 +698,18 @@ class PatchNotesManager:
 
 # Global singleton instance
 patch_notes_manager = PatchNotesManager()
+
+
+def get_patch_notes_url(token: str) -> str:
+    """Return the absolute public URL for a patch notes token, using configured domain."""
+    try:
+        import config
+
+        base = getattr(
+            config,
+            "PATCH_NOTES_BASE_URL",
+            f"https://{getattr(config, 'DUCKDNS_DOMAIN', 'vapls.duckdns.org')}",
+        ).rstrip("/")
+    except Exception:
+        base = "https://vapls.duckdns.org"
+    return f"{base}/patch-notes/{token}"

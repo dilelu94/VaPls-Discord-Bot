@@ -110,6 +110,46 @@ def test_rendered_html_contains_patch_notes(tmp_patch_notes_manager):
     assert "cabecear el enano" in html_out
 
 
+def test_dynamic_sections_rendering(tmp_patch_notes_manager):
+    """Dynamic sections provided in token are rendered properly with escaping."""
+    mgr = tmp_patch_notes_manager
+    sections = [
+        {
+            "icon": "🚀",
+            "title": "Novedades Semanales",
+            "items": [
+                {
+                    "tag": "Buff",
+                    "header": "Super Cambio",
+                    "desc": "Detalle del cambio <script>alert(1)</script>",
+                    "dialogues": ["probando diálogo"],
+                }
+            ],
+        }
+    ]
+    token = mgr.create_token(version="3.0", title="Notas v3.0", sections=sections)
+    _, data = mgr.get_token_status(token)
+    html_out = mgr.render_patch_notes_html(data)
+
+    assert "Notas v3.0" in html_out
+    assert "Novedades Semanales" in html_out
+    assert "Super Cambio" in html_out
+    assert "tag-buff" in html_out
+    assert "probando diálogo" in html_out
+    # Script tag from user payload must be escaped
+    assert "<script>alert(1)</script>" not in html_out
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html_out
+
+
+def test_get_patch_notes_url():
+    """URL generator outputs domain URL pointing to patch notes token."""
+    from patch_notes import get_patch_notes_url
+
+    url = get_patch_notes_url("test_token_1234567890")
+    assert "patch-notes/test_token_1234567890" in url
+    assert "vapls.duckdns.org" in url
+
+
 @pytest.mark.asyncio
 async def test_api_patch_notes_endpoint_e2e(tmp_patch_notes_manager, monkeypatch):
     """End-to-end test against the API router."""

@@ -307,3 +307,12 @@ JOJO_REPLY_PROBABILITY = float(os.getenv("JOJO_REPLY_PROBABILITY", "0.15"))
 DUCKDNS_DOMAIN = os.getenv("DUCKDNS_DOMAIN", "vapls.duckdns.org").strip()
 DUCKDNS_TOKEN = os.getenv("DUCKDNS_TOKEN", "").strip()
 
+# --- Patch Notes Web UI & Automation ----------------------------------------
+PATCH_NOTES_BASE_URL = os.getenv(
+    "PATCH_NOTES_BASE_URL",
+    f"https://{DUCKDNS_DOMAIN}" if DUCKDNS_DOMAIN else "https://vapls.duckdns.org",
+).rstrip("/")
+PATCH_NOTES_CRON_STATE_PATH = os.getenv(
+    "PATCH_NOTES_CRON_STATE_PATH", "data/patch_notes_cron_state.json"
+)
+

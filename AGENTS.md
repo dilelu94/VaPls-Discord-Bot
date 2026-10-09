@@ -148,6 +148,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `media_analyzer.py`: Extracción de fotogramas de video con FFmpeg, metadatos de enlaces (yt-dlp/OpenGraph) y análisis de intereses de usuario para la memoria a largo plazo del Indio.
 - `data/internet_rules.json`: Registro persistente en JSON de las 101 Reglas de Internet (Regla 0 a 100) con su texto original en inglés y traducción al español.
 - `patch_notes.py`: UI web y gestor de tokens efímeros (24h) con headers de seguridad y rate-limiting para notas de parche completas.
+- `patch_notes_generator.py`: Generador y publicador semanal automático de notas de parche en Discord (#soreteposting) y web UI mediante análisis con Gemini de commits recientes.
 
 ## 🔬 Detalles de Implementación Clave
 
@@ -188,6 +189,13 @@ Cuando un usuario responde con un reply en Discord a un mensaje de transcripció
 - **Reporte Automático de Bug (GitHub Issues)**: `transcriptBugTracker.py` extrae la transcripción errónea, el audio clipeado adjunto (con tamaño y enlace), el autor de la voz, el texto correctivo escrito por el usuario, la respuesta original del Indio y enlaces jump directos de Discord, creando o comentando un issue con fingerprint `transcript-{id}` y etiqueta `bot-error` / `stt` para su reentrenamiento o depuración con Grok.
 - **Aislamiento en Userbot (Cero Respuestas del Indio)**: Para evitar que el Indio interprete la corrección del usuario como una conversación dirigida a él, `userbot/bot.py` detecta mediante `_is_audio_transcript_message()` si el mensaje referenciado (o su mensaje padre) es una transcripción de voz clipeada. En dicho caso, `on_message` aborta tempranamente y `_extract_reply_chain()` fuerza `is_reply_to_indio = False`, asegurando que el Indio **no responda en el chat** y el mensaje solo se procese como reporte técnico de Auto-Bug.
 - **Deduplicación y Filtrado de Bots**: `transcriptBugTracker.py` descarta mensajes provenientes de bots, del propio bot principal (`VAPLS_BOT_ID`) y del userbot (`USERBOT_USER_ID`). Además, mantiene una caché en memoria (`_known_transcript_issues`) para evitar la creación de issues duplicados durante la latencia de indexación de la API de GitHub.
+
+### 7) Generación Automática de Notas de Parche (`patch_notes.py` y `patch_notes_generator.py`)
+
+- **Cron y Programación**: Se ejecuta todos los viernes a las 19:00 hs (UTC-3 / Argentina) mediante `@tasks.loop` en `bot.py` (`scheduled_weekly_patch_notes`). Mantiene persistencia idempotente en `data/patch_notes_cron_state.json` para evitar envíos duplicados en el mismo día tras reinicios.
+- **Análisis de Commits con Gemini**: Extrae los commits de los últimos 7 días con `git log`. Gemini analiza los cambios reales y determina dinámicamente la categoría más destacada de la semana (ej: música, IPTV/GoLive, el Indio, correcciones técnicas, etc.), sin usar términos forzados de videojuegos ("combate") ni inventar balances inexistentes.
+- **Formato en Discord**: Publica en `#soreteposting` respetando estrictamente el encabezado en negrita `**Notas del parche vapls (DD/MM/YYYY)**`, la categoría destacada con su emoji, 1-2 cambios en viñetas `• **<Título> (<Tag>):** <desc>`, y el enlace temporal `🔗 [Ver notas del parche completo](https://vapls.duckdns.org/patch-notes/{token})`.
+- **Web UI & Seguridad**: Cada token generado tiene una duración de 24 horas (HTTP 410 Gone al expirar), rate-limiting por IP y cabeceras estrictas de seguridad (CSP, `X-Frame-Options: DENY`, `no-referrer`, `nosniff`). Se renderizan tarjetas de diseño oscuro con temporizador en vivo.
 
 ## 📡 Integración con el bot de Telegram
 
@@ -231,6 +239,7 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 - `/adivinador`: inicia una partida interactiva de trivia / adivinador en el canal de texto.
 - `/mascota`: panel interactivo para ver, alimentar y evolucionar la mascota virtual del usuario.
 - `/israel-alerts`: activa o desactiva el feed de alertas de emergencia de Israel en el canal.
+- `/notas-parche-generar`: genera y publica manualmente las notas de parche semanales en `#soreteposting` (owner only).
 - `/banana` (Pausado/Inactivo): genera una imagen con Gemini web UI (Playwright).
 
 ## 📺 GoLive / IPTV / Stremio (`/stream`)
