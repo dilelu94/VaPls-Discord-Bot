@@ -313,3 +313,39 @@ def test_file_att_to_dict_persistence_no_attribute_error():
     assert d["pending"][0]["attachment"]["filename"] == "test.png"
 
 
+async def test_handle_first_msg_ignores_reply_to_other_message(bot):
+    """Replies to other messages (not the story vote/text msg) do not consume story feedback."""
+    b, ch = bot
+    guild_id = 456
+    _seed_review(story_msg_id=1001, vote_msg_id=1002, guild_id=guild_id)
+
+    msg = MagicMock()
+    msg.guild.id = guild_id
+    msg.content = "indio, mira, el cuello de seba"
+    msg.reference = types.SimpleNamespace(message_id=9999)  # Reply to unrelated msg
+
+    await storyManager.handle_first_msg_after_story(msg, b)
+
+    # Review remains active in _awaiting_first_msg
+    assert guild_id in storyManager._awaiting_first_msg
+
+
+async def test_handle_first_msg_unrelated_text_keeps_story_active(bot):
+    """Unrelated chat messages do not delete the active story review or consume _awaiting_first_msg."""
+    b, ch = bot
+    guild_id = 456
+    _seed_review(story_msg_id=1001, vote_msg_id=1002, guild_id=guild_id)
+
+    msg = MagicMock()
+    msg.guild.id = guild_id
+    msg.content = "hola como andan"
+    msg.reference = None
+
+    with patch.object(storyManager, "_evaluate_reply_context", AsyncMock(return_value=False)):
+        await storyManager.handle_first_msg_after_story(msg, b)
+
+    # Review remains active
+    assert guild_id in storyManager._awaiting_first_msg
+
+
+

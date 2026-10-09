@@ -1033,9 +1033,26 @@ class _FileAtt:
 
 async def handle_first_msg_after_story(message, bot) -> None:
     guild_id = message.guild.id
-    review = _awaiting_first_msg.pop(guild_id, None)
+    review = _awaiting_first_msg.get(guild_id)
     if review is None:
         return
+
+    # If the message is a Discord reply to another message (not the story review),
+    # ignore it as story feedback.
+    ref = getattr(message, "reference", None)
+    if ref and ref.message_id:
+        target_mid = int(ref.message_id)
+        valid_mids = {
+            review.get("vote_msg_id"),
+            review.get("story_msg_id"),
+        }
+        valid_mids.discard(None)
+        if target_mid not in valid_mids:
+            logger.info(
+                "[STORY] msg is a reply to non-story msg %s — ignoring as story feedback",
+                target_mid,
+            )
+            return
 
     feedback = (message.content or "").strip()
     if not feedback:
@@ -1043,19 +1060,15 @@ async def handle_first_msg_after_story(message, bot) -> None:
 
     rel_path = review["rel_path"]
     channel_id = review["channel_id"]
-    logger.info(
-        "[STORY] first msg after story guild=%s user=%s feedback=%s rel_path=%s",
-        guild_id,
-        message.author.id,
-        feedback[:100],
-        rel_path,
-    )
 
     if await _evaluate_reply_context(review["story_text"], feedback):
-        # Related → regenerate with feedback
+        _awaiting_first_msg.pop(guild_id, None)
         logger.info(
-            "[STORY] feedback related, regenerating story guild=%s",
+            "[STORY] feedback related, regenerating story guild=%s user=%s feedback=%s rel_path=%s",
             guild_id,
+            message.author.id,
+            feedback[:100],
+            rel_path,
         )
         old_story_id = review["story_msg_id"]
         old_vote_id = review["vote_msg_id"]
@@ -1104,57 +1117,12 @@ async def handle_first_msg_after_story(message, bot) -> None:
                 except Exception:
                     pass
     else:
-        # Not related → start ImageDMSession via DM so the user can save the image
+        # Unrelated message: leave the active story review untouched for voting
         logger.info(
-            "[STORY] feedback unrelated, starting ImageDMSession user=%s guild=%s",
-            message.author.id,
+            "[STORY] feedback unrelated to story text — keeping story review active guild=%s user=%s",
             guild_id,
+            message.author.id,
         )
-        full = Path(imagePool.POOL_DIR, rel_path)
-        if full.exists():
-            _pending_reviews.pop(review["vote_msg_id"], None)
-            _pending_reviews.pop(review["story_msg_id"], None)
-            _pr_flush()
-            ch = bot.get_channel(channel_id)
-            if ch and hasattr(ch, "send"):
-                for mid in (review["vote_msg_id"], review["story_msg_id"]):
-                    if mid:
-                        try:
-                            m = await ch.fetch_message(mid)
-                            await m.delete()
-                        except Exception:
-                            pass
-
-            data = full.read_bytes()
-            ext = full.suffix[1:] or "png"
-            mime = {
-                "png": "image/png",
-                "jpg": "image/jpeg",
-                "jpeg": "image/jpeg",
-                "gif": "image/gif",
-                "webp": "image/webp",
-            }.get(ext, "image/png")
-
-            fake_att = _FileAtt(data, full.name, mime)
-            buf = _StoryBuffer()
-            author = types.SimpleNamespace(
-                id=message.author.id, display_name=message.author.display_name
-            )
-            msg = types.SimpleNamespace(
-                author=author, channel=buf, attachments=[fake_att], content=""
-            )
-            await geminiCommand.handle_indio_image_dm(msg, [fake_att])
-
-            session_text = (
-                "\n\n".join(buf.messages) if buf.messages else "📸 Acá está la imagen."
-            )
-            await _relay_dm_file(message.author.id, session_text, str(full.resolve()))
-        else:
-            logger.warning(
-                "[STORY] image not found for DM guild=%s rel_path=%s",
-                guild_id,
-                rel_path,
-            )
 
 
 _DM_REPLY_PROMPT = """\

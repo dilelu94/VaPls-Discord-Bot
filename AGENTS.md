@@ -391,6 +391,10 @@ golive: encoder probe OK → libx264
     - **Descripción**: Se incluyó una instrucción explícita en `INDIO_SYSTEM` y en `_INDIO_ANGRY_DAY_BLOCK` (`geminiCommand.py`) indicando que "cabecear el enano" es una referencia a sexo oral en jerga rioplatense, por lo que la frase debe ser SIEMPRE expresada en dirección de los otros hacia el Indio (`"Me vas a tener que cabecear el enano"`). Se prohíbe explícitamente la forma invertida `"Te voy a cabecear el enano"`, evitando que el bot genere frases donde se ofrezca a realizar sexo oral a los usuarios.
     - **Tests**: `tests/test_indio_angry_day.py` (`test_indio_system_prompt_includes_cabecear_el_enano_berretines`).
 
+27. **(2026-10-09) Sincronización del catálogo de imágenes curadas (`indio_images/manifest.json`) y filtrado de respuestas en `storyManager.py`**:
+    - **Descripción**: Sincronizado `indio_images/manifest.json` y los archivos de imagen curados de la instancia de producción OCI (incluyendo la foto curada `bb773572-8cc9-41fc-9e56-52814abb9eb6.png` derivada de `Juji/JJ.png` —la edición de cara simétrica con cuatro ojos dentro de los auriculares—). Además, se corrigió en `storyManager.py` el manejo de `handle_first_msg_after_story` para evitar que las respuestas (`reply`) a otros mensajes no relacionados consuman el estado de feedback activo o descarten la revisión de historia en curso.
+    - **Tests**: `tests/test_indio_story_approval.py`.
+
 
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
