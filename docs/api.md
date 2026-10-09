@@ -323,6 +323,19 @@ These endpoints are **public** (no `X-API-Secret` required). A cryptographically
 
 Serves the full, responsive gaming patch notes HTML page with strict security headers (CSP, X-Frame-Options: DENY, nosniff, no-referrer), IP rate-limiting, and automatic 24-hour expiration (returns `410 Gone` once expired).
 
+## Web landing page & command catalog (`/`, `/index.html`)
+
+This endpoint is **public** (no `X-API-Secret` required) and designed with strict isolation:
+
+### `GET /` (alias: `GET /index.html`)
+
+Serves the interactive web control console and command catalog for VaPls Discord Bot (`https://vapls.duckdns.org/`):
+- **Features Showcase**: Transmisión Go Live (`/stream`), música (`/play`, `/clip`, `/parar`), IA de El Indio (`/indio`, `/vapls`), soundpad interactivo, mascota virtual (`/mascota`), trivia (`/adivinador`) y portal de transferencias (`/transferir`).
+- **Zero Remote Execution**: No commands or sensitive operations are executed through the web server. Clicking any button displays an interactive modal detailing the exact slash command to copy and run directly inside Discord.
+- **Zero Leaks**: Guarantees zero sensitive tokens, secrets, or internal server IPs in HTML/JS.
+- **Security Headers**: Enforces strict CSP, anti-framing (`X-Frame-Options: DENY`), `X-Content-Type-Options: nosniff` and IP rate-limiting.
+- **Stremio Token Compatibility**: If queried with a 32-character Stremio session token (`/?token={token}`), seamlessly delegates to `stremioIndex` for Stremio Web UI sessions.
+
 ## Error responses
 
 Common errors:

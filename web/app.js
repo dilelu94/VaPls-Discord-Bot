@@ -32,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const urlParams = new URLSearchParams(window.location.search);
   let sessionToken = urlParams.get('token') || '';
   if (!sessionToken) {
-    const pathMatch = window.location.pathname.match(/\/stremio\/([a-f0-9]{32})/i);
+    const pathMatch = window.location.pathname.match(/(?:\/stremio\/|\/)([a-f0-9]{32})/i);
     if (pathMatch) sessionToken = pathMatch[1];
   }
   if (!sessionToken) {

@@ -16,7 +16,7 @@ import re
 import time
 import datetime
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 import aiohttp
 import discord
 from discord.ext import commands, tasks
@@ -3198,7 +3198,9 @@ async def stream(
 
 
     if canal is not None and canal.strip().lower() in ("stremio", "anime", "stremio anime"):
-        stremio_base = getattr(config, "STREMIO_WEB_URL", "http://141.148.84.55/stremio")
+        stremio_base = getattr(config, "STREMIO_WEB_URL", "https://vapls.duckdns.org/").strip()
+        if not stremio_base:
+            stremio_base = "https://vapls.duckdns.org/"
         from stremio_sessions import session_manager
         sess = session_manager.create_session(
             author_id=ctx.author.id,
@@ -3207,7 +3209,12 @@ async def stream(
             guild_id=ctx.guild.id if ctx.guild else 0,
             ttl_hours=6.0,
         )
-        stremio_url = f"{stremio_base}?token={sess.token}"
+        parsed_base = urlparse(stremio_base)
+        clean_base = stremio_base
+        if not parsed_base.path:
+            clean_base = f"{stremio_base}/"
+        sep = "&" if "?" in clean_base else "?"
+        stremio_url = f"{clean_base}{sep}token={sess.token}"
         embed = discord.Embed(
             title="🎬 Buscador Interactivo Stremio & Anime",
             description="Buscá anime, películas y series y transmitilas al instante a tu canal de voz.",

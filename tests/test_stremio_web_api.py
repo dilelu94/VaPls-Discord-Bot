@@ -64,6 +64,19 @@ async def test_stremio_unauthenticated_access_rejected(mock_bot):
         assert "/stream stremio" in text
         assert "válido por la duración del stream" in text
 
+        # 1b. GET / without token serves the public landing page (200 OK)
+        resp_root = await client.get("/")
+        assert resp_root.status == 200
+        text_root = await resp_root.text()
+        assert "VaPls &amp; El Indio" in text_root or "VaPls & El Indio" in text_root
+
+        # 1c. GET / with invalid token delegates to Stremio -> 403 Access Denied
+        resp_root_tok = await client.get("/?token=invalid_stremio_token_123456789")
+        assert resp_root_tok.status == 403
+        text_root_tok = await resp_root_tok.text()
+        assert "Acceso Denegado" in text_root_tok
+        assert "/stream stremio" in text_root_tok
+
         # 2. GET /api/stremio/search without token -> 403 JSON
         resp_search = await client.get("/api/stremio/search?q=Naruto")
         assert resp_search.status == 403
@@ -112,6 +125,18 @@ async def test_stremio_valid_token_access(mock_bot):
         assert resp.status == 200
         text = await resp.text()
         assert "VaPls Stremio" in text
+
+        # 1b. GET /?token=<token> serves index.html
+        resp_root = await client.get(f"/?token={token}")
+        assert resp_root.status == 200
+        text_root = await resp_root.text()
+        assert "VaPls Stremio" in text_root
+
+        # 1c. GET /<token> serves index.html
+        resp_path = await client.get(f"/{token}")
+        assert resp_path.status == 200
+        text_path = await resp_path.text()
+        assert "VaPls Stremio" in text_path
 
         # 2. GET /stremio/style.css serves static CSS (static assets accessible)
         resp_css = await client.get("/stremio/style.css")
@@ -190,7 +215,7 @@ async def test_stremio_slash_commands():
     ctx.author.voice.channel.id = 456
     ctx.channel_id = 789
 
-    # Test /stream stremio command generates tokenized link
+    # Test /stream stremio command generates tokenized link with https://vapls.duckdns.org/
     with patch("bot.safe_defer", new=AsyncMock()):
         await stream(ctx, opcion="stremio")
         assert ctx.interaction.edit_original_response.called
@@ -200,7 +225,30 @@ async def test_stremio_slash_commands():
         assert "Stremio & Anime" in embed.title
         btn = view.children[0]
         assert "token=" in btn.url
-        assert "141.148.84.55/stremio?token=" in btn.url or "http" in btn.url
+        assert "vapls.duckdns.org/?token=" in btn.url or "https://vapls.duckdns.org" in btn.url
+
+
+@pytest.mark.asyncio
+async def test_stremio_slash_command_custom_url(monkeypatch):
+    from bot import stream
+    import config
+
+    monkeypatch.setattr(config, "STREMIO_WEB_URL", "https://custom.duckdns.org/stremio")
+
+    ctx = AsyncMock()
+    ctx.guild = MagicMock()
+    ctx.guild.id = 123
+    ctx.author.id = 999
+    ctx.author.display_name = "UserTester"
+    ctx.author.voice.channel.id = 456
+    ctx.channel_id = 789
+
+    with patch("bot.safe_defer", new=AsyncMock()):
+        await stream(ctx, opcion="stremio")
+        assert ctx.interaction.edit_original_response.called
+        kwargs = ctx.interaction.edit_original_response.call_args[1]
+        btn = kwargs["view"].children[0]
+        assert "https://custom.duckdns.org/stremio?token=" in btn.url
 
 
 @pytest.mark.asyncio
@@ -527,6 +575,14 @@ async def test_stremio_security_headers_present(mock_bot):
         assert headers.get("X-Frame-Options") == "DENY"
         assert headers.get("X-Content-Type-Options") == "nosniff"
         assert headers.get("Referrer-Policy") == "no-referrer"
+
+        # Headers also present on root /?token=
+        resp_root = await client.get(f"/?token={sess.token}")
+        assert resp_root.status == 200
+        headers_root = resp_root.headers
+        assert "Content-Security-Policy" in headers_root
+        assert headers_root.get("X-Frame-Options") == "DENY"
+        assert headers_root.get("X-Content-Type-Options") == "nosniff"
     finally:
         await client.close()
 

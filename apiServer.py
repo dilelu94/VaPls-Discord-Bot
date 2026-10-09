@@ -38,6 +38,7 @@ from baseView import BaseView
 import tts
 from stremio_sessions import session_manager, StremioSession
 from patch_notes import patch_notes_manager
+from landing_page import landing_page_manager
 
 logger = logging.getLogger("apiServer")
 
@@ -183,9 +184,13 @@ async def authMiddleware(request: web.Request, handler):
         # Admin routes use Basic Auth instead of X-API-Secret.
         if request.path.startswith("/admin"):
             return await handler(request)
-        # Transfer routes use the token as auth.
+        # Transfer, Stremio (root or /stremio) and public web routes use session/token auth.
         if (
-            request.path.startswith("/upload")
+            request.path == "/"
+            or request.path == "/index.html"
+            or (len(request.path) == 33 and re.match(r"^/[a-f0-9]{32}$", request.path))
+            or request.path == "/favicon.ico"
+            or request.path.startswith("/upload")
             or request.path.startswith("/dl")
             or request.path.startswith("/static")
             or request.path.startswith("/stremio")
@@ -955,6 +960,20 @@ def makeApp(bot: discord.Bot) -> web.Application:
         html_body = patch_notes_manager.render_not_found_html()
         resp = web.Response(text=html_body, content_type="text/html", status=404)
         return patch_notes_manager.add_security_headers(resp)
+
+    async def landingPageView(request: web.Request) -> web.Response:
+        """Serve public, interactive landing page and command catalog at /."""
+        # If request has a Stremio token parameter in query, delegate to stremioIndex
+        if "token" in request.query:
+            return await stremioIndex(request)
+
+        ip = request.remote or "unknown"
+        if not landing_page_manager.check_rate_limit(ip):
+            return web.Response(status=429, text="Too Many Requests")
+
+        html_body = landing_page_manager.render_landing_page_html()
+        resp = web.Response(text=html_body, content_type="text/html")
+        return landing_page_manager.add_security_headers(resp)
 
     async def handleWebhook(request: web.Request) -> web.Response:
         """Handle incoming Meta webhooks (POST).
@@ -2985,6 +3004,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
         updated = watched_manager.set_watched(key, watched)
         return web.json_response({"ok": True, "watched": updated})
 
+    async def stremioFavicon(request: web.Request) -> web.Response:
+        fav_path = os.path.join(os.path.dirname(__file__), "web", "ahegao.webp")
+        if os.path.isfile(fav_path):
+            resp = web.FileResponse(fav_path)
+            return _add_stremio_security_headers(resp)
+        return web.Response(status=404)
+
+    app.router.add_get("/", landingPageView)
+    app.router.add_get("/index.html", landingPageView)
+    app.router.add_get("/{token:[a-f0-9]{32}}", stremioIndex)
+    app.router.add_get("/favicon.ico", stremioFavicon)
     app.router.add_get("/stremio", stremioIndex)
     app.router.add_get("/stremio/", stremioIndex)
     app.router.add_get("/stremio/index.html", stremioIndex)

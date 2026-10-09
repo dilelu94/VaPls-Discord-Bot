@@ -86,7 +86,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 
 **Dominio y DNS Dinámico (Duck DNS):**
 - **Dominio:** `vapls.duckdns.org` (servicio Duck DNS, cuenta `dilelu94@github`, free tier).
-- **Propósito:** Resolución y acceso estable a las páginas y servicios web del bot (`http://vapls.duckdns.org`), incluyendo el panel MMR (`/admin`), la Web UI de Stremio (`/stremio`), transferencias de archivos pesados (`/transferir`), notas de parche completas (`/patch-notes`), y webhooks (`/github-webhook`, `/webhook`), evitando el uso de direcciones IP directas o desactualizadas si cambia la IP pública.
+- **Propósito:** Resolución y acceso estable a las páginas y servicios web del bot (`http://vapls.duckdns.org`), incluyendo la consola interactiva de comandos (`/`), el panel MMR (`/admin`), la Web UI de Stremio (`/stremio`), transferencias de archivos pesados (`/transferir`), notas de parche completas (`/patch-notes`), y webhooks (`/github-webhook`, `/webhook`), evitando el uso de direcciones IP directas o desactualizadas si cambia la IP pública.
 - **Actualización dinámica (DDNS):** Duck DNS se actualiza mediante su endpoint HTTP estándar:
   ```bash
   curl -s "https://www.duckdns.org/update?domains=vapls&token=${DUCKDNS_TOKEN}&ip="
@@ -149,6 +149,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `data/internet_rules.json`: Registro persistente en JSON de las 101 Reglas de Internet (Regla 0 a 100) con su texto original en inglés y traducción al español.
 - `patch_notes.py`: UI web y gestor de tokens efímeros (24h) con headers de seguridad y rate-limiting para notas de parche completas.
 - `patch_notes_generator.py`: Generador y publicador semanal automático de notas de parche en Discord (#soreteposting) y web UI mediante análisis con Gemini de commits recientes.
+- `landing_page.py`: Consola web pública interactiva y catálogo de comandos de Discord en la raíz (`/`) con simulación y redirección segura a Discord (Zero Leaks, CSP y rate-limiting).
 
 ## 🔬 Detalles de Implementación Clave
 

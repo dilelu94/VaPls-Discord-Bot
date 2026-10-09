@@ -29,10 +29,17 @@ else:
         YT_DLP_PATH = shutil.which(_raw_yt_dlp) or _raw_yt_dlp
 YT_DLP_POT_BASE_URL = os.getenv("YT_DLP_POT_BASE_URL", "http://127.0.0.1:4416")
 
+# --- Duck DNS Dynamic DNS ---------------------------------------------------
+DUCKDNS_DOMAIN = os.getenv("DUCKDNS_DOMAIN", "vapls.duckdns.org").strip()
+DUCKDNS_TOKEN = os.getenv("DUCKDNS_TOKEN", "").strip()
+
 # TorBox / Torrentio Debrid configuration for fast HTTP stream searching
 TORBOX_TOKEN = os.getenv("TORBOX_TOKEN", "").strip()
 TORRENTIO_CONFIG = os.getenv("TORRENTIO_CONFIG", f"torbox={TORBOX_TOKEN}" if TORBOX_TOKEN else "").strip()
-STREMIO_WEB_URL = os.getenv("STREMIO_WEB_URL", "http://141.148.84.55/stremio").strip()
+STREMIO_WEB_URL = os.getenv(
+    "STREMIO_WEB_URL",
+    f"https://{DUCKDNS_DOMAIN}/" if DUCKDNS_DOMAIN else "https://vapls.duckdns.org/",
+).strip()
 
 
 # Guild IDs where slash commands are registered instantly (dev mode).
@@ -302,10 +309,6 @@ TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID = int(os.getenv("TWITCH_AUTOSTREAM_TARGET_CH
 # --- JoJo reference spontaneous reply --------------------------------------
 # Probabilidad (0.0 a 1.0) de que el Indio intervenga espontáneamente al detectar una JoJo referencia.
 JOJO_REPLY_PROBABILITY = float(os.getenv("JOJO_REPLY_PROBABILITY", "0.15"))
-
-# --- Duck DNS Dynamic DNS ---------------------------------------------------
-DUCKDNS_DOMAIN = os.getenv("DUCKDNS_DOMAIN", "vapls.duckdns.org").strip()
-DUCKDNS_TOKEN = os.getenv("DUCKDNS_TOKEN", "").strip()
 
 # --- Patch Notes Web UI & Automation ----------------------------------------
 PATCH_NOTES_BASE_URL = os.getenv(
