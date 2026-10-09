@@ -13,7 +13,7 @@ _CONFIG_VARS = [
     "YT_DLP_PATH", "DEBUG_GUILD_IDS", "RAM_THRESHOLD_MB", "PLAY_COOLDOWN",
     "POSTHOG_API_KEY", "POSTHOG_HOST", "API_HOST", "API_PORT", "API_SECRET",
     "GEMINI_API_KEY", "GEMINI_MODEL", "INDIO_MEMORY_PATH",
-    "INDIO_PLAY_CHANNEL_ID",
+    "INDIO_PLAY_CHANNEL_ID", "DUCKDNS_DOMAIN", "DUCKDNS_TOKEN",
 ]
 
 
@@ -76,13 +76,19 @@ def test_string_defaults_present(load_config):
     cfg = load_config({})
     assert cfg.GEMINI_MODEL == "gemini-2.5-flash"
     assert cfg.INDIO_MEMORY_PATH == "data/indio_memory.json"
+    assert cfg.DUCKDNS_DOMAIN == "vapls.duckdns.org"
+    assert cfg.DUCKDNS_TOKEN == ""
 
 
 def test_string_overrides_from_env(load_config):
     cfg = load_config({"GEMINI_MODEL": "gemini-3-pro",
-                       "INDIO_MEMORY_PATH": "/tmp/mem.json"})
+                       "INDIO_MEMORY_PATH": "/tmp/mem.json",
+                       "DUCKDNS_DOMAIN": "custom.duckdns.org",
+                       "DUCKDNS_TOKEN": "mock-token-xyz"})
     assert cfg.GEMINI_MODEL == "gemini-3-pro"
     assert cfg.INDIO_MEMORY_PATH == "/tmp/mem.json"
+    assert cfg.DUCKDNS_DOMAIN == "custom.duckdns.org"
+    assert cfg.DUCKDNS_TOKEN == "mock-token-xyz"
 
 
 def test_indio_play_channel_id_unset_falls_to_prod_default(load_config):

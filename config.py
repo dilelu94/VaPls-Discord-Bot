@@ -302,3 +302,7 @@ TWITCH_AUTOSTREAM_TARGET_CHANNEL_ID = int(os.getenv("TWITCH_AUTOSTREAM_TARGET_CH
 # Probabilidad (0.0 a 1.0) de que el Indio intervenga espontáneamente al detectar una JoJo referencia.
 JOJO_REPLY_PROBABILITY = float(os.getenv("JOJO_REPLY_PROBABILITY", "0.15"))
 
+# --- Duck DNS Dynamic DNS ---------------------------------------------------
+DUCKDNS_DOMAIN = os.getenv("DUCKDNS_DOMAIN", "vapls.duckdns.org").strip()
+DUCKDNS_TOKEN = os.getenv("DUCKDNS_TOKEN", "").strip()
+

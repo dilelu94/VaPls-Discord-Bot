@@ -3557,7 +3557,8 @@ async def _extract_reply_chain(message, max_depth: int = 4):
 
         vapls_id = getattr(config, "VAPLS_BOT_ID", None)
         if ref_msg.author.id in {client.user.id, vapls_id}:
-            is_reply_to_indio = True
+            if not _is_audio_transcript_message(ref_msg):
+                is_reply_to_indio = True
 
         author_name = _name_for(ref_msg.author.id, ref_msg.author)
         content = (ref_msg.content or "").strip()[:500]
@@ -3598,7 +3599,20 @@ async def _extract_reply_chain(message, max_depth: int = 4):
                 )
         replied_content = "\n".join(formatted_items)
 
-    return replied_content, replied_author, is_reply_to_indio, attachment_urls
+def _is_audio_transcript_message(msg: Optional[discord.Message]) -> bool:
+    """Return True if ``msg`` represents a voice transcript clip message."""
+    if msg is None:
+        return False
+    content = (getattr(msg, "content", "") or "").strip()
+    if content.startswith("🎙️ **") or content.startswith("🎙️"):
+        return True
+    attachments = getattr(msg, "attachments", []) or []
+    for att in attachments:
+        fn = (getattr(att, "filename", "") or "").lower()
+        ct = (getattr(att, "content_type", "") or "").lower()
+        if "audio_escuchado" in fn or ct.startswith("audio/") or fn.endswith((".wav", ".ogg", ".mp3", ".m4a")):
+            return True
+    return False
 
 
 @client.event
@@ -3635,6 +3649,41 @@ async def on_message(message):
     # Skip slash-command-shaped messages.
     if content.startswith("/"):
         return
+
+    # Si el mensaje es un reply a un audio de transcripción (o a la respuesta del Indio
+    # a dicho audio), ignorarlo: es una corrección STT para el Auto-Bug de GitHub, no una
+    # consulta conversacional para el Indio.
+    ref = getattr(message, "reference", None)
+    if ref is not None:
+        ref_msg = getattr(message, "referenced_message", None)
+        if ref_msg is None and ref.message_id is not None:
+            try:
+                ref_msg = await message.channel.fetch_message(ref.message_id)
+            except Exception:
+                ref_msg = None
+        if ref_msg is not None:
+            if _is_audio_transcript_message(ref_msg):
+                log.info(
+                    "[AUTOREPLY] message by %s is reply to audio transcript %s; skipping indio auto-reply",
+                    message.author.id,
+                    ref_msg.id,
+                )
+                return
+            parent_ref = getattr(ref_msg, "reference", None)
+            if parent_ref and parent_ref.message_id is not None:
+                parent_msg = getattr(ref_msg, "referenced_message", None)
+                if parent_msg is None:
+                    try:
+                        parent_msg = await message.channel.fetch_message(parent_ref.message_id)
+                    except Exception:
+                        parent_msg = None
+                if parent_msg and _is_audio_transcript_message(parent_msg):
+                    log.info(
+                        "[AUTOREPLY] message by %s is reply to indio response of audio transcript %s; skipping indio auto-reply",
+                        message.author.id,
+                        parent_msg.id,
+                    )
+                    return
 
     # ---- Extract replied-to message context for the indio ----
     replied_content, replied_author, is_reply_to_indio, attachment_urls = (

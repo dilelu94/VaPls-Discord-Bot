@@ -362,23 +362,23 @@ class PatchNotesManager:
         <span class="badge badge-timer" id="countdown">⏳ Expira en {rem_hours}h {rem_minutes}m</span>
       </div>
       <h1>{title}</h1>
-      <p class="subtitle">Registro oficial de cambios, balance de combate y parches del sistema</p>
+      <p class="subtitle">Registro oficial de cambios y mejoras del bot</p>
     </div>
 
     <!-- 1. ANTI-EXPLOITS & LOOT -->
     <div class="section-card">
       <div class="section-title">
         <span class="section-icon">🛡️</span>
-        <span>Anti-Exploits & Sistema de Loot</span>
+        <span>Saludos Raros & Pity</span>
       </div>
       <ul class="patch-list">
         <li class="patch-item">
           <div class="item-header">
-            <span class="patch-tag tag-nerf">Nerf / Anti-Farm</span>
-            Pity de Saludos Raros (Cooldown Interno)
+            <span class="patch-tag tag-nerf">Ajuste</span>
+            Cooldown de Pity en Saludos Raros
           </div>
           <div class="item-desc">
-            Se implementó un <strong>cooldown de 1 hora</strong> para el incremento de pity por usuario. Se cancela el exploit de entrar y salir repetidamente del canal de voz para farmear audios raros (como el Don Cangrejo de Seba).
+            Se implementó un <strong>cooldown de 1 hora</strong> para el incremento de pity por usuario. Se evita entrar y salir repetidamente del canal de voz para forzar audios raros (como el Don Cangrejo de Seba).
           </div>
         </li>
       </ul>
@@ -388,35 +388,35 @@ class PatchNotesManager:
     <div class="section-card">
       <div class="section-title">
         <span class="section-icon">📺</span>
-        <span>Netcode & GoLive Streaming</span>
+        <span>GoLive Streaming</span>
       </div>
       <ul class="patch-list">
         <li class="patch-item">
           <div class="item-header">
-            <span class="patch-tag tag-buff">Buff / Netcode</span>
+            <span class="patch-tag tag-buff">Mejora</span>
             Sincronización Audio / Video (A/V Sync)
           </div>
           <div class="item-desc">
-            Se eliminó el desfasaje en transmisiones GoLive (IPTV, HLS y Stremio). Ahora el inicio de audio se sincroniza de forma precisa con la emisión del primer fotograma (<code>first_frame_sent</code>) con aislamiento de flags por entrada en FFmpeg.
+            Se eliminó el desfasaje en transmisiones GoLive (IPTV, HLS y Stremio). Ahora el audio inicia exactamente con la emisión del primer fotograma (<code>first_frame_sent</code>).
           </div>
         </li>
       </ul>
     </div>
 
-    <!-- 3. BALANCE DE PERSONAJE — EL INDIO -->
+    <!-- 3. COMPORTAMIENTO DEL INDIO -->
     <div class="section-card">
       <div class="section-title">
         <span class="section-icon">🧠</span>
-        <span>Balance de Personaje — El Indio</span>
+        <span>Respuestas y Comportamiento del Indio</span>
       </div>
       <ul class="patch-list">
         <li class="patch-item">
           <div class="item-header">
-            <span class="patch-tag tag-buff">Buff</span>
-            Habilidades Verbales & Frases Cruzadas
+            <span class="patch-tag tag-buff">Nuevo</span>
+            Nuevas Frases cuando anda cruzado
           </div>
           <div class="item-desc">
-            Se agregaron nuevos remates verbales y provocaciones al repertorio dialéctico del Indio Cruzado:
+            Se sumaron nuevas respuestas al repertorio del Indio:
             <div class="dialogue-box">
               💬 "andá a hacerte ortear"<br>
               💬 "¿por qué no me sopapeás la papirola?"
@@ -425,20 +425,20 @@ class PatchNotesManager:
         </li>
         <li class="patch-item">
           <div class="item-header">
-            <span class="patch-tag tag-fix">Fix / Precisión</span>
-            Puntería de Berretines ('cabecear el enano')
+            <span class="patch-tag tag-fix">Arreglo</span>
+            Corrección en bardeadas ('cabecear el enano')
           </div>
           <div class="item-desc">
-            Se corrigió la direccionalidad e intención del prompt para asegurar que las bardeadas se dirijan estrictamente hacia el contrincante y no de forma autodirigida.
+            Se corrigió la intención de la frase para asegurar que el bardeo se dirija al interlocutor y no hacia sí mismo.
           </div>
         </li>
         <li class="patch-item">
           <div class="item-header">
-            <span class="patch-tag tag-fix">Fix</span>
-            Seguro de Gatillo (Anti-Misfire en Controles de Reproducción)
+            <span class="patch-tag tag-fix">Arreglo</span>
+            Control de Reproducción de Música
           </div>
           <div class="item-desc">
-            Se añadieron compuertas de seguridad para que el Indio no dispare comandos de pausa o cambio de música por confusión al chatear espontáneamente.
+            Se agregaron filtros para evitar que el Indio corte o cambie canciones por error mientras conversa en el chat.
           </div>
         </li>
       </ul>

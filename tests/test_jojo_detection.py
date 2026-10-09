@@ -100,3 +100,14 @@ def test_jojo_reply_probability_default_value():
     assert config.JOJO_REPLY_PROBABILITY == 0.15
 
 
+@pytest.mark.asyncio
+async def test_check_jojo_reference_text_no_keywords_skips_gemini():
+    with patch("geminiClient.generate", new_callable=AsyncMock) as mock_gen:
+        res = await media_analyzer.check_jojo_reference(
+            "Caro", "texto", text="Hola chicos cómo andan todo bien por acá?"
+        )
+        assert res is None
+        assert not mock_gen.called
+
+
+

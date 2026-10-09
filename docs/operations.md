@@ -73,6 +73,17 @@ Userbot service example:
 - **`scripts/backup.sh`**: Copia localmente la carpeta `data/` (`groq_keys.json`, `gemini_keys.json`, `users.json`, `indio_memory.json`, `pets.json`, etc.) y los archivos `.env` a `$HOME/vapls-backups/`. Si la clave SSH `/home/ubuntu/.ssh/free-02` está presente, sincroniza mediante `rsync` hacia el servidor secundario `free-02` (`ubuntu@193.122.210.127:~/backups/vapls-discord-bot/`).
 - **`vapls-backup.timer`**: Timer de systemd configurado por `scripts/deploy.sh` que ejecuta el backup automáticamente cada 6 horas (`OnCalendar=*-*-* 00,06,12,18:00:00`).
 
+## Dominio y Dynamic DNS (Duck DNS)
+
+- **Dominio configurado**: `vapls.duckdns.org` (servicio Duck DNS, cuenta `dilelu94@github`, free tier).
+- **Finalidad**: Proveer un nombre de host canónico y estable para acceder a las interfaces web y páginas del bot (`/admin` panel MMR, Stremio Web UI `/stremio`, `/transferir` para subida/descarga de archivos, `/patch-notes`, webhooks de Meta/GitHub) sin atarse a una IP estática o cuando la dirección IP cambia dinámicamente.
+- **Mecanismo de actualización (DDNS update)**: Duck DNS se actualiza mediante una petición HTTP GET simple:
+  ```bash
+  curl -s "https://www.duckdns.org/update?domains=vapls&token=${DUCKDNS_TOKEN}&ip="
+  ```
+  Al omitir el parámetro `ip`, Duck DNS detecta y asigna automáticamente la IP pública desde la cual se originó el request.
+- **🔒 Seguridad Estricta (Zero Leaks Policy)**: El token de autenticación de Duck DNS (`DUCKDNS_TOKEN`) otorga control sobre la resolución DNS y **NUNCA DEBE SER COMMITEADO A GITHUB** ni figurar en documentación rastreada por git. Vive de forma aislada y segura en el archivo `.env` del host / servidor.
+
 ## Logging locations
 
 - `play.log`: rotación de logs específicos de `/play`.

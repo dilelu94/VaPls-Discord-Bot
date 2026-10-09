@@ -84,6 +84,16 @@ que un cambio roto llegue siquiera al servidor remoto.
 
 **Servidor de Backup (`free-02`):** `ubuntu@193.122.210.127` (SSH key local: `/var/home/dilelu/.ssh/free-02`). Mantiene un backup de respaldo del repositorio, los archivos de configuración/secretos (`.env`, `userbot/.env`, `golive/.env`) y el directorio `data/` (`groq_keys.json`, `gemini_keys.json`, `users.json`, `indio_memory.json`, etc.) mediante `scripts/backup.sh` y el timer automático `vapls-backup.timer` (cada 6h).
 
+**Dominio y DNS Dinámico (Duck DNS):**
+- **Dominio:** `vapls.duckdns.org` (servicio Duck DNS, cuenta `dilelu94@github`, free tier).
+- **Propósito:** Resolución y acceso estable a las páginas y servicios web del bot (`http://vapls.duckdns.org`), incluyendo el panel MMR (`/admin`), la Web UI de Stremio (`/stremio`), transferencias de archivos pesados (`/transferir`), notas de parche completas (`/patch-notes`), y webhooks (`/github-webhook`, `/webhook`), evitando el uso de direcciones IP directas o desactualizadas si cambia la IP pública.
+- **Actualización dinámica (DDNS):** Duck DNS se actualiza mediante su endpoint HTTP estándar:
+  ```bash
+  curl -s "https://www.duckdns.org/update?domains=vapls&token=${DUCKDNS_TOKEN}&ip="
+  ```
+  (si se omite el parámetro `ip`, Duck DNS detecta y asigna automáticamente la IP pública desde la que se realiza la consulta).
+- **🔒 Política de Cero Leaks (Zero Leaks Security):** El token de Duck DNS (`DUCKDNS_TOKEN`) y las credenciales privadas **NUNCA DEBEN COMMITEARSE A GITHUB** ni figurar en documentación versionada. Deben residir únicamente en el archivo `.env` del entorno/servidor (el cual está protegido por `.gitignore`).
+
 **Deploy workflow (automático):** push a `master` → CI (Python 3.10, la versión
 de prod) → job `deploy` que SSHea al server y corre `scripts/deploy.sh` (`git reset --hard
 origin/master`, reinstala deps si cambiaron, reinicia ambos servicios y verifica
@@ -169,7 +179,7 @@ El bot incluye un trabajador en segundo plano en `bot.py` (`_analyze_message_med
 - **Videos**: Se obtiene la duración con `ffprobe` y se extrae un fotograma del medio ($D/2$) con `ffmpeg` para enviarlo a Gemini Vision.
 - **Enlaces**: Se extraen metadatos mediante `yt-dlp` en modo metadatos o tags OpenGraph con `aiohttp`.
 - **Registro en Memoria**: `analyze_content_interest()` genera una frase resumida sobre el interés demostrado por el usuario (ej: *"A Seba le interesan los videos de autos antiguos"*), la cual se almacena en `_indio_long_term["users"][usuario]["gustos"]` mediante `geminiCommand.record_user_interest()`.
-- **Detección Visual y Sutil de Referencias a JoJo**: `check_jojo_reference()` evalúa mediante Gemini Vision y análisis visual si la imagen, fotograma o texto contiene referencias sutiles, posturas extravagantes (ej: una rama o un objeto torcido posando), siluetas dramáticas o tropos de JoJo's Bizarre Adventure. Si detecta una referencia, el Indio interviene espontáneamente solo de forma ocasional/aleatoria (`JOJO_REPLY_PROBABILITY`, por defecto 15%) respondiendo directamente con un reply en el mismo canal (`no_redirect=True`), **sin borrar la imagen/mensaje del usuario** ni mover la respuesta a Indio Cueva, y filtrando mensajes del propio bot/userbot para prevenir loops.
+- **Detección de Referencias a JoJo**: `check_jojo_reference()` evalúa mediante palabras clave directas en texto y Gemini Vision en imágenes/videos si el contenido contiene una referencia clara o icónica a JoJo's Bizarre Adventure (descartando pareidolias forzadas en objetos o posturas casuales de animales/personas para evitar falsos positivos). Si detecta una referencia, el Indio interviene espontáneamente solo de forma ocasional/aleatoria (`JOJO_REPLY_PROBABILITY`, por defecto 15%) respondiendo directamente con un reply en el mismo canal (`no_redirect=True`), **sin borrar la imagen/mensaje del usuario** ni mover la respuesta a Indio Cueva, y filtrando mensajes del propio bot/userbot para prevenir loops.
 - **Prompt del Indio**: El campo `gustos` se inyecta naturalmente en `_format_long_term()` para que el Indio conozca los intereses de cada integrante durante las conversaciones.
 
 ## 📡 Integración con el bot de Telegram
@@ -590,11 +600,11 @@ El endpoint `/github-webhook` está protegido por el middleware `X-API-Secret` c
 - Grupos migrados a issues **#49–#57** (todos con label `sugerencia`)
 - Auto-sync corre en cada reinicio del bot
 - Nginx en puerto 80 como reverse proxy para webhook (Security List de Oracle Cloud abierta)
-- Webhook de GitHub configurado para eventos `issues` → `http://141.148.84.55/github-webhook`
+- Webhook de GitHub configurado para eventos `issues` → `http://141.148.84.55/github-webhook` (o `http://vapls.duckdns.org/github-webhook`)
 
 ## 📊 Admin page MMR
 
-La página de admin en `http://141.148.84.55/admin` muestra datos de MMR,
+La página de admin en `http://141.148.84.55/admin` (o `http://vapls.duckdns.org/admin`) muestra datos de MMR,
 weights, config y activity. Se compone de:
 
 - **`_ADMIN_HTML`** (en `apiServer.py`): template HTML con JavaScript inline.

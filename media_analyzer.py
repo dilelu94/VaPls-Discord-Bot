@@ -300,6 +300,9 @@ async def check_jojo_reference(
         match = _JOJO_KEYWORDS_RE.search(text)
         if match:
             return f"Expresión en texto '{match.group(0)}'"
+        if not image_bytes and not link_meta:
+            # Plain text without JoJo keywords: skip Gemini to avoid hallucinations
+            return None
 
     # 2. Quick link metadata fallback
     if link_meta:
@@ -314,18 +317,19 @@ async def check_jojo_reference(
     # 3. Multimodal Vision / Creative check via Gemini Flash-Lite
     system_instruction = (
         "Sos un detector especializado de referencias al anime/manga JoJo's Bizarre Adventure (JoJo). "
-        f"Tu tarea es analizar el contenido ({content_type}) enviado por '{user_name}' "
-        "y encontrar si hay CUALQUIER detalle —ya sea explícito, sutil o abstracto— que pueda interpretarse "
-        "como una referencia, postura o meme de JoJo.\n\n"
-        "Ejemplos de referencias sutiles y abstractas:\n"
-        "- Una rama de árbol retorcida, estatua o silueta que parece estar haciendo una pose dramática o bizarra de JoJo.\n"
-        "- Un animal (gato, perro) o figura en una postura exagerada o postura de Stand.\n"
-        "- Sombras, ángulos o paletas de colores dramáticas estilo JoJo.\n"
-        "- Memes clásicos (Dio, Jotaro, Stands, 'To Be Continued...', 'Kono DIO da', 'Za Warudo', 'ゴゴゴ / Menacing').\n\n"
-        "Reglas:\n"
-        "1. Si encuentras CUALQUIER elemento visual, forma o detalle que parezca una pose o referencia a JoJo, "
-        "responde ÚNICAMENTE en 1 sola frase corta describiendo qué detalle parece una referencia (ej: 'Una rama torcida que parece un personaje de JoJo posando dramáticamente').\n"
-        "2. Si no hay absolutamente nada que pueda relacionarse ni de forma sutil o graciosa con JoJo, responde ÚNICAMENTE la palabra: 'NO'."
+        f"Tu tarea es analizar el contenido ({content_type}) compartido por '{user_name}' "
+        "y determinar si contiene una referencia real, intencional y reconocible a JoJo.\n\n"
+        "Criterios de referencia válida:\n"
+        "- Personajes, Stands o diseños oficiales de JoJo's Bizarre Adventure.\n"
+        "- Poses icónicas inconfundibles de JoJo reconocibles por los fans (poses dramáticas de Hirohiko Araki recreadas a propósito).\n"
+        "- Elementos visuales clave (flechas de Stand, onomatopeyas 'ゴゴゴ / Menacing', máscaras de piedra, estética oficial de la serie).\n"
+        "- Memes explícitos y populares de la serie ('To Be Continued', 'Kono DIO da', 'Za Warudo', etc.).\n\n"
+        "Reglas estrictas de descarte:\n"
+        "1. NO interpretes posturas casuales de personas o animales de la vida cotidiana como referencias a JoJo "
+        "a menos que sea evidente que están recreando o parodiando la serie a propósito.\n"
+        "2. NO busques similitudes forzadas, abstractas ni pareidolias en objetos, ramas o sombras.\n"
+        "3. Si encuentras una referencia clara y reconocible, responde ÚNICAMENTE en 1 sola frase corta describiendo cuál es la referencia (ej: 'Meme de Dio Brando Kono DIO Da').\n"
+        "4. Si NO es clara e intencionalmente una referencia a JoJo, responde ÚNICAMENTE la palabra: 'NO'."
     )
 
     image_parts = None
