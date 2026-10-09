@@ -26,7 +26,7 @@ Codex, Copilot, u otro) DEBE cumplir esta checklist sin excepciones:
       el trabajo completo.
 - [ ] No marcar una tarea como terminada si hay tests rojos, aunque el cambio
       parezca trivial.
-- [ ] Actualizar siempre la documentación en `AGENTS.md` (y/o en `docs/`), editando o agregando información detallada sobre los cambios realizados justo antes de hacer commit y pushear. Además, mostrar obligatoriamente en el resumen de cambios al usuario un fragmento con el texto nuevo o editado de la documentación.
+- [ ] Actualizar la documentación en `AGENTS.md` (y/o en `docs/`) cuando el cambio introduzca o modifique arquitectura, componentes clave, decisiones de diseño o configuraciones del sistema. La documentación debe ser concisa y explicar cómo funciona cada componente y las razones de su diseño (evitando bitácoras de commits o changelogs menores).
 - [ ] Realizar `git commit` y `git push origin master` inmediatamente después de completar cada cambio o tarea (con la suite en verde) para que GitHub despliegue los cambios automáticamente en OCI.
 
 **Hook de git (pre-push):** el repositorio incluye `.githooks/pre-push`, que
@@ -62,11 +62,11 @@ que un cambio roto llegue siquiera al servidor remoto.
 
 - **Centralización en "vapls":** Los comandos y la lógica de interacción principal deben programarse siempre en el **Main bot** ("vapls").
 - **El Userbot es un usuario:** El _Indio_ (userbot) debe ser tratado como un usuario más. Si se le pide realizar una tarea, debe invocar los comandos de "vapls" programáticamente mediante una función que ejecute el comando slash con sus argumentos (ya que no puede usar comandos slash literales por texto).
-- **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea estrictamente necesario por limitaciones técnicas o para su funcionamiento como IA que simula ser una persona real (ej. lógica de personalidad, comportamiento humano o integraciones que no puedan delegarse al bot "vapls").
+- **Lógica mínima en Userbot:** No se debe programar lógica en el userbot a menos que sea strictly necesario por limitaciones técnicas o para su funcionamiento como IA que simula ser una persona real (ej. lógica de personalidad, comportamiento humano o integraciones que no puedan delegarse al bot "vapls").
 - **Reutilización de código existente:** Auditar y reutilizar siempre las funciones, clases o métodos que ya existen antes de crear nuevas si cumplen la función necesaria.
 - **YouTube requiere PoT primero:** Todo lo que use o interactúe con YouTube (descargas, reproducción, yt-dlp, streaming, etc.) debe pasar obligatoriamente por el servicio de PoT (Proof of Work Token, `YT_DLP_POT_BASE_URL`) en primer lugar.
 - **Manejo global de Botones/Views:** Al enviar o responder interacciones que incluyan un `view` con botones (especialmente efímeros), **NUNCA** usar `safe_defer()` / `defer()` seguido de `followup.send(..., view=view)` sin `wait=True`. py-cord registra la vista en `ViewStore` sin `message_id` cuando `wait=False` (default), haciendo que Discord tire `This interaction failed` al presionar cualquier botón. Usar siempre `ctx.respond(..., view=view)` o `interaction.response.send_message(..., view=view)` directamente. Además, toda vista interactiva DEBE heredar de `BaseView` (`baseView.py`) para que al expirar el `timeout` los botones desaparezcan automáticamente del mensaje (`view=None`).
-- **Actualización obligatoria de documentación y fragmento en el resumen:** Antes de realizar `git commit` y `git push`, se debe actualizar siempre el archivo `AGENTS.md` (o la documentación correspondiente en `docs/`), editando o agregando información basada en lo que se realizó en la tarea o fix. En el mensaje final al usuario tras el push, se DEBE incluir siempre un fragmento (snippet) con los cambios o adiciones realizados en la documentación como parte del resumen.
+- **Documentación centrada en arquitectura y diseño:** Actualizar `AGENTS.md` o la carpeta `docs/` únicamente si el cambio afecta la arquitectura del proyecto, agrega nuevos módulos o altera decisiones de diseño/configuración (explicando la estructura y el motivo técnico). No usar la documentación como una bitácora de commits ni agregar changelogs extensos por tareas menores.
 - **Commit, Push a Master y Deploy a OCI:** Realizar siempre `git commit` y `git push origin master` tras completar cada cambio o tarea. Tras cada push a `master`, GitHub Actions ejecutará automáticamente el pipeline de CI/CD que despliega los cambios en la instancia de producción en OCI (Oracle Cloud Infrastructure).
 
 ## 🌐 Servidor de producción (2026-05-30)
@@ -322,78 +322,13 @@ El streamer prueba encoders en orden: `h264_nvenc` → `h264_vaapi` → `libx264
 golive: encoder probe OK → libx264
 ```
 
-### Bugs conocidos (historial)
+### Decisiones de Diseño y Gotchas Técnicos
 
-1. **(2026-06-20) `h264_nvenc` seleccionado en server ARM sin CUDA**: `_detect_encoder()` usaba `ffmpeg -encoders` para detectar disponibilidad, pero el encoder figura como compilado incluso si libcuda no está disponible. El encode fallaba silenciosamente (FFmpeg salía con rc=1 inmediatamente) y el `send_loop` terminaba en ~1s sin emitir frames. **Fix**: `_detect_encoder()` ahora prueba cada encoder con un encode real de 1 frame. Ver `golive/streamer.py`.
+- **Detección de encoder**: `_detect_encoder()` realiza un encode de prueba real de 1 cuadro a `pipe:null` en lugar de consultar `ffmpeg -encoders` para asegurar que el encoder candidato (como `libx264`) esté funcional en la arquitectura actual.
+- **Transmisión en ARM**: Para evitar lag y consumo excesivo de CPU en servidores ARM (Oracle VM), los streams usan `libx264` con `-preset ultrafast -tune zerolatency -profile:v high -x264-params aud=1` a 720p/30fps.
+- **Alineación de NAL Units**: Los NALs Access Unit Delimiter (`aud=1`) son obligatorios para que `streamer.py` agrupe las tramas de video correctamente y el cifrado DAVE E2EE se mantenga activo (`ready=True`).
+- **Pistas de audio/video en VODs**: `_ffmpeg_cmd` aplica los flags `-re` y `-reconnect` a cada input (`-i`) por separado para mantener sincronizados los relojes de audio y video.
 
-2. **(2026-06-20) `send_loop` terminaba en el primer timeout con streams HLS**: streams HLS con múltiples renditions tardan 4-8s en probe antes de emitir el primer frame. El `asyncio.wait_for` con `timeout=2.0` expiraba, y en condiciones de race el loop detectaba `returncode is not None` (del encoder fallido) y abortaba. **Fix**: el primer `read()` tiene un timeout de 15s (`first_read=True`); los subsiguientes mantienen 2s.
-
-3. **(2026-06-21) `/stream` con videos de YouTube (VODs) — troubleshooting histórico**:
-   - _Causa original_: Faltaba configurar `YT_DLP_POT_BASE_URL` en `golive/.env`. YouTube exige PoT en IPs de Oracle.
-   - **Fix inicial**: Se agregó `YT_DLP_POT_BASE_URL` y se cambió format a `"bestvideo[height<=1080][fps<=60]+bestaudio/best"` para 1080p60.
-   - **Problemas secundarios**: `bestvideo` elegía AV1 (sin decoder en ARM), y devolvía tuple de URLs (video+audio separados) que el streamer no manejaba. Además, `-http_persistent 0` estaba aplicado a URLs YouTube y fallaba con "Option not found" en direct MP4 de googlevideo.com.
-     - **Fix final (a0b0e2e)**: `"format": "best"` (combined H264, single URL, max 720p) y `-http_persistent 0` solo para URLs HTTP que NO sean googlevideo.com (IPTV sí, YouTube no).
-
-4. **(2026-08-26) CPU lag y fallback `libx264` + preset 720p30 en servidor ARM**:
-   - _Causas_: (a) `_detect_encoder()` omitía `libx264` si no estaba `libopenh264` en Ubuntu ARM, provocando `AssertionError: no encoder available`. (b) `STREAM_QUALITY` usaba `1080p60` a 12 Mbps por defecto, saturando los vCPUs de la instancia ARM. (c) `_set_nickname` fallaba si el miembro del bot no estaba en caché. (d) Error `NameError: name 'is_youtube'` por variable residual.
-   - **Fixes**: Habilitado `libx264` (`-preset ultrafast -tune zerolatency`), predeterminado `720p` (30fps / 2500k bitrate) para fluidez óptima por CPU, y resolución de apodos mediante `guild.me`.
-
-5. **(2026-08-27) Desfasaje H.264 por ausencia de AUDs (`-x264-params aud=1`) y alineación 100 % con Slopsoil (`dev-topsoil/slopsoil`)**:
-   - _Causas_: (a) `libx264` omitía los delimitadores de Access Unit (`_NAL_AUD`, NAL tipo 9) por no incluir `-x264-params aud=1` y `-profile:v high`. Como `streamer.py` utiliza los NALs AUD para delimitar los cuadros exactos, se generaba emparejamiento desfasado de NALs y falla en el cifrado DAVE (`DAVE ready=False`), mostrando 2 FPS en Discord. (b) `-re` no se aplicaba a URLs de VODs HTTP (YouTube), haciendo que FFmpeg duplicara 1000+ cuadros estáticos.
-   - **Fixes**: Alineación 100 % con la implementación canónica de [Slopsoil (`dev-topsoil/slopsoil`)](https://github.com/dev-topsoil/slopsoil): inclusión de `-x264-params aud=1`, `-profile:v high`, `-re` para VODs HTTP, `_DEFAULT_PACKET_PACE = 0.75` y preset `1080p60` a 12.000k (12 Mbps).
-
-6. **(2026-08-29) Corrección de `AttributeError` en emisor RTP y desidentación del handshake en `GoLiveConnection.connect()`**:
-   - _Causas_:
-     (a) **Falla de `send_packet` (commit `e9ea8d1`)**: `GoLiveAudioSender` y `H264VideoPlayer` invocaban `self._conn.send_packet(packet)` directamente sobre el objeto de conexión. Cuando la clase pasaba como un objeto `VoiceClient` o a través del proxy de la raíz (`golive_connection.py`, que carecía del método `.send_packet`), Python arrojaba `AttributeError: 'GoLiveConnection' object has no attribute 'send_packet'`, destruyendo el hilo de audio inmediatamente al iniciar la transmisión. Además, `golive_connection.py` en la raíz era una copia obsoleta desalineada con `golive/slopsoil/golive.py`.
-     (b) **Bloqueo silencioso de GoLive por identación en `connect()` (commit `ff75e1d`)**: El cuerpo principal de `GoLiveConnection.connect()` (envío de Opcode 18 `STREAM_CREATE`, Opcode 22 `STREAM_SET_PAUSED`, escucha de respuestas de Gateway, inicialización del socket UDP de streaming y conexión WebSocket de video) estaba erróneamente identado dentro de la función auxiliar local `async def _send_json_safe`. Como la función interna se definía pero nunca se invocaba dentro de `connect()`, `connect()` finalizaba instantáneamente en 0ms sin enviar señales ni paquetes de video a Discord.
-   - **Fixes y razones de fluidez (por qué ahora transmite a 30 FPS constantes sin lag)**:
-     - **Handshake completo activo**: Al desidentar el cuerpo de `connect()`, la conexión WebSocket de streaming se establece formalmente, se anuncia la capacidad de video (Opcode 12 con SSRCs y metadatos) y se realiza `self.socket.connect((self.endpoint_ip, self.voice_port))` hacia la IP/puerto del servidor de voz de Discord.
-     - **Resiliencia en el envío RTP**: Se implementó una cascada de fallback multinivel para el despacho de paquetes RTP (`send_packet` $\rightarrow$ `_connection.send_packet` $\rightarrow$ `socket.sendall` $\rightarrow$ `_connection.socket.sendall`).
-     - **Proxy de raíz unificado**: `golive_connection.py` en la raíz se convirtió en un re-export canónico hacia `golive.slopsoil.golive`, eliminando la clase duplicada e incompleta.
-     - **Fluidez de 30 FPS / baja carga de CPU**: Gracias al encoder de CPU `libx264` configurado con `-preset ultrafast -tune zerolatency -profile:v high -x264-params aud=1` (del fix 5 del 2026-08-27), delimitar los Access Units con AUDs permite que `streamer.py` agrupe los NALs exactos por cuadro. Con la conexión WebSocket funcionando plenamente, FFmpeg entrega los cuadros a 30 FPS estables con un uso de CPU mínimo en la instancia ARM (4 vCPUs).
-
-7. **(2026-09-18) Botones fantasmas en UI por falta de referencia `message`/`interaction` y error `AttributeError` en `BaseView.on_timeout()`**:
-   - _Causas_: (a) Al responder comandos con `ctx.respond(..., view=view)` o `safe_respond()`, no se guardaba la referencia `view.message` o `view.bound_interaction`. Al expirar el timeout (60s–300s), `BaseView.on_timeout()` no podía editar el mensaje de Discord para remover los botones (`view=None`). (b) En comandos como `/mascota`, `ctx.respond()` devolvía un objeto `discord.Interaction` que era asignado a `view.message`. Al expirar el timeout, `on_timeout()` ejecutaba `await self.message.edit(view=None)`, lanzando `AttributeError: 'Interaction' object has no attribute 'edit'`, fallando silenciosamente la remoción de botones.
-   - **Fixes**: (a) Se actualizó `BaseView.on_timeout()` en `baseView.py` con duck-typing para tratar a `self.message` si es una `discord.Interaction` como `bound_interaction`. (b) Se actualizó `safe_respond()` en `bot.py` para usar `wait=True` cuando se envía una `view` por `followup.send()` y auto-vincular `view.message` o `view.bound_interaction` en todas las respuestas de comandos.
-
-8. **(2026-09-29) Optimización de sensibilidad wake-word, simplificación del prompt STT y log de presencia de usuarios (`user_count`)**:
-   - _Causas_: (a) El prompt STT con instrucciones de dialecto ("Español rioplatense con voseo") causaba alucinaciones fonéticas en Whisper large-v3. (b) La verificación post-STT exigía estrictamente la palabra "che", descartando llamados válidos. (c) Faltaba registrar la cantidad de usuarios en canal en `adb.log_activity` desde el relay HTTP.
-   - **Fixes**: (a) Prompt STT simplificado a frases naturales estándar ("Transcripción en español. Che indio, poné un tema. VaPls, Discord, clipeá."). (b) Verificación `_whisper_confirms_indio` actualizada para validar cualquier variante de `_WAKE_WORD_TOKENS` sin exigir "che" y tolerar puntuación. (c) Expansión de partículas de invocación (`ey`, `hey`, `oye`, `hola`, `de`, `se`, etc.) en la gramática VOSK para Preset 1. (d) Propagación de `user_count` en `_log_activity` en `bot.py` y `_relay_activity_log` en `userbot/bot.py`.
-
-9. **(2026-09-29) Captura global de excepciones no manejadas en tareas asíncronas (`asyncio.create_task`) y enriquecimiento de Auto-Bug en GitHub Issues**:
-   - _Causas_: (a) Las excepciones no atrapadas en tareas en segundo plano lanzadas con `asyncio.create_task(...)` y no escuchadas con `await` o `result()` no pasaban por `sys.excepthook` al ser procesadas por el recopilador de basura de asyncio. (b) El contexto de ejecución de las Issues automáticas de GitHub no incluía argumentos de comandos slash ni metadatos de corrutinas/tareas.
-   - **Fixes**: (a) Se implementó `custom_asyncio_exception_handler` y `bind_asyncio_exception_handler` en `autoErrorTracker.py`, registrándolo en los event loops de `bot.py`, `userbot/bot.py` y `golive/bot.py`. (b) Se enriqueció `_extract_context` para parsear argumentos de comandos slash (`CommandArgs`) y metadatos de tareas en segundo plano (`TaskName`, `Coroutine`).
-
-10. **(2026-10-01) Traba/congelamiento del stream en GoLive por captura de excepciones DAVE en `process_commit` / `process_welcome`**:
-    - _Causa_: Durante la transmisión en vivo (ej. Twitch autostream), al ocurrir re-keying de voz o cambios de miembros en el canal de voz, Discord envió un commit MLS DAVE. `libdave` rechazó el commit (`MLS commit message was for unexpected group`). Sin embargo, `davey_compat.py` (y `golive/davey_compat.py`) atrapaba todas las excepciones y `dave.RejectType`, cambiando silenciosamente a modo passthrough (`set_passthrough_mode(True)` — envío de video H.264 sin cifrar) y **sin elevar una excepción**. Como no había error elevado, la gateway de `discord.py-self` nunca ejecutaba `await state._recover_from_invalid_commit(transition_id)`, impidiendo la regeneración de la clave DAVE. Los clientes de Discord, esperando DAVE E2EE, no podían decodificar las tramas sin cifrar y la imagen del stream se congelaba/trababa para los espectadores.
-    - **Fix**: Se modificó `davey_compat.py` y `golive/davey_compat.py` en `process_commit` y `process_welcome` para elevar la excepción (`raise RuntimeError(...)`) ante rechazos de `libdave`. Esto permite que la gateway de `discord.py-self` capture la excepción y ejecute `_recover_from_invalid_commit`, notificando `MLS_INVALID_COMMIT_WELCOME` a Discord y restableciendo la sesión DAVE de forma transparente sin congelar la transmisión. Se agregó la prueba unitaria `tests/test_dave_commit_recovery.py`.
-
-23. **(2026-10-08) Auto-Bug en GitHub Issues al responder a audios clipeados (`transcriptBugTracker.py`)**:
-    - **Descripción**: Se implementó la detección de `reply` en mensajes de Discord sobre clips de audio transcritos (`audio_escuchado_*.wav` / `🎙️ **...**`) o sobre las respuestas del Indio asociadas a ellos.
-    - **Funcionalidad**: Extrae la corrección enviada por el usuario, la transcripción errónea del STT, la respuesta generada por el Indio, y la URL directa del archivo de audio adjunto. Genera automáticamente un Issue en GitHub etiquetado con `autobug` y `stt-error`, e incluye una instrucción explícita de depuración para descargar el audio y re-procesarlo / enviarlo a Grok para depurar la calidad del STT.
-    - **Deduplicación**: Deduplica reportes sobre la misma transcripción utilizando `<!-- transcript-bug-id: <message_id> -->` agregando comentarios de reincidencia ante múltiples replies. Reacciona con `🐛` en el mensaje de Discord.
-    - **Tests**: `tests/test_transcript_bug_tracker.py` (7 pruebas).
-
-24. **(2026-10-08) Solución a desincronización de audio y video en `/stream` GoLive con YouTube VODs**:
-    - _Causas_:
-      (a) **`-re` y `-reconnect` no se aplicaban al stream de audio**: Cuando yt-dlp devuelve audio y video en URLs separadas `(video_url, audio_url)` para VODs de YouTube, `_ffmpeg_cmd` colocaba `-re` y `-reconnect` globalmente antes de `input_args`. En FFmpeg CLI, las opciones previas a `-i` solo aplican al primer `-i` (video). Así, la pista de audio (input 1) era leída a máxima velocidad de red sin rate-limit, saturando el FIFO con segundos de adelanto respecto al video.
-      (b) **`GoLiveAudioSender` no esperaba al primer frame de video (`first_frame_sent`)**: `H264VideoPlayer` seteaba `first_frame_sent` al emitir la primera trama H.264, pero `GoLiveAudioSender` transmitía Opus inmediatamente al abrir el FIFO, desfasando los timestamps iniciales.
-    - **Fixes**:
-      (a) Se ajustó `_ffmpeg_cmd` en `golive/slopsoil/video_player.py` para inyectar `-re` y `-reconnect` de forma scoped antes de **cada** argumento `-i`.
-      (b) Se vinculó `first_frame_sent` a `GoLiveAudioSender` (`golive/slopsoil/golive.py`, `engine.py` y `golive/bot.py`), haciendo que la transmisión de audio espere a la emisión del primer cuadro de video antes de iniciar el reloj de tiempo real `t0`.
-      (c) **Tests**: `tests/test_video_player_tracks.py` y `tests/test_quack_control.py`.
-
-25. **(2026-10-09) Anti-misfire gate para herramientas de control de reproducción y corrección de `no_redirect`**:
-    - **Descripción**: Se agregaron verificaciones determinísticas en `_gate_play_music_actions` (`geminiCommand.py`) para herramientas de reproducción/control (`PAUSE_MUSIC`, `RESUME_MUSIC`, `SKIP_MUSIC`, `STOP_MUSIC`). Previene que llamadas a herramientas espurias producidas por alucinaciones de la IA ejecuten acciones no deseadas o muestren respuestas del tipo `"⏸️ Pausando — no había reproductor activo"`. Además, se corrigió la validación de `no_redirect` en `indioFromVoice` para evitar la redirección forzada al canal de música cuando `no_redirect=True` está activo.
-    - **Tests**: `tests/test_playback_control_gating.py`.
-
-26. **(2026-10-09) Regla inquebrantable sobre dirección del berretín 'cabecear el enano' en el Indio**:
-    - **Descripción**: Se incluyó una instrucción explícita en `INDIO_SYSTEM` y en `_INDIO_ANGRY_DAY_BLOCK` (`geminiCommand.py`) indicando que "cabecear el enano" es una referencia a sexo oral en jerga rioplatense, por lo que la frase debe ser SIEMPRE expresada en dirección de los otros hacia el Indio (`"Me vas a tener que cabecear el enano"`). Se prohíbe explícitamente la forma invertida `"Te voy a cabecear el enano"`, evitando que el bot genere frases donde se ofrezca a realizar sexo oral a los usuarios.
-    - **Tests**: `tests/test_indio_angry_day.py` (`test_indio_system_prompt_includes_cabecear_el_enano_berretines`).
-
-27. **(2026-10-09) Sincronización del catálogo de imágenes curadas (`indio_images/manifest.json`) y filtrado de respuestas en `storyManager.py`**:
-    - **Descripción**: Sincronizado `indio_images/manifest.json` y los archivos de imagen curados de la instancia de producción OCI (incluyendo la foto curada `bb773572-8cc9-41fc-9e56-52814abb9eb6.png` derivada de `Juji/JJ.png` —la edición de cara simétrica con cuatro ojos dentro de los auriculares—). Además, se corrigió en `storyManager.py` el manejo de `handle_first_msg_after_story` para evitar que las respuestas (`reply`) a otros mensajes no relacionados consuman el estado de feedback activo o descarten la revisión de historia en curso.
-    - **Tests**: `tests/test_indio_story_approval.py`.
 
 
 
@@ -821,114 +756,6 @@ Toda actividad se loggea vía `_log_activity()` que hace POST al relay del userb
 19. **`delete_token`**: cada sesión genera un `delete_token` único en `create_session()`. El endpoint `DELETE /upload/{token}` requiere `?dt=delete_token`. Solo la página de upload (que tiene el token embebido) puede borrar. El link de descarga en Discord NO sirve para borrar.
 20. **Botón Cancelar en upload**: aparece durante la subida, detiene los chunks restantes y borra el archivo parcial via `DELETE /upload/{token}?dt=...`.
 21. **`transferHistory` sin guard**: se removió el chequeo `if not mgr.sessions.get(token)` que retornaba vacío para tokens desconocidos. Ahora siempre devuelve el historial completo desde `_history.jsonl`.
-
-## 📦 Últimos cambios
-
-### 2026-10-03 — Exclusión estricta de bots, userbots y usuarios no registrados (Main Characters) del ranking MMR
-
-1. **Restricción a Main Characters (`users.USERS` / `data/users.json`)**: El sistema MMR (`userbot/activity_db.py` y `bot.py`) ahora ignora el registro de actividades (`log_activity`) y excluye del leaderboard (`get_leaderboard`, `/ranking`, `/estadisticas`) a cualquier usuario que no pertenezca a la lista oficial de miembros en `data/users.json` / `users.USERS` (evitando que usuarios casuales o desconocidos como `juliyo` ingresen al ranking).
-2. **Purga automática de usuarios no registrados (`_purge_old`)**: `_purge_old()` purga de la tabla `user_mmr` tanto a los userbots del sistema (`GOLIVE_USER_ID`, `USERBOT_USER_ID`) como a cualquier ID de usuario que no figure en `data/users.json`.
-3. **Filtrado en comandos de Discord (`bot.py`)**: `_log_activity()`, el comando `/ranking` y el cálculo de posiciones en `/estadisticas` validan explícitamente `user_id in users.USERS`, asegurando que la tabla de posiciones sea 100 % exclusiva de los *Main Characters*.
-
-### 2026-09-29 — MMR: fix decaimiento por inactividad + multiplicador por concurrencia en canal + exclusión de GoLive
-
-1. **Decaimiento continuo por inactividad (`userbot/activity_db.py`)**: Se corrigió el cálculo de decaimiento donde los usuarios inactivos quedaban estancados en 1500 MMR o no bajaban de ese piso. Ahora el decaimiento reduce el rating hacia `min_rating` (1000) a razón de `decay_rating_per_day` (5 pts/día tras 24h de inactividad).
-2. **Decaimiento dinámico en lectura (`_apply_decay_on_read`)**: Las consultas `/ranking`, `/actividad`, `get_leaderboard` y el dashboard web `/admin` calculan el decaimiento en vivo para usuarios inactivos sin requerir escrituras ni esperar a que el usuario vuelva a estar activo.
-3. **Multiplicador por concurrencia (`occupancy_boost_max`)**: Actividades en canales de voz o interacciones con más personas escalan su calidad de 1.0x (a 2 usuarios) hasta 1.4x (`occupancy_boost_max`) al alcanzar 10+ usuarios no-bot en el canal.
-4. **Exclusión de bots del sistema (`_channel_non_bot_count`)**: Se aseguró la exclusión tanto de `USERBOT_USER_ID` como de `GOLIVE_USER_ID` (`1541984338386620492`) del conteo de miembros no-bot en canal de voz, evitando falsos positivos de presencia humana.
-5. **Ganancia positiva continua por participación**: Se ajustó el cálculo de `actual` para que realizar actividades válidas (`q >= 0.2`) otorgue deltas positivos en base a la expectativa actual del usuario, evitando que usuarios activos en ratings altos pierdan MMR al interactuar.
-6. **Reseteo general de MMR (`reset_all_mmr`)**: Se restablecieron todos los ratings a 1500 MMR con desviación 350, exceptuando a Tobi (`428444575963807745`) que se fijó en 1000 MMR.
-7. **Piso de decaimiento a 0 MMR (`min_rating`)**: Se configuró `min_rating = 0` y se corrigió el fallback en `_get_cfg_float` para que el decaimiento por inactividad pueda reducir el rating hasta 0 MMR.
-
-
-### 2026-06-20 — GoLive: fix encoder ARM + fix timeout HLS
-
-1. **`_detect_encoder()` por probe real** (`golive/streamer.py`): reemplazado el chequeo de `ffmpeg -encoders` por un encode de 1 frame real a null por cada candidato. Soluciona que `h264_nvenc` se usara en el server ARM (sin CUDA) causando que FFmpeg fallara en rc=1 inmediatamente y el stream nunca emitiera frames.
-2. **Timeout inicial de 15s en `_send_loop`** (`golive/streamer.py`): streams HLS con múltiples renditions tardan 4-8s en probe antes del primer frame. El timeout original de 2s hacía que el loop detectara un "proceso muerto" y abortara. El primer `read()` ahora espera 15s (`first_read=True`); los siguientes mantienen 2s.
-
-### 2026-06-29 — Botones de Mascota: fix view dispatch + fix GIF animado
-
-1. **Botones sin logs ni respuesta** (`bot.py`): los botones de `/mascota ver` (Mostrar, GIF, Evolucionar, etc.) mostraban This interaction failed sin ningún log. La causa era el patrón `safe_defer()` + `followup.send(ephemeral=True, view=view)`: py-cord almacena el View en el `ViewStore` sin `message_id` cuando `followup.send()` se llama con `wait=False` (default), y aunque `ViewStore.dispatch()` tiene un fallback a `message_id=None`, la interacción del botón no encontraba el view. **Fix**: reemplazar el defer + followup por `ctx.respond(msg, ephemeral=True, view=view)` directo, que registra el view a través de `InteractionResponse.send_message()` y además asigna `view.message` via `original_response()`. Las entradas en el log (`on_error`, `log.warning`) ahora se ven correctamente.
-
-2. **GIF no se generaba** (`petGenerator.py:185`): `asciiAnimator.js` destructure `pet.parts.eyes.s` para los caracteres de ojos en la animación de parpadeo, pero el generador de mascotas solo guardaba `{name: ..., r: ...}` en `parts[eyes]`, omitiendo la clave `s`. **Fix**: agregar `s: eyes[s]` al dict de ojos. El GIF ahora se renderiza correctamente (25761 bytes, rc=0).
-
-3. **Backfill para mascotas existentes** (`petGenerator.py:273`): mascotas guardadas antes del fix no tienen `eyes.s` en sus parts. Se agregó `_backfill_missing_eye_character()` que rellena `eyes.s` desde `PARTS["eyes"]` al cargar la mascota. Se invoca desde `get_or_create_pet()` y `get_pet()`.
-
-### 2026-06-13 — Sistema de historias: prompt sin nombres forzados + memoria del Indio + aprobación vía DM del owner
-
-34. **Prompt sin lista de nombres**: `_STORY_PROMPT` ya no dice "uno de los pibes (Viny, Fox...)". Gemini describe lo que realmente ve en la imagen. Si reconoce un famoso lo identifica; si no, hace un chiste sobre la situación sin inventar identidades.
-35. **Memoria del Indio en chistes**: `_generate_story()` ahora inyecta la misma memoria larga que usa `/indio` (`_format_long_term()` de `geminiCommand`). El Indio sabe quiénes son sus amigos, anécdotas y chistes internos al generar el chiste.
-36. **Aprobación vía DM del owner**: cuando alguien reacciona 👍, el Indio ya no guarda inmediatamente. Te manda **DM** con la imagen + chiste y espera tu respuesta. Respondés **"sí"** → se guarda con descripción + tags. **"no"** → se descarta. Sin timeout.
-
-### 2026-06-13 — Refactor: validación de descripciones del usuario contra Gemini
-
-26. **`_validate_candidate()`** reemplaza `_describe_with_gemini()`: un solo llamado
-    a Gemini describe la imagen + extrae tags + valida si el texto del usuario coincide
-    (prompt "describí CORRECTAMENTE el contenido, no el formato, sino el contenido real").
-27. **Loop de 5 intentos**: si no coincide, incrementa `_retries` y pide nueva descripción.
-    Al quinto fallo, saltea la imagen automáticamente.
-28. **Descripción de Gemini oculta durante validación**: solo se muestra cuando coincide
-    y pregunta "¿La guardo así?".
-29. **Filename genérico** ya no describe con IA automáticamente — fuerza al usuario a
-    escribir una descripción manualmente (va a `waiting_desc`).
-30. **`_save_user_and_gemini_desc()`** guarda ambas descripciones (`description` del
-    usuario + `gemini_description` de Gemini). Reemplaza `_save_with_filename`,
-    `_save_with_user_description`, `_save_with_gemini_desc`.
-31. **Menú simplificado**: `confirm` stage solo tiene **1** (filename), **cancelar**
-    (skip), o **cualquier texto** (descripción propia). `confirm_save` stage acepta
-    **sí** (primera palabra) o cualquier otra cosa (skip).
-32. **Cache de imagen**: `_pending_data` evita re-descargar en cada reintento.
-33. **`imageManager.add_image()`** recibe `gemini_description: str = ""`.
-
-### 2026-06-12 — Indio DM: rechazo de filenames genéricos + analytics + fix coincidence de Gemini
-
-22. **Filename genéricos rechazados**: `_is_generic_filename()` detecta nombres como
-    `image.png`, `photo.jpg`, `IMG_1234.jpg` (tags vacíos, solo números o solo
-    palabras genéricas). Si el usuario dice "sí" con un filename así, se redirige
-    automáticamente a Gemini para que describa la imagen.
-23. **Gemini ya no verifica coincidencia**: se eliminó el prompt que le preguntaba
-    a Gemini si "image.png" coincide con la imagen — es al pedo porque Gemini dice
-    "sí" al pedo (técnicamente es una imagen). La validación de filenames es
-    ​100% client-side via `_is_generic_filename()` + `_extract_tags()`.
-24. **Analytics events** en cada paso del flujo:
-    - `indio_image_session_started` — inicio de sesión
-    - `indio_image_action` — cada respuesta del usuario (describe_with_ai,
-      user_description, skip, unrecognized, confirm_gemini_desc, reject_gemini_desc,
-      generic_filename_rejected)
-    - `indio_image_gemini_described` — resultado de la descripción de Gemini
-    - `indio_image_saved` — imagen guardada (con método: filename/user_desc/gemini_desc)
-    - `indio_image_session_finished` — sesión terminada
-25. **`_extract_tags()` filtra números**: los tokens puramente numéricos ya no se
-    consideran tags (ej: "2024" de "IMG_2024.jpg").
-
-### 2026-06-11 — Fixes y mejoras en /transferir
-
-1. **URL encoding de espacios**: `apiServer.py:1243` — `quote(sess.filename)` al construir URL del botón de Discord. Antes espacios rompían el embed con `400 Bad Request`.
-2. **Botón en vez de texto**: `bot.py` — `/transferir` ahora envía `discord.ui.Button(label="⬆️ Subir acá", url=...)` en vez de texto plano.
-3. **Página de descarga separada**: `transferCommand.py` — nuevo template `DOWNLOAD_HTML`. Sin botón de borrar, sin "Sesión expirada". Muestra icono, filename, tamaño, botón de descarga. Si el archivo no existe: "Archivo no disponible".
-4. **Redirect a /dl/ al completar upload**: `transferCommand.py:683` — `window.location.href = "/dl/..."` en vez de mostrar sección "completado".
-5. **Icono VaporPals**: `static/icon.jpg` — favicon + main icon en ambas páginas.
-6. **Timer suave (segundo a segundo)**: `transferCommand.py` — reemplazado `updateTimer()` (saltos de 5s) por `syncTimer()` (fetch cada 5s para sincronizar) + `tick()` (contador local cada 1s).
-7. **Ocultar upload al expirar**: `transferCommand.py` — cuando el timer detecta expiración, oculta `upload-section` y muestra `expired-section`. Antes solo cambiaba el texto.
-8. **Borrado de archivos pesados**: Se liberaron ~7 GB borrando dos `Burglin Gnomes.zip` de 3.4 GB del server.
-
-### 2026-06-11 — Seguridad
-
-9. **XSS en HTML/JS**: `html.escape()` en `format_download_html`, función `esc()` en JS para escapar filenames en innerHTML. Atributo `href` sanitizado vía `url_quote()` en URLs.
-10. **Path traversal**: rechazo de `/` y `\` en `init_upload`, `os.path.basename()` en endpoints de descarga.
-11. **Auth middleware para /static/**: `apiServer.py` — agregado `/static` a la whitelist del middleware para que el icono se sirva sin token.
-
-### 2026-06-12 — Restricción de tipos de archivo y auto-embed
-
-12. **Extensiones permitidas**: solo se aceptan estos grupos:
-    - **Archivos comprimidos**: `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.tgz`, `.bz2`, `.xz`, `.zst`
-    - **Imágenes**: `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`, `.svg`, `.ico`, `.avif`
-    - **Videos**: `.mp4`, `.webm`, `.mkv`, `.avi`, `.mov`, `.wmv`, `.flv`
-    - Cualquier otra extensión responde `"formato no permitido"`.
-    - Implementado en `transferCommand.py:_ext()`, `ALLOWED_EXTS`, validación en `init_upload()`.
-13. **Auto-embed de media en Discord**: en `apiServer.py:uploadComplete()`, si es imagen/video se envía el link al endpoint `/raw` para que Discord lo incruste/reproduzca. Para archivos comprimidos se mantiene el embed con botón "Descargar".
-14. **Página de descarga con preview de media**: `DOWNLOAD_HTML` + `format_download_html()` detecta si es imagen/video y muestra `<img>` o `<video>` directamente en vez del botón "Descargar". Content-Disposition `inline` para media, `attachment` para archivos.
-15. **Logs y PostHog analytics** en todos los pasos: eventos `transfer_rejected` (con razón: `path_traversal`, `format_not_allowed`, `oversize`, `disk_full`), `transfer_init`, `transfer_complete` (con `embed_type`: `image`/`video`/`archive`), `transfer_embed_failed`.
 
 ## 🎭 Sistema de Historias del Indio (/story-test, pool de imágenes, review y aprobación)
 
