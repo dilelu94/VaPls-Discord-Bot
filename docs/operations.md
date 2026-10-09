@@ -76,7 +76,7 @@ Userbot service example:
 ## Dominio y Dynamic DNS (Duck DNS)
 
 - **Dominio configurado**: `vapls.duckdns.org` (servicio Duck DNS, cuenta `dilelu94@github`, free tier).
-- **Finalidad**: Proveer un nombre de host canónico y estable para acceder a las interfaces web y páginas del bot (`/admin` panel MMR, Stremio Web UI `/stremio`, `/transferir` para subida/descarga de archivos, `/patch-notes`, webhooks de Meta/GitHub) sin atarse a una IP estática o cuando la dirección IP cambia dinámicamente.
+- **Finalidad**: Proveer un nombre de host canónico y estable para acceder a las interfaces web y páginas del bot (`https://vapls.duckdns.org/`, panel MMR `/admin`, Stremio Web UI `/?token={token}` o `/stremio`, `/transferir` para subida/descarga de archivos, `/patch-notes`, webhooks de Meta/GitHub) sin atarse a una IP estática o cuando la dirección IP cambia dinámicamente.
 - **Mecanismo de actualización (DDNS update)**: Duck DNS se actualiza mediante una petición HTTP GET simple:
   ```bash
   curl -s "https://www.duckdns.org/update?domains=vapls&token=${DUCKDNS_TOKEN}&ip="

@@ -86,7 +86,7 @@ que un cambio roto llegue siquiera al servidor remoto.
 
 **Dominio y DNS Dinámico (Duck DNS):**
 - **Dominio:** `vapls.duckdns.org` (servicio Duck DNS, cuenta `dilelu94@github`, free tier).
-- **Propósito:** Resolución y acceso estable a las páginas y servicios web del bot (`http://vapls.duckdns.org`), incluyendo la consola interactiva de comandos (`/`), el panel MMR (`/admin`), la Web UI de Stremio (`/stremio`), transferencias de archivos pesados (`/transferir`), notas de parche completas (`/patch-notes`), y webhooks (`/github-webhook`, `/webhook`), evitando el uso de direcciones IP directas o desactualizadas si cambia la IP pública.
+- **Propósito:** Resolución y acceso estable a las páginas y servicios web del bot (`https://vapls.duckdns.org`), incluyendo la consola interactiva de comandos (`/`), el panel MMR (`/admin`), la Web UI interactiva de Stremio (`https://vapls.duckdns.org/?token={token}` / `/stremio`), transferencias de archivos pesados (`/transferir`), notas de parche completas (`/patch-notes`), y webhooks (`/github-webhook`, `/webhook`), evitando el uso de direcciones IP directas o desactualizadas si cambia la IP pública.
 - **Actualización dinámica (DDNS):** Duck DNS se actualiza mediante su endpoint HTTP estándar:
   ```bash
   curl -s "https://www.duckdns.org/update?domains=vapls&token=${DUCKDNS_TOKEN}&ip="
@@ -240,7 +240,6 @@ El **main bot expone una HTTP API** en `127.0.0.1:8080` (loopback, protegida por
 - `/adivinador`: inicia una partida interactiva de trivia / adivinador en el canal de texto.
 - `/mascota`: panel interactivo para ver, alimentar y evolucionar la mascota virtual del usuario.
 - `/israel-alerts`: activa o desactiva el feed de alertas de emergencia de Israel en el canal.
-- `/notas-parche-generar`: genera y publica manualmente las notas de parche semanales en `#soreteposting` (owner only).
 - `/banana` (Pausado/Inactivo): genera una imagen con Gemini web UI (Playwright).
 
 ## 📺 GoLive / IPTV / Stremio (`/stream`)
@@ -617,11 +616,11 @@ El endpoint `/github-webhook` está protegido por el middleware `X-API-Secret` c
 - Grupos migrados a issues **#49–#57** (todos con label `sugerencia`)
 - Auto-sync corre en cada reinicio del bot
 - Nginx en puerto 80 como reverse proxy para webhook (Security List de Oracle Cloud abierta)
-- Webhook de GitHub configurado para eventos `issues` → `http://141.148.84.55/github-webhook` (o `http://vapls.duckdns.org/github-webhook`)
+- Webhook de GitHub configurado para eventos `issues` → `http://141.148.84.55/github-webhook` (o `https://vapls.duckdns.org/github-webhook`)
 
 ## 📊 Admin page MMR
 
-La página de admin en `http://141.148.84.55/admin` (o `http://vapls.duckdns.org/admin`) muestra datos de MMR,
+La página de admin en `http://141.148.84.55/admin` (o `https://vapls.duckdns.org/admin`) muestra datos de MMR,
 weights, config y activity. Se compone de:
 
 - **`_ADMIN_HTML`** (en `apiServer.py`): template HTML con JavaScript inline.

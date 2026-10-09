@@ -5019,30 +5019,6 @@ async def before_scheduled_weekly_patch_notes():
     await bot.wait_until_ready()
 
 
-@bot.slash_command(
-    name="notas-parche-generar",
-    description="Genera y publica manualmente las notas de parche semanales (Owner only)",
-    guild_ids=config.DEBUG_GUILD_IDS,
-)
-async def notas_parche_generar_cmd(
-    ctx: discord.ApplicationContext,
-    force: discord.Option(bool, "Forzar generación sin importar el día", default=True),  # type: ignore
-):
-    if ctx.author.id != config.OWNER_ID:
-        await ctx.respond("⛔ Solo el dueño del bot puede usar este comando.", ephemeral=True)
-        return
-
-    await safe_defer(ctx, ephemeral=True)
-    import patch_notes_generator
-
-    res = await patch_notes_generator.generate_and_post_weekly_patch_notes(bot, force=force)
-    if not res:
-        await ctx.respond("⚠️ No se generaron notas de parche (quizás no hubo commits o ya se ejecutó hoy).", ephemeral=True)
-        return
-
-    await ctx.respond(f"✅ Notas de parche generadas y enviadas:\n{res['url']}", ephemeral=True)
-
-
 if __name__ == "__main__":
 
     try:

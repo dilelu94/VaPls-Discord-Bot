@@ -43,7 +43,6 @@ COMMAND_FLAGS: dict[str, str] = {
     "restart": "text",
     "verstream": "text",
     "clip": "text",
-    "notas-parche-generar": "text",
 }
 
 VALID_FLAGS: frozenset[str] = frozenset({"music", "text", "response"})
