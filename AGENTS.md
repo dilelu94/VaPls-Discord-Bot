@@ -980,10 +980,9 @@ del Indio (amigos, anécdotas, chistes internos del grupo).
 4. **👎 reacción** → el chiste se rechaza, la imagen vuelve al pool.
 5. **Reply con feedback** → `handle_first_msg_after_story()` evalúa si el
    comentario se relaciona con el chiste (`_evaluate_reply_context()` con Gemini).
+   - Ignora mensajes que son Discord replies (`message.reference`) a mensajes ajenos a la historia.
    - **Relacionado**: regenera el chiste con el feedback como contexto.
-   - **No relacionado**: el Indio manda DM con la imagen original + chiste, y
-     explica por qué llegó por DM. El usuario puede responder al DM y el Indio
-     contesta naturalmente sobre la imagen (`handle_story_dm_reply()`).
+   - **No relacionado**: ignora el mensaje y mantiene la propuesta de historia activa en el canal para que la comunidad siga votando (evita borrar el review o iniciar DMs por charlas generales del chat).
 
 ### Archivos clave
 
