@@ -137,6 +137,7 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 - `transcriptBugTracker.py`: Generador de Auto-Bug en GitHub Issues al responder a audios de transcripción de voz clipeados.
 - `media_analyzer.py`: Extracción de fotogramas de video con FFmpeg, metadatos de enlaces (yt-dlp/OpenGraph) y análisis de intereses de usuario para la memoria a largo plazo del Indio.
 - `data/internet_rules.json`: Registro persistente en JSON de las 101 Reglas de Internet (Regla 0 a 100) con su texto original en inglés y traducción al español.
+- `patch_notes.py`: UI web y gestor de tokens efímeros (24h) con headers de seguridad y rate-limiting para notas de parche completas.
 
 ## 🔬 Detalles de Implementación Clave
 

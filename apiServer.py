@@ -37,6 +37,7 @@ import transferCommand
 from baseView import BaseView
 import tts
 from stremio_sessions import session_manager, StremioSession
+from patch_notes import patch_notes_manager
 
 logger = logging.getLogger("apiServer")
 
@@ -194,6 +195,8 @@ async def authMiddleware(request: web.Request, handler):
             or request.path.startswith("/delete-data")
             or request.path.startswith("/audio")
             or request.path.startswith("/debug-idle")
+            or request.path.startswith("/patch-notes")
+            or request.path.startswith("/notas-parche")
         ):
             return await handler(request)
         err = _checkAuth(request)
@@ -928,6 +931,30 @@ def makeApp(bot: discord.Bot) -> web.Application:
 </body>
 </html>"""
         return web.Response(text=html, content_type="text/html")
+
+    async def patchNotesView(request: web.Request) -> web.Response:
+        """Serve secure, 24h expiring patch notes HTML page."""
+        ip = request.remote or "unknown"
+        if not patch_notes_manager.check_rate_limit(ip):
+            return web.Response(status=429, text="Too Many Requests")
+
+        token = request.match_info.get("token", "").strip()
+        status, data = patch_notes_manager.get_token_status(token)
+
+        if status == "valid" and data:
+            html_body = patch_notes_manager.render_patch_notes_html(data)
+            resp = web.Response(text=html_body, content_type="text/html")
+            return patch_notes_manager.add_security_headers(resp)
+
+        if status == "expired":
+            html_body = patch_notes_manager.render_expired_html()
+            resp = web.Response(text=html_body, content_type="text/html", status=410)
+            return patch_notes_manager.add_security_headers(resp)
+
+        # "not_found" or "invalid_format"
+        html_body = patch_notes_manager.render_not_found_html()
+        resp = web.Response(text=html_body, content_type="text/html", status=404)
+        return patch_notes_manager.add_security_headers(resp)
 
     async def handleWebhook(request: web.Request) -> web.Response:
         """Handle incoming Meta webhooks (POST).
@@ -2209,6 +2236,8 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_post("/webhook", handleWebhook)
     app.router.add_get("/privacy", privacyPage)
     app.router.add_get("/delete-data", deleteDataPage)
+    app.router.add_get("/patch-notes/{token}", patchNotesView)
+    app.router.add_get("/notas-parche/{token}", patchNotesView)
 
     # ---- Stremio & Anime Web UI Endpoints (Security Enhanced with Token Gating & CSP) ----
     _stremio_rate_limit: dict[str, list[float]] = {}

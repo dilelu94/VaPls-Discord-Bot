@@ -315,6 +315,14 @@ Download a completed file. Serves the file with `Content-Disposition: attachment
 
 Redirects to `/dl/{token}/{filename}` when there is exactly one file.
 
+## Patch notes web endpoint (`/patch-notes`, `/notas-parche`)
+
+These endpoints are **public** (no `X-API-Secret` required). A cryptographically secure token gates access and expires after 24 hours.
+
+### `GET /patch-notes/{token}` (alias: `GET /notas-parche/{token}`)
+
+Serves the full, responsive gaming patch notes HTML page with strict security headers (CSP, X-Frame-Options: DENY, nosniff, no-referrer), IP rate-limiting, and automatic 24-hour expiration (returns `410 Gone` once expired).
+
 ## Error responses
 
 Common errors:
