@@ -70,7 +70,8 @@ async def test_analyze_message_media_and_links_triggers_jojo_reply():
     msg.attachments = []
     msg.channel = MagicMock(id=111222333)
 
-    with patch("random.random", return_value=0.1):
+    # Roll low (< 0.05), so reply triggers
+    with patch("random.random", return_value=0.01):
         with patch("geminiCommand.askIndio", new_callable=AsyncMock) as mock_ask:
             await bot._analyze_message_media_and_links(msg)
             assert mock_ask.called
@@ -87,8 +88,14 @@ async def test_analyze_message_media_and_links_skips_jojo_reply_on_random_roll()
     msg.attachments = []
     msg.channel = MagicMock(id=111222333)
 
-    # Roll high (> 0.25), so reply is skipped
+    # Roll high (> 0.05), so reply is skipped
     with patch("random.random", return_value=0.95):
         with patch("geminiCommand.askIndio", new_callable=AsyncMock) as mock_ask:
             await bot._analyze_message_media_and_links(msg)
             assert not mock_ask.called
+
+
+def test_jojo_reply_probability_default_value():
+    import config
+    assert config.JOJO_REPLY_PROBABILITY == 0.05
+

@@ -510,7 +510,7 @@ async def _analyze_message_media_and_links(message):
                     break
 
         if jojo_ref:
-            prob = getattr(config, "JOJO_REPLY_PROBABILITY", 0.25)
+            prob = getattr(config, "JOJO_REPLY_PROBABILITY", 0.05)
             log.info("JoJo reference detected in message by %s: %s", display_name, jojo_ref)
             if random.random() < prob:
                 log.info("Triggering JoJo spontaneous reply for %s (roll passed prob=%.2f)", display_name, prob)
