@@ -27,6 +27,8 @@ import githubIssues
 
 logger = logging.getLogger("bot.transcript_bug_tracker")
 
+_known_transcript_issues: dict[int, int] = {}
+
 
 def is_audio_transcript_message(msg: Optional[discord.Message]) -> bool:
     """Return True if ``msg`` represents a voice transcript clip message."""
@@ -44,19 +46,20 @@ def is_audio_transcript_message(msg: Optional[discord.Message]) -> bool:
     return False
 
 
-def get_audio_attachment_url(msg: discord.Message) -> Tuple[Optional[str], Optional[str]]:
-    """Extract (filename, url) for the audio clip attached to ``msg``."""
+def get_audio_attachment_url(msg: discord.Message) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+    """Extract (filename, url, size_bytes) for the audio clip attached to ``msg``."""
     attachments = getattr(msg, "attachments", []) or []
     for att in attachments:
         fn = getattr(att, "filename", "") or ""
         ct = getattr(att, "content_type", "") or ""
         url = getattr(att, "url", "") or ""
+        size = getattr(att, "size", None)
         if "audio_escuchado" in fn.lower() or ct.lower().startswith("audio/") or fn.lower().endswith((".wav", ".ogg", ".mp3", ".m4a")):
-            return fn, url
+            return fn, url, size
     if attachments:
         first = attachments[0]
-        return getattr(first, "filename", "audio.wav"), getattr(first, "url", None)
-    return None, None
+        return getattr(first, "filename", "audio.wav"), getattr(first, "url", None), getattr(first, "size", None)
+    return None, None, None
 
 
 def parse_transcript_text(content: str) -> Tuple[str, str]:
@@ -89,6 +92,7 @@ def format_issue_body(
     indio_response: str,
     audio_filename: Optional[str],
     audio_url: Optional[str],
+    audio_size_bytes: Optional[int] = None,
     speaker: str,
     reporter_name: str,
     reporter_id: int,
@@ -96,12 +100,18 @@ def format_issue_body(
     channel_name: str,
     transcript_message_id: int,
     reply_message_id: int,
+    transcript_jump_url: Optional[str] = None,
+    reply_jump_url: Optional[str] = None,
 ) -> str:
     """Format markdown body for the STT Auto-Bug GitHub Issue."""
-    audio_md = f"[{audio_filename or 'Descargar Audio'}]({audio_url})" if audio_url else "*No adjuntado*"
+    size_str = f" ({audio_size_bytes / 1024:.2f} KB)" if audio_size_bytes else ""
+    audio_md = f"[{audio_filename or 'Descargar Audio'}]({audio_url}){size_str}" if audio_url else "*No adjuntado*"
     indio_text = indio_response.strip() if indio_response else "(Sin respuesta del Indio)"
     err_text = erroneous_transcription.strip() if erroneous_transcription else "(Transcripción vacía)"
     corr_text = user_reply_text.strip() if user_reply_text else "(Sin corrección especificada)"
+
+    transcript_link = f" [`{transcript_message_id}`]({transcript_jump_url})" if transcript_jump_url else f" `{transcript_message_id}`"
+    reply_link = f" [`{reply_message_id}`]({reply_jump_url})" if reply_jump_url else f" `{reply_message_id}`"
 
     fingerprint = f"transcript-{transcript_message_id}"
 
@@ -128,8 +138,8 @@ def format_issue_body(
 - **Usuario que habló**: {speaker}
 - **Reportado por**: {reporter_name} (ID: `{reporter_id}`)
 - **Servidor / Canal**: `{guild_name}` / `#{channel_name}`
-- **ID Mensaje Transcripción**: `{transcript_message_id}`
-- **ID Mensaje Respuesta Usuario**: `{reply_message_id}`
+- **ID Mensaje Transcripción**:{transcript_link}
+- **ID Mensaje Respuesta Usuario**:{reply_link}
 """
 
 
@@ -161,7 +171,15 @@ async def find_indio_response_for_transcript(channel: Any, transcript_msg: disco
 
 async def check_and_report_transcript_bug(message: discord.Message) -> Optional[int]:
     """Inspect message for reply to audio transcript and report auto-bug to GitHub."""
-    if message is None or message.author is None or getattr(message.author, "bot", False):
+    userbot_id = getattr(config, "USERBOT_USER_ID", 519594605520486428)
+    vapls_id = getattr(config, "VAPLS_BOT_ID", None)
+    author_id = getattr(message.author, "id", None)
+    if (
+        message is None
+        or message.author is None
+        or getattr(message.author, "bot", False)
+        or (author_id is not None and author_id in {userbot_id, vapls_id})
+    ):
         return None
 
     ref = getattr(message, "reference", None)
@@ -205,7 +223,7 @@ async def check_and_report_transcript_bug(message: discord.Message) -> Optional[
         return None
 
     speaker, erroneous_transcription = parse_transcript_text(transcript_msg.content or "")
-    audio_fn, audio_url = get_audio_attachment_url(transcript_msg)
+    audio_fn, audio_url, audio_size = get_audio_attachment_url(transcript_msg)
 
     reporter_name = getattr(message.author, "display_name", None) or getattr(message.author, "name", "desconocido")
     reporter_id = getattr(message.author, "id", 0)
@@ -213,11 +231,25 @@ async def check_and_report_transcript_bug(message: discord.Message) -> Optional[
     guild_name = getattr(guild, "name", "DM / Servidor Desconocido") if guild else "DM"
     channel_name = getattr(channel, "name", "desconocido")
 
+    # In-memory deduplication check
+    existing_in_mem = _known_transcript_issues.get(transcript_msg.id)
+    if existing_in_mem:
+        logger.info("Transcript bug for msg %s already cached in issue #%d", transcript_msg.id, existing_in_mem)
+        comment = f"### 🔄 Nueva corrección reportada por {reporter_name}\n> **{user_reply_text}**"
+        await githubIssues.add_comment(existing_in_mem, body=comment)
+        try:
+            await message.add_reaction("🐛")
+        except Exception:
+            pass
+        return existing_in_mem
+
+    # GitHub API deduplication check via fingerprint
     fingerprint = f"transcript-{transcript_msg.id}"
     try:
         existing = await githubIssues.find_issue_by_fingerprint(fingerprint)
         if existing and existing.get("number"):
             issue_num = existing["number"]
+            _known_transcript_issues[transcript_msg.id] = issue_num
             logger.info("Transcript bug for msg %s already logged in issue #%d", transcript_msg.id, issue_num)
             comment = f"### 🔄 Nueva corrección reportada por {reporter_name}\n> **{user_reply_text}**"
             await githubIssues.add_comment(issue_num, body=comment)
@@ -236,6 +268,7 @@ async def check_and_report_transcript_bug(message: discord.Message) -> Optional[
         indio_response=indio_response,
         audio_filename=audio_fn,
         audio_url=audio_url,
+        audio_size_bytes=audio_size,
         speaker=speaker,
         reporter_name=reporter_name,
         reporter_id=reporter_id,
@@ -243,6 +276,8 @@ async def check_and_report_transcript_bug(message: discord.Message) -> Optional[
         channel_name=channel_name,
         transcript_message_id=transcript_msg.id,
         reply_message_id=message.id,
+        transcript_jump_url=getattr(transcript_msg, "jump_url", None),
+        reply_jump_url=getattr(message, "jump_url", None),
     )
 
     error_label = getattr(config, "GITHUB_ERROR_LABEL", "bot-error")
@@ -255,6 +290,7 @@ async def check_and_report_transcript_bug(message: discord.Message) -> Optional[
     )
 
     if issue_number:
+        _known_transcript_issues[transcript_msg.id] = issue_number
         logger.info("Created STT Auto-Bug issue #%d for transcript msg %s", issue_number, transcript_msg.id)
         try:
             await message.add_reaction("🐛")

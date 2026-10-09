@@ -3555,8 +3555,10 @@ async def _extract_reply_chain(message, max_depth: int = 4):
         if ref_msg is None or ref_msg.author is None:
             break
 
+        client_user_id = client.user.id if client.user else None
         vapls_id = getattr(config, "VAPLS_BOT_ID", None)
-        if ref_msg.author.id in {client.user.id, vapls_id}:
+        indio_ids = {uid for uid in (client_user_id, vapls_id) if uid is not None}
+        if indio_ids and ref_msg.author.id in indio_ids:
             if not _is_audio_transcript_message(ref_msg):
                 is_reply_to_indio = True
 
@@ -3598,6 +3600,9 @@ async def _extract_reply_chain(message, max_depth: int = 4):
                     f"{item['author']} (respondiendo a {prev_author}): {item['content']}"
                 )
         replied_content = "\n".join(formatted_items)
+
+    return replied_content, replied_author, is_reply_to_indio, attachment_urls
+
 
 def _is_audio_transcript_message(msg: Optional[discord.Message]) -> bool:
     """Return True if ``msg`` represents a voice transcript clip message."""

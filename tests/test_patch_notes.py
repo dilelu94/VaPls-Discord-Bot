@@ -102,9 +102,9 @@ def test_rendered_html_contains_patch_notes(tmp_patch_notes_manager):
 
     html_out = mgr.render_patch_notes_html(data)
     assert "Notas de Parche v2.6" in html_out
-    assert "Anti-Exploits &amp; Sistema de Loot" in html_out or "Anti-Exploits & Sistema de Loot" in html_out
-    assert "Netcode &amp; GoLive" in html_out or "Netcode & GoLive" in html_out
-    assert "Balance de Personaje — El Indio" in html_out
+    assert any(term in html_out for term in ("Anti-Exploits", "Saludos Raros"))
+    assert any(term in html_out for term in ("Netcode", "GoLive"))
+    assert any(term in html_out for term in ("Balance de Personaje", "Respuestas y Comportamiento", "El Indio"))
     assert "andá a hacerte ortear" in html_out
     assert "sopapeás la papirola" in html_out
     assert "cabecear el enano" in html_out

@@ -15,6 +15,12 @@ if "discord.ext.voice_recv" not in sys.modules:
     class MockVoiceRecv(MagicMock):
         class AudioSink: pass
     sys.modules["discord.ext.voice_recv"] = MockVoiceRecv()
+import discord
+if not hasattr(discord, "voice_state"):
+    discord.voice_state = MagicMock()
+if "discord.voice_state" not in sys.modules:
+    sys.modules["discord.voice_state"] = discord.voice_state
+
 for _mod in ("faster_whisper", "vosk", "davey"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
@@ -98,6 +104,33 @@ async def test_extract_reply_chain_indio_in_ancestors(monkeypatch):
 
     assert is_indio is True
     assert author == "Viny"
+
+
+@pytest.mark.asyncio
+async def test_extract_reply_chain_ignores_audio_transcript_indio_reply(monkeypatch):
+    """is_reply_to_indio is False when the replied message authored by Indio is an audio transcript."""
+    indio_id = 999111
+    monkeypatch.setattr(config, "VAPLS_BOT_ID", indio_id, raising=False)
+    from userbot.bot import config as userbot_cfg
+    monkeypatch.setattr(userbot_cfg, "VAPLS_BOT_ID", indio_id, raising=False)
+
+    att = MagicMock()
+    att.filename = "audio_escuchado_471420397049479180.wav"
+    att.content_type = "audio/wav"
+
+    msg_transcript = _make_msg(
+        "🎙️ **Fide:** indio de ganas, sen?",
+        indio_id,
+        "Indio",
+        attachments=[att],
+    )
+    msg_reply = _make_msg("paciente de cancer", 555, "Miles", ref_msg=msg_transcript)
+
+    content, author, is_indio, media = await _extract_reply_chain(msg_reply)
+
+    assert is_indio is False
+    assert author == "Indio"
+    assert "indio de ganas, sen?" in content
 
 
 @pytest.mark.asyncio

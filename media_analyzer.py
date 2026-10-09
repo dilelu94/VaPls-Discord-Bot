@@ -291,8 +291,7 @@ async def check_jojo_reference(
 ) -> Optional[str]:
     """Check if text, link metadata, or image/video contains a subtle or explicit JoJo reference.
 
-    Evaluates subtle visual poses (e.g. a twisted tree branch looking like a JoJo pose),
-    bizarre shapes, dynamic silhouettes, as well as explicit JoJo memes/quotes.
+    Evaluates visual images/videos, link metadata, or explicit JoJo memes/quotes.
     Returns a short description of the reference if detected, or None otherwise.
     """
     # 1. Quick text keyword fallback
@@ -325,9 +324,9 @@ async def check_jojo_reference(
         "- Elementos visuales clave (flechas de Stand, onomatopeyas 'ゴゴゴ / Menacing', máscaras de piedra, estética oficial de la serie).\n"
         "- Memes explícitos y populares de la serie ('To Be Continued', 'Kono DIO da', 'Za Warudo', etc.).\n\n"
         "Reglas estrictas de descarte:\n"
-        "1. NO interpretes posturas casuales de personas o animales de la vida cotidiana como referencias a JoJo "
+        "1. NO interpretes posturas casuales o situaciones de la vida cotidiana como referencias a JoJo "
         "a menos que sea evidente que están recreando o parodiando la serie a propósito.\n"
-        "2. NO busques similitudes forzadas, abstractas ni pareidolias en objetos, ramas o sombras.\n"
+        "2. NO busques similitudes forzadas, abstractas ni pareidolias en objetos, formas o sombras cotidianas.\n"
         "3. Si encuentras una referencia clara y reconocible, responde ÚNICAMENTE en 1 sola frase corta describiendo cuál es la referencia (ej: 'Meme de Dio Brando Kono DIO Da').\n"
         "4. Si NO es clara e intencionalmente una referencia a JoJo, responde ÚNICAMENTE la palabra: 'NO'."
     )
