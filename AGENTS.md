@@ -387,6 +387,11 @@ golive: encoder probe OK → libx264
     - **Descripción**: Se agregaron verificaciones determinísticas en `_gate_play_music_actions` (`geminiCommand.py`) para herramientas de reproducción/control (`PAUSE_MUSIC`, `RESUME_MUSIC`, `SKIP_MUSIC`, `STOP_MUSIC`). Previene que llamadas a herramientas espurias producidas por alucinaciones de la IA ejecuten acciones no deseadas o muestren respuestas del tipo `"⏸️ Pausando — no había reproductor activo"`. Además, se corrigió la validación de `no_redirect` en `indioFromVoice` para evitar la redirección forzada al canal de música cuando `no_redirect=True` está activo.
     - **Tests**: `tests/test_playback_control_gating.py`.
 
+26. **(2026-10-09) Regla inquebrantable sobre dirección del berretín 'cabecear el enano' en el Indio**:
+    - **Descripción**: Se incluyó una instrucción explícita en `INDIO_SYSTEM` y en `_INDIO_ANGRY_DAY_BLOCK` (`geminiCommand.py`) indicando que "cabecear el enano" es una referencia a sexo oral en jerga rioplatense, por lo que la frase debe ser SIEMPRE expresada en dirección de los otros hacia el Indio (`"Me vas a tener que cabecear el enano"`). Se prohíbe explícitamente la forma invertida `"Te voy a cabecear el enano"`, evitando que el bot genere frases donde se ofrezca a realizar sexo oral a los usuarios.
+    - **Tests**: `tests/test_indio_angry_day.py` (`test_indio_system_prompt_includes_cabecear_el_enano_berretines`).
+
+
 
 ## 🎚️ Sensibilidad del wake-word (presets VOSK)
 

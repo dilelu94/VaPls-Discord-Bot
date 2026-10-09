@@ -14,10 +14,11 @@ from geminiCommand import (
 
 
 def test_indio_system_prompt_includes_cabecear_el_enano_berretines():
-    """Verify that INDIO_SYSTEM instructs Indio on using 'cabecear el enano' berretines."""
+    """Verify that INDIO_SYSTEM instructs Indio on using 'cabecear el enano' berretines with correct directionality."""
     system = INDIO_SYSTEM.lower()
     assert "cabecear el enano" in system
     assert "berretines" in system
+    assert "nunca jamás digas \"te voy a cabecear el enano\"" in system
 
 
 def test_is_indio_angry_day_deterministic_per_date():
