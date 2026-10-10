@@ -16,6 +16,7 @@ discord-ext-voice-recv @ git+https://github.com/imayhaveborkedit/discord-ext-voi
 # Keeps audio processing idle until the word "indio" is heard.
 vosk>=0.3.45
 numpy
+soxr>=1.0.0
 python-dotenv
 aiohttp>=3.9
 # Observability. The userbot runs in its own venv, so it needs these here too

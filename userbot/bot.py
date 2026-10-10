@@ -409,6 +409,13 @@ try:
 except Exception:
     np = None
 
+try:
+    import soxr
+    _HAS_SOXR = True
+except Exception:
+    soxr = None
+    _HAS_SOXR = False
+
 import unicodedata
 
 
@@ -569,6 +576,7 @@ class TranscriberSink(voice_recv.AudioSink):
         pcm_data = data.pcm
         if not pcm_data:
             return
+        pcm_data = apply_headroom(pcm_data)
 
         # Always feed rolling buffer for /clip command before any wake/sensitivity filters
         try:
@@ -622,8 +630,8 @@ class TranscriberSink(voice_recv.AudioSink):
                 return
 
             # Voice: downsample + append to buffer.
-            data_16k, new_state = audioop.ratecv(
-                mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
+            data_16k, new_state = resample_48k_to_16k(
+                mono, self.resample_states.get(user_id)
             )
             self.resample_states[user_id] = new_state
             self.buffers[user_id].extend(data_16k)
@@ -1633,6 +1641,7 @@ class WakeWordSink(voice_recv.AudioSink):
         pcm_data = data.pcm
         if not pcm_data:
             return
+        pcm_data = apply_headroom(pcm_data)
 
         # Always feed rolling buffer for /clip command before any wake/sensitivity filters
         try:
@@ -1667,8 +1676,8 @@ class WakeWordSink(voice_recv.AudioSink):
         try:
             if mono is None:
                 mono = ensure_mono(pcm_data)
-            data_16k, new_state = audioop.ratecv(
-                mono, 2, 1, 48000, 16000, self.resample_states.get(user_id)
+            data_16k, new_state = resample_48k_to_16k(
+                mono, self.resample_states.get(user_id)
             )
             self.resample_states[user_id] = new_state
             rms = audioop.rms(data_16k, 2)
@@ -2352,6 +2361,7 @@ class RecorderSink(voice_recv.AudioSink):
         pcm = data.pcm
         if not pcm:
             return
+        pcm = apply_headroom(pcm)
         try:
             mono = ensure_mono(pcm, _REC_INPUT_WIDTH)
         except Exception as e:
@@ -2694,6 +2704,21 @@ _idle_leave_tasks: dict[int, asyncio.Task] = {}
 _vote_restrictions: dict[int, int] = {}
 
 
+def apply_headroom(pcm_data: bytes, width: int = 2) -> bytes:
+    """Apply gain headroom (attenuation) to prevent 16-bit PCM clipping before mixing/resampling.
+
+    Scales raw amplitudes by HEADROOM_FACTOR (default 0.85, ~ -3 dB), preventing
+    vocal peaks from hard clipping at ±32767 during downmixing or filtering.
+    """
+    factor = getattr(config, "HEADROOM_FACTOR", 0.85)
+    if not pcm_data or factor == 1.0 or factor <= 0:
+        return pcm_data
+    try:
+        return audioop.mul(pcm_data, width, factor)
+    except Exception:
+        return pcm_data
+
+
 def ensure_mono(pcm_data: bytes, width: int = 2) -> bytes:
     """Ensure PCM data is 16-bit mono.
 
@@ -2714,6 +2739,27 @@ def ensure_mono(pcm_data: bytes, width: int = 2) -> bytes:
     if len(pcm_data) % 4 == 0 and len(pcm_data) > 1920:
         return audioop.tomono(pcm_data, width, 0.5, 0.5)
     return pcm_data
+
+
+def resample_48k_to_16k(mono_pcm: bytes, state: Any = None) -> tuple[bytes, Any]:
+    """Downsample 16-bit mono PCM from 48kHz to 16kHz with anti-aliasing sinc filtering.
+
+    When soxr (and numpy) is available, applies high-quality anti-aliasing bandlimiting
+    to remove frequencies >8kHz before decimation, eliminating metallic hiss and harmonics.
+    Falls back gracefully to audioop.ratecv if soxr is unavailable.
+    """
+    if not mono_pcm:
+        return b"", state
+
+    if _HAS_SOXR and np is not None:
+        try:
+            arr = np.frombuffer(mono_pcm, dtype=np.int16)
+            res = soxr.resample(arr, 48000, 16000, quality="HQ")
+            return res.astype(np.int16).tobytes(), state
+        except Exception as e:
+            log.debug(f"[RESAMPLE] soxr resample failed ({e}), falling back to audioop")
+
+    return audioop.ratecv(mono_pcm, 2, 1, 48000, 16000, state)
 
 
 def _is_speaker_allowed(guild_id: Optional[int], user_id: Optional[int]) -> bool:

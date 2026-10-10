@@ -32,6 +32,11 @@
         <button id="clearSearch" class="clear-btn" style="display:none;">✕</button>
       </div>
 
+      <label class="filter-toggle-label nav-4k-toggle" title="Habilitar streams 4K y 2K en los resultados (Desactivado por defecto)">
+        <input type="checkbox" id="navAllow4kCheckbox">
+        <span>Permitir 4K / 2K</span>
+      </label>
+
       <div class="voice-status" id="voiceStatusPill">
         <span class="status-dot"></span>
         <span id="voiceStatusText">Cargando canales...</span>
@@ -185,6 +190,10 @@
               <div class="section-header">
                 <h3>🎥 Opciones de Stream</h3>
                 <div class="section-actions">
+                  <label class="filter-toggle-label modal-4k-toggle" title="Habilitar streams 4K y 2K en los resultados (Desactivado por defecto)">
+                    <input type="checkbox" id="modalAllow4kCheckbox">
+                    <span>Permitir 4K / 2K</span>
+                  </label>
                   <button id="toggleModalTracksBtn" class="mini-btn tracks-toggle-btn" title="Configurar audio y subtítulos">⚙️ Audio & Subs</button>
                   <button id="refreshStreamsBtn" class="mini-btn">🔄 Actualizar</button>
                 </div>

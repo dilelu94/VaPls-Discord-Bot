@@ -116,6 +116,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const streamList = document.getElementById('streamList');
   const refreshStreamsBtn = document.getElementById('refreshStreamsBtn');
   const startStreamBtn = document.getElementById('startStreamBtn');
+  const navAllow4kCheckbox = document.getElementById('navAllow4kCheckbox');
+  const modalAllow4kCheckbox = document.getElementById('modalAllow4kCheckbox');
 
   // Active Player View Elements
   const playerView = document.getElementById('playerView');
@@ -161,6 +163,36 @@ document.addEventListener('DOMContentLoaded', () => {
   let activePosSecs = 0;
   let isUserSeeking = false;
   let isPausedState = false;
+
+  // 4K & 2K Resolution Filter State
+  let allow4k2k = false;
+  let currentFetchedStreams = [];
+
+  function is4kOr2kStream(s) {
+    if (!s) return false;
+    const quality = (s.quality || '').trim().toUpperCase();
+    if (quality === '4K' || quality === '2K') return true;
+    const text = `${s.title || ''} ${s.name || ''} ${s.details || ''}`;
+    return /\b(2160p|4k|uhd|1440p|2k|qhd|wqhd)\b/i.test(text);
+  }
+
+  function setAllow4k2k(enabled) {
+    allow4k2k = !!enabled;
+    if (navAllow4kCheckbox) navAllow4kCheckbox.checked = allow4k2k;
+    if (modalAllow4kCheckbox) modalAllow4kCheckbox.checked = allow4k2k;
+    updateToggleStyles(allow4k2k);
+    if (currentFetchedStreams && currentFetchedStreams.length) {
+      applyStreamFilterAndRender();
+    }
+  }
+
+  function updateToggleStyles(enabled) {
+    [navAllow4kCheckbox, modalAllow4kCheckbox].forEach(cb => {
+      if (cb && cb.parentElement) {
+        cb.parentElement.classList.toggle('active', enabled);
+      }
+    });
+  }
 
   function formatTime(seconds) {
     if (isNaN(seconds) || seconds < 0) return '00:00';
@@ -277,6 +309,13 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshStreamsBtn.addEventListener('click', () => {
     if (currentMeta) fetchStreams();
   });
+
+  if (navAllow4kCheckbox) {
+    navAllow4kCheckbox.addEventListener('change', (e) => setAllow4k2k(e.target.checked));
+  }
+  if (modalAllow4kCheckbox) {
+    modalAllow4kCheckbox.addEventListener('change', (e) => setAllow4k2k(e.target.checked));
+  }
 
   startStreamBtn.addEventListener('click', triggerDiscordStream);
 
@@ -697,10 +736,17 @@ document.addEventListener('DOMContentLoaded', () => {
               }
             }
 
+            let quality = 'HD';
+            if (/\b(2160p|4k|uhd)\b/i.test(mainTitle)) quality = '4K';
+            else if (/\b(1440p|2k|qhd|wqhd)\b/i.test(mainTitle)) quality = '2K';
+            else if (/\b(1080p|fhd)\b/i.test(mainTitle)) quality = '1080p';
+            else if (/\b720p\b/i.test(mainTitle)) quality = '720p';
+            else if (/\b480p\b/i.test(mainTitle)) quality = '480p';
+
             extracted.push({
               name: s.name || 'Torrentio',
               title: mainTitle,
-              quality: mainTitle.includes('2160P') || mainTitle.includes('4K') ? '4K' : (mainTitle.includes('1080P') ? '1080p' : 'HD'),
+              quality: quality,
               seeders: seeders,
               size: sizeStr,
               details: lines.slice(1).join(' '),
@@ -716,12 +762,37 @@ document.addEventListener('DOMContentLoaded', () => {
 
     streamLoader.style.display = 'none';
 
-    if (!streams || !streams.length) {
+    currentFetchedStreams = streams || [];
+    applyStreamFilterAndRender();
+  }
+
+  function applyStreamFilterAndRender() {
+    if (!currentFetchedStreams || !currentFetchedStreams.length) {
       streamList.innerHTML = '<div style="padding: 12px; color: var(--text-muted);">No se encontraron enlaces de streaming para esta opción.</div>';
+      startStreamBtn.disabled = true;
+      selectedStreamUrl = null;
       return;
     }
 
-    renderStreams(streams);
+    const visibleStreams = allow4k2k ? currentFetchedStreams : currentFetchedStreams.filter(s => !is4kOr2kStream(s));
+
+    if (!visibleStreams.length) {
+      streamList.innerHTML = `
+        <div class="stream-empty-filter-notice">
+          <p>⚠️ Solo hay fuentes disponibles en resolución 4K / 2K.</p>
+          <button id="enable4kFromNoticeBtn" class="mini-btn">Activar 4K / 2K para verlas</button>
+        </div>
+      `;
+      const noticeBtn = document.getElementById('enable4kFromNoticeBtn');
+      if (noticeBtn) {
+        noticeBtn.addEventListener('click', () => setAllow4k2k(true));
+      }
+      startStreamBtn.disabled = true;
+      selectedStreamUrl = null;
+      return;
+    }
+
+    renderStreams(visibleStreams);
   }
 
   function renderStreams(streams) {
@@ -733,7 +804,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ${esc(s.title)}
           </div>
           <div class="stream-meta">
-            ${s.quality ? `[${esc(s.quality)}]` : ''} ${s.seeders >= 0 ? `👤 ${esc(s.seeders)}` : ''} ${s.size ? `💾 ${esc(s.size)}` : ''} ${esc(s.details || '')}
+            ${s.quality ? `<span class="quality-tag ${is4kOr2kStream(s) ? 'quality-tag-highres' : ''}">[${esc(s.quality)}]</span>` : ''} ${s.seeders >= 0 ? `👤 ${esc(s.seeders)}` : ''} ${s.size ? `💾 ${esc(s.size)}` : ''} ${esc(s.details || '')}
           </div>
         </div>
       </div>

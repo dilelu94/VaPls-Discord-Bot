@@ -202,6 +202,13 @@ GREETING_VOLUME = float(os.getenv("GREETING_VOLUME", "0.8"))
 TTS_VOLUME = float(os.getenv("TTS_VOLUME", "0.7"))
 
 
+# --- Audio Pre-processing Headroom ----------------------------------------
+# Factor de atenuación preventiva de ganancia aplicado al PCM de 16 bits
+# antes de convertir a mono y resamplear. Un factor de 0.85 (-3 dB aprox.)
+# evita que picos de voz choquen contra el techo de ±32767 causando saturación.
+HEADROOM_FACTOR = float(os.getenv("HEADROOM_FACTOR", "0.85"))
+
+
 # --- Wake sound (confirmation cue on wake-word detection) ------------------
 # Cuando VOSK detecta la palabra clave ("indio"), el userbot reproduce un
 # sonidito corto en el canal de voz como feedback inmediato para que el

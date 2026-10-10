@@ -2523,6 +2523,9 @@ def makeApp(bot: discord.Bot) -> web.Application:
             return web.json_response({"error": "missing or invalid id"}, status=400)
         from torrent_search import get_stremio_streams
         res = await get_stremio_streams(item_type, item_id, season, episode, imdb_id)
+        allow_4k_param = request.query.get("allow_4k", request.query.get("allow_4k_2k", "1")).strip().lower()
+        if allow_4k_param in ("0", "false", "no"):
+            res = [s for s in res if s.get("quality") not in ("4K", "2K")]
         return web.json_response(res)
 
     async def apiStremioVoiceChannels(request: web.Request) -> web.Response:

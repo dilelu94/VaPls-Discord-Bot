@@ -52,8 +52,13 @@ def test_resolve_stremio_or_magnet_url_with_stremio_link():
 
 def test_parse_torrent_quality():
     assert parse_torrent_quality("Avatar.2009.2160p.UHD.mkv") == "4K"
+    assert parse_torrent_quality("Avatar.2009.4k.HDR.mkv") == "4K"
+    assert parse_torrent_quality("Movie.2023.1440p.QHD.mkv") == "2K"
+    assert parse_torrent_quality("Movie.2023.2K.WEB-DL.mkv") == "2K"
     assert parse_torrent_quality("Matrix.1080p.BluRay.x264") == "1080p"
     assert parse_torrent_quality("Movie.720p.WEB-DL") == "720p"
+    assert parse_torrent_quality("OldShow.480p.DVDRip") == "480p"
+    assert parse_torrent_quality("NBA.2K24.Tournament.1080p") == "1080p"
     assert parse_torrent_quality("Unknown.Release") == "HD"
 
 

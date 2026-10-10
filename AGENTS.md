@@ -161,11 +161,12 @@ El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 ### 2) Pipeline de transcripción (TranscriberSink / WakeWordSink)
 
 1. Recibe PCM desde `voice_recv`.
-2. Convierte a mono y re-samplea a 16 kHz.
-3. VOSK realiza el gating inicial del wake word ("indio" / "che indio").
-4. Tras el corte de silencio, envía el audio a `Gemini 2.5 Flash` (base64 WAV con rotación de keys de `geminiKeys.py` y fallback a Groq Cloud).
-5. Valida que el texto confirme la invocación al Indio (`_stt_confirms_indio`); si no contiene "indio", descarta el falso positivo.
-6. `on_transcript` publica en el canal de texto y forwardea por HTTP al main bot (`_dispatch_to_indio`).
+2. Aplica atenuación de ganancia preventiva (`HEADROOM_FACTOR = 0.85` / ~ -3 dB) para evitar saturación digital contra ±32767 antes de procesar.
+3. Convierte a mono y re-samplea a 16 kHz usando filtrado anti-aliasing sinc (`soxr`, con fallback a `audioop.ratecv`) para eliminar armónicos y siseos metálicos por encima del límite de Nyquist (8 kHz).
+4. VOSK realiza el gating inicial del wake word ("indio" / "che indio").
+5. Tras el corte de silencio, envía el audio a `Gemini 2.5 Flash` (base64 WAV con rotación de keys de `geminiKeys.py` y fallback a Groq Cloud).
+6. Valida que el texto confirme la invocación al Indio (`_stt_confirms_indio`); si no contiene "indio", descarta el falso positivo.
+7. `on_transcript` publica en el canal de texto y forwardea por HTTP al main bot (`_dispatch_to_indio`).
 
 ### 3) Playback de música (GuildPlayer)
 

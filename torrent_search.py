@@ -288,16 +288,24 @@ def resolve_stremio_or_magnet_url(text: str) -> tuple[str, Optional[str]]:
     return raw, "Stream Directo"
 
 
+QUALITY_4K_RE = re.compile(r"\b(2160p|4k|uhd)\b", re.IGNORECASE)
+QUALITY_2K_RE = re.compile(r"\b(1440p|2k|qhd|wqhd)\b", re.IGNORECASE)
+QUALITY_1080P_RE = re.compile(r"\b(1080p|fhd)\b", re.IGNORECASE)
+QUALITY_720P_RE = re.compile(r"\b720p\b", re.IGNORECASE)
+QUALITY_480P_RE = re.compile(r"\b480p\b", re.IGNORECASE)
+
+
 def parse_torrent_quality(title: str) -> str:
-    """Extract resolution/quality string from title (e.g. 1080p, 720p, 4K)."""
-    title_upper = title.upper()
-    if "2160P" in title_upper or "4K" in title_upper:
+    """Extract resolution/quality string from title (e.g. 1080p, 720p, 4K, 2K)."""
+    if QUALITY_4K_RE.search(title):
         return "4K"
-    if "1080P" in title_upper:
+    if QUALITY_2K_RE.search(title):
+        return "2K"
+    if QUALITY_1080P_RE.search(title):
         return "1080p"
-    if "720P" in title_upper:
+    if QUALITY_720P_RE.search(title):
         return "720p"
-    if "480P" in title_upper:
+    if QUALITY_480P_RE.search(title):
         return "480p"
     return "HD"
 

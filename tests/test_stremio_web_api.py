@@ -125,6 +125,10 @@ async def test_stremio_valid_token_access(mock_bot):
         assert resp.status == 200
         text = await resp.text()
         assert "VaPls Stremio" in text
+        assert 'id="navAllow4kCheckbox"' in text
+        assert 'id="modalAllow4kCheckbox"' in text
+        assert 'checked' not in text.split('id="navAllow4kCheckbox"')[1].split('>')[0]
+        assert 'checked' not in text.split('id="modalAllow4kCheckbox"')[1].split('>')[0]
 
         # 1b. GET /?token=<token> serves index.html
         resp_root = await client.get(f"/?token={token}")
@@ -157,10 +161,25 @@ async def test_stremio_valid_token_access(mock_bot):
             meta_json = await resp_meta.json()
             assert meta_json["title"] == "Naruto"
 
-        # 5. GET /api/stremio/streams with token
-        with patch("torrent_search.get_stremio_streams", new=AsyncMock(return_value=[{"title": "Naruto Ep 1 1080p", "url": "https://torrentio.strem.fun/resolve/torbox/1/2"}])):
-            resp_streams = await client.get(f"/api/stremio/streams?id=kitsu:11&type=anime&season=1&episode=1&token={token}")
-            assert resp_streams.status == 200
+        # 5. GET /api/stremio/streams with token (test filtering with allow_4k=0)
+        mock_streams = [
+            {"title": "Naruto Ep 1 4K UHD", "quality": "4K", "url": "https://torrentio.strem.fun/resolve/torbox/1/4k"},
+            {"title": "Naruto Ep 1 2K QHD", "quality": "2K", "url": "https://torrentio.strem.fun/resolve/torbox/1/2k"},
+            {"title": "Naruto Ep 1 1080p", "quality": "1080p", "url": "https://torrentio.strem.fun/resolve/torbox/1/1080p"},
+        ]
+        with patch("torrent_search.get_stremio_streams", new=AsyncMock(return_value=mock_streams)):
+            # All streams returned by default
+            resp_all = await client.get(f"/api/stremio/streams?id=kitsu:11&type=anime&season=1&episode=1&token={token}")
+            assert resp_all.status == 200
+            all_json = await resp_all.json()
+            assert len(all_json) == 3
+
+            # Filtered streams when allow_4k=0
+            resp_filtered = await client.get(f"/api/stremio/streams?id=kitsu:11&type=anime&season=1&episode=1&allow_4k=0&token={token}")
+            assert resp_filtered.status == 200
+            filtered_json = await resp_filtered.json()
+            assert len(filtered_json) == 1
+            assert filtered_json[0]["quality"] == "1080p"
 
         # 6. GET /api/stremio/voice-channels with token
         guild_mock = MagicMock()
