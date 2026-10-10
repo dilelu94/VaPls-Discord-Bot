@@ -328,25 +328,19 @@ class PatchNotesManager:
         return None
 
     def _cleanup_old_tokens(self) -> None:
-        """Prune tokens expired more than 24 hours ago."""
-        now = time.time()
-        to_delete = [
-            tok for tok, data in self._tokens.items()
-            if now > data.get("expires_at", 0) + 86400
-        ]
-        for tok in to_delete:
-            del self._tokens[tok]
+        """Patch notes tokens are permanent and never deleted."""
+        pass
 
     def create_token(
         self,
         version: str = "2.6",
-        ttl_seconds: int = 86400,
+        ttl_seconds: Optional[int] = None,
         title: str = "Notas de Parche v2.6",
         sections: Optional[list[dict[str, Any]]] = None,
         discord_highlight: Optional[dict[str, Any]] = None,
         save_history: bool = True,
     ) -> str:
-        """Generate a cryptographically secure token valid for `ttl_seconds` (default 24h) and archive in history."""
+        """Generate a cryptographically secure token valid permanently and archive in history."""
         self._cleanup_old_tokens()
         token = secrets.token_urlsafe(32)
         now = time.time()
@@ -355,7 +349,7 @@ class PatchNotesManager:
             "version": version,
             "title": title,
             "created_at": now,
-            "expires_at": now + ttl_seconds,
+            "expires_at": None,
             "sections": sections or _get_default_v26_sections(),
             "discord_highlight": discord_highlight,
         }
@@ -363,13 +357,14 @@ class PatchNotesManager:
         self._save()
         if save_history:
             self.save_to_history(token_data, token=token)
-        logger.info("Created patch notes token %s (version=%s, ttl=%ds)", token[:8], version, ttl_seconds)
+        logger.info("Created permanent patch notes token %s (version=%s)", token[:8], version)
         return token
 
     def get_token_status(self, token: Optional[str]) -> tuple[str, Optional[dict[str, Any]]]:
         """Validate token and return (status, data).
 
-        Status is one of: 'valid', 'expired', 'not_found', 'invalid_format'.
+        Patch notes tokens are permanent and never expire.
+        Status is one of: 'valid', 'not_found', 'invalid_format'.
         """
         if not token or not isinstance(token, str) or not TOKEN_REGEX.match(token):
             return "invalid_format", None
@@ -384,10 +379,6 @@ class PatchNotesManager:
         # Ensure active or requested valid token is represented in history
         if not self.get_history_entry(token) and not self.get_history_entry(data.get("version", "")):
             self.save_to_history(data, token=token)
-
-        now = time.time()
-        if now > data.get("expires_at", 0):
-            return "expired", data
 
         return "valid", data
 
@@ -426,10 +417,6 @@ class PatchNotesManager:
         """Render high-aesthetic gaming patch notes page."""
         title = html.escape(str(token_data.get("title", "Notas de Parche v2.6")))
         version = html.escape(str(token_data.get("version", "2.6")))
-        expires_at = int(token_data.get("expires_at", time.time() + 86400))
-        remaining_secs = max(0, int(expires_at - time.time()))
-        rem_hours = remaining_secs // 3600
-        rem_minutes = (remaining_secs % 3600) // 60
 
         sections_data = token_data.get("sections") or _get_default_v26_sections()
         if sections_data and isinstance(sections_data, list):
@@ -728,11 +715,20 @@ class PatchNotesManager:
       border: 1px solid rgba(139, 92, 246, 0.4);
       color: #c4b5fd;
     }}
-    .badge-timer {{
-      background: rgba(245, 158, 11, 0.15);
-      border: 1px solid rgba(245, 158, 11, 0.4);
-      color: #fcd34d;
-      font-family: var(--font-mono);
+    .badge-permanent {{
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.4);
+      color: #c4b5fd;
+    }}
+    .badge-history-link {{
+      background: rgba(6, 182, 212, 0.15);
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      color: var(--accent-cyan);
+      transition: all 0.2s ease;
+    }}
+    .badge-history-link:hover {{
+      background: rgba(6, 182, 212, 0.28);
+      color: #fff;
     }}
     @keyframes pulse {{
       0%, 100% {{ opacity: 1; }}
@@ -845,7 +841,8 @@ class PatchNotesManager:
       <div class="badge-row">
         <span class="badge badge-live">Servidor OCI Producción</span>
         <span class="badge badge-version">Update v{version}</span>
-        <span class="badge badge-timer" id="countdown">⏳ Expira en {rem_hours}h {rem_minutes}m</span>
+        <span class="badge badge-permanent">📜 Registro Oficial Permanente</span>
+        <a href="/patch-notes" class="badge badge-history-link" style="text-decoration:none;">📚 Ver Historial Completo</a>
       </div>
       <h1>{title}</h1>
       <p class="subtitle">Registro oficial de cambios y mejoras del bot</p>
@@ -854,32 +851,9 @@ class PatchNotesManager:
 {sections_html_block}
 
     <div class="footer">
-      VaPls Discord Bot &bull; Oracle Cloud Infrastructure (OCI) &bull; Este enlace temporal vence automáticamente en 24 horas.
+      VaPls Discord Bot &bull; Oracle Cloud Infrastructure (OCI) &bull; Registro oficial permanente de notas de parche.
     </div>
   </div>
-
-  <script>
-    (function() {{
-      var expiresAt = {expires_at};
-      function updateTimer() {{
-        var now = Math.floor(Date.now() / 1000);
-        var diff = expiresAt - now;
-        var el = document.getElementById("countdown");
-        if (!el) return;
-        if (diff <= 0) {{
-          el.innerText = "⏳ Enlace expirado";
-          el.style.color = "#f87171";
-          return;
-        }}
-        var h = Math.floor(diff / 3600);
-        var m = Math.floor((diff % 3600) / 60);
-        var s = diff % 60;
-        el.innerText = "⏳ Expira en " + h + "h " + (m < 10 ? "0" : "") + m + "m " + (s < 10 ? "0" : "") + s + "s";
-      }}
-      setInterval(updateTimer, 1000);
-      updateTimer();
-    }})();
-  </script>
 </body>
 </html>"""
 
@@ -915,18 +889,10 @@ class PatchNotesManager:
                     badges.append('<span class="badge badge-latest">✨ Último Lanzamiento</span>')
                 badges.append(f'<span class="badge badge-version">v{ver}</span>')
                 badges.append(f'<span class="badge badge-date">📅 {date_str}</span>')
-
-                if expires_at > now:
-                    diff_sec = int(expires_at - now)
-                    rem_h = diff_sec // 3600
-                    rem_m = (diff_sec % 3600) // 60
-                    tok_str = html.escape(str(rel.get("token") or ""), quote=True)
-                    if tok_str:
-                        badges.append(f'<a href="/patch-notes/{tok_str}" class="badge badge-timer" style="text-decoration:none;" target="_blank">⏳ Enlace Discord Activo ({rem_h}h {rem_m}m) 🔗</a>')
-                    else:
-                        badges.append(f'<span class="badge badge-timer">⏳ Enlace Discord Activo ({rem_h}h {rem_m}m) &bull; Archivado permanente</span>')
-                else:
-                    badges.append('<span class="badge badge-archived">📁 Archivado Permanente</span>')
+                tok_str = html.escape(str(rel.get("token") or ""), quote=True)
+                if tok_str:
+                    badges.append(f'<a href="/patch-notes/{tok_str}" class="badge badge-token-link" target="_blank" onclick="event.stopPropagation()">🔗 Anuncio Dedicado</a>')
+                badges.append('<span class="badge badge-archived">📜 Registro Permanente</span>')
 
                 badges_html = "\n        ".join(badges)
 
@@ -1024,23 +990,37 @@ class PatchNotesManager:
                 # Search content blob for fast client-side filtering
                 search_blob = f"v{ver} {ver} {title} {date_str}".lower()
 
+                is_latest = (idx == 0)
+                collapsed_cls = "" if is_latest else " is-collapsed"
+                aria_exp = "true" if is_latest else "false"
+                hint_text = "Clic para contraer" if is_latest else "Clic para expandir"
+
                 rendered_releases.append(f"""    <!-- Release v{ver} -->
-    <article class="release-card" id="release-v{clean_ver}" data-version="{ver.lower()}" data-search="{search_blob}">
-      <div class="release-header">
-        <div class="badge-row">
-          {badges_html}
+    <article class="release-card{collapsed_cls}" id="release-v{clean_ver}" data-version="{ver.lower()}" data-search="{search_blob}">
+      <div class="release-header" onclick="toggleRelease('release-v{clean_ver}')" onkeydown="onHeaderKey(event, 'release-v{clean_ver}')" tabindex="0" role="button" aria-expanded="{aria_exp}" title="Haz clic para desplegar o colapsar este parche">
+        <div class="release-header-top">
+          <div class="badge-row">
+            {badges_html}
+          </div>
+          <button type="button" class="dropdown-chevron-btn" aria-label="Desplegar o colapsar parche" tabindex="-1">
+            <span class="dropdown-chevron">▼</span>
+          </button>
         </div>
-        <h2>{title}</h2>
-        <p class="release-subtitle">Publicado el {date_str} &bull; Registro oficial en infraestructura OCI</p>
+        <div class="release-title-row">
+          <h2>{title} <span class="dropdown-arrow">▾</span></h2>
+        </div>
+        <p class="release-subtitle">Publicado el {date_str} &bull; Registro oficial en infraestructura OCI <span class="dropdown-hint">({hint_text})</span></p>
       </div>
 
+      <div class="release-body" id="body-release-v{clean_ver}">
 {highlight_block}
 
 {sections_html_block}
 
-      <div class="release-footer">
-        <span>VaPls Discord Bot &bull; Versión v{ver}</span>
-        <a href="#release-v{clean_ver}" class="anchor-link"># Enlace directo a este parche</a>
+        <div class="release-footer">
+          <span>VaPls Discord Bot &bull; Versión v{ver}</span>
+          <a href="#release-v{clean_ver}" class="anchor-link" onclick="event.stopPropagation()"># Enlace directo a este parche</a>
+        </div>
       </div>
     </article>""")
 
@@ -1303,9 +1283,91 @@ class PatchNotesManager:
       background: linear-gradient(90deg, var(--accent-purple), var(--accent-pink), var(--accent-cyan));
     }}
     .release-header {{
-      margin-bottom: 24px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.2s ease, border-color 0.2s ease;
+      border-radius: 14px;
+      padding: 14px 16px;
+      margin: -14px -14px 20px -14px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    }}
+    .release-header:hover {{
+      background: rgba(139, 92, 246, 0.08);
+    }}
+    .release-header:focus-visible {{
+      outline: 2px solid var(--accent-purple);
+      outline-offset: 2px;
+    }}
+    .release-header-top {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }}
+    .dropdown-chevron-btn {{
+      background: transparent;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+    }}
+    .dropdown-chevron {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: var(--accent-cyan);
+      font-size: 0.85rem;
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease, border-color 0.2s ease;
+    }}
+    .release-header:hover .dropdown-chevron {{
+      background: rgba(139, 92, 246, 0.22);
+      border-color: var(--accent-purple);
+      color: #fff;
+    }}
+    .release-title-row {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 6px;
+    }}
+    .dropdown-arrow {{
+      display: inline-block;
+      font-size: 1.1rem;
+      color: var(--accent-purple);
+      transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      margin-left: 6px;
+      vertical-align: middle;
+    }}
+    .release-header:hover .dropdown-arrow {{
+      color: var(--accent-cyan);
+    }}
+    .dropdown-hint {{
+      display: inline-block;
+      margin-left: 8px;
+      font-size: 0.78rem;
+      color: #a78bfa;
+      font-weight: 500;
+    }}
+    .release-card.is-collapsed {{
       padding-bottom: 20px;
+    }}
+    .release-card.is-collapsed .release-header {{
+      margin-bottom: 0;
+      border-bottom: none;
+      padding-bottom: 14px;
+    }}
+    .release-card.is-collapsed .release-body {{
+      display: none;
+    }}
+    .release-card.is-collapsed .dropdown-chevron {{
+      transform: rotate(-90deg);
+    }}
+    .release-card.is-collapsed .dropdown-arrow {{
+      transform: rotate(-90deg);
     }}
     .badge-row {{
       display: flex;
@@ -1339,16 +1401,37 @@ class PatchNotesManager:
       border: 1px solid rgba(255, 255, 255, 0.1);
       color: #cbd5e1;
     }}
-    .badge-timer {{
-      background: rgba(245, 158, 11, 0.15);
-      border: 1px solid rgba(245, 158, 11, 0.4);
-      color: #fcd34d;
-      font-family: var(--font-mono);
+    .badge-token-link {{
+      background: rgba(6, 182, 212, 0.15);
+      border: 1px solid rgba(6, 182, 212, 0.4);
+      color: var(--accent-cyan);
+      transition: all 0.2s ease;
+    }}
+    .badge-token-link:hover {{
+      background: rgba(6, 182, 212, 0.3);
+      color: #fff;
     }}
     .badge-archived {{
       background: rgba(100, 116, 139, 0.15);
       border: 1px solid rgba(100, 116, 139, 0.3);
       color: #94a3b8;
+    }}
+    .tool-btn {{
+      background: rgba(139, 92, 246, 0.15);
+      border: 1px solid rgba(139, 92, 246, 0.35);
+      color: #c4b5fd;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: var(--font-body);
+    }}
+    .tool-btn:hover {{
+      background: rgba(139, 92, 246, 0.28);
+      border-color: var(--accent-purple);
+      color: #fff;
     }}
     .release-header h2 {{
       font-size: 1.65rem;
@@ -1557,6 +1640,7 @@ class PatchNotesManager:
           <button type="button" class="filter-pill" data-category="indio" id="pill-indio">🧠 El Indio</button>
           <button type="button" class="filter-pill" data-category="stream" id="pill-stream">📺 Go Live &amp; Stremio</button>
           <button type="button" class="filter-pill" data-category="musica" id="pill-music">🎵 Música</button>
+          <button type="button" class="tool-btn" id="btn-toggle-all" onclick="toggleAllReleases()">📂 Desplegar / Colapsar Todos</button>
         </div>
       </div>
     </section>
@@ -1585,12 +1669,80 @@ class PatchNotesManager:
     </p>
   </footer>
 
-  <!-- Search & Filter Script -->
+  <!-- Search & Filter Script & Accordion Dropdown -->
   <script>
     (function() {{
       var searchInput = document.getElementById("patch-search");
       var cards = document.querySelectorAll(".release-card");
       var pills = document.querySelectorAll(".filter-pill");
+
+      window.toggleRelease = function(cardId) {{
+        var card = document.getElementById(cardId);
+        if (!card) return;
+        var isCollapsed = card.classList.toggle("is-collapsed");
+        var header = card.querySelector(".release-header");
+        if (header) {{
+          header.setAttribute("aria-expanded", isCollapsed ? "false" : "true");
+          var hint = header.querySelector(".dropdown-hint");
+          if (hint) {{
+            hint.textContent = isCollapsed ? "(Clic para expandir)" : "(Clic para contraer)";
+          }}
+        }}
+      }};
+
+      window.onHeaderKey = function(event, cardId) {{
+        if (event.key === "Enter" || event.key === " ") {{
+          event.preventDefault();
+          window.toggleRelease(cardId);
+        }}
+      }};
+
+      window.toggleAllReleases = function() {{
+        var cardsList = document.querySelectorAll(".release-card");
+        if (!cardsList.length) return;
+        var anyCollapsed = false;
+        cardsList.forEach(function(c) {{
+          if (c.classList.contains("is-collapsed")) anyCollapsed = true;
+        }});
+        cardsList.forEach(function(card) {{
+          if (anyCollapsed) {{
+            card.classList.remove("is-collapsed");
+            var h = card.querySelector(".release-header");
+            if (h) {{
+              h.setAttribute("aria-expanded", "true");
+              var hint = h.querySelector(".dropdown-hint");
+              if (hint) hint.textContent = "(Clic para contraer)";
+            }}
+          }} else {{
+            card.classList.add("is-collapsed");
+            var h = card.querySelector(".release-header");
+            if (h) {{
+              h.setAttribute("aria-expanded", "false");
+              var hint = h.querySelector(".dropdown-hint");
+              if (hint) hint.textContent = "(Clic para expandir)";
+            }}
+          }}
+        }});
+        var btn = document.getElementById("btn-toggle-all");
+        if (btn) {{
+          btn.textContent = anyCollapsed ? "📁 Colapsar Todos" : "📂 Desplegar Todos";
+        }}
+      }};
+
+      // Auto-expand card if URL has direct anchor (#release-v...)
+      if (window.location.hash) {{
+        var target = document.querySelector(window.location.hash);
+        if (target && target.classList.contains("is-collapsed")) {{
+          target.classList.remove("is-collapsed");
+          var h = target.querySelector(".release-header");
+          if (h) {{
+            h.setAttribute("aria-expanded", "true");
+            var hint = h.querySelector(".dropdown-hint");
+            if (hint) hint.textContent = "(Clic para contraer)";
+          }}
+          target.scrollIntoView({{ behavior: "smooth" }});
+        }}
+      }}
 
       function filterPatches() {{
         var query = searchInput ? searchInput.value.toLowerCase().trim() : "";
@@ -1614,6 +1766,15 @@ class PatchNotesManager:
 
           if (matchesQuery && matchesCategory) {{
             card.style.display = "";
+            if (query) {{
+              card.classList.remove("is-collapsed");
+              var h = card.querySelector(".release-header");
+              if (h) {{
+                h.setAttribute("aria-expanded", "true");
+                var hint = h.querySelector(".dropdown-hint");
+                if (hint) hint.textContent = "(Clic para contraer)";
+              }}
+            }}
           }} else {{
             card.style.display = "none";
           }}

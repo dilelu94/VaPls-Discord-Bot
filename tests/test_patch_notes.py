@@ -29,16 +29,16 @@ def test_token_creation_and_lookup(tmp_patch_notes_manager):
     assert data is not None
     assert data["version"] == "2.6"
     assert data["title"] == "Test Notas"
-    assert data["expires_at"] > time.time()
+    assert data.get("expires_at") is None or data["expires_at"] > time.time()
 
 
-def test_token_expiration(tmp_patch_notes_manager):
-    """An expired token returns 'expired' status and can be checked accurately."""
+def test_token_never_expires(tmp_patch_notes_manager):
+    """Patch notes tokens are permanent and never expire, returning 'valid' status even with past timestamp."""
     mgr = tmp_patch_notes_manager
-    token = mgr.create_token(version="2.6", ttl_seconds=-10, title="Expired Notas")
+    token = mgr.create_token(version="2.6", ttl_seconds=-10, title="Permanent Notas")
 
     status, data = mgr.get_token_status(token)
-    assert status == "expired"
+    assert status == "valid"
     assert data is not None
 
 
@@ -275,11 +275,11 @@ async def test_api_patch_notes_endpoint_e2e(tmp_patch_notes_manager, monkeypatch
         assert "Notas de Parche" in text
         assert resp_valid.headers.get("X-Frame-Options") == "DENY"
 
-        # 2. Expired token returns 410 Gone
+        # 2. Token created with past timestamp remains valid permanently (returns 200)
         resp_exp = await client.get(f"/patch-notes/{expired_tok}")
-        assert resp_exp.status == 410
+        assert resp_exp.status == 200
         exp_text = await resp_exp.text()
-        assert "Enlace Expirado" in exp_text
+        assert "Notas de Parche" in exp_text
 
         # 3. Invalid token returns 404 Not Found
         resp_404 = await client.get("/patch-notes/nonexistent_token_1234567890")
@@ -335,6 +335,35 @@ def test_token_without_sections_seeds_into_history_with_default_sections(tmp_pat
     html_out = mgr.render_history_html()
     assert "Notas de Parche v2.6" in html_out
     assert "XN_zExXtxu8UZWaB7pbZD1ThvmUXLNoo5lnusFX8o0E" in html_out
-    assert "Enlace Discord Activo" in html_out
+    assert "Anuncio Dedicado" in html_out or "Registro Permanente" in html_out
+
+
+def test_history_dropdown_accordion_structure(tmp_patch_notes_manager):
+    """Historical archive cards have dropdown headers, chevrons, collapsible bodies, and toggle handlers."""
+    mgr = tmp_patch_notes_manager
+    mgr.save_to_history({
+        "version": "2.7",
+        "title": "Notas v2.7",
+        "sections": [{"icon": "✨", "title": "Sec", "items": [{"tag": "Buff", "header": "H", "desc": "D"}]}],
+    })
+    mgr.save_to_history({
+        "version": "2.6",
+        "title": "Notas v2.6",
+        "sections": [{"icon": "🛠️", "title": "Sec", "items": [{"tag": "Fix", "header": "H", "desc": "D"}]}],
+    })
+
+    html = mgr.render_history_html()
+    # Header dropdown attributes & markup
+    assert "dropdown-chevron" in html
+    assert "dropdown-arrow" in html
+    assert "release-body" in html
+    assert "toggleRelease" in html
+    assert "btn-toggle-all" in html
+    assert "toggleAllReleases" in html
+    assert "aria-expanded" in html
+
+    # The latest release (v2.7) is open by default, older release (v2.6) starts collapsed
+    assert 'class="release-card"' in html
+    assert 'class="release-card is-collapsed"' in html
 
 
