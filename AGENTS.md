@@ -157,6 +157,10 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 
 El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 `dave.decrypt()` después del AEAD, permitiendo decodificar audio en canales E2EE.
+En `davey_compat.py` (y `golive/davey_compat.py`), las instancias de `dave.Decryptor`
+se gestionan de forma aislada e independiente por cada usuario y flujo de video (`_audio_decryptors` / `_video_decryptors`),
+actualizando sus key ratchets ante cada transición de época MLS (`process_commit` / `process_welcome`). Esto previene
+la contaminación de ventanas de nonces y fallos de descifrado (`decryption failed: 1`) entre participantes.
 Además, en `davey_compat.py` el cifrador saliente de Opus (`encrypt_opus`) resuelve
 dinámicamente el `ssrc` real de la conexión de voz (`vc.ssrc`) asignándolo al códec Opus
 de `libdave`, evitando que se descarten tramas de audio salientes (TTS) por discrepancia de SSRC.

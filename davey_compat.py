@@ -106,6 +106,11 @@ class DaveSession:
         self._decryptor.transition_to_passthrough_mode(True)
         self._active_decryptor_user_id: str | None = None
 
+        self._audio_decryptors: dict[str, dave.Decryptor] = {}
+        self._audio_decryptor_epochs: dict[str, int] = {}
+        self._video_decryptors: dict[str, dave.Decryptor] = {}
+        self._video_decryptor_epochs: dict[str, int] = {}
+
         self._ready = False
         self._epoch: int | None = None
         self.status = SessionStatus.inactive
@@ -125,6 +130,64 @@ class DaveSession:
             str(self._user_id),  # libdave expects user_id as str
         )
         self.status = SessionStatus.pending
+
+    def _get_or_create_audio_decryptor(self, target_uid_str: str) -> dave.Decryptor:
+        current_epoch = self._epoch if self._epoch is not None else -1
+        dec = self._audio_decryptors.get(target_uid_str)
+        if dec is None:
+            dec = dave.Decryptor()
+            ratchet = self._session.get_key_ratchet(target_uid_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    self._audio_decryptor_epochs[target_uid_str] = current_epoch
+                except Exception as exc:
+                    log.warning("[DAVE] transition_to_key_ratchet error for uid=%s: %s", target_uid_str, exc)
+                    self._audio_decryptor_epochs[target_uid_str] = -1
+            else:
+                dec.transition_to_passthrough_mode(True)
+                self._audio_decryptor_epochs[target_uid_str] = -1
+            self._audio_decryptors[target_uid_str] = dec
+        elif self._audio_decryptor_epochs.get(target_uid_str) != current_epoch:
+            ratchet = self._session.get_key_ratchet(target_uid_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    self._audio_decryptor_epochs[target_uid_str] = current_epoch
+                except Exception as exc:
+                    log.warning("[DAVE] ratchet epoch transition error for uid=%s: %s", target_uid_str, exc)
+        return dec
+
+    def _get_or_create_video_decryptor(self, key_str: str) -> dave.Decryptor:
+        current_epoch = self._epoch if self._epoch is not None else -1
+        dec = self._video_decryptors.get(key_str)
+        if dec is None:
+            dec = dave.Decryptor()
+            ratchet = self._session.get_key_ratchet(key_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    self._video_decryptor_epochs[key_str] = current_epoch
+                except Exception as exc:
+                    log.warning("[DAVE-VIDEO] transition_to_key_ratchet error for key=%s: %s", key_str, exc)
+                    self._video_decryptor_epochs[key_str] = -1
+            else:
+                dec.transition_to_passthrough_mode(True)
+                self._video_decryptor_epochs[key_str] = -1
+            self._video_decryptors[key_str] = dec
+        elif self._video_decryptor_epochs.get(key_str) != current_epoch:
+            ratchet = self._session.get_key_ratchet(key_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    self._video_decryptor_epochs[key_str] = current_epoch
+                except Exception as exc:
+                    log.warning("[DAVE-VIDEO] ratchet epoch transition error for key=%s: %s", key_str, exc)
+        return dec
 
     def _get_recognized_users(self) -> set:
         """
@@ -161,13 +224,37 @@ class DaveSession:
             self._encryptor.set_key_ratchet(ratchet_enc)
             self._encryptor.set_passthrough_mode(False)
 
+        current_epoch = self._epoch if self._epoch is not None else -1
+
+        # Refresh all active audio decryptors with their new epoch ratchets
+        for uid_str, dec in list(self._audio_decryptors.items()):
+            ratchet = self._session.get_key_ratchet(uid_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    self._audio_decryptor_epochs[uid_str] = current_epoch
+                except Exception as exc:
+                    log.warning("[DAVE] decryptor ratchet refresh error for %s: %s", uid_str, exc)
+
+        # Refresh all active video decryptors
+        for key_str, dec in list(self._video_decryptors.items()):
+            ratchet = self._session.get_key_ratchet(key_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    self._video_decryptor_epochs[key_str] = current_epoch
+                except Exception as exc:
+                    log.warning("[DAVE-VIDEO] decryptor ratchet refresh error for %s: %s", key_str, exc)
+
         ratchet_dec = self._session.get_key_ratchet(str(self._user_id))
         if ratchet_dec is not None:
             try:
                 self._decryptor.transition_to_key_ratchet(ratchet_dec)
                 self._decryptor.transition_to_passthrough_mode(False)
             except Exception as exc:
-                log.warning("[DAVE] decryptor ratchet transition warning: %s", exc)
+                log.warning("[DAVE] fallback decryptor ratchet transition warning: %s", exc)
 
         if ratchet_enc is not None or ratchet_dec is not None:
             if not self._ready:
@@ -195,6 +282,11 @@ class DaveSession:
         self._encryptor.set_key_ratchet(None)
         self._encryptor.set_passthrough_mode(True)
         self._decryptor.transition_to_passthrough_mode(True)
+        self._audio_decryptors.clear()
+        self._audio_decryptor_epochs.clear()
+        self._video_decryptors.clear()
+        self._video_decryptor_epochs.clear()
+        self._active_decryptor_user_id = None
         self._assigned_audio_ssrc = self._SSRC
         self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
         self._do_init()
@@ -207,6 +299,11 @@ class DaveSession:
         self._encryptor.set_key_ratchet(None)
         self._encryptor.set_passthrough_mode(True)
         self._decryptor.transition_to_passthrough_mode(True)
+        self._audio_decryptors.clear()
+        self._audio_decryptor_epochs.clear()
+        self._video_decryptors.clear()
+        self._video_decryptor_epochs.clear()
+        self._active_decryptor_user_id = None
         self._assigned_audio_ssrc = self._SSRC
         self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
 
@@ -220,6 +317,16 @@ class DaveSession:
     def set_passthrough_mode(self, passthrough: bool, transition_expiry=None) -> None:
         self._encryptor.set_passthrough_mode(passthrough)
         self._decryptor.transition_to_passthrough_mode(passthrough)
+        for dec in self._audio_decryptors.values():
+            try:
+                dec.transition_to_passthrough_mode(passthrough)
+            except Exception:
+                pass
+        for dec in self._video_decryptors.values():
+            try:
+                dec.transition_to_passthrough_mode(passthrough)
+            except Exception:
+                pass
 
     def process_proposals(self, optype, proposals: bytes):
         """
@@ -317,26 +424,43 @@ class DaveSession:
     def decrypt(self, user_id: int, media_type, packet: bytes) -> bytes:
         """DAVE-decrypt an incoming media packet for a specific user ID."""
         target_uid_str = str(user_id) if user_id is not None else str(self._user_id)
-        if target_uid_str != self._active_decryptor_user_id:
-            ratchet = self._session.get_key_ratchet(target_uid_str)
-            if ratchet is not None:
-                try:
-                    self._decryptor.transition_to_key_ratchet(ratchet)
-                    self._decryptor.transition_to_passthrough_mode(False)
-                    self._active_decryptor_user_id = target_uid_str
-                except Exception:
-                    pass
 
-        if media_type == 1 or media_type == getattr(dave, "MediaType", None).video or str(media_type).lower() == "video":
+        is_video = (
+            media_type == 1
+            or media_type == getattr(dave, "MediaType", None).video
+            or str(media_type).lower() == "video"
+        )
+
+        if is_video:
+            dec = self._get_or_create_video_decryptor(target_uid_str)
             m_type = dave.MediaType.video
         else:
+            dec = self._get_or_create_audio_decryptor(target_uid_str)
             m_type = dave.MediaType.audio
+
         try:
-            res = self._decryptor.decrypt(m_type, packet)
+            res = dec.decrypt(m_type, packet)
             if res is not None:
                 return res
         except Exception:
             pass
+
+        # If decryption failed, check if this user's ratchet can be refreshed from the session
+        current_epoch = self._epoch if self._epoch is not None else -1
+        epochs_map = self._video_decryptor_epochs if is_video else self._audio_decryptor_epochs
+        if epochs_map.get(target_uid_str) != current_epoch:
+            ratchet = self._session.get_key_ratchet(target_uid_str)
+            if ratchet is not None:
+                try:
+                    dec.transition_to_key_ratchet(ratchet)
+                    dec.transition_to_passthrough_mode(False)
+                    epochs_map[target_uid_str] = current_epoch
+                    res = dec.decrypt(m_type, packet)
+                    if res is not None:
+                        return res
+                except Exception:
+                    pass
+
         return packet
 
     def decrypt_h264(self, ssrc: int, data: bytes, user_id: int | None = None) -> bytes:
@@ -344,37 +468,12 @@ class DaveSession:
         target_uid_str = str(user_id) if user_id else (str(ssrc) if ssrc else None)
         active_key = target_uid_str or str(self._user_id)
 
+        dec = self._get_or_create_video_decryptor(active_key)
         try:
-            self._decryptor.transition_to_passthrough_mode(False)
-        except Exception:
-            pass
-
-        if active_key != self._active_decryptor_user_id:
-            ratchet = None
-            for lookup in (target_uid_str, str(ssrc) if ssrc else None, str(self._user_id)):
-                if not lookup:
-                    continue
-                try:
-                    ratchet = self._session.get_key_ratchet(lookup)
-                    if ratchet is not None:
-                        break
-                except Exception:
-                    pass
-
-            if ratchet is not None:
-                try:
-                    self._decryptor.transition_to_key_ratchet(ratchet)
-                    self._decryptor.transition_to_passthrough_mode(False)
-                    self._active_decryptor_user_id = active_key
-                    log.info("[DAVE-VIDEO] Transitioned decryptor key ratchet to %s", active_key)
-                except Exception as ex:
-                    log.debug("[DAVE-VIDEO] ratchet transition note: %s", ex)
-
-        try:
-            res = self._decryptor.decrypt(dave.MediaType.video, data)
+            res = dec.decrypt(dave.MediaType.video, data)
             if res is not None:
                 return res
-            st = self._decryptor.get_stats(dave.MediaType.video)
+            st = dec.get_stats(dave.MediaType.video)
             log.warning(
                 "[DAVE-VIDEO] decrypt returned None (len=%d, attempts=%d, success=%d, fail=%d, missing_key=%d, invalid_nonce=%d, pass=%d)",
                 len(data),

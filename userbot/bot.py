@@ -273,12 +273,14 @@ def _install_dave_patch():
                 try:
                     decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
                     if decrypted:
-                        payload = decrypted
                         if decrypted != raw:
+                            payload = decrypted
                             _dave_stats["dave_ok"] += 1
                             decrypted_ok = True
                         else:
                             _dave_stats["dave_skip"] += 1
+                            if has_dave_channel and len(raw) >= 4 and raw.endswith(b"\xfa\xfa"):
+                                payload = _OPUS_SILENCE
                 except Exception as e:
                     _dave_stats["dave_fail"] += 1
                     if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
