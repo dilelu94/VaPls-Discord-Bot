@@ -163,70 +163,6 @@ _last_voice_ts: dict[int, float] = {}
 _OPUS_SILENCE = b"\xf8\xff\xfe"
 
 
-def _process_dave_audio_payload(
-    raw: bytes,
-    packet: Any,
-    vc: Any,
-    dave: Any,
-    uid: Any,
-    ssrc_map: dict | None = None,
-) -> bytes:
-    """
-    Apply DAVE E2EE decryption to an audio RTP payload and enforce the
-    Zero-Ciphertext Leak Barrier so raw encrypted frames never reach libopus.
-    """
-    global _dave_stats
-    _dave_stats["total"] += 1
-    payload = raw
-    decrypted_ok = False
-    dave_ready = getattr(dave, "ready", False) if dave is not None else False
-
-    has_dave_channel = (
-        (dave is not None) or
-        (vc is not None and (
-            getattr(getattr(vc, "_connection", None), "dave_protocol_version", 0) > 0
-            or getattr(vc, "dave_protocol_version", 0) > 0
-        ))
-    )
-
-    if davey is not None and dave is not None and dave_ready and uid:
-        try:
-            decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
-            if isinstance(decrypted, (bytes, bytearray)) and decrypted != raw and not (len(decrypted) >= 2 and decrypted.endswith(b"\xfa\xfa")):
-                payload = decrypted
-                _dave_stats["dave_ok"] += 1
-                decrypted_ok = True
-            elif decrypted == _OPUS_SILENCE:
-                payload = _OPUS_SILENCE
-                _dave_stats["dave_skip"] += 1
-            else:
-                _dave_stats["dave_skip"] += 1
-        except Exception as e:
-            _dave_stats["dave_fail"] += 1
-            if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
-                log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
-    else:
-        _dave_stats["dave_skip"] += 1
-
-    # Zero-Ciphertext Leak Barrier:
-    # If the audio payload was not successfully decrypted and has the DAVE ciphertext trailer (0xFAFA),
-    # or if this is a DAVE channel and raw ends with 0xFAFA, it MUST NEVER reach libopus.
-    # Passing ciphertext to libopus causes decoding of pseudo-random bytes into full-scale
-    # digital white noise / screeching ("puro ruido"). Replace unconditionally with Opus silence.
-    if not decrypted_ok:
-        if (len(payload) >= 2 and payload.endswith(b"\xfa\xfa")) or (has_dave_channel and len(raw) >= 2 and raw.endswith(b"\xfa\xfa")):
-            payload = _OPUS_SILENCE
-
-    if _dave_stats["total"] % 200 == 1:
-        log.info(
-            f"[DAVE-STATS] total={_dave_stats['total']} ok={_dave_stats['dave_ok']} "
-            f"skip={_dave_stats['dave_skip']} fail={_dave_stats['dave_fail']} | "
-            f"ssrc={getattr(packet, 'ssrc', None)} -> uid={uid} | "
-            f"dave_exists={dave is not None} ready={dave_ready} "
-            f"decrypted_ok={decrypted_ok} | ssrc_map_len={len(ssrc_map or {})}"
-        )
-
-    return payload
 
 
 def _install_dave_patch():
@@ -335,9 +271,43 @@ def _install_dave_patch():
                         dispatch_rtp_packet(hdr + payload)
                 except Exception:
                     pass
-                return payload
+            _dave_stats["total"] += 1
+            payload = raw
+            decrypted_ok = False
+            dave_ready = getattr(dave, "ready", False) if dave is not None else False
 
-            return _process_dave_audio_payload(raw, packet, vc, dave, uid, ssrc_map)
+            has_dave_channel = (
+                (dave is not None) or
+                (vc is not None and getattr(getattr(vc, "_connection", None), "dave_protocol_version", 0) > 0)
+            )
+
+            if davey is not None and dave is not None and dave_ready and uid:
+                try:
+                    decrypted = dave.decrypt(uid, davey.MediaType.audio, raw)
+                    if decrypted:
+                        if decrypted != raw:
+                            payload = decrypted
+                            _dave_stats["dave_ok"] += 1
+                            decrypted_ok = True
+                        else:
+                            _dave_stats["dave_skip"] += 1
+                except Exception as e:
+                    _dave_stats["dave_fail"] += 1
+                    if _dave_stats["dave_fail"] <= 5 or _dave_stats["dave_fail"] % 100 == 0:
+                        log.warning(f"[DAVE] Decryption failed for ssrc={getattr(packet, 'ssrc', None)} uid={uid}: {e}")
+            else:
+                _dave_stats["dave_skip"] += 1
+
+            if _dave_stats["total"] % 200 == 1:
+                log.info(
+                    f"[DAVE-STATS] total={_dave_stats['total']} ok={_dave_stats['dave_ok']} "
+                    f"skip={_dave_stats['dave_skip']} fail={_dave_stats['dave_fail']} | "
+                    f"ssrc={getattr(packet, 'ssrc', None)} -> uid={uid} | "
+                    f"dave_exists={dave is not None} ready={dave_ready} "
+                    f"decrypted_ok={decrypted_ok} | ssrc_map_len={len(ssrc_map)}"
+                )
+
+            return payload
 
         wrapped._is_dave_wrapped = True
         setattr(PacketDecryptor, method_name, wrapped)

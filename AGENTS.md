@@ -165,16 +165,12 @@ Además, en `davey_compat.py` el cifrador saliente de Opus (`encrypt_opus`) resu
 dinámicamente el `ssrc` real de la conexión de voz (`vc.ssrc`) asignándolo al códec Opus
 de `libdave`, evitando que se descarten tramas de audio salientes (TTS) por discrepancia de SSRC.
 
-**Barrera Zero-Ciphertext Leak ("Puro Ruido"):** En canales DAVE, Discord añade un trailer de 2 bytes (`0xFAFA`) al final de cada frame de audio cifrado. Si un paquete cifrado llega sin desencriptar (por SSRC aún no mapeado, ratchet pendiente o fallo en libdave), `libopus` decodifica los bytes pseudorandom como estática digital pura a rango máximo ($\pm 32767$), produciendo un chirrido ensordecedor ("puro ruido") y alucinaciones en el STT. Para impedirlo de raíz, `_process_dave_audio_payload` en `userbot/bot.py` y `davey_compat.py` implementan una barrera estricta: todo paquete con terminación `0xFAFA` no desencriptado se sustituye incondicionalmente por silencio Opus (`_OPUS_SILENCE = b"\xf8\xff\xfe"`), garantizando que el ciphertext jamás llegue al decodificador de audio.
-
-
 ### 2) Pipeline de transcripción y reconocimiento de voz (TranscriberSink / WakeWordSink)
 
 El sistema de escucha y transcripción en tiempo real del Indio se ejecuta en el userbot y combina pre-procesamiento acústico local, gating liviano con VOSK, transcripción multimodal en la nube (Gemini/Groq) y filtros fonéticos estrictos:
 
 1. **Ingesta y acondicionamiento acústico de audio**:
    - Recibe tramas PCM a 48 kHz (mono/estéreo) desde `discord-ext-voice-recv` en canales de voz Discord protegidos con cifrado DAVE E2EE.
-   - **Barrera Zero-Ciphertext Leak**: Todo paquete DAVE que conserve el trailer `0xFAFA` sin descifrar se reemplaza incondicionalmente por silencio Opus (`_OPUS_SILENCE = b"\xf8\xff\xfe"`) antes de llegar a Opus, impidiendo ráfagas de estática digital ("puro ruido") y alucinaciones en el reconocedor.
    - **Headroom preventivo**: Se atenúa la señal con `HEADROOM_FACTOR = 0.85` (~ -3 dB) para evitar saturación digital contra los límites de $\pm 32767$ antes de cualquier conversión.
    - **Resampling sinc anti-aliasing**: Convierte a mono y re-samplea a 16 kHz usando filtrado sinc (`soxr`, con fallback a `audioop.ratecv`), suprimiendo armónicos por encima del límite de Nyquist (8 kHz).
    - **Pre-buffer circular por orador** (`_push_prebuffer`, `WAKE_WORD_PREBUFFER_SECONDS = 1.5s`): Almacena de forma continua los últimos frames (voz + micro-pausas) de cada usuario. Esto asegura que no se pierda el arranque de la frase ni el contexto previo cuando el usuario dice la wake-word.
