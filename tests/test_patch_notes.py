@@ -308,3 +308,33 @@ async def test_api_patch_notes_endpoint_e2e(tmp_patch_notes_manager, monkeypatch
     finally:
         await client.close()
 
+
+def test_token_without_sections_seeds_into_history_with_default_sections(tmp_path):
+    """Tokens stored without explicit sections (e.g. legacy token v2.6) are automatically
+    seeded into history with structured sections and active link."""
+    import json
+    data_file = tmp_path / "tokens.json"
+    hist_file = tmp_path / "history.json"
+    data_file.write_text(json.dumps({
+        "XN_zExXtxu8UZWaB7pbZD1ThvmUXLNoo5lnusFX8o0E": {
+            "token": "XN_zExXtxu8UZWaB7pbZD1ThvmUXLNoo5lnusFX8o0E",
+            "version": "2.6",
+            "title": "Notas de Parche v2.6",
+            "created_at": 1791572630.0,
+            "expires_at": time.time() + 3600.0,
+        }
+    }), encoding="utf-8")
+
+    mgr = PatchNotesManager(data_path=str(data_file), history_path=str(hist_file))
+    history = mgr.get_history()
+    assert len(history) >= 1
+    v26 = next(h for h in history if h.get("version") == "2.6")
+    assert v26["token"] == "XN_zExXtxu8UZWaB7pbZD1ThvmUXLNoo5lnusFX8o0E"
+    assert len(v26["sections"]) >= 5
+
+    html_out = mgr.render_history_html()
+    assert "Notas de Parche v2.6" in html_out
+    assert "XN_zExXtxu8UZWaB7pbZD1ThvmUXLNoo5lnusFX8o0E" in html_out
+    assert "Enlace Discord Activo" in html_out
+
+

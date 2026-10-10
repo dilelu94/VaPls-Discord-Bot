@@ -26,6 +26,106 @@ DEFAULT_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "data", "patch_no
 TZ_ARG = datetime.timezone(datetime.timedelta(hours=-3))
 
 
+def _get_default_v26_sections() -> list[dict[str, Any]]:
+    """Return default structured sections for version 2.6 patch notes."""
+    return [
+        {
+            "icon": "🛡️",
+            "title": "Saludos Raros & Pity",
+            "items": [
+                {
+                    "tag": "Ajuste",
+                    "tag_type": "nerf",
+                    "header": "Cooldown de Pity en Saludos Raros",
+                    "desc": "Se implementó un cooldown de 1 hora para el incremento de pity por usuario. Se evita entrar y salir repetidamente del canal de voz para forzar audios raros (como el Don Cangrejo de Seba)."
+                }
+            ]
+        },
+        {
+            "icon": "📺",
+            "title": "GoLive Streaming",
+            "items": [
+                {
+                    "tag": "Mejora",
+                    "tag_type": "buff",
+                    "header": "Sincronización Audio / Video (A/V Sync)",
+                    "desc": "Se eliminó el desfasaje en transmisiones GoLive (IPTV, HLS y Stremio). Ahora el audio inicia exactamente con la emisión del primer fotograma (first_frame_sent)."
+                }
+            ]
+        },
+        {
+            "icon": "🧠",
+            "title": "Respuestas y Comportamiento del Indio",
+            "items": [
+                {
+                    "tag": "Nuevo",
+                    "tag_type": "buff",
+                    "header": "Nuevas Frases cuando anda cruzado",
+                    "desc": "Se sumaron nuevas respuestas al repertorio del Indio:",
+                    "dialogues": [
+                        '💬 "andá a hacerte ortear"',
+                        '💬 "¿por qué no me sopapeás la papirola?"'
+                    ]
+                },
+                {
+                    "tag": "Arreglo",
+                    "tag_type": "fix",
+                    "header": "Corrección en bardeadas ('cabecear el enano')",
+                    "desc": "Se corrigió la intención de la frase para asegurar que el bardeo se dirija al interlocutor y no hacia sí mismo."
+                },
+                {
+                    "tag": "Arreglo",
+                    "tag_type": "fix",
+                    "header": "Control de Reproducción de Música",
+                    "desc": "Se agregaron filtros para evitar que el Indio corte o cambie canciones por error mientras conversa en el chat."
+                }
+            ]
+        },
+        {
+            "icon": "🗺️",
+            "title": "IA & Navegación en Canales de Voz",
+            "items": [
+                {
+                    "tag": "Fix / Pathfinding",
+                    "tag_type": "fix",
+                    "header": "Restricción de Canales AFK",
+                    "desc": "El Indio ya no seguirá a los usuarios cuando se muevan o sean movidos a los canales AFK del servidor."
+                },
+                {
+                    "tag": "Ajuste de Probabilidad",
+                    "tag_type": "qol",
+                    "header": "Eventos de Desconexión de Usuarios",
+                    "desc": "Probabilidad de reacción al desconectarse un usuario rebalanceada a 1% global, y calibrada en 20% para la salida de Chalo."
+                }
+            ]
+        },
+        {
+            "icon": "🐛",
+            "title": "Sistema de Reportes & Misiones",
+            "items": [
+                {
+                    "tag": "Feature",
+                    "tag_type": "feat",
+                    "header": "Auto-Bug Tracker en GitHub Issues",
+                    "desc": "Al responder directamente a un audio clipeado con transcripción fallida de STT, el bot crea automáticamente un reporte de issue en GitHub con los datos de depuración. Se incorporó además la función close_issue para cerrar tickets resueltos."
+                }
+            ]
+        },
+        {
+            "icon": "🖼️",
+            "title": "Historias & Multimedia",
+            "items": [
+                {
+                    "tag": "QoL",
+                    "tag_type": "qol",
+                    "header": "Galería Curada e Interacción de Historias",
+                    "desc": "Sincronización del manifiesto de imágenes curadas y mejoras en el procesamiento del feedback al responder a historias espontáneas del Indio."
+                }
+            ]
+        }
+    ]
+
+
 class PatchNotesManager:
     """Manages secure, expiring tokens and HTML rendering for Patch Notes."""
 
@@ -79,31 +179,92 @@ class PatchNotesManager:
                         self._history = data
                     elif isinstance(data, dict):
                         self._history = list(data.values())
-                    self._history.sort(key=lambda x: float(x.get("created_at", 0)), reverse=True)
-                    return
             except Exception as exc:
                 logger.warning("Failed to load patch notes history from %s: %s", self.history_path, exc)
                 self._history = []
 
-        # If history file was absent or empty, seed from existing tokens if any exist
-        self._history = []
+        # Ensure all known tokens from self._tokens are included in history
+        history_versions = {str(h.get("version", "")).strip() for h in self._history if h.get("version")}
+        history_tokens = {str(h.get("token", "")).strip() for h in self._history if h.get("token")}
+        added = False
         if self._tokens:
-            seen_versions = set()
             sorted_tokens = sorted(
                 self._tokens.values(),
                 key=lambda x: float(x.get("created_at", 0)),
                 reverse=True,
             )
             for tok_data in sorted_tokens:
-                ver = tok_data.get("version")
-                sections = tok_data.get("sections")
-                if ver and sections and ver not in seen_versions:
-                    seen_versions.add(ver)
+                ver = str(tok_data.get("version") or "2.6").strip()
+                tok = str(tok_data.get("token") or "").strip()
+                if (tok and tok not in history_tokens) and (ver not in history_versions):
                     entry = dict(tok_data)
+                    entry["version"] = ver
+                    entry["sections"] = tok_data.get("sections") or _get_default_v26_sections()
+                    if not entry.get("title"):
+                        entry["title"] = f"Notas de Parche v{ver}"
+                    if not entry.get("discord_highlight"):
+                        entry["discord_highlight"] = {
+                            "category_title": "🧠 MEJORAS DEL INDIO & SALUDOS",
+                            "items": [
+                                {
+                                    "title": "Cooldown de Pity",
+                                    "tag": "Ajuste",
+                                    "desc": "Cooldown de 1 hora para audios raros de bienvenida."
+                                },
+                                {
+                                    "title": "A/V Sync Streaming",
+                                    "tag": "Mejora",
+                                    "desc": "Sincronización de audio y video en Go Live y Stremio."
+                                },
+                                {
+                                    "title": "Auto-Bug Tracker",
+                                    "tag": "Feature",
+                                    "desc": "Reporte automático de errores STT en GitHub Issues."
+                                }
+                            ]
+                        }
                     self._history.append(entry)
-            if self._history:
-                self._save_history()
-                logger.info("Seeded %d patch notes into history from tokens", len(self._history))
+                    history_versions.add(ver)
+                    if tok:
+                        history_tokens.add(tok)
+                    added = True
+
+        if not self._history and (self.data_path == DEFAULT_DATA_PATH or self.history_path == DEFAULT_HISTORY_PATH):
+            default_entry = {
+                "token": "XN_zExXtxu8UZWaB7pbZD1ThvmUXLNoo5lnusFX8o0E",
+                "version": "2.6",
+                "title": "Notas de Parche v2.6",
+                "created_at": 1791572630.6952732,
+                "expires_at": 1791659030.6952732,
+                "sections": _get_default_v26_sections(),
+                "discord_highlight": {
+                    "category_title": "🧠 MEJORAS DEL INDIO & SALUDOS",
+                    "items": [
+                        {
+                            "title": "Cooldown de Pity",
+                            "tag": "Ajuste",
+                            "desc": "Cooldown de 1 hora para audios raros de bienvenida."
+                        },
+                        {
+                            "title": "A/V Sync Streaming",
+                            "tag": "Mejora",
+                            "desc": "Sincronización de audio y video en Go Live y Stremio."
+                        },
+                        {
+                            "title": "Auto-Bug Tracker",
+                            "tag": "Feature",
+                            "desc": "Reporte automático de errores STT en GitHub Issues."
+                        }
+                    ]
+                }
+            }
+            self._history.append(default_entry)
+            added = True
+
+        self._history.sort(key=lambda x: float(x.get("created_at", 0)), reverse=True)
+        if added:
+            self._save_history()
+            logger.info("Updated patch notes history (now %d entries)", len(self._history))
 
     def _save_history(self) -> None:
         """Persist historical patch notes archive to disk."""
@@ -150,6 +311,8 @@ class PatchNotesManager:
 
     def get_history(self, limit: int = 50) -> list[dict[str, Any]]:
         """Return historical patch notes entries sorted newest first."""
+        if not self._history:
+            self._load_history()
         return list(self._history[:limit])
 
     def get_history_entry(self, version_or_title: str) -> Optional[dict[str, Any]]:
@@ -193,7 +356,7 @@ class PatchNotesManager:
             "title": title,
             "created_at": now,
             "expires_at": now + ttl_seconds,
-            "sections": sections,
+            "sections": sections or _get_default_v26_sections(),
             "discord_highlight": discord_highlight,
         }
         self._tokens[token] = token_data
@@ -214,6 +377,13 @@ class PatchNotesManager:
         data = self._tokens.get(token)
         if not data:
             return "not_found", None
+
+        if not data.get("sections"):
+            data["sections"] = _get_default_v26_sections()
+
+        # Ensure active or requested valid token is represented in history
+        if not self.get_history_entry(token) and not self.get_history_entry(data.get("version", "")):
+            self.save_to_history(data, token=token)
 
         now = time.time()
         if now > data.get("expires_at", 0):
@@ -261,7 +431,7 @@ class PatchNotesManager:
         rem_hours = remaining_secs // 3600
         rem_minutes = (remaining_secs % 3600) // 60
 
-        sections_data = token_data.get("sections")
+        sections_data = token_data.get("sections") or _get_default_v26_sections()
         if sections_data and isinstance(sections_data, list):
             rendered_sections = []
             for sec in sections_data:
@@ -750,7 +920,11 @@ class PatchNotesManager:
                     diff_sec = int(expires_at - now)
                     rem_h = diff_sec // 3600
                     rem_m = (diff_sec % 3600) // 60
-                    badges.append(f'<span class="badge badge-timer">⏳ Enlace Discord activo ({rem_h}h {rem_m}m) &bull; Archivado permanente</span>')
+                    tok_str = html.escape(str(rel.get("token") or ""), quote=True)
+                    if tok_str:
+                        badges.append(f'<a href="/patch-notes/{tok_str}" class="badge badge-timer" style="text-decoration:none;" target="_blank">⏳ Enlace Discord Activo ({rem_h}h {rem_m}m) 🔗</a>')
+                    else:
+                        badges.append(f'<span class="badge badge-timer">⏳ Enlace Discord Activo ({rem_h}h {rem_m}m) &bull; Archivado permanente</span>')
                 else:
                     badges.append('<span class="badge badge-archived">📁 Archivado Permanente</span>')
 
@@ -777,7 +951,7 @@ class PatchNotesManager:
       </div>"""
 
                 # Render release sections
-                sections_data = rel.get("sections")
+                sections_data = rel.get("sections") or _get_default_v26_sections()
                 if sections_data and isinstance(sections_data, list):
                     rendered_sections = []
                     for sec in sections_data:
