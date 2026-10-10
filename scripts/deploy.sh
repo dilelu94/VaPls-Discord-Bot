@@ -57,6 +57,11 @@ if [ "$OLD" != "$NEW" ]; then
     if git diff --name-only "$OLD" "$NEW" -- userbot/requirements.txt | grep -q .; then
         echo "==> userbot/requirements.txt changed — reinstalling userbot venv deps"
         userbot/venv/bin/pip install -r userbot/requirements.txt
+        # discord-ext-voice-recv installs discord.py as a dependency, which
+        # overwrites discord.py-self. Force-clean it every time deps change.
+        echo "==> Fixing discord namespace: removing discord.py, restoring discord.py-self"
+        userbot/venv/bin/pip uninstall -y discord.py 2>/dev/null || true
+        userbot/venv/bin/pip install --force-reinstall "discord.py-self[voice] @ git+https://github.com/dolfies/discord.py-self@v2.1.0"
         DEPS_REINSTALLED="${DEPS_REINSTALLED} userbot/requirements.txt"
     fi
 
