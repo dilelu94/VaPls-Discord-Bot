@@ -937,6 +937,17 @@ def makeApp(bot: discord.Bot) -> web.Application:
 </html>"""
         return web.Response(text=html, content_type="text/html")
 
+    async def patchNotesHistoryView(request: web.Request) -> web.Response:
+        """Serve public historical patch notes archive."""
+        ip = request.remote or "unknown"
+        if not patch_notes_manager.check_rate_limit(ip):
+            return web.Response(status=429, text="Too Many Requests")
+
+        history = patch_notes_manager.get_history()
+        html_body = patch_notes_manager.render_history_html(history)
+        resp = web.Response(text=html_body, content_type="text/html")
+        return patch_notes_manager.add_security_headers(resp)
+
     async def patchNotesView(request: web.Request) -> web.Response:
         """Serve secure, 24h expiring patch notes HTML page."""
         ip = request.remote or "unknown"
@@ -2254,7 +2265,12 @@ def makeApp(bot: discord.Bot) -> web.Application:
     app.router.add_get("/webhook", verifyWebhook)
     app.router.add_post("/webhook", handleWebhook)
     app.router.add_get("/privacy", privacyPage)
-    app.router.add_get("/delete-data", deleteDataPage)
+    app.router.add_get("/patch-notes", patchNotesHistoryView)
+    app.router.add_get("/patch-notes/", patchNotesHistoryView)
+    app.router.add_get("/notas-parche", patchNotesHistoryView)
+    app.router.add_get("/notas-parche/", patchNotesHistoryView)
+    app.router.add_get("/patch-notes/historial", patchNotesHistoryView)
+    app.router.add_get("/notas-parche/historial", patchNotesHistoryView)
     app.router.add_get("/patch-notes/{token}", patchNotesView)
     app.router.add_get("/notas-parche/{token}", patchNotesView)
 

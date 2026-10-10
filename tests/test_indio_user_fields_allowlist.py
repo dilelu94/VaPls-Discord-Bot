@@ -32,7 +32,13 @@ def test_greeting_never_leaks_to_indio_prompt():
             if isinstance(g, list):
                 for item in g:
                     if isinstance(item, dict) and "path" in item:
-                        greetings.append(item["path"])
+                        p = item["path"]
+                        if isinstance(p, (list, tuple)):
+                            greetings.extend(p)
+                        else:
+                            greetings.append(p)
+                    elif isinstance(item, (list, tuple)):
+                        greetings.extend(item)
                     elif isinstance(item, str):
                         greetings.append(item)
             else:

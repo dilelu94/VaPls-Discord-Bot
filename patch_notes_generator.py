@@ -313,12 +313,14 @@ async def generate_and_post_weekly_patch_notes(
     sections = patch_data.get("sections", [])
     highlight = patch_data.get("discord_highlight", {})
 
-    # Create 24h expiring token with dynamic sections
+    # Create 24h expiring token with dynamic sections and archive in history
     token = patch_notes_manager.create_token(
         version=version,
         ttl_seconds=86400,
         title=title,
         sections=sections,
+        discord_highlight=highlight,
+        save_history=True,
     )
     url = get_patch_notes_url(token)
     logger.info("[PATCH NOTES] Created token %s (ttl=24h). URL: %s", token[:8], url)

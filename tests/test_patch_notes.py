@@ -150,6 +150,101 @@ def test_get_patch_notes_url():
     assert "vapls.duckdns.org" in url
 
 
+def test_get_patch_notes_history_url():
+    """History URL generator outputs public URL for the patch notes archive."""
+    from patch_notes import get_patch_notes_history_url
+
+    url = get_patch_notes_history_url()
+    assert url.endswith("/patch-notes")
+    assert "vapls.duckdns.org" in url
+
+
+def test_history_archive_persistence(tmp_path):
+    """Patch notes history archives entries and persists them across manager reloads."""
+    data_file = str(tmp_path / "tokens.json")
+    hist_file = str(tmp_path / "history.json")
+    mgr = PatchNotesManager(data_path=data_file, history_path=hist_file)
+
+    # 1. Initially empty
+    assert len(mgr.get_history()) == 0
+
+    # 2. Save entry
+    entry = {
+        "version": "2.8",
+        "title": "Notas v2.8",
+        "sections": [
+            {
+                "icon": "✨",
+                "title": "Novedades",
+                "items": [{"tag": "Buff", "header": "Cambio A", "desc": "Detalle A"}],
+            }
+        ],
+    }
+    mgr.save_to_history(entry)
+    assert len(mgr.get_history()) == 1
+    assert mgr.get_history()[0]["version"] == "2.8"
+
+    # 3. Reload in new instance
+    mgr2 = PatchNotesManager(data_path=data_file, history_path=hist_file)
+    hist2 = mgr2.get_history()
+    assert len(hist2) == 1
+    assert hist2[0]["title"] == "Notas v2.8"
+
+    # 4. Lookup entry
+    found = mgr2.get_history_entry("2.8")
+    assert found is not None
+    assert found["title"] == "Notas v2.8"
+
+
+def test_render_history_html_escapes_xss(tmp_patch_notes_manager):
+    """Rendered history HTML neutralizes XSS payloads in version, title, desc, and dialogues."""
+    mgr = tmp_patch_notes_manager
+    entry = {
+        "version": "3.0<script>alert('ver')</script>",
+        "title": "Notas con XSS <script>alert('title')</script>",
+        "sections": [
+            {
+                "icon": "⚠️",
+                "title": "Sección Segura <img src=x onerror=alert(1)>",
+                "items": [
+                    {
+                        "tag": "Fix",
+                        "header": "Header Peligroso <svg onload=alert(2)>",
+                        "desc": "Descripción Peligrosa <script>alert(3)</script>",
+                        "dialogues": ["Diálogo peligroso <script>alert(4)</script>"],
+                    }
+                ],
+            }
+        ],
+    }
+    mgr.save_to_history(entry)
+    html_out = mgr.render_history_html()
+
+    # Raw XSS payload strings must not be present
+    assert "<script>alert('ver')</script>" not in html_out
+    assert "<script>alert('title')</script>" not in html_out
+    assert "<img src=x onerror=alert(1)>" not in html_out
+    assert "<svg onload=alert(2)>" not in html_out
+    assert "<script>alert(3)</script>" not in html_out
+    assert "<script>alert(4)</script>" not in html_out
+
+    # Escaped safe entities must be present
+    assert "&lt;script&gt;alert(&#x27;ver&#x27;)&lt;/script&gt;" in html_out or "&lt;script&gt;" in html_out
+    assert "Historial de Notas de Parche" in html_out
+
+
+def test_landing_page_includes_patch_notes_module():
+    """The landing page exposes a patch notes navbar button, filter pill, and module card."""
+    from landing_page import landing_page_manager
+
+    landing_html = landing_page_manager.render_landing_page_html()
+    assert "/patch-notes" in landing_html
+    assert "Notas de Parche" in landing_html
+    assert 'id="nav-patch-notes"' in landing_html
+    assert 'id="card-patch-notes"' in landing_html
+    assert 'id="pill-patches"' in landing_html
+
+
 @pytest.mark.asyncio
 async def test_api_patch_notes_endpoint_e2e(tmp_patch_notes_manager, monkeypatch):
     """End-to-end test against the API router."""
@@ -160,7 +255,7 @@ async def test_api_patch_notes_endpoint_e2e(tmp_patch_notes_manager, monkeypatch
     # Valid token
     valid_tok = tmp_patch_notes_manager.create_token(version="2.6", ttl_seconds=86400)
     # Expired token
-    expired_tok = tmp_patch_notes_manager.create_token(version="2.6", ttl_seconds=-10)
+    expired_tok = tmp_patch_notes_manager.create_token(version="2.6", ttl_seconds=-10, save_history=False)
 
     # Setup dummy bot for createApp
     class DummyBot:
@@ -193,5 +288,23 @@ async def test_api_patch_notes_endpoint_e2e(tmp_patch_notes_manager, monkeypatch
         # 4. Spanish alias /notas-parche/{token} works identically
         resp_alias = await client.get(f"/notas-parche/{valid_tok}")
         assert resp_alias.status == 200
+
+        # 5. Historical archive at /patch-notes returns 200 with security headers
+        resp_hist = await client.get("/patch-notes")
+        assert resp_hist.status == 200
+        hist_text = await resp_hist.text()
+        assert "Historial de Notas de Parche" in hist_text
+        assert resp_hist.headers.get("X-Frame-Options") == "DENY"
+        assert resp_hist.headers.get("X-Content-Type-Options") == "nosniff"
+        assert "Content-Security-Policy" in resp_hist.headers
+
+        # 6. Spanish alias /notas-parche returns 200
+        resp_hist_es = await client.get("/notas-parche")
+        assert resp_hist_es.status == 200
+
+        # 7. Explicit subpath /patch-notes/historial returns 200
+        resp_hist_sub = await client.get("/patch-notes/historial")
+        assert resp_hist_sub.status == 200
     finally:
         await client.close()
+

@@ -416,8 +416,18 @@ def calculate_effective_weights(
     for path, base_w in zip(paths, base_weights):
         base_prob = base_w / total_base
         if base_prob <= rare_threshold:
-            rare_paths.add(path)
-            misses = max(0, user_pity.get(path, 0))
+            if isinstance(path, (list, tuple)):
+                pity_key = "::".join(str(p) for p in path)
+                rare_paths.add(pity_key)
+                misses = max(
+                    [0]
+                    + [user_pity.get(pity_key, 0)]
+                    + [user_pity.get(str(p), 0) for p in path if p is not None]
+                )
+            else:
+                pity_key = path
+                rare_paths.add(pity_key)
+                misses = max(0, user_pity.get(path, 0))
             # Progressive weight: base_w * (1 + misses) * people_mult
             effective_weights.append(base_w * (1.0 + misses) * people_mult)
         else:
@@ -499,7 +509,19 @@ def resolve_greeting_path(
         valid_items = []
         for item in rel:
             p = item.get("path") if isinstance(item, dict) else item
-            if p is None or _locate_audio_file(p) is not None:
+            if isinstance(p, (list, tuple)):
+                valid_subs = [
+                    sub_p for sub_p in p
+                    if sub_p is None or _locate_audio_file(sub_p) is not None
+                ]
+                if valid_subs:
+                    if isinstance(item, dict):
+                        new_item = dict(item)
+                        new_item["path"] = valid_subs
+                        valid_items.append(new_item)
+                    else:
+                        valid_items.append(valid_subs)
+            elif p is None or _locate_audio_file(p) is not None:
                 valid_items.append(item)
         items_to_use = valid_items if valid_items else rel
 
@@ -509,24 +531,40 @@ def resolve_greeting_path(
         )
         if not paths:
             return None
-        chosen_path = random.choices(paths, weights=weights, k=1)[0]
+        chosen_entry = random.choices(paths, weights=weights, k=1)[0]
+        if isinstance(chosen_entry, (list, tuple)):
+            pity_key = "::".join(str(p) for p in chosen_entry)
+            chosen_sub_paths = list(chosen_entry)
+            chosen_path = random.choice(chosen_sub_paths)
+        else:
+            pity_key = chosen_entry
+            chosen_sub_paths = [chosen_entry]
+            chosen_path = chosen_entry
+
         if record_pity and rare_paths:
             now = time.time()
             cooldown_sec = float(getattr(config, "GREETING_PITY_COOLDOWN_SECONDS", 3600.0))
             user_counts = _pity_state.setdefault(user_id, {})
             last_time = _last_pity_time.get(user_id, 0.0)
 
+            is_hit = pity_key in rare_paths or chosen_path in rare_paths
             if now - last_time >= cooldown_sec:
-                if chosen_path in rare_paths:
-                    user_counts[chosen_path] = 0
+                if is_hit:
+                    user_counts[pity_key] = 0
+                    for sp in chosen_sub_paths:
+                        if isinstance(sp, str):
+                            user_counts[sp] = 0
                 for r_path in rare_paths:
-                    if r_path != chosen_path:
+                    if r_path != pity_key and r_path != chosen_path:
                         user_counts[r_path] = user_counts.get(r_path, 0) + 1
                 _last_pity_time[user_id] = now
                 save_pity_state()
             else:
-                if chosen_path in rare_paths:
-                    user_counts[chosen_path] = 0
+                if is_hit:
+                    user_counts[pity_key] = 0
+                    for sp in chosen_sub_paths:
+                        if isinstance(sp, str):
+                            user_counts[sp] = 0
                     save_pity_state()
                 else:
                     logger.info(

@@ -148,18 +148,14 @@
       "greeting": [
         {
           "path": "Audios/aughhhhhhhhhh.mp3",
-          "weight": 98
+          "weight": 99
         },
         {
-          "path": "Secretos/albin backshoots 2.m4a",
-          "weight": 1
-        },
-        {
-          "path": "Secretos/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
-          "weight": 1
-        },
-        {
-          "path": "Secretos/who-is-getting-the-best-head-chipmunks.mp3",
+          "path": [
+            "Secretos/albin backshoots 2.m4a",
+            "Secretos/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
+            "Secretos/who-is-getting-the-best-head-chipmunks.mp3"
+          ],
           "weight": 1
         }
       ],

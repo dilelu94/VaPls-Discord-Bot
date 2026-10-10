@@ -858,10 +858,110 @@ def test_fide_greeting_config_includes_chipmunks_secret(fake_users, _audio_dir):
     users.reload_users_if_changed(force=True)
     fide_cfg = users.USERS.get(471420397049479180, {})
     greetings = fide_cfg.get("greeting", [])
-    paths = [g["path"] for g in greetings if isinstance(g, dict)]
-    assert "Secretos/who-is-getting-the-best-head-chipmunks.mp3" in paths
-    chipmunks_item = next(g for g in greetings if g.get("path") == "Secretos/who-is-getting-the-best-head-chipmunks.mp3")
-    assert chipmunks_item["weight"] == 1
+    found_chipmunks = False
+    for g in greetings:
+        if isinstance(g, dict):
+            p = g.get("path")
+            if p == "Secretos/who-is-getting-the-best-head-chipmunks.mp3" or (
+                isinstance(p, (list, tuple)) and "Secretos/who-is-getting-the-best-head-chipmunks.mp3" in p
+            ):
+                found_chipmunks = True
+                assert g["weight"] == 1
+                break
+    assert found_chipmunks
+
+
+def test_subpool_paths_share_weight_and_pity(fake_users, monkeypatch):
+    """When a greeting item specifies a list of paths with weight 1, they share 1% weight and pity."""
+    fake_users({
+        90: {
+            "greeting": [
+                {"path": "common.mp3", "weight": 99},
+                {
+                    "path": [
+                        "Secretos/rare1.mp3",
+                        "Secretos/rare2.mp3",
+                        "Secretos/rare3.mp3",
+                    ],
+                    "weight": 1,
+                },
+            ]
+        }
+    })
+
+    t0 = time.time()
+    monkeypatch.setattr(greeting.time, "time", lambda: t0)
+
+    # 1. calculate_effective_weights sees total_base = 100, common=99, sub-pool=1
+    items = [
+        {"path": "common.mp3", "weight": 99},
+        {"path": ["Secretos/rare1.mp3", "Secretos/rare2.mp3", "Secretos/rare3.mp3"], "weight": 1},
+    ]
+    paths, weights, rare = greeting.calculate_effective_weights(items, user_id=90, pity_state={})
+    assert len(weights) == 2
+    assert weights[0] == 99.0
+    assert weights[1] == 1.0
+    assert len(rare) == 1
+    pity_key = list(rare)[0]
+    assert "Secretos/rare1.mp3" in pity_key
+
+    # 2. Miss on first roll -> pity increments for the shared sub-pool
+    monkeypatch.setattr(greeting.random, "choices", lambda p, weights, k=1: ["common.mp3"])
+    greeting.resolve_greeting_path(90)
+    assert greeting._pity_state[90][pity_key] == 1
+
+    # 3. Rare hit 1 hour later -> resolves one of the sub-paths and resets pity to 0
+    monkeypatch.setattr(greeting.time, "time", lambda: t0 + 3601)
+    monkeypatch.setattr(
+        greeting.random,
+        "choices",
+        lambda p, weights, k=1: [["Secretos/rare1.mp3", "Secretos/rare2.mp3", "Secretos/rare3.mp3"]],
+    )
+    chosen = greeting.resolve_greeting_path(90)
+    assert any(
+        chosen.endswith(cand)
+        for cand in [
+            "Secretos/rare1.mp3",
+            "Secretos/rare2.mp3",
+            "Secretos/rare3.mp3",
+        ]
+    )
+    assert greeting._pity_state[90][pity_key] == 0
+
+
+def test_fide_greeting_resolves_all_rare_options(fake_users, _audio_dir, monkeypatch):
+    """Verify Fidel's configured greeting can randomly pick any of the 3 rare options."""
+    for rel in [
+        "Audios/aughhhhhhhhhh.mp3",
+        "Secretos/albin backshoots 2.m4a",
+        "Secretos/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
+        "Secretos/who-is-getting-the-best-head-chipmunks.mp3",
+    ]:
+        p = _audio_dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"fake")
+
+    import users
+    users.reload_users_if_changed(force=True)
+    fake_users(users.USERS)
+
+    sub_pool = [
+        "Secretos/albin backshoots 2.m4a",
+        "Secretos/Auughhh_cat_meme__aauugh_sound_effect_cat__meme.wav",
+        "Secretos/who-is-getting-the-best-head-chipmunks.mp3",
+    ]
+    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: [sub_pool])
+
+    picked = set()
+    for _ in range(50):
+        resolved = greeting.resolve_greeting_path(471420397049479180, record_pity=False)
+        assert resolved is not None
+        for cand in sub_pool:
+            if cand in resolved.replace("\\", "/"):
+                picked.add(cand)
+
+    assert len(picked) == 3
+
 
 
 

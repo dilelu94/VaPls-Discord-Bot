@@ -369,6 +369,7 @@ class LandingPageManager:
     .card-stripe.ai { background: linear-gradient(90deg, #06b6d4, #10b981); }
     .card-stripe.soundpad { background: linear-gradient(90deg, #f59e0b, #ef4444); }
     .card-stripe.community { background: linear-gradient(90deg, #10b981, #f59e0b); }
+    .card-stripe.patches { background: linear-gradient(90deg, #8b5cf6, #ec4899); }
 
     .module-header {
       display: flex;
@@ -799,6 +800,7 @@ class LandingPageManager:
       </div>
     </div>
     <div class="nav-actions">
+      <a href="/patch-notes" class="nav-link-btn" id="nav-patch-notes">📜 Notas de Parche</a>
       <div class="status-badge" title="Servicios activos en producción">
         <span class="status-dot"></span> Bot Activo &bull; En Línea
       </div>
@@ -824,6 +826,7 @@ class LandingPageManager:
         <input type="text" id="command-search" class="search-input" placeholder="Buscar comando o función (ej: play, stream, indio, mascota)..." autocomplete="off" />
         <div class="category-pills">
           <button class="pill-btn active" data-category="all" id="pill-all">Todos</button>
+          <button class="pill-btn" data-category="patches" id="pill-patches">📜 Notas de Parche</button>
           <button class="pill-btn" data-category="golive" id="pill-golive">🎬 Stremio &amp; Go Live</button>
           <button class="pill-btn" data-category="music" id="pill-music">🎵 Música</button>
           <button class="pill-btn" data-category="ai" id="pill-ai">🧠 El Indio &amp; IA</button>
@@ -1056,6 +1059,38 @@ class LandingPageManager:
         </div>
       </article>
 
+      <!-- MÓDULO 6: Notas de Parche & Historial -->
+      <article class="module-card" data-category="patches" id="card-patch-notes">
+        <div class="card-stripe patches"></div>
+        <div class="module-header">
+          <div class="module-title-box">
+            <div class="module-icon">📜</div>
+            <div>
+              <h3>Notas de Parche &amp; Historial</h3>
+              <p>Registro oficial de versiones &bull; Vence en 24h &bull; Archivo permanente</p>
+            </div>
+          </div>
+          <span class="command-tag">/patch-notes</span>
+        </div>
+        <p class="module-desc">
+          Consulta las actualizaciones semanales del bot, balances de IA de El Indio, netcode de Go Live y correcciones técnicas. El enlace directo en Discord vence a las 24 horas por seguridad, pero el registro completo se archiva de forma permanente en la web.
+        </p>
+        <div class="module-form">
+          <div class="form-row">
+            <a href="/patch-notes" class="btn btn-primary" style="flex: 2; text-decoration: none;" id="btn-view-patch-history">
+              📜 Ver Historial Completo
+            </a>
+            <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="triggerCommand('https://vapls.duckdns.org/patch-notes', '', 'Explora el registro histórico de cambios y notas de parche archivadas de VaPls.')" id="btn-copy-patch-link">
+              🔗 Copiar Enlace
+            </button>
+          </div>
+        </div>
+        <div class="card-footer">
+          <span class="discord-badge">⏳ 24h Efímero &bull; 📁 Archivo Web</span>
+          <span>Actualización semanal automática</span>
+        </div>
+      </article>
+
     </section>
 
   </main>
@@ -1104,6 +1139,7 @@ class LandingPageManager:
   <!-- Footer -->
   <footer>
     <div class="footer-links">
+      <a href="/patch-notes">Notas de Parche</a>
       <a href="/privacy">Política de Privacidad</a>
       <a href="/delete-data">Eliminar Datos</a>
       <a href="/stremio">Stremio Web UI</a>

@@ -89,7 +89,13 @@ def _get_ignored_greeting_files() -> set[str]:
             items = g if isinstance(g, list) else [g]
             for item in items:
                 rel_path = item.get("path") if isinstance(item, dict) else item
-                if isinstance(rel_path, str) and rel_path.strip():
+                if isinstance(rel_path, (list, tuple)):
+                    for sub_rel in rel_path:
+                        if isinstance(sub_rel, str) and sub_rel.strip():
+                            clean_rel = sub_rel.strip().replace("\\", "/")
+                            norm_rel = os.path.normpath(clean_rel).lower()
+                            ignored.add(norm_rel)
+                elif isinstance(rel_path, str) and rel_path.strip():
                     clean_rel = rel_path.strip().replace("\\", "/")
                     norm_rel = os.path.normpath(clean_rel).lower()
                     ignored.add(norm_rel)
