@@ -648,6 +648,11 @@ def _fetch_opensubtitles_file(
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             subs = data.get("subtitles", [])
             target_ep = episode or 1
+            q_low = str(query or "").lower()
+            q_is_bluray = any(k in q_low for k in ("bluray", "blu-ray", "bdrip", "brrip", "uhd"))
+            q_is_web = any(k in q_low for k in ("web-dl", "webrip", "web.", "web ", "nf", "amzn", "dsnp", "hmax", "atvp", "netflix"))
+            q_is_hdtv = any(k in q_low for k in ("hdtv", "pdtv", "dsr", "tvrip"))
+
             def score_sub(s: dict) -> int:
                 lang = str(s.get("lang", "")).lower()
                 name = str(s.get("subtitleFileName", "") or s.get("id", "") or s.get("lang", "")).lower()
@@ -662,16 +667,44 @@ def _fetch_opensubtitles_file(
                     if m_e2 and int(m_e2.group(1)) != target_ep:
                         return -1000
 
+                score = 0
                 # 1. Latino
                 if lang in ("spa-la", "es-mx", "es-ar", "es-cl", "es-co") or any(k in name for k in ("latino", "latin america", "latin", "spa-la", "es-mx")):
-                    return 300
+                    score = 300
                 # 2. Español
-                if lang in ("spa", "es", "spanish", "es-es", "castellano") or any(k in name for k in ("spanish", "espanol", "español")):
-                    return 200
+                elif lang in ("spa", "es", "spanish", "es-es", "castellano") or any(k in name for k in ("spanish", "espanol", "español")):
+                    score = 200
                 # 3. Inglés
-                if lang in ("eng", "en", "english") or "english" in name:
-                    return 100
-                return 0
+                elif lang in ("eng", "en", "english") or "english" in name:
+                    score = 100
+                else:
+                    return 0
+
+                # Release Matching Heuristics:
+                # Uncut streaming/retail cuts (BluRay and WEB-DL) share frame pacing.
+                # HDTV releases include TV commercials and different broadcast intros.
+                sub_is_bluray = any(k in name for k in ("bluray", "blu-ray", "bdrip", "brrip", "uhd"))
+                sub_is_web = any(k in name for k in ("web-dl", "webrip", "web.", "web ", "ctrlhd", "nf", "amzn"))
+                sub_is_hdtv = any(k in name for k in ("hdtv", "pdtv", "dsr", "tvrip", "killers"))
+
+                if q_is_bluray or q_is_web:
+                    if sub_is_bluray or sub_is_web:
+                        score += 150
+                    elif sub_is_hdtv:
+                        score -= 150
+                elif q_is_hdtv:
+                    if sub_is_hdtv:
+                        score += 150
+                    elif sub_is_bluray or sub_is_web:
+                        score -= 150
+
+                # Resolution match bonus
+                if "1080p" in q_low and "1080p" in name:
+                    score += 30
+                elif "720p" in q_low and "720p" in name:
+                    score += 30
+
+                return score
 
             scored = [(score_sub(s), s) for s in subs if score_sub(s) > 0]
             if not scored:
@@ -1351,7 +1384,7 @@ class H264VideoPlayer(threading.Thread):
         use_filter_complex = False
 
         if not sub_file and sub_idx >= 0 and is_url:
-            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=5.0)
+            sub_file = _extract_subtitle_file(primary_url, sub_idx, timeout=15.0)
             if not sub_file:
                 search_q = getattr(self, "_title", None) or primary_url.split("/")[-1]
                 sub_file = _fetch_opensubtitles_file(

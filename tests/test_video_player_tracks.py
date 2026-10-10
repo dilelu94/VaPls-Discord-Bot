@@ -17,6 +17,8 @@ from unittest.mock import patch
 from golive.slopsoil.video_player import H264VideoPlayer, _EncoderConfig
 import golive.slopsoil.video_player as vp
 
+_REAL_FETCH = vp._fetch_opensubtitles_file
+
 
 @pytest.fixture(autouse=True)
 def mock_encoder():
@@ -133,6 +135,55 @@ def test_ffmpeg_cmd_multiple_inputs_re_and_reconnect():
     assert len(reconnect_indices) == 2, f"-reconnect should be specified before each input, found {reconnect_indices} in {cmd}"
     assert reconnect_indices[0] < i_indices[0]
     assert i_indices[0] < reconnect_indices[1] < i_indices[1]
+
+
+def test_fetch_opensubtitles_file_release_matching():
+    import json
+    from golive.slopsoil.video_player import _fetch_opensubtitles_file
+
+    mock_sub_data = {
+        "subtitles": [
+            {
+                "lang": "spa",
+                "subtitleFileName": "Better.Call.Saul.S01E01.Uno.HDTV.x264-KILLERS.srt",
+                "url": "https://example.com/hdtv.srt",
+            },
+            {
+                "lang": "spa",
+                "subtitleFileName": "Better.Call.Saul.S01E01.Uno.1080p.WEB-DL.DD5.1.H.264-CtrlHD.srt",
+                "url": "https://example.com/webdl.srt",
+            },
+        ]
+    }
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value = mock_resp
+    mock_resp.read.return_value = json.dumps(mock_sub_data).encode("utf-8")
+
+    mock_dl_resp = MagicMock()
+    mock_dl_resp.__enter__.return_value = mock_dl_resp
+    mock_dl_resp.read.return_value = b"1\n00:00:01,000 --> 00:00:02,000\nHola"
+
+    downloaded_urls = []
+
+    def fake_urlopen(req, timeout=6.0):
+        url = req.full_url if hasattr(req, "full_url") else str(req)
+        if "opensubtitles-v3" in url:
+            return mock_resp
+        downloaded_urls.append(url)
+        return mock_dl_resp
+
+    with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+        sub_path = _REAL_FETCH(
+            query="Better Call Saul S01E01 1080p BluRay x265 Silence [QxR]",
+            imdb_id="tt3032476",
+            item_type="series",
+            season=1,
+            episode=1,
+        )
+        assert sub_path is not None
+        # It MUST download the WEB-DL subtitle matching the BluRay release cut, not the HDTV subtitle
+        assert downloaded_urls == ["https://example.com/webdl.srt"]
 
 
 
