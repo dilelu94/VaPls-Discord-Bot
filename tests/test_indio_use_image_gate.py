@@ -96,10 +96,13 @@ def test_build_indio_system_instruction_excludes_catalog_when_disabled(monkeypat
     assert "[IMÁGENES DISPONIBLES]" not in instruction
 
 
-def test_build_indio_system_instruction_includes_catalog_by_default():
+def test_build_indio_system_instruction_includes_catalog_by_default(tmp_path, monkeypatch):
     """By default (include_images=True), the catalog block is injected if images exist."""
+    import imageManager
+    fake_mgr = imageManager.ImageManager(str(tmp_path))
+    fake_mgr.images = [{"id": "test-id", "description": "test image", "tags": ["test"], "filename": "test.png"}]
+    monkeypatch.setattr(geminiCommand, "_image_mgr", fake_mgr)
     instruction = _build_indio_system_instruction()
-    # The repo has images in indio_images/
     assert "[IMÁGENES DISPONIBLES]" in instruction
 
 
@@ -204,12 +207,25 @@ async def test_indioFromVoice_with_image_attachment_strips_use_image_tool(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_use_image_falls_back_to_non_empty_caption(monkeypatch):
+async def test_dispatch_use_image_falls_back_to_non_empty_caption(tmp_path, monkeypatch):
     """When USE_IMAGE runs with empty caption and empty reply_text, caption is never empty."""
     import config
+    import imageManager
 
     monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
     monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "", raising=False)
+
+    img_file = tmp_path / "test.png"
+    img_file.write_bytes(b"fake image data")
+
+    fake_mgr = imageManager.ImageManager(str(tmp_path))
+    fake_mgr.images = [{
+        "id": "bb773572-8cc9-41fc-9e56-52814abb9eb6",
+        "description": "foto de juji",
+        "tags": ["juji"],
+        "filename": "test.png",
+    }]
+    monkeypatch.setattr(geminiCommand, "_image_mgr", fake_mgr)
 
     bot, channel = _make_bot_and_channel()
 
