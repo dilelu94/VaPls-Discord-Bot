@@ -153,10 +153,13 @@ Referencia rápida (detalle completo en [docs/architecture.md](docs/architecture
 
 ## 🔬 Detalles de Implementación Clave
 
-### 1) Parche de DAVE en userbot
+### 1) Parche y Cifrado de DAVE en userbot
 
 El userbot envuelve `PacketDecryptor._decrypt_rtp_*` para aplicar
 `dave.decrypt()` después del AEAD, permitiendo decodificar audio en canales E2EE.
+Además, en `davey_compat.py` el cifrador saliente de Opus (`encrypt_opus`) resuelve
+dinámicamente el `ssrc` real de la conexión de voz (`vc.ssrc`) asignándolo al códec Opus
+de `libdave`, evitando que se descarten tramas de audio salientes (TTS) por discrepancia de SSRC.
 
 ### 2) Pipeline de transcripción (TranscriberSink / WakeWordSink)
 

@@ -2997,7 +2997,8 @@ async def _join_channel(channel: discord.VoiceChannel):
     force_restart = True
     try:
         if existing:
-            if existing.channel.id == channel.id and existing.is_connected():
+            ws_closed = getattr(getattr(existing, "ws", None), "closed", False) is True
+            if existing.channel.id == channel.id and existing.is_connected() and not ws_closed:
                 vc = existing
                 force_restart = False
             else:
@@ -3996,7 +3997,7 @@ async def _relay_say(request: web.Request) -> web.Response:
             task.add_done_callback(_on_done)
         except (ValueError, TypeError) as e:
             log.warning("[RELAY-SAY-TTS] invalid guild_id %s: %s", guild_id, e)
-    else:
+    elif speak_tts:
         log.warning("[RELAY-SAY-TTS] missing guild_id (channel=%s, guild=%s) — TTS skipped", channel_id, guild)
 
     return web.json_response({"sent": len(message_ids), "message_ids": message_ids})
@@ -4917,18 +4918,19 @@ async def _speak_text_internal(
                 target_channel = vcs[0]
 
     if target_channel is not None:
-        if vc is None or not vc.is_connected() or (getattr(vc, "channel", None) and vc.channel.id != target_channel.id):
+        ws_closed = (getattr(getattr(vc, "ws", None), "closed", False) is True) if vc else False
+        if vc is None or not vc.is_connected() or ws_closed or (getattr(vc, "channel", None) and vc.channel.id != target_channel.id):
             try:
                 await _join_channel(target_channel)
                 vc = _vc_for_guild(guild)
             except Exception as e:
                 log.exception("[RELAY-SPEAK] failed to join voice channel: %s", e)
                 return False, None, f"voice join failed: {e}"
-    elif vc is None or not vc.is_connected():
+    elif vc is None or not vc.is_connected() or (getattr(getattr(vc, "ws", None), "closed", False) is True):
         log.warning("[RELAY-SPEAK] skipped: no active or fallback voice channel found in guild %s (force=%s)", guild_id, force)
         return False, None, "no active voice channel found"
 
-    if vc is None or not vc.is_connected():
+    if vc is None or not vc.is_connected() or (getattr(getattr(vc, "ws", None), "closed", False) is True):
         log.warning("[RELAY-SPEAK] skipped: userbot not connected to voice in guild %s", guild_id)
         return False, None, "userbot not connected to voice"
 

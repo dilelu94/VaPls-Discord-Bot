@@ -98,6 +98,7 @@ class DaveSession:
 
         self._session = dave.Session(mls_failure_callback=self._on_mls_failure)
         self._encryptor = dave.Encryptor()
+        self._assigned_audio_ssrc: int = self._SSRC
         self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
         self._encryptor.set_passthrough_mode(True)  # passthrough until key ready
 
@@ -194,6 +195,8 @@ class DaveSession:
         self._encryptor.set_key_ratchet(None)
         self._encryptor.set_passthrough_mode(True)
         self._decryptor.transition_to_passthrough_mode(True)
+        self._assigned_audio_ssrc = self._SSRC
+        self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
         self._do_init()
 
     def reset(self) -> None:
@@ -204,6 +207,8 @@ class DaveSession:
         self._encryptor.set_key_ratchet(None)
         self._encryptor.set_passthrough_mode(True)
         self._decryptor.transition_to_passthrough_mode(True)
+        self._assigned_audio_ssrc = self._SSRC
+        self._encryptor.assign_ssrc_to_codec(self._SSRC, dave.Codec.opus)
 
     def get_serialized_key_package(self) -> bytes:
         """Returns the MLS key package to send to Discord (opcode MLS_KEY_PACKAGE)."""
@@ -269,9 +274,28 @@ class DaveSession:
             log.warning("[DAVE] process_welcome error: %s — raising for gateway recovery", exc)
             raise
 
+    def _get_audio_ssrc(self) -> int:
+        if self._voice_state is not None:
+            vc = getattr(self._voice_state, "voice_client", None)
+            if vc is not None:
+                ssrc = getattr(vc, "ssrc", None)
+                if ssrc:
+                    return ssrc
+        return self._SSRC
+
+    def _ensure_audio_ssrc(self, ssrc: int) -> None:
+        if ssrc != getattr(self, "_assigned_audio_ssrc", None):
+            try:
+                self._encryptor.assign_ssrc_to_codec(ssrc, dave.Codec.opus)
+                self._assigned_audio_ssrc = ssrc
+            except Exception as exc:
+                log.warning("[DAVE] assign_ssrc_to_codec(%s) failed: %s", ssrc, exc)
+
     def encrypt_opus(self, data: bytes) -> bytes:
         """DAVE-encrypt an Opus frame before transport encryption."""
-        result = self._encryptor.encrypt(dave.MediaType.audio, self._SSRC, data)
+        ssrc = self._get_audio_ssrc()
+        self._ensure_audio_ssrc(ssrc)
+        result = self._encryptor.encrypt(dave.MediaType.audio, ssrc, data)
         if result is None:
             return data  # passthrough (no key yet)
         return result
