@@ -12,7 +12,9 @@ from geminiClient import GeminiError
 
 
 @pytest.fixture(autouse=True)
-def reset_gemini_client_state():
+def reset_gemini_client_state(monkeypatch):
+    import geminiKeys
+    monkeypatch.setattr(geminiKeys, "active_keys", lambda: [])
     geminiClient._key_cooldowns.clear()
     geminiClient._sticky_key = None
     yield
@@ -27,6 +29,9 @@ async def _gen(**kw):
 
 
 async def test_missing_api_key_is_config_error(monkeypatch):
+    import geminiKeys
+    monkeypatch.setattr(geminiKeys, "active_keys", lambda: [])
+    monkeypatch.setattr(config, "GEMINI_API_KEYS", [])
     monkeypatch.setattr(config, "GEMINI_API_KEY", "", raising=False)
     # Guard: the network must not be touched when unconfigured.
     monkeypatch.setattr(aiohttp, "ClientSession",

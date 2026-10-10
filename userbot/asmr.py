@@ -107,11 +107,13 @@ def resolve_asmr_audio_path() -> Optional[str]:
     custom_audio_dir = getattr(config, "CUSTOM_AUDIO_PATH", "/home/ubuntu/vapls-discord-bot/audio_output")
     subdir = getattr(config, "ASMR_SUBDIR", "asmr")
 
-    candidate_dirs = [
-        os.path.join(custom_audio_dir, subdir),
-        os.path.join(repo_root, "audio_output", subdir),
-        os.path.join(repo_root, subdir),
-    ]
+    if custom_audio_dir:
+        candidate_dirs = [os.path.join(custom_audio_dir, subdir)]
+    else:
+        candidate_dirs = [
+            os.path.join(repo_root, "audio_output", subdir),
+            os.path.join(repo_root, subdir),
+        ]
 
     valid_exts = {".mp3", ".ogg", ".wav", ".m4a", ".flac", ".aac", ".opus"}
     found_files: list[str] = []
