@@ -367,3 +367,80 @@ def test_history_dropdown_accordion_structure(tmp_patch_notes_manager):
     assert 'class="release-card"' not in html.replace('class="release-card is-collapsed"', "")
 
 
+def test_history_deduplication_same_date_and_title(tmp_path):
+    """Multiple generation runs on the same date or title merge into one card, favoring richer Gemini content."""
+    data_file = str(tmp_path / "tokens.json")
+    hist_file = str(tmp_path / "history.json")
+
+    # Seed with two entries for the same date (e.g. 10/10/2026): one raw fallback, one rich Gemini
+    initial_history = [
+        {
+            "version": "2.10.10",
+            "title": "Notas de Parche (10/10/2026)",
+            "created_at": 1791662749,
+            "sections": [
+                {
+                    "icon": "🛠️",
+                    "title": "Cambios Principales",
+                    "items": [{"tag": "Fix", "header": "Commit header", "desc": "Commit desc"}],
+                }
+            ],
+        },
+        {
+            "version": "2.7",
+            "title": "Notas de Parche (10/10/2026)",
+            "created_at": 1791661832,
+            "sections": [
+                {
+                    "icon": "🧠",
+                    "title": "RESPUESTAS Y COMPORTAMIENTO DEL INDIO",
+                    "items": [
+                        {
+                            "tag": "Fix",
+                            "header": "El Indio se calla cuando transcribe",
+                            "desc": "Detalle creativo.",
+                            "dialogues": ["Che, se calló"],
+                        }
+                    ],
+                },
+                {
+                    "icon": "🌐",
+                    "title": "INTERFAZ WEB",
+                    "items": [{"tag": "Buff", "header": "Web UI", "desc": "Detalle web."}],
+                },
+            ],
+        },
+        {
+            "version": "2.6",
+            "title": "Notas de Parche v2.6",
+            "created_at": 1791572630,
+            "sections": [
+                {
+                    "icon": "🛡️",
+                    "title": "Saludos Raros",
+                    "items": [{"tag": "Ajuste", "header": "Cooldown", "desc": "Detalle cooldown."}],
+                }
+            ],
+        },
+    ]
+
+    import json
+    with open(hist_file, "w", encoding="utf-8") as f:
+        json.dump(initial_history, f)
+
+    mgr = PatchNotesManager(data_path=data_file, history_path=hist_file)
+    hist = mgr.get_history()
+
+    # Must be deduplicated from 3 down to 2 cards
+    assert len(hist) == 2
+    titles = [h["title"] for h in hist]
+    assert titles.count("Notas de Parche (10/10/2026)") == 1
+    assert "Notas de Parche v2.6" in titles
+
+    # Rich Gemini entry (v2.7) must be preserved over raw fallback
+    oct10_entry = next(h for h in hist if "10/10/2026" in h["title"])
+    assert oct10_entry["version"] == "2.7"
+    assert len(oct10_entry["sections"]) == 2
+
+
+

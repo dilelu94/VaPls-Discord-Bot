@@ -76,9 +76,36 @@ def _extract_json_from_gemini_response(text: str) -> Optional[dict[str, Any]]:
     return None
 
 
-def _build_fallback_patch_notes(commits: list[str], date_str: str) -> dict[str, Any]:
+def determine_next_patch_version(date_str: Optional[str] = None) -> str:
+    """Determine the semantic patch version based on history, keeping existing version for same date."""
+    try:
+        from patch_notes import patch_notes_manager
+
+        history = patch_notes_manager.get_history()
+        # If there is already an entry for this date in history, reuse its version
+        if date_str:
+            for entry in history:
+                if date_str in entry.get("title", "") and entry.get("version"):
+                    return str(entry["version"]).strip()
+        # Otherwise find highest 2.X minor version
+        highest_minor = 6
+        for entry in history:
+            ver = str(entry.get("version", "")).strip()
+            m = re.match(r"^2\.(\d+)$", ver)
+            if m:
+                highest_minor = max(highest_minor, int(m.group(1)))
+        return f"2.{highest_minor + 1}"
+    except Exception:
+        return "2.7"
+
+
+def _build_fallback_patch_notes(
+    commits: list[str],
+    date_str: str,
+    version: Optional[str] = None,
+) -> dict[str, Any]:
     """Build structured patch notes without Gemini when API is unavailable."""
-    version = "2." + datetime.datetime.now(TZ_ARG).strftime("%m.%d")
+    target_version = version or determine_next_patch_version(date_str)
     title = f"Notas de Parche ({date_str})"
 
     # Classify commits into groups
@@ -122,7 +149,7 @@ def _build_fallback_patch_notes(commits: list[str], date_str: str) -> dict[str, 
         category_title = "🎵 REPRODUCTOR DE MÚSICA"
 
     return {
-        "version": version,
+        "version": target_version,
         "title": title,
         "discord_highlight": {
             "category_title": category_title,
@@ -145,10 +172,15 @@ def _build_fallback_patch_notes(commits: list[str], date_str: str) -> dict[str, 
     }
 
 
-async def generate_patch_notes_with_gemini(commits: list[str], date_str: str) -> dict[str, Any]:
+async def generate_patch_notes_with_gemini(
+    commits: list[str],
+    date_str: str,
+    target_version: Optional[str] = None,
+) -> dict[str, Any]:
     """Call Gemini to analyze weekly commits and generate patch notes structure."""
+    ver = target_version or determine_next_patch_version(date_str)
     if not commits:
-        return _build_fallback_patch_notes(commits, date_str)
+        return _build_fallback_patch_notes(commits, date_str, version=ver)
 
     commit_list_text = "\n".join(f"- {c}" for c in commits)
 
@@ -177,7 +209,7 @@ async def generate_patch_notes_with_gemini(commits: list[str], date_str: str) ->
         f"Commits de la semana:\n{commit_list_text}\n\n"
         "Generá el JSON con la estructura:\n"
         "{\n"
-        '  "version": "2.7",\n'
+        f'  "version": "{ver}",\n'
         f'  "title": "Notas de Parche ({date_str})",\n'
         '  "discord_highlight": {\n'
         '    "category_title": "<EMOJI> <CATEGORÍA DESTACADA>",\n'
@@ -215,6 +247,8 @@ async def generate_patch_notes_with_gemini(commits: list[str], date_str: str) ->
                 h_items,
                 secs,
             )
+            parsed.setdefault("version", ver)
+            parsed.setdefault("title", f"Notas de Parche ({date_str})")
             return parsed
         logger.warning(
             "[PATCH NOTES] Gemini response did not contain expected JSON structure: %s. Using fallback.",
@@ -227,7 +261,7 @@ async def generate_patch_notes_with_gemini(commits: list[str], date_str: str) ->
             exc,
         )
 
-    return _build_fallback_patch_notes(commits, date_str)
+    return _build_fallback_patch_notes(commits, date_str, version=ver)
 
 
 def format_discord_patch_notes_message(date_str: str, highlight_data: dict[str, Any], url: str) -> str:

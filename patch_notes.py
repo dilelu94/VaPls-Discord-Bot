@@ -169,8 +169,82 @@ class PatchNotesManager:
         except Exception as exc:
             logger.error("Failed to save patch notes tokens to %s: %s", self.data_path, exc)
 
+    def _deduplicate_history(self) -> bool:
+        """Deduplicate in-memory history by release date, title, and version.
+
+        When duplicate entries exist (e.g. from multiple test/generator runs on the same date),
+        preserves the richest entry (more sections, Gemini creative copy, or dialogues).
+        Returns True if duplicates were pruned.
+        """
+        if not self._history:
+            return False
+
+        def _score_entry(e: dict[str, Any]) -> int:
+            score = 0
+            secs = e.get("sections") or []
+            score += len(secs) * 10
+            for s in secs:
+                items = s.get("items") or []
+                score += len(items) * 2
+                for item in items:
+                    if item.get("dialogues"):
+                        score += 5
+            # Bonus for creative custom sections (non-fallback)
+            if secs and secs[0].get("title") != "Cambios Principales":
+                score += 15
+            if e.get("discord_highlight"):
+                score += 5
+            return score
+
+        seen_keys: dict[str, int] = {}
+        unique_entries: list[dict[str, Any]] = []
+        changed = False
+
+        for entry in self._history:
+            title = str(entry.get("title", "")).strip()
+            version = str(entry.get("version", "")).strip()
+            date_match = re.search(r"(\d{2}/\d{2}/\d{4})", title)
+            date_key = date_match.group(1) if date_match else ""
+            if not date_key and entry.get("created_at"):
+                try:
+                    date_key = datetime.datetime.fromtimestamp(float(entry["created_at"]), TZ_ARG).strftime("%d/%m/%Y")
+                except Exception:
+                    date_key = ""
+
+            # Match against existing seen keys
+            match_idx = None
+            if date_key and f"date:{date_key}" in seen_keys:
+                match_idx = seen_keys[f"date:{date_key}"]
+            elif title and f"title:{title.lower()}" in seen_keys:
+                match_idx = seen_keys[f"title:{title.lower()}"]
+            elif version and f"ver:{version}" in seen_keys:
+                match_idx = seen_keys[f"ver:{version}"]
+
+            if match_idx is not None:
+                existing_entry = unique_entries[match_idx]
+                if _score_entry(entry) > _score_entry(existing_entry):
+                    merged = dict(entry)
+                    if not merged.get("token") and existing_entry.get("token"):
+                        merged["token"] = existing_entry["token"]
+                    unique_entries[match_idx] = merged
+                changed = True
+            else:
+                idx = len(unique_entries)
+                unique_entries.append(entry)
+                if date_key:
+                    seen_keys[f"date:{date_key}"] = idx
+                if title:
+                    seen_keys[f"title:{title.lower()}"] = idx
+                if version:
+                    seen_keys[f"ver:{version}"] = idx
+
+        if changed or len(unique_entries) != len(self._history):
+            self._history = unique_entries
+            return True
+        return False
+
     def _load_history(self) -> None:
-        """Load stored patch notes history from disk, seeding from existing tokens if empty."""
+        """Load stored patch notes history from disk, deduplicating and seeding from existing tokens if empty."""
         if os.path.isfile(self.history_path):
             try:
                 with open(self.history_path, "r", encoding="utf-8") as f:
@@ -183,9 +257,24 @@ class PatchNotesManager:
                 logger.warning("Failed to load patch notes history from %s: %s", self.history_path, exc)
                 self._history = []
 
-        # Ensure all known tokens from self._tokens are included in history
+        # Deduplicate loaded entries
+        deduped = self._deduplicate_history()
+
+        # Track existing versions, tokens, titles, and dates to avoid duplicate cards
         history_versions = {str(h.get("version", "")).strip() for h in self._history if h.get("version")}
         history_tokens = {str(h.get("token", "")).strip() for h in self._history if h.get("token")}
+        history_titles = {str(h.get("title", "")).strip().lower() for h in self._history if h.get("title")}
+        history_dates = set()
+        for h in self._history:
+            dm = re.search(r"(\d{2}/\d{2}/\d{4})", str(h.get("title", "")))
+            if dm:
+                history_dates.add(dm.group(1))
+            elif h.get("created_at"):
+                try:
+                    history_dates.add(datetime.datetime.fromtimestamp(float(h["created_at"]), TZ_ARG).strftime("%d/%m/%Y"))
+                except Exception:
+                    pass
+
         added = False
         if self._tokens:
             sorted_tokens = sorted(
@@ -196,38 +285,54 @@ class PatchNotesManager:
             for tok_data in sorted_tokens:
                 ver = str(tok_data.get("version") or "2.6").strip()
                 tok = str(tok_data.get("token") or "").strip()
-                if (tok and tok not in history_tokens) and (ver not in history_versions):
-                    entry = dict(tok_data)
-                    entry["version"] = ver
-                    entry["sections"] = tok_data.get("sections") or _get_default_v26_sections()
-                    if not entry.get("title"):
-                        entry["title"] = f"Notas de Parche v{ver}"
-                    if not entry.get("discord_highlight"):
-                        entry["discord_highlight"] = {
-                            "category_title": "🧠 MEJORAS DEL INDIO & SALUDOS",
-                            "items": [
-                                {
-                                    "title": "Cooldown de Pity",
-                                    "tag": "Ajuste",
-                                    "desc": "Cooldown de 1 hora para audios raros de bienvenida."
-                                },
-                                {
-                                    "title": "A/V Sync Streaming",
-                                    "tag": "Mejora",
-                                    "desc": "Sincronización de audio y video en Go Live y Stremio."
-                                },
-                                {
-                                    "title": "Auto-Bug Tracker",
-                                    "tag": "Feature",
-                                    "desc": "Reporte automático de errores STT en GitHub Issues."
-                                }
-                            ]
-                        }
-                    self._history.append(entry)
-                    history_versions.add(ver)
-                    if tok:
-                        history_tokens.add(tok)
-                    added = True
+                title = str(tok_data.get("title") or f"Notas de Parche v{ver}").strip()
+                dm = re.search(r"(\d{2}/\d{2}/\d{4})", title)
+                tok_date = dm.group(1) if dm else ""
+                if not tok_date and tok_data.get("created_at"):
+                    try:
+                        tok_date = datetime.datetime.fromtimestamp(float(tok_data["created_at"]), TZ_ARG).strftime("%d/%m/%Y")
+                    except Exception:
+                        tok_date = ""
+
+                # Skip if already represented by token, version, title, or date
+                if tok in history_tokens or ver in history_versions or title.lower() in history_titles:
+                    continue
+                if tok_date and tok_date in history_dates:
+                    continue
+
+                entry = dict(tok_data)
+                entry["version"] = ver
+                entry["title"] = title
+                entry["sections"] = tok_data.get("sections") or _get_default_v26_sections()
+                if not entry.get("discord_highlight"):
+                    entry["discord_highlight"] = {
+                        "category_title": "🧠 MEJORAS DEL INDIO & SALUDOS",
+                        "items": [
+                            {
+                                "title": "Cooldown de Pity",
+                                "tag": "Ajuste",
+                                "desc": "Cooldown de 1 hora para audios raros de bienvenida."
+                            },
+                            {
+                                "title": "A/V Sync Streaming",
+                                "tag": "Mejora",
+                                "desc": "Sincronización de audio y video en Go Live y Stremio."
+                            },
+                            {
+                                "title": "Auto-Bug Tracker",
+                                "tag": "Feature",
+                                "desc": "Reporte automático de errores STT en GitHub Issues."
+                            }
+                        ]
+                    }
+                self._history.append(entry)
+                history_versions.add(ver)
+                history_titles.add(title.lower())
+                if tok:
+                    history_tokens.add(tok)
+                if tok_date:
+                    history_dates.add(tok_date)
+                added = True
 
         if not self._history and (self.data_path == DEFAULT_DATA_PATH or self.history_path == DEFAULT_HISTORY_PATH):
             default_entry = {
@@ -261,8 +366,11 @@ class PatchNotesManager:
             self._history.append(default_entry)
             added = True
 
+        if self._deduplicate_history() or deduped:
+            deduped = True
+
         self._history.sort(key=lambda x: float(x.get("created_at", 0)), reverse=True)
-        if added:
+        if added or deduped:
             self._save_history()
             logger.info("Updated patch notes history (now %d entries)", len(self._history))
 
@@ -293,10 +401,19 @@ class PatchNotesManager:
         entry["version"] = version
         entry["title"] = title
 
-        # Check for existing entry with same version or title to update
+        # Check for existing entry with same version, title, or release date to update
         updated = False
+        dm = re.search(r"(\d{2}/\d{2}/\d{4})", title)
+        date_str = dm.group(1) if dm else ""
+
         for idx, existing in enumerate(self._history):
-            if existing.get("version") == version or existing.get("title") == title:
+            existing_title = str(existing.get("title", "")).strip().lower()
+            existing_ver = str(existing.get("version", "")).strip()
+            same_ver = (existing_ver == version)
+            same_title = (existing_title == title.lower())
+            same_date = bool(date_str and date_str in existing_title)
+
+            if same_ver or same_title or same_date:
                 self._history[idx] = {**existing, **entry}
                 updated = True
                 break
@@ -304,6 +421,7 @@ class PatchNotesManager:
         if not updated:
             self._history.append(entry)
 
+        self._deduplicate_history()
         self._history.sort(key=lambda x: float(x.get("created_at", 0)), reverse=True)
         self._save_history()
         logger.info("Saved patch notes to history (version=%s, title='%s')", version, title)
