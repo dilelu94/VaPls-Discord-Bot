@@ -7,8 +7,8 @@ VaPls runs as two cooperating processes:
 - **Main bot (`bot.py`)**: Handles slash commands, voice playback, greetings,
   analytics, and the HTTP API server.
 - **Userbot (`userbot/bot.py`)**: Logs in with a real user account to receive
-  voice audio (DAVE E2EE), transcribes Spanish with Vosk, and optionally forwards
-  transcripts to the main bot's HTTP API.
+  voice audio (DAVE E2EE), performs wake-word gating with VOSK, transcribes
+  voice via Gemini 2.5 Flash (Groq fallback), and forwards transcripts to the main bot's HTTP API.
 
 ## Entry points
 
@@ -56,10 +56,12 @@ VaPls runs as two cooperating processes:
 
 ### Transcription
 
-1. Userbot joins voice channels and attaches `TranscriberSink`.
-2. PCM is resampled to 16 kHz and processed by Vosk.
-3. `on_transcript` logs text, posts to a text channel, and optionally forwards
-   to `BOT_API_BASE` (expects an external `/transcript` handler).
+1. Userbot joins voice channels and attaches `WakeWordSink` (or `TranscriberSink`).
+2. Incoming PCM is resampled to 16 kHz with sinc filtering and headroom attenuation.
+3. VOSK recognizes wake words ("che indio", "indio ponete", etc.) with restricted JSON grammar.
+4. On wake detection, audio is transcribed using Gemini 2.5 Flash (Groq fallback).
+5. Post-STT filter verifies the presence of the wake word, trims conversational prefixes, and posts `🎙️ **Speaker:** text` with `audio_escuchado_*.wav` to the transcript channel.
+6. `on_transcript` forwards `[voz] <text>` to the main bot HTTP API `POST /indio`.
 
 ### Gemini responses
 

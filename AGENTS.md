@@ -168,15 +168,40 @@ de `libdave`, evitando que se descarten tramas de audio salientes (TTS) por disc
 **Barrera Zero-Ciphertext Leak ("Puro Ruido"):** En canales DAVE, Discord añade un trailer de 2 bytes (`0xFAFA`) al final de cada frame de audio cifrado. Si un paquete cifrado llega sin desencriptar (por SSRC aún no mapeado, ratchet pendiente o fallo en libdave), `libopus` decodifica los bytes pseudorandom como estática digital pura a rango máximo ($\pm 32767$), produciendo un chirrido ensordecedor ("puro ruido") y alucinaciones en el STT. Para impedirlo de raíz, `_process_dave_audio_payload` en `userbot/bot.py` y `davey_compat.py` implementan una barrera estricta: todo paquete con terminación `0xFAFA` no desencriptado se sustituye incondicionalmente por silencio Opus (`_OPUS_SILENCE = b"\xf8\xff\xfe"`), garantizando que el ciphertext jamás llegue al decodificador de audio.
 
 
-### 2) Pipeline de transcripción (TranscriberSink / WakeWordSink)
+### 2) Pipeline de transcripción y reconocimiento de voz (TranscriberSink / WakeWordSink)
 
-1. Recibe PCM desde `voice_recv`.
-2. Aplica atenuación de ganancia preventiva (`HEADROOM_FACTOR = 0.85` / ~ -3 dB) para evitar saturación digital contra ±32767 antes de procesar.
-3. Convierte a mono y re-samplea a 16 kHz usando filtrado anti-aliasing sinc (`soxr`, con fallback a `audioop.ratecv`) para eliminar armónicos y siseos metálicos por encima del límite de Nyquist (8 kHz).
-4. VOSK realiza el gating inicial del wake word ("indio" / "che indio").
-5. Tras el corte de silencio, envía el audio a `Gemini 2.5 Flash` (base64 WAV con rotación de keys de `geminiKeys.py` y fallback a Groq Cloud).
-6. Valida que el texto confirme la invocación al Indio (`_stt_confirms_indio`); si no contiene "indio", descarta el falso positivo.
-7. `on_transcript` publica en el canal de texto y forwardea por HTTP al main bot (`_dispatch_to_indio`).
+El sistema de escucha y transcripción en tiempo real del Indio se ejecuta en el userbot y combina pre-procesamiento acústico local, gating liviano con VOSK, transcripción multimodal en la nube (Gemini/Groq) y filtros fonéticos estrictos:
+
+1. **Ingesta y acondicionamiento acústico de audio**:
+   - Recibe tramas PCM a 48 kHz (mono/estéreo) desde `discord-ext-voice-recv` en canales de voz Discord protegidos con cifrado DAVE E2EE.
+   - **Barrera Zero-Ciphertext Leak**: Todo paquete DAVE que conserve el trailer `0xFAFA` sin descifrar se reemplaza incondicionalmente por silencio Opus (`_OPUS_SILENCE = b"\xf8\xff\xfe"`) antes de llegar a Opus, impidiendo ráfagas de estática digital ("puro ruido") y alucinaciones en el reconocedor.
+   - **Headroom preventivo**: Se atenúa la señal con `HEADROOM_FACTOR = 0.85` (~ -3 dB) para evitar saturación digital contra los límites de $\pm 32767$ antes de cualquier conversión.
+   - **Resampling sinc anti-aliasing**: Convierte a mono y re-samplea a 16 kHz usando filtrado sinc (`soxr`, con fallback a `audioop.ratecv`), suprimiendo armónicos por encima del límite de Nyquist (8 kHz).
+   - **Pre-buffer circular por orador** (`_push_prebuffer`, `WAKE_WORD_PREBUFFER_SECONDS = 1.5s`): Almacena de forma continua los últimos frames (voz + micro-pausas) de cada usuario. Esto asegura que no se pierda el arranque de la frase ni el contexto previo cuando el usuario dice la wake-word.
+   - **Reset por silencio inter-frase** (`_maybe_reset_on_silence`, `WAKE_WORD_SILENCE_FINAL_SECONDS = 1.5s`): Si un usuario deja de hablar por más de 1.5 s, el prebuffer se limpia y el reconocedor VOSK se reinicia (`rec.Reset()`), impidiendo acumular frases de conversaciones previas.
+
+2. **Gating de Wake-Word con VOSK local (`KaldiRecognizer`)**:
+   - VOSK corre de forma local y liviana por cada participante, discriminando en tiempo real si el usuario está invocando al bot.
+   - **Gramática JSON restringida** (`_build_vosk_grammar`): VOSK utiliza una lista cerrada de tokens que incluye frases compuestas de invocación (`che indio`, `hola indio`, etc.), comandos directos (`indio ponete`, `indio reproducí`, `indio tirate`, `indio dale`, `indio clipea`) y `[unk]`, colapsando el audio ambiente sin consumir CPU en modelos acústicos pesados.
+   - **Anti-patterns en tercera persona** (`_WAKE_ANTI_PATTERNS`): Vetan automáticamente el disparo si VOSK detecta menciones indirectas (ej. `("el", "indio")`), distinguiendo cuando hablan *al* Indio vs. cuando hablan *del* Indio.
+   - **Buffer de segmento** (`vosk_audio`): Acumula el PCM del segmento en curso para correlacionar timestamps de palabras con offsets exactos de bytes de audio.
+
+3. **Captura y Transcripción Cloud Multimodal (`_transcribe_pcm` / `_transcribe_and_dispatch`)**:
+   - Al detectar la wake-word, `_start_capture` reúne el audio acumulado del pre-buffer y continúa grabando hasta que detecta silencio final o alcanza `WAKE_WORD_MAX_DURATION_SECONDS` (15 s).
+   - Un candado de concurrencia (`_wake_in_progress`) bloquea re-disparos redundantes de VOSK sobre el mismo usuario mientras se procesa la transcripción en curso.
+   - **STT Primario (Gemini 2.5 Flash)**: Empaqueta el audio en formato WAV base64 y consulta el modelo multimodal nativo de audio vía REST API (`gemini-2.5-flash:generateContent`). Gestiona un pool de API keys con rotación dinámica, cooldown preventivo de 60s ante errores HTTP 429 y descarte definitivo de keys inválidas (`geminiKeys.py`).
+   - **STT Fallback (Groq Cloud)**: Si Gemini falla, retorna vacío o agota sus cuotas, conmuta de forma transparente a la API de Groq (`whisper-large-v3`) con pool propio de claves (`groqKeys.py`).
+
+4. **Filtro Fonético Post-STT y Normalización**:
+   - **Confirmación estricta post-STT** (`_stt_confirms_indio` / `_whisper_confirms_indio`): Evalúa el texto devuelto por la nube. Debe contener fonéticamente "indio" o sus variantes (`indio`, `india`, `indyo`, `chendio`, etc.). Si detecta referencias en tercera persona (`"el indio"`, `"del indio"`, `"al indio"`, `"un indio"`), o si la wake-word no figura en la transcripción, la entrada se descarta en el acto como falso positivo sin responder.
+   - **Sonido de confirmación** ("huh"): Si está habilitado (`WAKE_SOUND_ENABLED`), reproduce un beep/huh breve en el canal de voz. En los presets 1-3 suena de inmediato al detectar VOSK; en el preset 4 se difiere hasta que el STT en la nube confirme la invocación.
+   - **Poda de prefijo conversacional** (`_trim_to_wake_word`): Limpia muletillas o frases que el usuario venía diciendo antes de la invocación y que quedaron dentro del pre-buffer (ej: *"Estábamos viendo una peli y che indio qué hora es"* → *"che indio qué hora es"*).
+
+5. **Publicación en Discord, Auto-Bug y Dispatch**:
+   - **Canal de transcripciones**: Publica en `#transcripciones` el mensaje formateado `🎙️ **<Usuario>:** <texto>` y adjunta el audio exacto escuchado como archivo `audio_escuchado_{user_id}.wav`.
+   - **Auto-Bug Tracker** (`transcriptBugTracker.py`): Permite que cualquier usuario responda al mensaje con un reply en Discord para corregir errores de reconocimiento; el sistema extrae el archivo WAV adjunto y abre o comenta automáticamente un issue en GitHub con etiqueta `stt` para depuración.
+   - **Comandos de voz para streams**: Si la transcripción contiene frases clave de streaming (*"comenta el stream"*, *"comenta la pantalla"*, etc.), activa dinámicamente el modo rápido de inspección de pantalla en el espectador de Go Live (`_spectator_mgr.set_fast_mode`).
+   - **Dispatch HTTP**: Forwardea la pregunta por HTTP loopback a `POST 127.0.0.1:8080/indio` del bot principal con el prefijo `[voz] `, indicando a la IA que tolere posibles erratas o ambigüedades fonéticas del audio.
 
 ### 3) Playback de música (GuildPlayer)
 
@@ -397,6 +422,7 @@ userbot). **El preset se persiste en disco (`data/sensitivity_preset.json`) para
 | **1** (default) | `che/que/eh indio` + verbos                                                         | chico (solo wake-words + decoys mínimos)                                                          | El más sensible (default).                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | **2**           | solo `che indio` + verbos                                                           | chico                                                                                             | Saca `que`/`eh` (principal fuente de falsos positivos: `que` es palabra comunísima que VOSK confunde con `che`).                                                                                                                                                                                                                                                                                                                             |
 | **3**           | `che/que/eh indio` + verbos                                                         | **grande** (muletillas, interrogativos, artículos, pronombres, verbos comunes — el pool original) | Menos sensible vía pool grande, pero re-habilita `eh/que indio`. Pensado para **editar a mano** las wake-words según lo que VOSK vaya escuchando mal.                                                                                                                                                                                                                                                                                        |
+| **4**           | solo `che indio` + verbos (con validación de span)                                  | chico (`SetWords(True)`) + verificación STT dedicada                                              | Doble reconocimiento: VOSK corre con `SetWords(True)` en single-best para extraer timestamps por palabra. Al detectar la invocación, `_extract_indio_span` y `_slice_wake_audio` recortan el segmento exacto de "indio". El sonido de confirmación ("huh") se difiere hasta que el STT en la nube confirme fonéticamente "indio".                                                                                                       |
 
 **Tuning manual del preset 3:** los bloques de wake-words y filler en
 `userbot/bot.py` están marcados para editarse a mano. Cuando VOSK colapse mal una
