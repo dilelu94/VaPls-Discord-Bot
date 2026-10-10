@@ -165,6 +165,9 @@ Además, en `davey_compat.py` el cifrador saliente de Opus (`encrypt_opus`) resu
 dinámicamente el `ssrc` real de la conexión de voz (`vc.ssrc`) asignándolo al códec Opus
 de `libdave`, evitando que se descarten tramas de audio salientes (TTS) por discrepancia de SSRC.
 
+**Barrera Zero-Ciphertext Leak ("Puro Ruido"):** En canales DAVE, Discord añade un trailer de 2 bytes (`0xFAFA`) al final de cada frame de audio cifrado. Si un paquete cifrado llega sin desencriptar (por SSRC aún no mapeado, ratchet pendiente o fallo en libdave), `libopus` decodifica los bytes pseudorandom como estática digital pura a rango máximo ($\pm 32767$), produciendo un chirrido ensordecedor ("puro ruido") y alucinaciones en el STT. Para impedirlo de raíz, `_process_dave_audio_payload` en `userbot/bot.py` y `davey_compat.py` implementan una barrera estricta: todo paquete con terminación `0xFAFA` no desencriptado se sustituye incondicionalmente por silencio Opus (`_OPUS_SILENCE = b"\xf8\xff\xfe"`), garantizando que el ciphertext jamás llegue al decodificador de audio.
+
+
 ### 2) Pipeline de transcripción (TranscriberSink / WakeWordSink)
 
 1. Recibe PCM desde `voice_recv`.

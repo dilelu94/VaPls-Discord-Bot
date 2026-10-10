@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # ── Protocol version ──────────────────────────────────────────────────────────
 
 DAVE_PROTOCOL_VERSION: int = dave.get_max_supported_protocol_version()
+_OPUS_SILENCE: bytes = b"\xf8\xff\xfe"
 
 
 # ── ProposalsOperationType ────────────────────────────────────────────────────
@@ -149,7 +150,7 @@ class DaveSession:
                 dec.transition_to_passthrough_mode(True)
                 self._audio_decryptor_epochs[target_uid_str] = -1
             self._audio_decryptors[target_uid_str] = dec
-        elif self._audio_decryptor_epochs.get(target_uid_str) != current_epoch:
+        elif self._audio_decryptor_epochs.get(target_uid_str) != current_epoch or self._audio_decryptor_epochs.get(target_uid_str) == -1:
             ratchet = self._session.get_key_ratchet(target_uid_str)
             if ratchet is not None:
                 try:
@@ -178,7 +179,7 @@ class DaveSession:
                 dec.transition_to_passthrough_mode(True)
                 self._video_decryptor_epochs[key_str] = -1
             self._video_decryptors[key_str] = dec
-        elif self._video_decryptor_epochs.get(key_str) != current_epoch:
+        elif self._video_decryptor_epochs.get(key_str) != current_epoch or self._video_decryptor_epochs.get(key_str) == -1:
             ratchet = self._session.get_key_ratchet(key_str)
             if ratchet is not None:
                 try:
@@ -440,7 +441,7 @@ class DaveSession:
 
         try:
             res = dec.decrypt(m_type, packet)
-            if res is not None:
+            if res is not None and not (not is_video and len(res) >= 2 and res.endswith(b"\xfa\xfa")):
                 return res
         except Exception:
             pass
@@ -448,7 +449,7 @@ class DaveSession:
         # If decryption failed, check if this user's ratchet can be refreshed from the session
         current_epoch = self._epoch if self._epoch is not None else -1
         epochs_map = self._video_decryptor_epochs if is_video else self._audio_decryptor_epochs
-        if epochs_map.get(target_uid_str) != current_epoch:
+        if epochs_map.get(target_uid_str) != current_epoch or epochs_map.get(target_uid_str) == -1:
             ratchet = self._session.get_key_ratchet(target_uid_str)
             if ratchet is not None:
                 try:
@@ -456,10 +457,16 @@ class DaveSession:
                     dec.transition_to_passthrough_mode(False)
                     epochs_map[target_uid_str] = current_epoch
                     res = dec.decrypt(m_type, packet)
-                    if res is not None:
+                    if res is not None and not (not is_video and len(res) >= 2 and res.endswith(b"\xfa\xfa")):
                         return res
                 except Exception:
                     pass
+
+        # Zero-Ciphertext Leak Barrier for audio:
+        # If an encrypted audio frame (ending with DAVE trailer 0xFAFA) could not be decrypted,
+        # never leak raw ciphertext to libopus; return Opus silence instead.
+        if not is_video and len(packet) >= 2 and packet.endswith(b"\xfa\xfa"):
+            return _OPUS_SILENCE
 
         return packet
 
