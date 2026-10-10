@@ -64,13 +64,20 @@ except ModuleNotFoundError:
 
 try:
     from golive import davey_compat
-except ModuleNotFoundError:
-    import davey_compat
+except (ModuleNotFoundError, ImportError):
+    try:
+        import davey_compat
+    except (ModuleNotFoundError, ImportError):
+        davey_compat = None
 
-import discord.voice_state
-discord.voice_state.davey = davey_compat
-discord.gateway.davey = davey_compat
-davey_compat.patch_reinit(discord.voice_state)
+if davey_compat is not None:
+    try:
+        import discord.voice_state
+        discord.voice_state.davey = davey_compat
+        discord.gateway.davey = davey_compat
+        davey_compat.patch_reinit(discord.voice_state)
+    except Exception:
+        pass
 
 import asmr
 import greeting

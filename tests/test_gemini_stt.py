@@ -23,7 +23,7 @@ if not hasattr(discord, "voice_state"):
 if "discord.voice_state" not in sys.modules:
     sys.modules["discord.voice_state"] = discord.voice_state
 
-for _mod in ("vosk", "davey"):
+for _mod in ("vosk", "davey", "dave", "davey_compat"):
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
