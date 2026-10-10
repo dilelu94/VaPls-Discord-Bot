@@ -990,10 +990,9 @@ class PatchNotesManager:
                 # Search content blob for fast client-side filtering
                 search_blob = f"v{ver} {ver} {title} {date_str}".lower()
 
-                is_latest = (idx == 0)
-                collapsed_cls = "" if is_latest else " is-collapsed"
-                aria_exp = "true" if is_latest else "false"
-                hint_text = "Clic para contraer" if is_latest else "Clic para expandir"
+                collapsed_cls = " is-collapsed"
+                aria_exp = "false"
+                hint_text = "Clic para expandir"
 
                 rendered_releases.append(f"""    <!-- Release v{ver} -->
     <article class="release-card{collapsed_cls}" id="release-v{clean_ver}" data-version="{ver.lower()}" data-search="{search_blob}">
@@ -1640,7 +1639,7 @@ class PatchNotesManager:
           <button type="button" class="filter-pill" data-category="indio" id="pill-indio">🧠 El Indio</button>
           <button type="button" class="filter-pill" data-category="stream" id="pill-stream">📺 Go Live &amp; Stremio</button>
           <button type="button" class="filter-pill" data-category="musica" id="pill-music">🎵 Música</button>
-          <button type="button" class="tool-btn" id="btn-toggle-all" onclick="toggleAllReleases()">📂 Desplegar / Colapsar Todos</button>
+          <button type="button" class="tool-btn" id="btn-toggle-all" onclick="toggleAllReleases()">📂 Desplegar Todos</button>
         </div>
       </div>
     </section>

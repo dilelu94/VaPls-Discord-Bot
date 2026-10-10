@@ -4050,9 +4050,11 @@ async def help_cmd(ctx):
         pass
     _track_command(ctx, "help")
 
+    landing_url = f"https://{getattr(config, 'DUCKDNS_DOMAIN', 'vapls.duckdns.org')}/"
     embed = discord.Embed(
         title="🎙️ VaPls — ayuda",
         description=(
+            f"🌐 **Consola Web & Catálogo:** [{landing_url}]({landing_url})\n\n"
             "Bot de voz/música + persona Gemini con memoria. "
             "Corre en **dos procesos**:\n"
             "• **Main bot** (este) — slash commands, música, soundpad, Gemini.\n"
@@ -4060,6 +4062,14 @@ async def help_cmd(ctx):
             "con Gemini 2.5 Flash y responde al wake-word *indio*."
         ),
         color=0x5865F2,
+    )
+    embed.add_field(
+        name="🌐 Consola Web & Catálogo Online",
+        value=(
+            f"Probá comandos en vivo, explorá notas de parche y administrá servicios en:\n"
+            f"🔗 [{landing_url}]({landing_url})"
+        ),
+        inline=False,
     )
     embed.add_field(
         name="🎵 Música",

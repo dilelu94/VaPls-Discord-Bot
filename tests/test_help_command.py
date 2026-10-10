@@ -31,6 +31,9 @@ async def test_help_embed_contains_categories_and_copy_paste_commands(ctx_factor
     assert embed is not None, "expected an embed response"
 
     field_names = [f.name for f in embed.fields]
+    assert "vapls.duckdns.org" in embed.description
+    assert any("Consola Web" in name for name in [field_names[0]])
+    assert "vapls.duckdns.org" in embed.fields[0].value
     assert any("Música" in name for name in field_names)
     assert any("Voz y Go Live" in name for name in field_names)
     assert any("IA e Imágenes" in name for name in field_names)

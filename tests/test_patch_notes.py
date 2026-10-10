@@ -362,8 +362,8 @@ def test_history_dropdown_accordion_structure(tmp_patch_notes_manager):
     assert "toggleAllReleases" in html
     assert "aria-expanded" in html
 
-    # The latest release (v2.7) is open by default, older release (v2.6) starts collapsed
-    assert 'class="release-card"' in html
+    # All releases start collapsed by default
     assert 'class="release-card is-collapsed"' in html
+    assert 'class="release-card"' not in html.replace('class="release-card is-collapsed"', "")
 
 
