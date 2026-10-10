@@ -47,6 +47,7 @@ logger = logging.getLogger("apiServer")
 # Discord gateway hands us a connected session (on_ready / on_connect).
 _PROCESS_START = time.time()
 _GATEWAY_CONNECTED_AT: Optional[float] = None
+_last_voice_cache: dict[int, dict[str, int]] = {}
 
 # ---- Pending image retry queue --------------------------------------------
 # Images that failed to describe (e.g. Gemini rate-limited) are queued here
@@ -1539,8 +1540,18 @@ def makeApp(bot: discord.Bot) -> web.Application:
                 {"error": "Main Characters role not found"}, status=404
             )
 
+        system_bot_ids = {
+            uid
+            for uid in (
+                getattr(config, "USERBOT_USER_ID", None),
+                getattr(config, "GOLIVE_USER_ID", None),
+            )
+            if uid
+        }
+
         # Fetch timestamps from the userbot relay
         timestamps: dict[str, int] = {}
+        relay_ok = False
         if config.INDIO_RELAY_URL and config.INDIO_RELAY_SECRET:
             try:
                 async with aiohttp.ClientSession(
@@ -1556,8 +1567,24 @@ def makeApp(bot: discord.Bot) -> web.Application:
                             data = await resp.json()
                             raw_ts = data.get("timestamps", {})
                             timestamps = {str(k): int(v) for k, v in raw_ts.items() if v}
-            except Exception:
-                pass
+                            relay_ok = True
+                            _last_voice_cache[guild_id] = timestamps
+                        else:
+                            logger.warning(
+                                "lastVoice: relay returned HTTP %s", resp.status
+                            )
+            except Exception as e:
+                logger.warning("lastVoice: relay error (%s)", e)
+
+        if config.INDIO_RELAY_URL and not relay_ok:
+            cached = _last_voice_cache.get(guild_id)
+            if cached:
+                logger.warning("lastVoice: using cached timestamps for guild %s", guild_id)
+                timestamps = cached
+            else:
+                return web.json_response(
+                    {"error": "userbot relay unavailable"}, status=503
+                )
 
         now = int(time.time())
         users = []
@@ -1572,7 +1599,7 @@ def makeApp(bot: discord.Bot) -> web.Application:
             members = list(guild.members)
 
         for m in members:
-            if m.bot or not discord.utils.get(m.roles, id=role_id):
+            if m.bot or m.id in system_bot_ids or not discord.utils.get(m.roles, id=role_id):
                 continue
             uid_str = str(m.id)
 

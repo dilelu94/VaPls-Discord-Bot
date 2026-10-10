@@ -84,3 +84,56 @@ async def test_last_voice_falls_back_on_closed_session():
         assert body["users"][0]["id"] == 42
     finally:
         await client.close()
+
+
+async def test_last_voice_excludes_userbots(monkeypatch):
+    monkeypatch.setattr(config, "USERBOT_USER_ID", 519594605520486428, raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "", raising=False)
+
+    mc_role = _FakeRole("Main Characters", role_id=101)
+    indio_member = _FakeMember(user_id=519594605520486428, name="Indio", roles=[mc_role])
+    human_member = _FakeMember(user_id=42, name="mati", roles=[mc_role])
+    guild = _FakeGuild(guild_id=100, members=[indio_member, human_member], roles=[mc_role])
+    bot = _FakeBot(guild)
+
+    app = makeApp(bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        resp = await client.get("/last-voice?guild_id=100", headers=HEADERS)
+        assert resp.status == 200
+        body = await resp.json()
+        assert "users" in body
+        # Only the human member should be returned, Indio must be excluded
+        user_ids = [u["id"] for u in body["users"]]
+        assert user_ids == [42]
+        assert 519594605520486428 not in user_ids
+    finally:
+        await client.close()
+
+
+async def test_last_voice_relay_unavailable_returns_503(monkeypatch):
+    monkeypatch.setattr(config, "INDIO_RELAY_URL", "http://127.0.0.1:59999", raising=False)
+    monkeypatch.setattr(config, "INDIO_RELAY_SECRET", "secret", raising=False)
+
+    import apiServer
+    apiServer._last_voice_cache.clear()
+
+    mc_role = _FakeRole("Main Characters", role_id=101)
+    member = _FakeMember(user_id=42, name="mati", roles=[mc_role])
+    guild = _FakeGuild(guild_id=100, members=[member], roles=[mc_role])
+    bot = _FakeBot(guild)
+
+    app = makeApp(bot)
+    client = TestClient(TestServer(app))
+    await client.start_server()
+
+    try:
+        resp = await client.get("/last-voice?guild_id=100", headers=HEADERS)
+        assert resp.status == 503
+        body = await resp.json()
+        assert "error" in body
+    finally:
+        await client.close()
+
