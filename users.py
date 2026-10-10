@@ -51,11 +51,10 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 99
             },
             {
-                "path": "Secretos/dorime_WdWNsGk.mp3",
-                "weight": 1
-            },
-            {
-                "path": "Secretos/04 - He Follado con Cocodrilos.mp3",
+                "path": [
+                    "Secretos/dorime_WdWNsGk.mp3",
+                    "Secretos/04 - He Follado con Cocodrilos.mp3"
+                ],
                 "weight": 1
             }
         ],
@@ -114,14 +113,13 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/ay-ay-necesito-pito.mp3",
-                "weight": 98
+                "weight": 99
             },
             {
-                "path": "Secretos/el-monte-everest-no-tiene-nada-en-contra-de-mi_cut_025338.mp3",
-                "weight": 1
-            },
-            {
-                "path": "Secretos/viny-amor-descabellado.mp3",
+                "path": [
+                    "Secretos/el-monte-everest-no-tiene-nada-en-contra-de-mi_cut_025338.mp3",
+                    "Secretos/viny-amor-descabellado.mp3"
+                ],
                 "weight": 1
             }
         ],
@@ -529,19 +527,12 @@ _FALLBACK_USERS: dict[int, dict] = {
                 "weight": 14
             },
             {
-                "path": "Secretos/enrique_invertido.mp3",
-                "weight": 1
-            },
-            {
-                "path": "Secretos/enrique_tiktok_invertido.mp3",
-                "weight": 1
-            },
-            {
-                "path": "Secretos/enrique-fart-super-slowed.mp3",
-                "weight": 1
-            },
-            {
-                "path": "Secretos/ennnnriiiiqqqqueeeeeeee.mp3",
+                "path": [
+                    "Secretos/enrique_invertido.mp3",
+                    "Secretos/enrique_tiktok_invertido.mp3",
+                    "Secretos/enrique-fart-super-slowed.mp3",
+                    "Secretos/ennnnriiiiqqqqueeeeeeee.mp3"
+                ],
                 "weight": 1
             }
         ],
@@ -559,14 +550,13 @@ _FALLBACK_USERS: dict[int, dict] = {
         "greeting": [
             {
                 "path": "Audios/Fart_with_reverb_sound_effect.wav",
-                "weight": 98
+                "weight": 99
             },
             {
-                "path": "Secretos/oniiiiiiiiiiiii.mp3",
-                "weight": 1
-            },
-            {
-                "path": "Secretos/le-fart-de-simon.mp3",
+                "path": [
+                    "Secretos/oniiiiiiiiiiiii.mp3",
+                    "Secretos/le-fart-de-simon.mp3"
+                ],
                 "weight": 1
             }
         ],

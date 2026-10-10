@@ -144,6 +144,9 @@ def load_from_disk(path: Optional[str] = None) -> int:
     Returns the number of keys now in the pool.
     """
     target = path or config.GEMINI_KEYS_FILE
+    if not os.path.isabs(target):
+        repo_root = os.path.dirname(os.path.abspath(__file__))
+        target = os.path.join(repo_root, target)
     loaded: list[dict] = []
     try:
         with open(target, "r", encoding="utf-8") as f:
@@ -241,8 +244,12 @@ async def add_key(
             "source": source,
         }
         _keys.append(entry)
+        target = config.GEMINI_KEYS_FILE
+        if not os.path.isabs(target):
+            repo_root = os.path.dirname(os.path.abspath(__file__))
+            target = os.path.join(repo_root, target)
         try:
-            await asyncio.to_thread(_persist_sync, config.GEMINI_KEYS_FILE)
+            await asyncio.to_thread(_persist_sync, target)
         except Exception:
             logger.exception("gemini keys: persist failed")
             _keys.pop()  # rollback in-memory si falla el disco

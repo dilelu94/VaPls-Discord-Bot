@@ -51,6 +51,12 @@ sys.modules["userbot_config"] = config
 import groqKeys
 import geminiKeys
 
+try:
+    geminiKeys.load_from_disk()
+    groqKeys.load_from_disk()
+except Exception as _e_keys:
+    log.warning(f"[KEYS] Failed to load keys from disk at startup: {_e_keys}")
+
 import discord.gateway
 try:
     from golive.video_compat import patch_video
@@ -736,6 +742,9 @@ async def _run_groq_stt(pcm_16k_bytes: bytes) -> str:
 
     pool = groqKeys.active_keys()
     if not pool:
+        groqKeys.load_from_disk()
+        pool = groqKeys.active_keys()
+    if not pool:
         fallback = getattr(config, "GROQ_API_KEY", "")
         if fallback:
             pool = [fallback]
@@ -827,6 +836,9 @@ async def _run_gemini_stt(pcm_16k_bytes: bytes) -> str:
         return ""
 
     pool = geminiKeys.active_keys()
+    if not pool:
+        geminiKeys.load_from_disk()
+        pool = geminiKeys.active_keys()
     if not pool:
         pool = list(getattr(config, "GEMINI_API_KEYS", []))
     if not pool:
@@ -950,6 +962,10 @@ async def _run_gemini_stt(pcm_16k_bytes: bytes) -> str:
 
 async def _transcribe_pcm(pcm_16k_bytes: bytes) -> str:
     """Transcribe s16le 16k mono PCM bytes using configured STT_PROVIDER (gemini primary, groq fallback)."""
+    if not geminiKeys.active_keys():
+        geminiKeys.load_from_disk()
+    if not groqKeys.active_keys():
+        groqKeys.load_from_disk()
     provider = getattr(config, "STT_PROVIDER", "gemini").lower()
     has_gemini = bool(geminiKeys.active_keys() or getattr(config, "GEMINI_API_KEYS", []) or getattr(config, "GEMINI_API_KEY", ""))
     has_groq = bool(groqKeys.active_keys() or getattr(config, "GROQ_API_KEY", ""))

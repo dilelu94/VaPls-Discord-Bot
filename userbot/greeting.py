@@ -373,13 +373,123 @@ def get_or_generate_name_tts(user_id: int, name: str) -> Optional[str]:
         return None
 
 
+def unify_rare_greeting_items(
+    items: list,
+    rare_threshold: Optional[float] = None,
+    target_rare_prob: float = 0.01,
+) -> list:
+    """Normalize and unify greeting items so that all rare/secret audios
+    share a single unified sub-pool with a fixed target probability (1% by default),
+    preserving common greeting weights and relative proportions.
+
+    Rules:
+    - If items has no rare/secret audios, returns items unchanged.
+    - If items has only rare/secret audios (no common audios), returns items unchanged.
+    - An item is identified as rare/secret if:
+        1. Any of its paths contains "secretos/" (case-insensitive).
+        2. OR the item dict has "rare": True.
+        3. OR if no item contains "secretos/", its base_prob <= rare_threshold
+           while at least one item has base_prob > rare_threshold.
+    - All rare/secret audio paths are collected into a single unified sub-pool.
+    - If multiple rare audios exist, their paths are grouped into a list of paths
+      under a single entry: ``{"path": [p1, p2, ...], "weight": target_rare_weight, "is_rare": True}``.
+    - If exactly one rare audio exists (and it's a single path string), it stays as
+      ``{"path": p1, "weight": target_rare_weight, "is_rare": True}``.
+    - Common items are scaled proportionally so their combined base weight is
+      ``(1.0 - target_rare_prob) / target_rare_prob`` (e.g. 99.0 when target is 0.01),
+      and marked with ``"is_rare": False``.
+    - Even if new rare audios are added in the future as separate items or in a list,
+      they will automatically be folded into this unified 1% pool.
+    """
+    if rare_threshold is None:
+        rare_threshold = getattr(config, "GREETING_RARE_THRESHOLD", 0.05)
+
+    if not items or not isinstance(items, list):
+        return items
+
+    parsed = []
+    for it in items:
+        if isinstance(it, dict):
+            p = it.get("path")
+            w = float(it.get("weight", 1.0))
+            is_rare_flag = bool(it.get("rare", False))
+        elif isinstance(it, (list, tuple)):
+            p = list(it)
+            w = 1.0
+            is_rare_flag = False
+        else:
+            p = it
+            w = 1.0
+            is_rare_flag = False
+        parsed.append({"path": p, "weight": max(0.0001, w), "rare": is_rare_flag, "orig": it})
+
+    if len(parsed) <= 1:
+        return items
+
+    def _is_secret_path(p) -> bool:
+        if isinstance(p, (list, tuple)):
+            return any(_is_secret_path(sub) for sub in p)
+        if isinstance(p, str):
+            clean = p.replace("\\", "/").lower()
+            return "secretos/" in clean or "/secretos" in clean or clean.startswith("secretos")
+        return False
+
+    has_any_secret = any(_is_secret_path(it["path"]) or it["rare"] for it in parsed)
+
+    if has_any_secret:
+        rare_entries = [it for it in parsed if _is_secret_path(it["path"]) or it["rare"]]
+        common_entries = [it for it in parsed if not (_is_secret_path(it["path"]) or it["rare"])]
+    else:
+        total_w = sum(it["weight"] for it in parsed)
+        if total_w <= 0:
+            return items
+        probs = [it["weight"] / total_w for it in parsed]
+        if any(pr <= rare_threshold for pr in probs) and any(pr > rare_threshold for pr in probs):
+            rare_entries = [it for it, pr in zip(parsed, probs) if pr <= rare_threshold]
+            common_entries = [it for it, pr in zip(parsed, probs) if pr > rare_threshold]
+        else:
+            return items
+
+    if not rare_entries or not common_entries:
+        return items
+
+    rare_sub_paths = []
+    for it in rare_entries:
+        p = it["path"]
+        if isinstance(p, (list, tuple)):
+            for sub in p:
+                if sub is not None and sub not in rare_sub_paths:
+                    rare_sub_paths.append(sub)
+        elif p is not None:
+            if p not in rare_sub_paths:
+                rare_sub_paths.append(p)
+
+    if not rare_sub_paths:
+        return items
+
+    target_rare_weight = 1.0
+    target_common_weight = (1.0 - target_rare_prob) / target_rare_prob  # 99.0
+    rare_path_val = rare_sub_paths[0] if len(rare_sub_paths) == 1 else rare_sub_paths
+    rare_item = {"path": rare_path_val, "weight": target_rare_weight, "is_rare": True}
+
+    total_common_w = sum(it["weight"] for it in common_entries)
+    normalized_common = []
+    for it in common_entries:
+        scaled_w = (it["weight"] / total_common_w) * target_common_weight
+        if abs(scaled_w - round(scaled_w)) < 1e-5:
+            scaled_w = float(round(scaled_w))
+        normalized_common.append({"path": it["path"], "weight": scaled_w, "is_rare": False})
+
+    return normalized_common + [rare_item]
+
+
 def calculate_effective_weights(
     items: list,
     user_id: int,
     pity_state: Optional[dict[str, int]] = None,
     rare_threshold: Optional[float] = None,
     member_count: int = 1,
-) -> tuple[list[str], list[float], set[str]]:
+) -> tuple[list[Any], list[float], set[str]]:
     """Calculate effective weights for a list of greeting items taking pity and
     channel member count into account.
 
@@ -389,15 +499,20 @@ def calculate_effective_weights(
     if rare_threshold is None:
         rare_threshold = getattr(config, "GREETING_RARE_THRESHOLD", 0.05)
 
-    paths: list[str] = []
+    items = unify_rare_greeting_items(items, rare_threshold=rare_threshold)
+
+    paths: list[Any] = []
     base_weights: list[float] = []
+    is_rare_flags: list[Optional[bool]] = []
     for item in items:
         if isinstance(item, dict) and "path" in item:
             paths.append(item["path"])
             base_weights.append(float(item.get("weight", 1)))
+            is_rare_flags.append(item.get("is_rare"))
         elif isinstance(item, str):
             paths.append(item)
             base_weights.append(1.0)
+            is_rare_flags.append(None)
 
     if not paths:
         return [], [], set()
@@ -413,9 +528,10 @@ def calculate_effective_weights(
 
     people_mult = 1.0 + (max(1, member_count) - 1) / 9.0
 
-    for path, base_w in zip(paths, base_weights):
+    for path, base_w, explicit_rare in zip(paths, base_weights, is_rare_flags):
         base_prob = base_w / total_base
-        if base_prob <= rare_threshold:
+        is_rare = explicit_rare if explicit_rare is not None else (base_prob <= rare_threshold)
+        if is_rare:
             if isinstance(path, (list, tuple)):
                 pity_key = "::".join(str(p) for p in path)
                 rare_paths.add(pity_key)

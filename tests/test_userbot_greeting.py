@@ -298,7 +298,8 @@ def test_pity_counter_increments_on_miss_and_resets_on_hit(fake_users, monkeypat
     assert greeting._pity_state[30]["rare.mp3"] == 0
 
 
-def test_multiple_rare_audios_track_independently(fake_users, monkeypatch):
+def test_multiple_rare_audios_share_unified_one_percent_and_pity(fake_users, monkeypatch):
+    """Multiple rare audios are automatically unified into a shared 1% pool with shared pity."""
     fake_users({
         40: {
             "greeting": [
@@ -311,19 +312,24 @@ def test_multiple_rare_audios_track_independently(fake_users, monkeypatch):
 
     t0 = time.time()
 
-    # 1. common picked -> both rare_a and rare_b increment
+    # 1. common picked -> unified rare pool increments miss counter
     monkeypatch.setattr(greeting.time, "time", lambda: t0)
     monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["common.mp3"])
     greeting.resolve_greeting_path(40)
-    assert greeting._pity_state[40]["rare_a.mp3"] == 1
-    assert greeting._pity_state[40]["rare_b.mp3"] == 1
+    pity_key = "rare_a.mp3::rare_b.mp3"
+    assert greeting._pity_state[40][pity_key] == 1
 
-    # 2. rare_a picked 1 hour later -> rare_a resets to 0, rare_b increments to 2
+    # 2. rare sub-pool picked 1 hour later -> pity resets to 0 for the whole pool
     monkeypatch.setattr(greeting.time, "time", lambda: t0 + 3601)
-    monkeypatch.setattr(greeting.random, "choices", lambda paths, weights, k=1: ["rare_a.mp3"])
-    greeting.resolve_greeting_path(40)
-    assert greeting._pity_state[40]["rare_a.mp3"] == 0
-    assert greeting._pity_state[40]["rare_b.mp3"] == 2
+    monkeypatch.setattr(
+        greeting.random,
+        "choices",
+        lambda paths, weights, k=1: [["rare_a.mp3", "rare_b.mp3"]],
+    )
+    chosen = greeting.resolve_greeting_path(40)
+    assert any(chosen.endswith(cand) for cand in ["rare_a.mp3", "rare_b.mp3"])
+    assert greeting._pity_state[40][pity_key] == 0
+
 
 
 def test_pity_state_persists_to_disk_and_reloads(fake_users, tmp_path, monkeypatch):
@@ -961,6 +967,92 @@ def test_fide_greeting_resolves_all_rare_options(fake_users, _audio_dir, monkeyp
                 picked.add(cand)
 
     assert len(picked) == 3
+
+
+def test_unify_rare_greeting_items_future_proofing():
+    """Verify that adding 1, 2, or 5 extra rare audios maintains exactly 1% total rare base probability."""
+    # User with 1 common and 1 rare
+    items_1 = [
+        {"path": "Audios/common.mp3", "weight": 99},
+        {"path": "Secretos/rare1.mp3", "weight": 1},
+    ]
+    paths, weights, rare = greeting.calculate_effective_weights(items_1, user_id=100)
+    assert len(weights) == 2
+    assert weights[0] == 99.0
+    assert weights[1] == 1.0
+    assert len(rare) == 1
+
+    # Someone adds a 2nd and 3rd rare audio as separate dicts
+    items_3 = [
+        {"path": "Audios/common.mp3", "weight": 99},
+        {"path": "Secretos/rare1.mp3", "weight": 1},
+        {"path": "Secretos/rare2.mp3", "weight": 1},
+        {"path": "Secretos/rare3.mp3", "weight": 1},
+    ]
+    paths, weights, rare = greeting.calculate_effective_weights(items_3, user_id=100)
+    assert len(weights) == 2
+    assert weights[0] == 99.0
+    assert weights[1] == 1.0
+    assert len(rare) == 1
+    # The rare entry is a list of all 3 paths
+    assert paths[1] == ["Secretos/rare1.mp3", "Secretos/rare2.mp3", "Secretos/rare3.mp3"]
+    assert "Secretos/rare1.mp3::Secretos/rare2.mp3::Secretos/rare3.mp3" in rare
+
+    # Someone adds 5 more rare audios
+    items_8 = list(items_3)
+    for i in range(4, 9):
+        items_8.append({"path": f"Secretos/rare{i}.mp3", "weight": 1})
+    paths, weights, rare = greeting.calculate_effective_weights(items_8, user_id=100)
+    assert len(weights) == 2
+    assert weights[0] == 99.0
+    assert weights[1] == 1.0
+    assert len(paths[1]) == 8
+
+
+def test_all_configured_users_have_one_percent_rare_weight():
+    """Verify every configured user with rare audios in users.py / users.json has exactly 1% rare probability."""
+    import users
+    users.reload_users_if_changed(force=True)
+
+    for uid, uinfo in users.USERS.items():
+        g = uinfo.get("greeting")
+        if not g or not isinstance(g, list):
+            continue
+
+        paths, weights, rare = greeting.calculate_effective_weights(g, user_id=uid)
+        if not rare:
+            continue
+
+        total_w = sum(weights)
+        assert abs(total_w - 100.0) < 1e-3, f"User {uinfo.get('name')} total weight != 100: {total_w}"
+
+        # Find the rare weight
+        rare_w = 0.0
+        for p, w in zip(paths, weights):
+            pity_key = "::".join(str(x) for x in p) if isinstance(p, (list, tuple)) else p
+            if pity_key in rare:
+                rare_w += w
+
+        assert abs(rare_w - 1.0) < 1e-3, (
+            f"User {uinfo.get('name')} rare weight != 1.0: {rare_w} (prob={rare_w/total_w*100:.2f}%)"
+        )
+
+
+def test_enrique_common_audios_do_not_gain_pity():
+    """Verify Enrique's 43 common variations do not gain pity, only his secret sub-pool does."""
+    import users
+    users.reload_users_if_changed(force=True)
+
+    enrique_info = users.USERS.get(138430902547120129)
+    assert enrique_info is not None
+    greetings = enrique_info["greeting"]
+
+    paths, weights, rare = greeting.calculate_effective_weights(greetings, user_id=138430902547120129)
+    assert len(rare) == 1  # Only 1 rare entry (the secret sub-pool)
+    rare_key = list(rare)[0]
+    assert "Secretos/enrique_invertido.mp3" in rare_key
+    assert "Secretos/ennnnriiiiqqqqueeeeeeee.mp3" in rare_key
+
 
 
 

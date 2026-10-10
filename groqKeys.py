@@ -128,6 +128,9 @@ def _update_global_groq_key(new_key: str) -> None:
 def load_from_disk(path: Optional[str] = None) -> int:
     """Load key registry from disk or bootstrap from env."""
     target = path or getattr(config, "GROQ_KEYS_FILE", "data/groq_keys.json")
+    if not os.path.isabs(target):
+        repo_root = os.path.dirname(os.path.abspath(__file__))
+        target = os.path.join(repo_root, target)
     loaded: list[dict] = []
     try:
         with open(target, "r", encoding="utf-8") as f:
@@ -225,6 +228,9 @@ async def add_key(
         }
         _keys.append(entry)
         target = getattr(config, "GROQ_KEYS_FILE", "data/groq_keys.json")
+        if not os.path.isabs(target):
+            repo_root = os.path.dirname(os.path.abspath(__file__))
+            target = os.path.join(repo_root, target)
         try:
             await asyncio.to_thread(_persist_sync, target)
         except Exception:
