@@ -293,7 +293,7 @@ async def test_ask_indio_external_speaker_forces_tts_reply(monkeypatch):
     """Ensure external prompts (such as Zomboid server alerts or TG tags) trigger TTS voice reply with force=True."""
     speak_calls = []
 
-    async def mock_speak(bot, guild_id, member, text, max_chars=500, force=False, efecto="ninguno"):
+    async def mock_speak(bot, guild_id, member, text, max_chars=1000, force=False, efecto="ninguno"):
         speak_calls.append({"guild_id": guild_id, "text": text, "force": force})
 
     monkeypatch.setattr(geminiCommand, "_speak_indio_reply", mock_speak)
@@ -396,6 +396,49 @@ async def test_speak_indio_reply_uses_configured_guild_voice_effect(monkeypatch)
 
     assert posted_payload.get("guild_id") == 777
     assert posted_payload.get("efecto") == "alien"
+
+
+@pytest.mark.asyncio
+async def test_speak_indio_reply_allows_up_to_1000_chars(monkeypatch):
+    """Verify that _speak_indio_reply transmits responses up to 1000 characters without truncation."""
+    posted_payload = {}
+
+    class MockResponse:
+        status = 200
+        async def text(self): return "OK"
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+
+    class MockSession:
+        def __init__(self, *args, **kwargs): pass
+        def post(self, url, json=None, headers=None, timeout=None):
+            nonlocal posted_payload
+            posted_payload = json
+            return MockResponse()
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+
+    monkeypatch.setattr(aiohttp, "ClientSession", MockSession)
+
+    member = MagicMock(name="Member")
+    member.id = 123
+    member.voice = SimpleNamespace(channel=MagicMock(id=456))
+
+    # Text of 750 characters (such as the 716-char Mati response) should not be truncated
+    long_text = "palabra " * 100  # ~800 chars
+    assert len(long_text.strip()) > 500
+    assert len(long_text.strip()) < 1000
+
+    await geminiCommand._speak_indio_reply(None, 888, member, long_text)
+    assert not posted_payload.get("text", "").endswith("...")
+    assert len(posted_payload.get("text", "")) == len(long_text.strip())
+
+    # Text over 1000 characters gets truncated at 1000 with "..."
+    very_long_text = "a" * 1200
+    await geminiCommand._speak_indio_reply(None, 888, member, very_long_text)
+    assert posted_payload.get("text", "").endswith("...")
+    assert len(posted_payload.get("text", "")) == 1003
+
 
 
 

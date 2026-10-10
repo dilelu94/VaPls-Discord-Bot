@@ -5344,7 +5344,7 @@ async def _speak_indio_reply(
     guild_id: Optional[int],
     member: Optional[discord.Member],
     text: str,
-    max_chars: int = 500,
+    max_chars: int = 1000,
     force: bool = False,
     efecto: Optional[str] = None,
 ) -> None:
