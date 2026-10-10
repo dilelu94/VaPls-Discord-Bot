@@ -802,9 +802,6 @@ class LandingPageManager:
       <div class="status-badge" title="Servicios activos en producción">
         <span class="status-dot"></span> Bot Activo &bull; En Línea
       </div>
-      <a href="https://discord.com/app" target="_blank" rel="noopener noreferrer" class="nav-link-btn" id="btn-open-discord-nav">
-        🎮 Discord
-      </a>
     </div>
   </header>
 
@@ -827,7 +824,7 @@ class LandingPageManager:
         <input type="text" id="command-search" class="search-input" placeholder="Buscar comando o función (ej: play, stream, indio, mascota)..." autocomplete="off" />
         <div class="category-pills">
           <button class="pill-btn active" data-category="all" id="pill-all">Todos</button>
-          <button class="pill-btn" data-category="golive" id="pill-golive">📺 Transmisión</button>
+          <button class="pill-btn" data-category="golive" id="pill-golive">🎬 Stremio &amp; Go Live</button>
           <button class="pill-btn" data-category="music" id="pill-music">🎵 Música</button>
           <button class="pill-btn" data-category="ai" id="pill-ai">🧠 El Indio &amp; IA</button>
           <button class="pill-btn" data-category="soundpad" id="pill-soundpad">🔊 Soundpad</button>
@@ -839,30 +836,38 @@ class LandingPageManager:
     <!-- Modules Grid -->
     <section class="modules-grid" id="modules-container">
 
-      <!-- MÓDULO 1: Transmisión Go Live -->
+      <!-- MÓDULO 1: Transmisión Go Live & Stremio -->
       <article class="module-card" data-category="golive" id="card-golive">
         <div class="card-stripe stream"></div>
         <div class="module-header">
           <div class="module-title-box">
-            <div class="module-icon">📺</div>
+            <div class="module-icon">🎬</div>
             <div>
-              <h3>Transmisión Go Live</h3>
-              <p>Screenshare 1080p/720p 60fps con DAVE MLS</p>
+              <h3>Transmisión Go Live &amp; Stremio</h3>
+              <p>Películas &amp; Anime por Torrent &bull; IPTV &bull; Twitch (1080p 60fps)</p>
             </div>
           </div>
           <span class="command-tag">/stream</span>
         </div>
         <p class="module-desc">
-          Transmite canales de IPTV mundial, sesiones de Stremio / Torrents o streams de Twitch en vivo directamente a tu canal de voz mediante screenshare nativo de Discord.
+          Buscador interactivo de <strong>Stremio &amp; Torrents</strong> (TorBox / Torrentio Debrid) y catálogo de <strong>Anime</strong> (Kitsu) para transmitir películas y series en alta definición (1080p/720p 60fps), además de canales de <strong>IPTV mundial</strong> y streams de <strong>Twitch</strong> directamente a tu canal de voz por screenshare Go Live con cifrado DAVE MLS.
         </p>
         <form class="module-form" onsubmit="event.preventDefault(); handleStreamAction();">
           <div class="input-field-group">
-            <label class="input-label" for="input-stream-channel">Canal, Película o Streamer</label>
-            <input type="text" id="input-stream-channel" class="form-input" placeholder="Ej: Telefe, TyC Sports, Ibai, Stremio..." />
+            <label class="input-label" for="input-stream-channel">Película, Anime, Torrent o Canal IPTV</label>
+            <input type="text" id="input-stream-channel" class="form-input" placeholder="Ej: stremio, Shingeki no Kyojin, Oppenheimer, Telefe..." />
+          </div>
+          <div class="form-row">
+            <button type="button" class="btn btn-secondary" style="flex: 1; border-color: rgba(236, 72, 153, 0.4); color: #f472b6;" onclick="triggerCommand('/stream opcion: stremio', '', 'Genera el enlace web interactivo para buscar películas, series y anime por torrent.')" id="btn-stream-stremio">
+              🎬 Abrir Stremio &amp; Anime
+            </button>
+            <button type="button" class="btn btn-secondary" style="flex: 1;" onclick="handleTorrentAction();" id="btn-stream-torrent">
+              🧲 Transmitir Torrent
+            </button>
           </div>
           <div class="form-row">
             <button type="submit" class="btn btn-primary" style="flex: 2;" id="btn-stream-start">
-              ▶ Transmitir en Go Live
+              ▶ Transmitir en Go Live (/stream)
             </button>
             <button type="button" class="btn btn-danger" style="flex: 1;" onclick="triggerCommand('/stopstream', '', 'Detiene la transmisión Go Live activa en el servidor.')" id="btn-stream-stop">
               ⏹ Detener
@@ -870,7 +875,7 @@ class LandingPageManager:
           </div>
         </form>
         <div class="card-footer">
-          <span class="discord-badge">🤖 Proceso GoLive dedicado</span>
+          <span class="discord-badge">🎬 Stremio &amp; Torrents &bull; ⛩️ Anime</span>
           <span>Soporta IPTV, Twitch y Stremio</span>
         </div>
       </article>
@@ -1081,12 +1086,12 @@ class LandingPageManager:
       </div>
 
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" onclick="closeCommandModal()">
-          Entendido
+        <button type="button" class="btn btn-primary" onclick="copyCommandToClipboard()" id="btn-modal-copy">
+          📋 Copiar Comando
         </button>
-        <a href="https://discord.com/app" target="_blank" rel="noopener noreferrer" class="btn btn-primary" id="btn-modal-open-discord">
-          🎮 Abrir Discord
-        </a>
+        <button type="button" class="btn btn-secondary" onclick="closeCommandModal()" id="btn-modal-close">
+          Cerrar
+        </button>
       </div>
     </div>
   </div>
@@ -1167,11 +1172,16 @@ class LandingPageManager:
       }, 3000);
     }
 
-    // Handlers for interactive card forms
     function handleStreamAction() {
       var query = document.getElementById("input-stream-channel").value.trim();
-      var arg = query ? "canal: " + query : "canal: Telefe";
-      triggerCommand("/stream", arg, "Inicia la transmisión en Go Live screenshare.");
+      var arg = query ? "opcion: " + query : "opcion: stremio";
+      triggerCommand("/stream", arg, "Inicia la transmisión en Go Live (Stremio, Anime, IPTV o Twitch).");
+    }
+
+    function handleTorrentAction() {
+      var query = document.getElementById("input-stream-channel").value.trim();
+      var arg = query ? "opcion: torrent: " + query : "opcion: torrent: Película o Anime";
+      triggerCommand("/stream", arg, "Busca y reproduce un torrent de película o anime directamente por screenshare Go Live.");
     }
 
     function handlePlayAction() {
