@@ -55,6 +55,14 @@ def test_landing_page_html_rendered():
     assert "modal-command-code" in html_out
     assert "triggerCommand" in html_out
 
+    # Stremio, torrent movies & anime emphasis
+    assert "Stremio" in html_out
+    assert "Anime" in html_out
+    assert "Torrents" in html_out or "Torrent" in html_out
+
+    # Verify web Discord link (discord.com/app) is completely removed
+    assert "discord.com/app" not in html_out
+
 
 def test_security_headers_attached():
     """Strict security headers are attached to the response."""
