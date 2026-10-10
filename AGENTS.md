@@ -888,9 +888,16 @@ Indio las use espontáneamente en conversaciones vía la tool `use_image`.
 
 ### Tool `use_image`
 
-El Indio puede llamar `use_image(image_id, caption?)` para mostrar una imagen
-de la colección en el chat. El catálogo se inyecta en el system prompt como
-`[IMÁGENES DISPONIBLES]`.
+El Indio puede llamar `use_image(image_id, caption)` para mostrar una imagen
+de la colección en el chat cuando el usuario lo pide explícitamente (ej: "mostrá la foto de X").
+El catálogo se inyecta en el system prompt como `[IMÁGENES DISPONIBLES]`.
+
+**Gating determinístico (`_gate_use_image_actions`) y exclusión multimodal:**
+Si el usuario adjuntó o referenció una imagen/archivo, o si pide opinión/reacción
+(ej: "qué opinás", "qué pensás", "mirá esto"), `use_image` se remueve de las herramientas disponibles
+y la inyección del catálogo se suprime en `indioFromVoice`. Además, el gate determinístico
+`_gate_use_image_actions` descarta cualquier acción `USE_IMAGE` espuria si no hubo orden
+explícita de mostrar una foto, garantizando que el Indio responda con texto y no envíe imágenes mudas.
 
 ### Archivos clave
 

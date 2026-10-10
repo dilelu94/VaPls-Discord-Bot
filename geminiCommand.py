@@ -269,6 +269,7 @@ SOLO con texto, sin llamar tools. \
 - {_fmt_trigger("troll_move_user")} → `troll_move_user` \
 - {_fmt_trigger("comment_stream")} → `comment_stream` \
 - {_fmt_trigger("generate_image")} → `generate_image` \
+- {_fmt_trigger("use_image")} con pedido EXPLÍCITO de mostrar/mandar una foto, meme o imagen del catálogo del grupo → `use_image`. NUNCA llames a `use_image` si el usuario subió/adjuntó una imagen, si te está pidiendo opinión sobre algo que compartió o si no pidió explícitamente ver una imagen guardada. \
 - {_fmt_trigger("make_clip")} con orden EXPLÍCITA de crear un clip de audio (palabras como 'clip', 'clipeá', 'clipea', 'grabá el audio') → `make_clip`. NUNCA llames a `make_clip` por inferencia o charla general sobre denuncias, chistes o quejas que no pidan explícitamente un clip. \
 
 
@@ -392,6 +393,7 @@ def _build_indio_system_instruction(
     emoji_block: str = "",
     recent_block: str = "",
     date_str: str | None = None,
+    include_images: bool = True,
 ) -> str:
     """Build full system_instruction for the Indio persona.
 
@@ -406,7 +408,8 @@ def _build_indio_system_instruction(
     system_instruction = INDIO_SYSTEM + (
         f"\n\n{stable_extras}" if stable_extras else ""
     )
-    system_instruction = _inject_image_catalog(system_instruction)
+    if include_images:
+        system_instruction = _inject_image_catalog(system_instruction)
     if recent_block:
         system_instruction += "\n\n" + recent_block
     return system_instruction
@@ -563,11 +566,12 @@ _INDIO_TOOLS = [
     {
         "name": "use_image",
         "description": (
-            "Mostrar una imagen de la colección del grupo en el chat. "
-            "Usala cuando sea contextualmente relevante (un momento gracioso, "
-            "una referencia visual, una imagen que un amigo compartió antes). "
-            "Elegí la imagen que mejor matchee con la conversación. "
-            "Siempre fijate en [IMÁGENES DISPONIBLES] arriba para saber IDs y descripciones."
+            "Mostrar una foto, meme o imagen guardada de la colección del grupo en el chat. "
+            "REQUISITO DURO: ÚNICAMENTE usar cuando el usuario dé una orden directa o pida explícitamente "
+            "ver/mostrar una foto, imagen o meme (ej: 'mostrá la foto de Juji', 'mandá una foto de Viny'). "
+            "NUNCA usar si el usuario compartió o adjuntó una imagen, ni cuando te piden tu opinión o reacción "
+            "(ej: 'qué opinás', 'qué te parece', 'mirá esto'). En esos casos respondé con texto opinando. "
+            "Fijate en [IMÁGENES DISPONIBLES] para IDs válidos."
         ),
         "parameters": {
             "type": "OBJECT",
@@ -578,10 +582,10 @@ _INDIO_TOOLS = [
                 },
                 "caption": {
                     "type": "STRING",
-                    "description": "Texto opcional para acompañar la imagen (ej: 'mirá esta joyita'). Vacío si no querés texto.",
+                    "description": "Comentario o texto del Indio que acompaña la imagen (ej: 'Mirá lo que es esto'). Nunca lo dejes vacío.",
                 },
             },
-            "required": ["image_id"],
+            "required": ["image_id", "caption"],
         },
     },
     {
@@ -3052,7 +3056,7 @@ _ACTION_FALLBACK_TEXT = {
     "STOP_MUSIC": "⏹️ Listo",
     "DJ_MODE": "🎧 Modo DJ",
     "SPACEWAR_GUIDE": "🎮 Ahí va la guía de Spacewar",
-    "USE_IMAGE": "",
+    "USE_IMAGE": "📸 Acá tenés",
     "DISCONNECT_INDIO": "🚪 Me voy un rato",
     "TROLL_MOVE_USER": "🔀 A dar una vuelta",
     "COMMENT_STREAM": "📺 Mirando el stream",
@@ -3388,6 +3392,86 @@ def _gate_save_memory_actions(
         actions.append(("SAVE_MEMORY", content_to_save))
 
     return actions
+
+
+_OPINION_OR_LOOK_RE = re.compile(
+    r"\b("
+    r"que\s+opina[ns]?|"
+    r"que\s+pensa[ns]?|"
+    r"que\s+te\s+parece|"
+    r"que\s+les\s+parece|"
+    r"como\s+ve[ns]|"
+    r"que\s+onda|"
+    r"mira\s+est[oa]|"
+    r"miren\s+est[oa]|"
+    r"mira\b|"
+    r"opina[ns]?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_USE_IMAGE_ORDER_RE = re.compile(
+    r"\b("
+    r"(mostr[aá]|mand[aá]|pas[aá]|pon[eé]|tir[aá]|tirate|compart[ií]|sub[ií])(me|nos|te|le)?\s+((la|el|las|los|un|una|unos|unas|esa|ese|alguna)\s+)?(foto|imagen|meme|dibujo|pic|fotito)s?|"
+    r"(mostr[aá]|mand[aá]|pas[aá]|pon[eé]|tir[aá]|tirate|compart[ií])(me|nos|te|le)?\s+(a\s+)?(juji|viny|milardo)|"
+    r"(mostr[aá]|mand[aá]|pas[aá]|pon[eé]|tir[aá]|tirate|compart[ií])\s+(el\s+)?meme\b|"
+    r"acordate\s+de\s+la\s+(foto|imagen)|"
+    r"mostr[aá]\s+esa\s+imagen"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _gate_use_image_actions(
+    actions: list[tuple[str, str]], raw_text: str, has_attachments: bool = False
+) -> list[tuple[str, str]]:
+    """Filtra llamadas espurias a use_image.
+
+    Solo permite USE_IMAGE si el usuario dio una orden explícita de mostrar/mandar
+    una foto o imagen, Y no adjuntó un archivo/imagen en el mensaje (cuando el usuario
+    adjunta media, la intención es que el Indio opine o reaccione sobre ella con texto,
+    no que mande una foto distinta del catálogo).
+    """
+    if not actions:
+        return actions
+    has_use_image = any(action == "USE_IMAGE" for action, _ in actions)
+    if not has_use_image:
+        return actions
+
+    norm_text = _strip_accents_lower(raw_text or "")
+    is_opinion = bool(_OPINION_OR_LOOK_RE.search(norm_text))
+    has_order = bool(_USE_IMAGE_ORDER_RE.search(norm_text))
+
+    kept: list[tuple[str, str]] = []
+    for action, arg in actions:
+        if action != "USE_IMAGE":
+            kept.append((action, arg))
+            continue
+
+        if has_attachments:
+            logger.info(
+                "indio USE_IMAGE suprimido: el usuario adjuntó o referenció una imagen/archivo (msg=%r)",
+                (raw_text or "")[:80],
+            )
+            continue
+
+        if is_opinion and not has_order:
+            logger.info(
+                "indio USE_IMAGE suprimido: el usuario pide opinión o reacción, no una imagen del catálogo (msg=%r)",
+                (raw_text or "")[:80],
+            )
+            continue
+
+        if not has_order:
+            logger.info(
+                "indio USE_IMAGE suprimido: sin pedido explícito de imagen (msg=%r)",
+                (raw_text or "")[:80],
+            )
+            continue
+
+        kept.append((action, arg))
+
+    return kept
 
 
 def _ensure_reply_text(text: str, actions: list[tuple[str, str]]) -> str:
@@ -3914,6 +3998,15 @@ async def _dispatch_indio_actions(
                     if img_path is None:
                         statuses.append("use_image: fail — file missing")
                         continue
+                    if not caption and reply_text:
+                        caption = reply_text.strip()
+                    if not caption:
+                        desc = ""
+                        if isinstance(entry, dict):
+                            desc = entry.get("description", "")
+                        elif entry is not None:
+                            desc = getattr(entry, "description", "")
+                        caption = desc or "📸 Acá tenés"
                     target_cid = (
                         getattr(reply_handle, "channel_id", None)
                         or config.INDIO_REPLY_CHANNEL_ID
@@ -5977,8 +6070,11 @@ async def indioLogic(
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
     pending_actions = _gate_save_memory_actions(pending_actions, pregunta, reply.text or "")
+    pending_actions = _gate_use_image_actions(pending_actions, pregunta, has_attachments=False)
     clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker)
     clean_reply = _ensure_reply_text(clean_reply, pending_actions)
+    if not clean_reply and reply.function_calls and not pending_actions:
+        clean_reply = "¿Qué onda? No entendí qué querías que haga."
     relayed_via_userbot = False
     import playCommand
 
@@ -6330,13 +6426,6 @@ async def indioFromVoice(
     lt_block = _format_long_term(long_term_snapshot, current_members)
     emoji_block = _format_guild_emojis(guild)
     player_block = _format_player_state(bot, guild_id)
-    # Stable cache prefix: persona + long-term notes + emojis (change rarely
-    # within a session). Player state is volatile (current track/queue) so it
-    # rides in volatile_context, out of the cached system prompt.
-    recent_block = _format_recent_stories(guild_id)
-    system_instruction = _build_indio_system_instruction(
-        lt_block=lt_block, emoji_block=emoji_block, recent_block=recent_block
-    )
 
     # ---- Context from replied-to message + image download ----
     volatile = player_block or None
@@ -6374,6 +6463,20 @@ async def indioFromVoice(
             if downloaded:
                 image_parts = downloaded
 
+    has_images = bool(image_parts or (attachment_urls and any(u.get("mime_type", "").startswith("image/") for u in attachment_urls)))
+    indio_tools = [t for t in _INDIO_TOOLS if t.get("name") != "use_image"] if has_images else _INDIO_TOOLS
+
+    # Stable cache prefix: persona + long-term notes + emojis (change rarely
+    # within a session). Player state is volatile (current track/queue) so it
+    # rides in volatile_context, out of the cached system prompt.
+    recent_block = _format_recent_stories(guild_id)
+    system_instruction = _build_indio_system_instruction(
+        lt_block=lt_block,
+        emoji_block=emoji_block,
+        recent_block=recent_block,
+        include_images=not has_images,
+    )
+
     if replied_content is not None and replied_author is not None:
         if "\n" in replied_content:
             ctx_lines = [f"[contexto: {replied_author} dijo:\n{replied_content}]"]
@@ -6396,7 +6499,7 @@ async def indioFromVoice(
             user_message=tagged_message,
             system_instruction=system_instruction,
             history=_stamp_history_for_prompt(history_snapshot, time.time()),
-            tools=_INDIO_TOOLS,
+            tools=indio_tools,
             volatile_context=volatile,
             image_parts=image_parts,
         )
@@ -6414,7 +6517,7 @@ async def indioFromVoice(
                     user_message=tagged_message,
                     system_instruction=system_instruction,
                     history=_stamp_history_for_prompt(history_snapshot, time.time()),
-                    tools=_INDIO_TOOLS,
+                    tools=indio_tools,
                     volatile_context=combined_volatile,
                     image_parts=image_parts,
                 )
@@ -6461,12 +6564,17 @@ async def indioFromVoice(
     pending_actions = _gate_play_sound_actions(pending_actions, pregunta)
     pending_actions = _gate_play_music_actions(pending_actions, pregunta)
     pending_actions = _gate_save_memory_actions(pending_actions, pregunta, reply.text or "")
+    pending_actions = _gate_use_image_actions(
+        pending_actions, pregunta, has_attachments=bool(image_parts or attachment_urls)
+    )
     # Save flag BEFORE _maybe_disambiguate_music — that function consumes
     # pending_actions for single-match direct plays (returns []), which would
     # make the redirect check below miss the music action.
     _had_music = any(a in _MUSIC_ACTIONS for a, _ in pending_actions)
     clean_reply = _strip_speaker_prefix(reply.text, speaker_name=speaker_name)
     clean_reply = _ensure_reply_text(clean_reply, pending_actions)
+    if not clean_reply and reply.function_calls and not pending_actions:
+        clean_reply = "¿Qué onda? No entendí qué querías que haga."
     # Music action redirect: cuando el Indio responde con una accion de
     # musica desde wake-word de texto (sin reply contextual), redirigir
     # la respuesta textual al canal de musica designado. Asi las

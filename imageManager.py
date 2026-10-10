@@ -115,8 +115,9 @@ class ImageManager:
             return ""
         lines = [
             "\n[IMÁGENES DISPONIBLES] Tenés una colección de imágenes del grupo. "
-            "Cuando tenga sentido mostrarlas (chiste visual, momento gracioso, "
-            "referencia), usá la herramienta ``use_image`` con el ID correspondiente.\n"
+            "ÚNICAMENTE cuando un usuario te pida explícitamente mostrar/mandar una foto, meme o imagen del grupo "
+            "(o de alguien en particular), podés usar la herramienta ``use_image`` con el ID correspondiente. "
+            "NUNCA la uses si el usuario subió/adjuntó una imagen, te pide tu opinión o habla de otra cosa.\n"
         ]
         for img in self.images[-50:]:
             tags = ", ".join(img["tags"][:5])
