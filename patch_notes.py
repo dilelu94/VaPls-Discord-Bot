@@ -978,6 +978,7 @@ class PatchNotesManager:
     def render_history_html(self, history: Optional[list[dict[str, Any]]] = None) -> str:
         """Render high-aesthetic, responsive historical patch notes archive page."""
         releases = list(history if history is not None else self.get_history())
+        releases.sort(key=lambda x: float(x.get("created_at", 0)), reverse=True)
         total_releases = len(releases)
         latest_version = html.escape(str(releases[0].get("version", "2.0")), quote=True) if releases else "2.0"
         now = time.time()
@@ -1003,8 +1004,6 @@ class PatchNotesManager:
 
                 # Badges
                 badges = []
-                if idx == 0:
-                    badges.append('<span class="badge badge-latest">✨ Último Lanzamiento</span>')
                 badges.append(f'<span class="badge badge-version">v{ver}</span>')
                 badges.append(f'<span class="badge badge-date">📅 {date_str}</span>')
                 tok_str = html.escape(str(rel.get("token") or ""), quote=True)

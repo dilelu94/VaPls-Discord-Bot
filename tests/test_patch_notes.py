@@ -443,4 +443,28 @@ def test_history_deduplication_same_date_and_title(tmp_path):
     assert len(oct10_entry["sections"]) == 2
 
 
+def test_history_html_does_not_contain_ultimo_lanzamiento_badge(tmp_patch_notes_manager):
+    """Release cards do not display 'Último Lanzamiento' badge, newest release is simply first."""
+    mgr = tmp_patch_notes_manager
+    mgr.save_to_history({
+        "version": "2.7",
+        "title": "Notas v2.7",
+        "created_at": 1791661832,
+        "sections": [{"icon": "✨", "title": "Sec", "items": [{"tag": "Buff", "header": "H", "desc": "D"}]}],
+    })
+    mgr.save_to_history({
+        "version": "2.6",
+        "title": "Notas v2.6",
+        "created_at": 1791572630,
+        "sections": [{"icon": "🛠️", "title": "Sec", "items": [{"tag": "Fix", "header": "H", "desc": "D"}]}],
+    })
+
+    html = mgr.render_history_html()
+    assert "Último Lanzamiento" not in html
+    pos_27 = html.find("v2.7")
+    pos_26 = html.find("v2.6")
+    assert pos_27 != -1 and pos_26 != -1
+    assert pos_27 < pos_26
+
+
 
