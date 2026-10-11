@@ -185,7 +185,7 @@ async def test_generate_and_post_weekly_patch_notes_e2e(tmp_path, sample_commits
 def test_determine_next_patch_version_handles_multi_segment_versions(monkeypatch):
     """determine_next_patch_version must accept 2.X.Y formats and not fall back to hardcoded '2.7'.
 
-    Regression: regex r'^2\\.(\d+)$' did not match '2.10.10', so highest_minor stayed at 6
+    Regression: regex anchored with '$' did not match '2.10.10' (multi-segment), so highest_minor stayed at 6
     (hardcoded seed) and the function returned '2.7' even when the real history had higher versions.
     """
     import patch_notes_generator
