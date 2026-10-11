@@ -182,6 +182,38 @@ async def test_generate_and_post_weekly_patch_notes_e2e(tmp_path, sample_commits
     assert len(sent_messages) == 1
 
 
+def test_determine_next_patch_version_handles_multi_segment_versions(monkeypatch):
+    """determine_next_patch_version must accept 2.X.Y formats and not fall back to hardcoded '2.7'.
+
+    Regression: regex r'^2\\.(\d+)$' did not match '2.10.10', so highest_minor stayed at 6
+    (hardcoded seed) and the function returned '2.7' even when the real history had higher versions.
+    """
+    import patch_notes_generator
+    from unittest.mock import MagicMock
+
+    # History has a multi-segment version (2.10.10) and a simpler one (2.6)
+    fake_entry_multi = {"version": "2.10.10", "title": "Notas de Parche (10/10/2026)"}
+    fake_entry_simple = {"version": "2.6", "title": "Notas de Parche v2.6"}
+
+    fake_manager = MagicMock()
+    fake_manager.get_history.return_value = [fake_entry_multi, fake_entry_simple]
+
+    import patch_notes
+    monkeypatch.setattr(patch_notes, "patch_notes_manager", fake_manager)
+
+    # Without date — should return 2.11 (minor 10 from 2.10.10 + 1)
+    version = patch_notes_generator.determine_next_patch_version()
+    assert version == "2.11", f"Expected '2.11', got '{version}' (old bug returned '2.7')"
+
+    # With existing date — should reuse the existing version
+    version_same_date = patch_notes_generator.determine_next_patch_version("10/10/2026")
+    assert version_same_date == "2.10.10"
+
+    # With a new date — should still increment correctly
+    version_new = patch_notes_generator.determine_next_patch_version("17/10/2026")
+    assert version_new == "2.11"
+
+
 @pytest.mark.asyncio
 async def test_generate_and_post_weekly_patch_notes_error_logging(sample_commits, monkeypatch):
     """When Discord channel send fails, an exception is raised so autoErrorTracker logs an Auto-Bug."""

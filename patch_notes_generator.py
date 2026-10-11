@@ -88,15 +88,16 @@ def determine_next_patch_version(date_str: Optional[str] = None) -> str:
                 if date_str in entry.get("title", "") and entry.get("version"):
                     return str(entry["version"]).strip()
         # Otherwise find highest 2.X minor version
-        highest_minor = 6
+        highest_minor = 0
         for entry in history:
             ver = str(entry.get("version", "")).strip()
-            m = re.match(r"^2\.(\d+)$", ver)
+            # Accept both "2.X" and "2.X.Y" formats — only minor component matters
+            m = re.match(r"^2\.(\d+)", ver)
             if m:
                 highest_minor = max(highest_minor, int(m.group(1)))
         return f"2.{highest_minor + 1}"
     except Exception:
-        return "2.7"
+        return "2.1"
 
 
 def _build_fallback_patch_notes(
