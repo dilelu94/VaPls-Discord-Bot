@@ -343,7 +343,7 @@ async def generate_and_post_weekly_patch_notes(
         return None
 
     patch_data = await generate_patch_notes_with_gemini(commits, date_formatted)
-    version = str(patch_data.get("version", "2.7"))
+    version = str(patch_data.get("version") or determine_next_patch_version(date_formatted))
     title = str(patch_data.get("title", f"Notas de Parche ({date_formatted})"))
     sections = patch_data.get("sections", [])
     highlight = patch_data.get("discord_highlight", {})
